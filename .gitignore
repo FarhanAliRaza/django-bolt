@@ -1,0 +1,13 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+target/
+# Virtual environments
+.venv
+ignore/
+db.sqlite3
+python/django_bolt/_core.cpython-312-x86_64-linux-gnu.so

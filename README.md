@@ -109,8 +109,8 @@ Requests per second:     7507.36
 ORM Mini10 (GET /users/mini10)
 Requests per second:     8944.02
 
-JSON Parse/Validate (c=1, POST /bench/parse)
-Requests per second:     9023.87
+JSON Parse/Validate (POST /bench/parse)
+Requests per second:     37599.87
 ```
 
 See the full details in `BENCHMARK_DEV.md`. Your results will vary by hardware and settings (`P`, `WORKERS`, `C`, `N`, etc.).

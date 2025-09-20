@@ -139,14 +139,6 @@ Goal: First-class async streaming with tight backpressure.
 
 ---
 
-## 6) Multi-process Workers
-
-Goal: Scale linearly across cores by running multiple Python interpreters.
-
-- CLI/management: `--workers N` spawns N OS processes; SO_REUSEPORT for socket sharding.
-- Use `actix_web::HttpServer::workers` inside each process for IO concurrency.
-- Pin workers to cores (optional) and expose graceful shutdown.
-
 ---
 
 ## 7) Observability & CI Perf Gates

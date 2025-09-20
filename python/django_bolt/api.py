@@ -9,11 +9,18 @@ from .responses import JSON
 Request = Dict[str, Any]
 Response = Tuple[int, List[Tuple[str, str]], bytes]
 
+# Global registry for BoltAPI instances (used by autodiscovery)
+_BOLT_API_REGISTRY = []
+
 class BoltAPI:
-    def __init__(self) -> None:
+    def __init__(self, prefix: str = "") -> None:
         self._routes: List[Tuple[str, str, int, Callable]] = []
         self._handlers: Dict[int, Callable] = {}
         self._next_handler_id = 0
+        self.prefix = prefix.rstrip("/")  # Remove trailing slash
+        
+        # Register this instance globally for autodiscovery
+        _BOLT_API_REGISTRY.append(self)
 
     def get(self, path: str):
         return self._route_decorator("GET", path)
@@ -39,7 +46,10 @@ class BoltAPI:
             handler_id = self._next_handler_id
             self._next_handler_id += 1
             
-            self._routes.append((method, path, handler_id, fn))
+            # Apply prefix to path
+            full_path = self.prefix + path if self.prefix else path
+            
+            self._routes.append((method, full_path, handler_id, fn))
             self._handlers[handler_id] = fn
             
             return fn

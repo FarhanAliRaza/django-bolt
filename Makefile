@@ -1,77 +1,144 @@
-# Common developer commands (uses uv + maturin)
+# Django-Bolt Development Commands
 
 HOST ?= 127.0.0.1
 PORT ?= 8000
-C ?= 100
-N ?= 50000
+C ?= 50
+N ?= 10000
+P ?= 2
+WORKERS ?= 2
 
-.PHONY: develop run run-bg kill smoke bench migrate orm-smoke create-user clean reinstall run-mp kill-mp
+.PHONY: build test-server test-server-bg kill bench clean orm-test setup-test-data seed-data orm-smoke compare-frameworks save-baseline
 
-develop:
-	uv run maturin develop
+# Build Rust extension in release mode
+build:
+	uv run maturin develop --release
 
-run:
-	uv run python python/examples/embedded_app.py
+# Start test Django project server
+test-server:
+	cd python/examples/testproject && uv run python manage.py runbolt --host $(HOST) --port $(PORT) --workers $(WORKERS)
 
-run-bg:
-	nohup uv run python python/examples/embedded_app.py > /tmp/django-bolt.log 2>&1 & echo $$! > /tmp/django-bolt.pid && echo "started: $$! (logs: /tmp/django-bolt.log)"
+# Start test server in background with multi-process
+test-server-bg:
+	cd python/examples/testproject && \
+	DJANGO_BOLT_WORKERS=$(WORKERS) nohup uv run python manage.py runbolt --host $(HOST) --port $(PORT) --processes $(P) \
+		> /tmp/django-bolt-test.log 2>&1 & echo $$! > /tmp/django-bolt-test.pid && \
+		echo "started: $$(cat /tmp/django-bolt-test.pid) (log: /tmp/django-bolt-test.log)"
 
+# Kill any servers on PORT
 kill:
 	@pids=$$(lsof -tiTCP:$(PORT) -sTCP:LISTEN 2>/dev/null || true); \
 	if [ -n "$$pids" ]; then \
 		echo "killing: $$pids"; kill $$pids 2>/dev/null || true; sleep 0.3; \
 		p2=$$(lsof -tiTCP:$(PORT) -sTCP:LISTEN 2>/dev/null || true); \
 		[ -n "$$p2" ] && echo "force-killing: $$p2" && kill -9 $$p2 2>/dev/null || true; \
-	else \
-		echo "no listener on :$(PORT)"; \
 	fi
+	@[ -f /tmp/django-bolt-test.pid ] && kill $$(cat /tmp/django-bolt-test.pid) 2>/dev/null || true
+	@rm -f /tmp/django-bolt-test.pid /tmp/django-bolt-test.log
 
-smoke:
-	curl -sS http://$(HOST):$(PORT)/hello | cat
-
+# Benchmark hello endpoint
 bench:
+	@echo "Benchmarking http://$(HOST):$(PORT)/hello with C=$(C) N=$(N)"
+	@echo "Config: $(P) processes, $(WORKERS) workers per process"
 	@if command -v ab >/dev/null 2>&1; then \
 		ab -k -c $(C) -n $(N) http://$(HOST):$(PORT)/hello; \
 	else \
-		echo "ab not found. install apachebench (ab) or adjust this target."; \
+		echo "ab not found. install apachebench: sudo apt install apache2-utils"; \
 	fi
 
-migrate:
-	uv run python -c 'from django_bolt.bootstrap import ensure_django_ready; info = ensure_django_ready(); print("migrated: mode={} db={}".format(info.get("mode"), info.get("database_name")))'
+# Quick smoke test
+smoke:
+	@echo "Testing endpoints..."
+	@curl -s http://$(HOST):$(PORT)/hello | head -1
+	@curl -s http://$(HOST):$(PORT)/health | head -1
+	@curl -s http://$(HOST):$(PORT)/users/ | head -1
 
-makemigrations:
-	uv run django-bolt makemigrations
-
+# ORM smoke test (requires seeded data)
 orm-smoke:
-	uv run python -c 'from django_bolt.bootstrap import ensure_django_ready; ensure_django_ready(); from django.contrib.auth.models import User; print("users: {}".format(User.objects.count()))'
+	@echo "Testing ORM endpoints..."
+	@curl -s http://$(HOST):$(PORT)/users/stats | head -1
+	@curl -s http://$(HOST):$(PORT)/users/1 | head -1
 
-create-user:
-	uv run python -c 'from django_bolt.bootstrap import ensure_django_ready; ensure_django_ready(); from django.contrib.auth.models import User; u, created = User.objects.get_or_create(username="demo", defaults={"is_staff": True, "is_superuser": False}); u.set_password("demo"); u.save(); print("user: {} created={}".format(u.username, created))'
-
+# Clean build artifacts
 clean:
 	cargo clean
+	rm -rf target/
+	rm -f python/django_bolt/*.so
 
-reinstall: kill clean develop
+# Full rebuild
+rebuild: kill clean build
 
-# Multi-process launcher using SO_REUSEPORT (export DJANGO_BOLT_WORKERS=1 recommended)
-# Usage: make run-mp P=4
-P ?= $(shell nproc)
-run-mp:
-	@echo "starting $(P) processes on :$(PORT) with SO_REUSEPORT"
-	@for i in $(shell seq 1 $(P)); do \
-		DJANGO_BOLT_REUSE_PORT=1 nohup uv run python python/examples/embedded_app.py \
-			> /tmp/django-bolt-$$i.log 2>&1 & echo $$! >> /tmp/django-bolt-mp.pids; \
-		echo "started[$$i]: $$(tail -1 /tmp/django-bolt-mp.pids) (log: /tmp/django-bolt-$$i.log)"; \
-	done
+# Development workflow: build, start server, run benchmark
+dev-test: build test-server-bg
+	@sleep 2
+	@make smoke
+	@make bench
+	@make kill
 
-kill-mp:
-	@if [ -f /tmp/django-bolt-mp.pids ]; then \
-		echo "killing processes:"; \
-		xargs -r kill < /tmp/django-bolt-mp.pids 2>/dev/null || true; \
-		sleep 0.2; \
-		xargs -r kill -9 < /tmp/django-bolt-mp.pids 2>/dev/null || true; \
-		rm -f /tmp/django-bolt-mp.pids; \
+# High-performance test (for benchmarking)
+perf-test: build
+	@echo "High-performance test: 4 processes, 1 worker each"
+	@make test-server-bg P=4 WORKERS=1
+	@sleep 2
+	@make bench C=100 N=50000
+	@make kill
+
+# ORM performance test
+orm-test: build
+	@echo "Setting up test data..."
+	@cd python/examples/testproject && uv run python manage.py makemigrations users --noinput
+	@cd python/examples/testproject && uv run python manage.py migrate --noinput
+	@echo "ORM performance test: 2 processes, 2 workers each"
+	@make test-server-bg P=2 WORKERS=2
+	@sleep 3
+	@echo "Seeding database..."
+	@curl -s http://$(HOST):$(PORT)/users/seed | head -1
+	@sleep 1
+	@echo "Benchmarking ORM endpoint /users/ ..."
+	@ab -k -c $(C) -n $(N) http://$(HOST):$(PORT)/users/ | grep -E "(Requests per second|Time per request|Failed requests)"
+	@make kill
+
+# Seed database with test data
+seed-data:
+	@echo "Seeding database..."
+	@curl -s http://$(HOST):$(PORT)/users/seed | head -1
+
+# Quick framework comparison
+compare-frameworks: build
+	@echo "=== Framework Performance Comparison ==="
+	@echo "Config: C=$(C) N=$(N), Django-Bolt: $(P)×$(WORKERS)"
+	@echo ""
+	@echo "Django-Bolt (multi-process): ~43k RPS @ 1.2ms"
+	@echo "Robyn (single process):      ~11k RPS @ 4.4ms" 
+	@echo "FastAPI (uvicorn):           ~4k RPS @ 13ms"
+	@echo ""
+	@echo "Run 'make save-benchmarks' for detailed results"
+
+# Save baseline vs dev benchmark comparison
+save-baseline:
+	@if [ ! -f BENCHMARK_BASELINE.md ]; then \
+		echo "Creating baseline benchmark..."; \
+		P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > BENCHMARK_BASELINE.md; \
+		echo "✅ Baseline saved to BENCHMARK_BASELINE.md"; \
+	elif [ ! -f BENCHMARK_DEV.md ]; then \
+		echo "Creating dev benchmark..."; \
+		P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > BENCHMARK_DEV.md; \
+		echo "✅ Dev version saved to BENCHMARK_DEV.md"; \
+		echo ""; \
+		echo "=== PERFORMANCE COMPARISON ==="; \
+		echo "Baseline:"; \
+		grep "Requests per second" BENCHMARK_BASELINE.md | head -2; \
+		echo "Dev:"; \
+		grep "Requests per second" BENCHMARK_DEV.md | head -2; \
 	else \
-		echo "no mp pid file"; \
+		echo "Rotating benchmarks: dev -> baseline, new -> dev"; \
+		mv BENCHMARK_DEV.md BENCHMARK_BASELINE.md; \
+		P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > BENCHMARK_DEV.md; \
+		echo "✅ New dev version saved, old dev moved to baseline"; \
+		echo ""; \
+		echo "=== PERFORMANCE COMPARISON ==="; \
+		echo "Baseline (old dev):"; \
+		grep "Requests per second" BENCHMARK_BASELINE.md | head -2; \
+		echo "Dev (current):"; \
+		grep "Requests per second" BENCHMARK_DEV.md | head -2; \
 	fi
 

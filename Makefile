@@ -7,18 +7,15 @@ N ?= 10000
 P ?= 2
 WORKERS ?= 2
 
-.PHONY: build test-server test-server-bg kill bench clean orm-test setup-test-data seed-data orm-smoke compare-frameworks save-baseline
+.PHONY: build test-server test-server-bg kill bench clean orm-test setup-test-data seed-data orm-smoke compare-frameworks save-baseline test-py
 
 # Build Rust extension in release mode
 build:
-	uv run maturin develop --release
+	uvx maturin develop --release
 
-# Start test Django project server
-test-server:
-	cd python/examples/testproject && uv run python manage.py runbolt --host $(HOST) --port $(PORT) --workers $(WORKERS)
 
 # Start test server in background with multi-process
-test-server-bg:
+run-bg:
 	cd python/examples/testproject && \
 	DJANGO_BOLT_WORKERS=$(WORKERS) nohup uv run python manage.py runbolt --host $(HOST) --port $(PORT) --processes $(P) \
 		> /tmp/django-bolt-test.log 2>&1 & echo $$! > /tmp/django-bolt-test.pid && \
@@ -35,12 +32,12 @@ kill:
 	@[ -f /tmp/django-bolt-test.pid ] && kill $$(cat /tmp/django-bolt-test.pid) 2>/dev/null || true
 	@rm -f /tmp/django-bolt-test.pid /tmp/django-bolt-test.log
 
-# Benchmark hello endpoint
+# Benchmark root endpoint
 bench:
-	@echo "Benchmarking http://$(HOST):$(PORT)/hello with C=$(C) N=$(N)"
+	@echo "Benchmarking http://$(HOST):$(PORT)/ with C=$(C) N=$(N)"
 	@echo "Config: $(P) processes, $(WORKERS) workers per process"
 	@if command -v ab >/dev/null 2>&1; then \
-		ab -k -c $(C) -n $(N) http://$(HOST):$(PORT)/hello; \
+		ab -k -c $(C) -n $(N) http://$(HOST):$(PORT)/; \
 	else \
 		echo "ab not found. install apachebench: sudo apt install apache2-utils"; \
 	fi
@@ -48,8 +45,8 @@ bench:
 # Quick smoke test
 smoke:
 	@echo "Testing endpoints..."
-	@curl -s http://$(HOST):$(PORT)/hello | head -1
-	@curl -s http://$(HOST):$(PORT)/health | head -1
+	@curl -s http://$(HOST):$(PORT)/ | head -1
+	@curl -s http://$(HOST):$(PORT)/items/1 | head -1
 	@curl -s http://$(HOST):$(PORT)/users/ | head -1
 
 # ORM smoke test (requires seeded data)
@@ -73,6 +70,10 @@ dev-test: build test-server-bg
 	@make smoke
 	@make bench
 	@make kill
+
+# Run Python tests (verbose)
+test-py:
+	uv run --with pytest pytest python/django_bolt/tests -s -vv
 
 # High-performance test (for benchmarking)
 perf-test: build
@@ -102,19 +103,9 @@ seed-data:
 	@echo "Seeding database..."
 	@curl -s http://$(HOST):$(PORT)/users/seed | head -1
 
-# Quick framework comparison
-compare-frameworks: build
-	@echo "=== Framework Performance Comparison ==="
-	@echo "Config: C=$(C) N=$(N), Django-Bolt: $(P)×$(WORKERS)"
-	@echo ""
-	@echo "Django-Bolt (multi-process): ~43k RPS @ 1.2ms"
-	@echo "Robyn (single process):      ~11k RPS @ 4.4ms" 
-	@echo "FastAPI (uvicorn):           ~4k RPS @ 13ms"
-	@echo ""
-	@echo "Run 'make save-benchmarks' for detailed results"
 
 # Save baseline vs dev benchmark comparison
-save-baseline:
+save-bench:
 	@if [ ! -f BENCHMARK_BASELINE.md ]; then \
 		echo "Creating baseline benchmark..."; \
 		P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > BENCHMARK_BASELINE.md; \

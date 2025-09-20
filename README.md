@@ -14,34 +14,6 @@ Fast, typed HTTP APIs for Django using a Rust engine and msgspec serialization. 
 
 This is an experimental project. The API is unstable and may change without notice. Do not use in production yet.
 
-### Quick start
-
-1. 🔧 Build the native module (uses uv + maturin):
-
-```bash
-make build
-```
-
-2. ▶️ Run the example server (multi‑process background):
-
-```bash
-make run-bg HOST=127.0.0.1 PORT=8000 WORKERS=2 P=2
-# then
-make smoke
-```
-
-3. ✅ Run tests:
-
-```bash
-make test-py
-```
-
-4. 📈 Run benchmarks (root, items, ORM, and Json Parsing tests):
-
-```bash
-make save-bench
-# knobs: C, N, P, WORKERS, SLOW_MS, SLOW_CONC, SLOW_DURATION, WORKER_SET
-```
 
 ### Minimal usage 🧩
 
@@ -86,6 +58,36 @@ Notes:
 ### Contributing 🤝
 
 Feedback, issues, and PRs are welcome. Please keep in mind the project is evolving quickly and performance is the primary goal.
+
+#### Quick start
+
+1. 🔧 Build the native module (uses uv + maturin):
+
+```bash
+make build
+```
+
+2. ▶️ Run the example server (multi‑process background):
+
+```bash
+make run-bg HOST=127.0.0.1 PORT=8000 WORKERS=2 P=2
+# then
+make smoke
+```
+
+3. ✅ Run tests:
+
+```bash
+make test-py
+```
+
+4. 📈 Run benchmarks (root, items, ORM, and Json Parsing tests):
+
+```bash
+make save-bench
+# knobs: C, N, P, WORKERS, SLOW_MS, SLOW_CONC, SLOW_DURATION, WORKER_SET
+```
+
 
 ### Benchmarks (dev) 📊
 

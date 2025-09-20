@@ -33,6 +33,7 @@ class Item(msgspec.Struct):
 
 @api.post("/items/")
 async def create_item(item: Item) -> Item:
+    item = ItemModel.objects.create(**item)
     return item
 
 @api.get("/items/", response_model=list[Item]) # return type and response_model both are supprted like FastAPI

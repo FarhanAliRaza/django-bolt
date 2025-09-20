@@ -48,11 +48,8 @@ class BoltAPI:
     async def _dispatch(self, handler: Callable, request: Dict[str, Any]) -> Response:
         """Async dispatch that calls the handler and returns response tuple"""
         try:
-            # Extract path params to pass as kwargs
-            path_params = request.get("params", {})
-            
-            # Call the async handler with request and path params
-            result = await handler(request, **path_params)
+            # Single-arg fast path; handlers receive `request` and read from request["params"], request["query"], etc.
+            result = await handler(request)
             
             # Handle different response types
             if isinstance(result, JSON):

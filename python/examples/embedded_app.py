@@ -27,8 +27,9 @@ async def list_users(req):
 
 
 @api.get("/users/{user_id}")
-async def get_user(req, user_id: str):
+async def get_user(req):
     """Example with path parameters"""
+    user_id = req.get("params", {}).get("user_id")
     return JSON({
         "user_id": user_id,
         "query": req.get("query", {}),

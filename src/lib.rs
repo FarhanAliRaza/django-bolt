@@ -1,3 +1,4 @@
+use actix_http::KeepAlive;
 use actix_web::{self as aw, http::StatusCode, web, App, HttpRequest, HttpResponse, HttpServer};
 use ahash::AHashMap;
 use once_cell::sync::OnceCell;
@@ -7,6 +8,8 @@ use pyo3::{
 };
 use pyo3_asyncio_0_21 as pyo3_asyncio;
 use pyo3_asyncio_0_21::TaskLocals;
+use socket2::{Domain, Protocol, Socket, Type};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -22,6 +25,79 @@ static TASK_LOCALS: OnceCell<TaskLocals> = OnceCell::new();
 
 struct AppState {
     dispatch: Py<PyAny>,
+}
+
+#[pyclass]
+struct PyRequest {
+    method: String,
+    path: String,
+    body: Vec<u8>,
+    path_params: AHashMap<String, String>,
+    query_params: AHashMap<String, String>,
+}
+
+#[pymethods]
+impl PyRequest {
+    #[getter]
+    fn method(&self) -> &str {
+        &self.method
+    }
+
+    #[getter]
+    fn path(&self) -> &str {
+        &self.path
+    }
+
+    #[getter]
+    fn body<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new_bound(py, &self.body)
+    }
+
+    fn get<'py>(&self, py: Python<'py>, key: &str, default: Option<PyObject>) -> PyObject {
+        match key {
+            "method" => self.method.clone().into_py(py),
+            "path" => self.path.clone().into_py(py),
+            "body" => PyBytes::new_bound(py, &self.body).into_py(py),
+            "params" => {
+                let d = PyDict::new_bound(py);
+                for (k, v) in &self.path_params {
+                    let _ = d.set_item(k, v);
+                }
+                d.into_py(py)
+            }
+            "query" => {
+                let d = PyDict::new_bound(py);
+                for (k, v) in &self.query_params {
+                    let _ = d.set_item(k, v);
+                }
+                d.into_py(py)
+            }
+            _ => default.unwrap_or_else(|| py.None()),
+        }
+    }
+
+    fn __getitem__<'py>(&self, py: Python<'py>, key: &str) -> PyResult<PyObject> {
+        match key {
+            "method" => Ok(self.method.clone().into_py(py)),
+            "path" => Ok(self.path.clone().into_py(py)),
+            "body" => Ok(PyBytes::new_bound(py, &self.body).into_py(py)),
+            "params" => {
+                let d = PyDict::new_bound(py);
+                for (k, v) in &self.path_params {
+                    let _ = d.set_item(k, v);
+                }
+                Ok(d.into_py(py))
+            }
+            "query" => {
+                let d = PyDict::new_bound(py);
+                for (k, v) in &self.query_params {
+                    let _ = d.set_item(k, v);
+                }
+                Ok(d.into_py(py))
+            }
+            _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
+        }
+    }
 }
 
 async fn handle_request(
@@ -58,22 +134,14 @@ async fn handle_request(
 
         // Build coroutine under GIL briefly and convert to a Rust Future
         let fut = match Python::with_gil(|py| -> PyResult<_> {
-            let request = PyDict::new_bound(py);
-            request.set_item("method", method)?;
-            request.set_item("path", path)?;
-            request.set_item("body", PyBytes::new_bound(py, &body))?;
-
-            let py_path_params = PyDict::new_bound(py);
-            for (k, v) in path_params {
-                py_path_params.set_item(k, v)?;
-            }
-            request.set_item("params", py_path_params)?;
-
-            let py_query_params = PyDict::new_bound(py);
-            for (k, v) in query_params {
-                py_query_params.set_item(k, v)?;
-            }
-            request.set_item("query", py_query_params)?;
+            let request = PyRequest {
+                method,
+                path,
+                body: body.to_vec(),
+                path_params,
+                query_params,
+            };
+            let request_obj = Py::new(py, request)?;
 
             // Use global background asyncio loop locals if available; otherwise, best-effort current locals
             let locals = if let Some(globals) = TASK_LOCALS.get() {
@@ -83,7 +151,7 @@ async fn handle_request(
             };
 
             // Call dispatch with handler and request to get coroutine
-            let coroutine = dispatch.call1(py, (handler, request))?;
+            let coroutine = dispatch.call1(py, (handler, request_obj))?;
 
             // Convert coroutine into a Rust Future scheduled on Tokio using explicit locals
             pyo3_asyncio::into_future_with_locals(&locals, coroutine.into_bound(py))
@@ -194,16 +262,62 @@ fn start_server_async(py: Python<'_>, dispatch: PyObject, host: String, port: u1
                     .filter(|&w| w >= 1)
                     .unwrap_or(2);
 
-                HttpServer::new(move || {
-                    App::new()
-                        .app_data(web::Data::new(app_state.clone()))
-                        .default_service(web::route().to(handle_request))
-                })
-                .workers(workers)
-                .bind((host.as_str(), port))
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
-                .run()
-                .await
+                {
+                    let server = HttpServer::new(move || {
+                        App::new()
+                            .app_data(web::Data::new(app_state.clone()))
+                            .default_service(web::route().to(handle_request))
+                    })
+                    .keep_alive(KeepAlive::Os)
+                    .client_request_timeout(std::time::Duration::from_secs(0))
+                    .workers(workers);
+
+                    let use_reuse_port = std::env::var("DJANGO_BOLT_REUSE_PORT")
+                        .ok()
+                        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                        .unwrap_or(false);
+
+                    if use_reuse_port {
+                        // Build a SO_REUSEPORT listener
+                        let ip: IpAddr = host.parse().unwrap_or(IpAddr::from([0, 0, 0, 0]));
+                        let domain = match ip {
+                            IpAddr::V4(_) => Domain::IPV4,
+                            IpAddr::V6(_) => Domain::IPV6,
+                        };
+                        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                        socket
+                            .set_reuse_address(true)
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                        #[cfg(not(target_os = "windows"))]
+                        socket
+                            .set_reuse_port(true)
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                        let addr = SocketAddr::new(ip, port);
+                        socket
+                            .bind(&addr.into())
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                        socket
+                            .listen(1024)
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                        let listener: std::net::TcpListener = socket.into();
+                        listener
+                            .set_nonblocking(true)
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+                        server
+                            .listen(listener)
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+                            .run()
+                            .await
+                    } else {
+                        server
+                            .bind((host.as_str(), port))
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+                            .run()
+                            .await
+                    }
+                }
             })
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))
     })

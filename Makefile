@@ -5,7 +5,7 @@ PORT ?= 8000
 C ?= 100
 N ?= 50000
 
-.PHONY: develop run run-bg kill smoke bench migrate orm-smoke create-user clean reinstall
+.PHONY: develop run run-bg kill smoke bench migrate orm-smoke create-user clean reinstall run-mp kill-mp
 
 develop:
 	uv run maturin develop
@@ -52,4 +52,26 @@ clean:
 	cargo clean
 
 reinstall: kill clean develop
+
+# Multi-process launcher using SO_REUSEPORT (export DJANGO_BOLT_WORKERS=1 recommended)
+# Usage: make run-mp P=4
+P ?= $(shell nproc)
+run-mp:
+	@echo "starting $(P) processes on :$(PORT) with SO_REUSEPORT"
+	@for i in $(shell seq 1 $(P)); do \
+		DJANGO_BOLT_REUSE_PORT=1 nohup uv run python python/examples/embedded_app.py \
+			> /tmp/django-bolt-$$i.log 2>&1 & echo $$! >> /tmp/django-bolt-mp.pids; \
+		echo "started[$$i]: $$(tail -1 /tmp/django-bolt-mp.pids) (log: /tmp/django-bolt-$$i.log)"; \
+	done
+
+kill-mp:
+	@if [ -f /tmp/django-bolt-mp.pids ]; then \
+		echo "killing processes:"; \
+		xargs -r kill < /tmp/django-bolt-mp.pids 2>/dev/null || true; \
+		sleep 0.2; \
+		xargs -r kill -9 < /tmp/django-bolt-mp.pids 2>/dev/null || true; \
+		rm -f /tmp/django-bolt-mp.pids; \
+	else \
+		echo "no mp pid file"; \
+	fi
 

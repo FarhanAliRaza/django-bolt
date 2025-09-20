@@ -10,3 +10,4 @@ class JSON:
         return msgspec.json.encode(self.data)
 
 
+

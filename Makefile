@@ -5,7 +5,7 @@ PORT ?= 8000
 C ?= 50
 N ?= 10000
 P ?= 2
-WORKERS ?= 2
+WORKERS ?= 1
 
 .PHONY: build test-server test-server-bg kill bench clean orm-test setup-test-data seed-data orm-smoke compare-frameworks save-baseline test-py
 

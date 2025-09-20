@@ -86,3 +86,31 @@ Notes:
 ### Contributing
 
 Feedback, issues, and PRs are welcome. Please keep in mind the project is evolving quickly and performance is the primary goal.
+
+### Benchmarks (dev)
+
+These are indicative numbers produced by `scripts/benchmark.sh` on a local machine. This is not a full web framework yet; many features like middleware, CORS, auth, etc. are not enabled in these runs. Treat results as directional only.
+
+Summary (from BENCHMARK_DEV.md):
+
+```
+Root (GET /)
+Requests per second:    64527.79
+
+Items GET (GET /items/1?q=hello)
+Requests per second:    67866.55
+
+Items PUT JSON (PUT /items/1)
+Requests per second:    61265.50
+
+ORM Full10 (GET /users/full10)
+Requests per second:     7507.36
+
+ORM Mini10 (GET /users/mini10)
+Requests per second:     8944.02
+
+JSON Parse/Validate (c=1, POST /bench/parse)
+Requests per second:     9023.87
+```
+
+See the full details in `BENCHMARK_DEV.md`. Your results will vary by hardware and settings (`P`, `WORKERS`, `C`, `N`, etc.).

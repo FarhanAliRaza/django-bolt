@@ -1,8 +1,8 @@
-## Django‑Bolt (experimental)
+## Django‑Bolt (experimental) ⚡️
 
 Fast, typed HTTP APIs for Django using a Rust engine and msgspec serialization. This project is a prototype exploring how far we can push performance while keeping a simple, familiar developer experience.
 
-### What this is
+### What this is 🚀
 
 - **Rust server core**: Actix + Tokio behind the scenes, driven from Python via pyo3-asyncio.
 - **Simple API syntax**: Define routes with `BoltAPI` decorators (`get/post/put/patch/delete`).
@@ -10,19 +10,19 @@ Fast, typed HTTP APIs for Django using a Rust engine and msgspec serialization. 
 - **Typed responses**: Validate/serialize responses using either the function return type annotation or a `response_model=` on the decorator. Django ORM objects are automatically coerced into your `msgspec.Struct` models.
 - **Batteries included**: Example project, benchmarks, and tests.
 
-### Status
+### Status ⚠️
 
 This is an experimental project. The API is unstable and may change without notice. Do not use in production yet.
 
 ### Quick start
 
-1. Build the native module (uses uv + maturin):
+1. 🔧 Build the native module (uses uv + maturin):
 
 ```bash
 make build
 ```
 
-2. Run the example server (multi‑process background):
+2. ▶️ Run the example server (multi‑process background):
 
 ```bash
 make run-bg HOST=127.0.0.1 PORT=8000 WORKERS=2 P=2
@@ -30,20 +30,20 @@ make run-bg HOST=127.0.0.1 PORT=8000 WORKERS=2 P=2
 make smoke
 ```
 
-3. Run tests:
+3. ✅ Run tests:
 
 ```bash
 make test-py
 ```
 
-4. Run benchmarks (root, items, ORM, and Ninja‑style tests):
+4. 📈 Run benchmarks (root, items, ORM, and Json Parsing tests):
 
 ```bash
 make save-bench
 # knobs: C, N, P, WORKERS, SLOW_MS, SLOW_CONC, SLOW_DURATION, WORKER_SET
 ```
 
-### Minimal usage
+### Minimal usage 🧩
 
 ```python
 import msgspec
@@ -73,21 +73,21 @@ Notes:
 - If both a return annotation and `response_model` are present, `response_model` wins.
 - If neither is provided, responses are returned as‑is for maximal performance.
 
-### Why msgspec?
+### Why msgspec? 🚀
 
 `msgspec` provides extremely fast type validation and JSON encoding/decoding. We lean on it for both request body parsing and response serialization.
 
-### Caveats
+### Caveats ⚠️
 
 - Experimental: APIs and internals will change.
 - Limited error handling: response validation errors currently return 500; this may change to 422 in the future.
 - Benchmarks are local and environment‑dependent; treat numbers as indicative, not absolute.
 
-### Contributing
+### Contributing 🤝
 
 Feedback, issues, and PRs are welcome. Please keep in mind the project is evolving quickly and performance is the primary goal.
 
-### Benchmarks (dev)
+### Benchmarks (dev) 📊
 
 These are indicative numbers produced by `scripts/benchmark.sh` on a local machine. This is not a full web framework yet; many features like middleware, CORS, auth, etc. are not enabled in these runs. Treat results as directional only.
 

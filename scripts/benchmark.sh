@@ -78,10 +78,7 @@ kill $SERVER_PID 2>/dev/null || true
 echo ""
 echo "## Django Ninja-style Benchmarks"
 
-# JSON Parsing/Validation at concurrency=1 via POST /bench/parse
-DJANGO_BOLT_WORKERS=$WORKERS nohup uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
-SERVER_PID=$!
-sleep 2
+# JSON Parsing/Validation
 
 BODY_FILE=$(mktemp)
 cat > "$BODY_FILE" << 'JSON'
@@ -94,12 +91,22 @@ cat > "$BODY_FILE" << 'JSON'
 }
 JSON
 
-echo "\n### JSON Parse/Validate (c=1, POST /bench/parse)"
-ab -q -c 1 -n $N -T 'application/json' -u "$BODY_FILE" http://$HOST:$PORT/bench/parse 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+echo "\n### JSON Parse/Validate (POST /bench/parse)"
+# Start a fresh server for this test
+DJANGO_BOLT_WORKERS=$WORKERS nohup uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
+SERVER_PID=$!
+sleep 2
+
+# Sanity check
+PCODE=$(curl -s -o /dev/null -w '%{http_code}' http://$HOST:$PORT/)
+if [ "$PCODE" != "200" ]; then
+  echo "Expected 200 from / before parse test but got $PCODE; skipping." >&2
+else
+  ab -k -c 1 -n $N -T 'application/json' -u "$BODY_FILE" http://$HOST:$PORT/bench/parse 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+fi
+kill $SERVER_PID 2>/dev/null || true
 rm -f "$BODY_FILE"
 
-kill $SERVER_PID 2>/dev/null || true
-sleep 1
 
 # echo "\n### Slow Async Operation (GET /bench/slow?ms=$SLOW_MS, c=$SLOW_CONC, t=${SLOW_DURATION}s)"
 # for W in $WORKER_SET; do

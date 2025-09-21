@@ -565,6 +565,7 @@ dependencies = [
  "actix-web",
  "ahash",
  "bytes",
+ "futures-core",
  "futures-util",
  "matchit",
  "mimalloc",

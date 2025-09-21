@@ -37,23 +37,65 @@ ab -k -c $C -n $N http://$HOST:$PORT/ 2>/dev/null | grep -E "(Requests per secon
 echo ""
 echo "## Response Type Endpoints"
 
-echo "\n### Header Endpoint (/header)"
+printf "\n### Header Endpoint (/header)\n"
 ab -k -c $C -n $N -H 'x-test: val' http://$HOST:$PORT/header 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
-echo "\n### Cookie Endpoint (/cookie)"
+printf "\n### Cookie Endpoint (/cookie)\n"
 ab -k -c $C -n $N -H 'Cookie: session=abc' http://$HOST:$PORT/cookie 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
-echo "\n### Exception Endpoint (/exc)"
+printf "\n### Exception Endpoint (/exc)\n"
 ab -k -c $C -n $N http://$HOST:$PORT/exc 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
-echo "\n### HTML Response (/html)"
+printf "\n### HTML Response (/html)\n"
 ab -k -c $C -n $N http://$HOST:$PORT/html 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
-echo "\n### Redirect Response (/redirect)"
+printf "\n### Redirect Response (/redirect)\n"
 ab -k -c $C -n $N -r -H 'Accept: */*' http://$HOST:$PORT/redirect 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
-echo "\n### File Static via FileResponse (/file-static)"
+printf "\n### File Static via FileResponse (/file-static)\n"
 ab -k -c $C -n $N http://$HOST:$PORT/file-static 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
+# Streaming and SSE tests using hey (better than ab for streaming)
+echo ""
+echo "## Streaming and SSE Performance"
+
+# Check if hey is available
+HEY_BIN=""
+if command -v hey &> /dev/null; then
+    HEY_BIN="hey"
+elif [ -f "$HOME/go/bin/hey" ]; then
+    HEY_BIN="$HOME/go/bin/hey"
+elif [ -f "$HOME/.local/bin/hey" ]; then
+    HEY_BIN="$HOME/.local/bin/hey"
+fi
+
+if [ -n "$HEY_BIN" ]; then
+    printf "\n### Streaming Plain Text (/stream)\n"
+    $HEY_BIN -n $N -c $C http://$HOST:$PORT/stream 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10
+    
+    printf "\n### Server-Sent Events (/sse)\n"
+    $HEY_BIN -n $N -c $C -H "Accept: text/event-stream" http://$HOST:$PORT/sse 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10
+
+    printf "\n### Server-Sent Events (async) (/sse-async)\n"
+    $HEY_BIN -n $N -c $C -H "Accept: text/event-stream" http://$HOST:$PORT/sse-async 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10
+
+    printf "\n### OpenAI Chat Completions (stream) (/v1/chat/completions)\n"
+    BODY_STREAM='{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}],"stream":true,"n_chunks":50,"token":" hi","delay_ms":0}'
+    echo "$BODY_STREAM" > /tmp/bolt_chat_stream.json
+    $HEY_BIN -n $N -c $C -H "Content-Type: application/json" -m POST -D /tmp/bolt_chat_stream.json http://$HOST:$PORT/v1/chat/completions 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Bytes In|Bytes Out|Status code distribution:)" | head -15
+
+    printf "\n### OpenAI Chat Completions (async stream) (/v1/chat/completions-async)\n"
+    BODY_STREAM_ASYNC='{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}],"stream":true,"n_chunks":50,"token":" hi","delay_ms":0}'
+    echo "$BODY_STREAM_ASYNC" > /tmp/bolt_chat_stream_async.json
+    $HEY_BIN -n $N -c $C -H "Content-Type: application/json" -m POST -D /tmp/bolt_chat_stream_async.json http://$HOST:$PORT/v1/chat/completions-async 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Bytes In|Bytes Out|Status code distribution:)" | head -15
+
+    printf "\n### OpenAI Chat Completions (non-stream) (/v1/chat/completions)\n"
+    BODY_NOSTREAM='{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}],"stream":false,"n_chunks":200,"token":" hi","delay_ms":0}'
+    echo "$BODY_NOSTREAM" > /tmp/bolt_chat_nostream.json
+    $HEY_BIN -n $N -c $C -H "Content-Type: application/json" -m POST -D /tmp/bolt_chat_nostream.json http://$HOST:$PORT/v1/chat/completions 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Bytes In|Bytes Out|Status code distribution:)" | head -15
+else
+    echo "hey not installed. Run: ./scripts/install_hey.sh"
+fi
 
 # Additional endpoint: GET /items/{item_id}
 echo ""
@@ -65,7 +107,15 @@ echo ""
 echo "## Items PUT JSON Performance (/items/1)"
 BODY_FILE=$(mktemp)
 echo '{"name":"bench","price":1.23,"is_offer":true}' > "$BODY_FILE"
-ab -k -c $C -n $N -p "$BODY_FILE" -T 'application/json' http://$HOST:$PORT/items/1 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
+# Sanity check: ensure PUT returns 200 OK before benchmarking
+PCODE=$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary @"$BODY_FILE" http://$HOST:$PORT/items/1)
+if [ "$PCODE" != "200" ]; then
+  echo "Expected 200 from PUT /items/1 but got $PCODE; skipping Items PUT benchmark." >&2
+else
+  # Use -u for PUT body with ab
+  ab -k -c $C -n $N -u "$BODY_FILE" -T 'application/json' http://$HOST:$PORT/items/1 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests|Non-2xx responses)"
+fi
 rm -f "$BODY_FILE"
 
 kill $SERVER_PID 2>/dev/null || true
@@ -183,7 +233,7 @@ PCODE=$(curl -s -o /dev/null -w '%{http_code}' http://$HOST:$PORT/)
 if [ "$PCODE" != "200" ]; then
   echo "Expected 200 from / before parse test but got $PCODE; skipping." >&2
 else
-  ab -k -c 1 -n $N -p "$BODY_FILE" -T 'application/json' http://$HOST:$PORT/bench/parse 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+  ab -k -c $C -n $N -p "$BODY_FILE" -T 'application/json' http://$HOST:$PORT/bench/parse 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 fi
 kill $SERVER_PID 2>/dev/null || true
 rm -f "$BODY_FILE"

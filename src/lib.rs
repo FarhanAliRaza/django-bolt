@@ -1,19 +1,23 @@
 use actix_files::NamedFile;
 use actix_http::KeepAlive;
 use actix_web::http::header::{HeaderName, HeaderValue};
+use actix_web::web::Bytes;
 use actix_web::{self as aw, http::StatusCode, web, App, HttpRequest, HttpResponse, HttpServer};
 use ahash::AHashMap;
+use futures_core::Stream;
+use futures_util::stream;
 use once_cell::sync::OnceCell;
 use pyo3::{
     prelude::*,
-    types::{PyBytes, PyDict},
+    types::{PyBytes, PyDict, PyString},
 };
 use pyo3_asyncio_0_21 as pyo3_asyncio;
 use pyo3_asyncio_0_21::TaskLocals;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
+use std::pin::Pin;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 
 mod json;
 mod router;
@@ -36,6 +40,8 @@ struct PyRequest {
     body: Vec<u8>,
     path_params: AHashMap<String, String>,
     query_params: AHashMap<String, String>,
+    headers: AHashMap<String, String>,
+    cookies: AHashMap<String, String>,
 }
 
 #[pymethods]
@@ -74,6 +80,20 @@ impl PyRequest {
                 }
                 d.into_py(py)
             }
+            "headers" => {
+                let d = PyDict::new_bound(py);
+                for (k, v) in &self.headers {
+                    let _ = d.set_item(k, v);
+                }
+                d.into_py(py)
+            }
+            "cookies" => {
+                let d = PyDict::new_bound(py);
+                for (k, v) in &self.cookies {
+                    let _ = d.set_item(k, v);
+                }
+                d.into_py(py)
+            }
             _ => default.unwrap_or_else(|| py.None()),
         }
     }
@@ -93,6 +113,20 @@ impl PyRequest {
             "query" => {
                 let d = PyDict::new_bound(py);
                 for (k, v) in &self.query_params {
+                    let _ = d.set_item(k, v);
+                }
+                Ok(d.into_py(py))
+            }
+            "headers" => {
+                let d = PyDict::new_bound(py);
+                for (k, v) in &self.headers {
+                    let _ = d.set_item(k, v);
+                }
+                Ok(d.into_py(py))
+            }
+            "cookies" => {
+                let d = PyDict::new_bound(py);
+                for (k, v) in &self.cookies {
                     let _ = d.set_item(k, v);
                 }
                 Ok(d.into_py(py))
@@ -136,12 +170,36 @@ async fn handle_request(
 
         // Build coroutine under GIL briefly and convert to a Rust Future
         let fut = match Python::with_gil(|py| -> PyResult<_> {
+            // Collect headers (lower-case keys)
+            let mut headers: AHashMap<String, String> = AHashMap::new();
+            for (name, value) in req.headers().iter() {
+                if let Ok(v) = value.to_str() {
+                    headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
+                }
+            }
+            // Parse cookies from Cookie header
+            let mut cookies: AHashMap<String, String> = AHashMap::new();
+            if let Some(raw_cookie) = headers.get("cookie").cloned() {
+                for pair in raw_cookie.split(';') {
+                    let part = pair.trim();
+                    if let Some(eq) = part.find('=') {
+                        let (k, v) = part.split_at(eq);
+                        let v2 = &v[1..];
+                        if !k.is_empty() {
+                            cookies.insert(k.to_string(), v2.to_string());
+                        }
+                    }
+                }
+            }
+
             let request = PyRequest {
                 method,
                 path,
                 body: body.to_vec(),
                 path_params,
                 query_params,
+                headers,
+                cookies,
             };
             let request_obj = Py::new(py, request)?;
 
@@ -169,59 +227,120 @@ async fn handle_request(
         // Await the Python coroutine without holding the GIL
         match fut.await {
             Ok(result_obj) => {
-                // Extract the response tuple while holding the GIL briefly
-                match Python::with_gil(|py| -> PyResult<(u16, Vec<(String, String)>, Vec<u8>)> {
-                    result_obj.extract(py)
-                }) {
-                    Ok((status_code, resp_headers, body_bytes)) => {
-                        let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
-                        // Detect FileResponse sentinel header to stream via Actix NamedFile
-                        let mut file_path: Option<String> = None;
-                        let mut headers: Vec<(String, String)> =
-                            Vec::with_capacity(resp_headers.len());
-                        for (k, v) in resp_headers {
-                            if k.eq_ignore_ascii_case("x-bolt-file-path") {
-                                file_path = Some(v);
-                            } else {
-                                headers.push((k, v));
-                            }
-                        }
-
-                        if let Some(path) = file_path {
-                            // Attempt async open of the file and stream it
-                            match NamedFile::open_async(&path).await {
-                                Ok(file) => {
-                                    // Build response from NamedFile, then apply headers and status
-                                    let mut response = file.into_response(&req);
-                                    // Apply provided status code
-                                    // Best-effort: change status if possible
-                                    response.head_mut().status = status;
-
-                                    // Apply additional headers from Python (excluding sentinel)
-                                    for (k, v) in headers {
-                                        if let Ok(name) = HeaderName::try_from(k) {
-                                            if let Ok(val) = HeaderValue::try_from(v) {
-                                                response.headers_mut().insert(name, val);
-                                            }
-                                        }
-                                    }
-                                    response
-                                }
-                                Err(e) => HttpResponse::InternalServerError()
-                                    .content_type("text/plain; charset=utf-8")
-                                    .body(format!("File open error: {}", e)),
-                            }
+                // Try tuple result first
+                let tuple_result: Result<(u16, Vec<(String, String)>, Vec<u8>), _> =
+                    Python::with_gil(|py| result_obj.extract(py));
+                if let Ok((status_code, resp_headers, body_bytes)) = tuple_result {
+                    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+                    let mut file_path: Option<String> = None;
+                    let mut headers: Vec<(String, String)> = Vec::with_capacity(resp_headers.len());
+                    for (k, v) in resp_headers {
+                        if k.eq_ignore_ascii_case("x-bolt-file-path") {
+                            file_path = Some(v);
                         } else {
-                            let mut builder = HttpResponse::build(status);
-                            for (k, v) in headers {
-                                builder.append_header((k, v));
-                            }
-                            builder.body(body_bytes)
+                            headers.push((k, v));
                         }
                     }
-                    Err(e) => HttpResponse::InternalServerError()
-                        .content_type("text/plain; charset=utf-8")
-                        .body(format!("Handler error (extract): {}", e)),
+                    if let Some(path) = file_path {
+                        match NamedFile::open_async(&path).await {
+                            Ok(file) => {
+                                let mut response = file.into_response(&req);
+                                response.head_mut().status = status;
+                                for (k, v) in headers {
+                                    if let Ok(name) = HeaderName::try_from(k) {
+                                        if let Ok(val) = HeaderValue::try_from(v) {
+                                            response.headers_mut().insert(name, val);
+                                        }
+                                    }
+                                }
+                                response
+                            }
+                            Err(e) => HttpResponse::InternalServerError()
+                                .content_type("text/plain; charset=utf-8")
+                                .body(format!("File open error: {}", e)),
+                        }
+                    } else {
+                        let mut builder = HttpResponse::build(status);
+                        for (k, v) in headers {
+                            builder.append_header((k, v));
+                        }
+                        builder.body(body_bytes)
+                    }
+                } else {
+                    // Try treat as StreamingResponse
+                    let streaming = Python::with_gil(|py| {
+                        let obj = result_obj.bind(py);
+
+                        // Positive identification via isinstance if available
+                        let is_streaming = (|| -> PyResult<bool> {
+                            let m = py.import_bound("django_bolt.responses")?;
+                            let cls = m.getattr("StreamingResponse")?;
+                            obj.is_instance(&cls)
+                        })()
+                        .unwrap_or(false);
+
+                        // Or structural check for 'content'
+                        if !is_streaming && !obj.hasattr("content").unwrap_or(false) {
+                            return None;
+                        }
+
+                        let status_code: u16 = obj
+                            .getattr("status_code")
+                            .and_then(|v| v.extract())
+                            .unwrap_or(200);
+
+                        let mut headers: Vec<(String, String)> = Vec::new();
+                        if let Ok(hobj) = obj.getattr("headers") {
+                            if let Ok(hdict) = hobj.downcast::<PyDict>() {
+                                for (k, v) in hdict {
+                                    if let (Ok(ks), Ok(vs)) =
+                                        (k.extract::<String>(), v.extract::<String>())
+                                    {
+                                        headers.push((ks, vs));
+                                    }
+                                }
+                            }
+                        }
+
+                        let media_type: String = obj
+                            .getattr("media_type")
+                            .and_then(|v| v.extract())
+                            .unwrap_or_else(|_| "application/octet-stream".to_string());
+                        let has_ct = headers
+                            .iter()
+                            .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+                        if !has_ct {
+                            headers.push(("content-type".to_string(), media_type.clone()));
+                        }
+                        let content_obj: Py<PyAny> = match obj.getattr("content") {
+                            Ok(c) => c.unbind(),
+                            Err(_) => return None,
+                        };
+                        Some((status_code, headers, media_type, content_obj))
+                    });
+
+                    if let Some((status_code, headers, media_type, content_obj)) = streaming {
+                        let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+                        let mut builder = HttpResponse::build(status);
+                        for (k, v) in headers {
+                            builder.append_header((k, v));
+                        }
+                        if media_type == "text/event-stream" {
+                            builder.append_header(("X-Accel-Buffering", "no"));
+                            builder.append_header((
+                                "Cache-Control",
+                                "no-cache, no-store, must-revalidate",
+                            ));
+                            builder.append_header(("Pragma", "no-cache"));
+                            builder.append_header(("Expires", "0"));
+                        }
+                        let stream = create_python_stream(content_obj);
+                        builder.streaming(stream)
+                    } else {
+                        HttpResponse::InternalServerError()
+                            .content_type("text/plain; charset=utf-8")
+                            .body("Handler error: unsupported response type (expected tuple or StreamingResponse)")
+                    }
                 }
             }
             Err(e) => HttpResponse::InternalServerError()
@@ -371,4 +490,201 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(register_routes, m)?)?;
     m.add_function(wrap_pyfunction!(start_server_async, m)?)?;
     Ok(())
+}
+
+fn create_python_stream(
+    content: Py<PyAny>,
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
+    let channel_capacity: usize = std::env::var("DJANGO_BOLT_STREAM_CHANNEL_CAPACITY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(8);
+
+    // Resolve content to an iterator/generator target and detect async iterator support
+    let (resolved_target, is_async_iter) = Python::with_gil(|py| {
+        let mut target = content.clone_ref(py);
+        let obj = content.bind(py);
+        if obj.is_callable() {
+            if let Ok(new_obj) = obj.call0() {
+                target = new_obj.unbind();
+            }
+        }
+        let b = target.bind(py);
+        let has_async =
+            b.hasattr("__aiter__").unwrap_or(false) || b.hasattr("__anext__").unwrap_or(false);
+        (target, has_async)
+    });
+
+    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(channel_capacity);
+
+    if is_async_iter {
+        // Async generator path: use pyo3-asyncio to await __anext__ in a Tokio task
+        tokio::spawn(async move {
+            // Initialize async iterator
+            let async_iter: Option<Py<PyAny>> = Python::with_gil(|py| {
+                let b = resolved_target.bind(py);
+                if b.hasattr("__aiter__").unwrap_or(false) {
+                    match b.call_method0("__aiter__") {
+                        Ok(it) => Some(it.unbind()),
+                        Err(_) => None,
+                    }
+                } else if b.hasattr("__anext__").unwrap_or(false) {
+                    Some(resolved_target.clone_ref(py))
+                } else {
+                    None
+                }
+            });
+
+            if async_iter.is_none() {
+                return;
+            }
+            let async_iter = async_iter.unwrap();
+
+            loop {
+                // Build awaitable for __anext__ and convert to Rust Future
+                let fut_res = Python::with_gil(|py| {
+                    let locals = if let Some(globals) = TASK_LOCALS.get() {
+                        globals.clone()
+                    } else {
+                        match pyo3_asyncio::tokio::get_current_locals(py) {
+                            Ok(locals) => locals,
+                            Err(_) => return Err(()),
+                        }
+                    };
+
+                    let awaitable = match async_iter.bind(py).call_method0("__anext__") {
+                        Ok(a) => a,
+                        Err(e) => {
+                            if e.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
+                                return Ok(None);
+                            }
+                            return Err(());
+                        }
+                    };
+
+                    match pyo3_asyncio::into_future_with_locals(&locals, awaitable) {
+                        Ok(f) => Ok(Some(f)),
+                        Err(_) => Err(()),
+                    }
+                });
+
+                let fut = match fut_res {
+                    Ok(Some(f)) => f,
+                    Ok(None) => break, // normal end
+                    Err(_) => break,   // error
+                };
+
+                // Await next item
+                let next_obj = match fut.await {
+                    Ok(obj) => obj,
+                    Err(_) => break,
+                };
+
+                // Convert to bytes and send
+                let send_res = Python::with_gil(|py| {
+                    let v = next_obj.bind(py);
+                    if let Ok(b) = v.downcast::<PyBytes>() {
+                        return Some(Bytes::copy_from_slice(b.as_bytes()));
+                    }
+                    if let Ok(s) = v.downcast::<PyString>() {
+                        return Some(Bytes::from(s.to_string_lossy().into_owned()));
+                    }
+                    if let Ok(bobj) = v.call_method0("__bytes__") {
+                        if let Ok(b) = bobj.downcast::<PyBytes>() {
+                            return Some(Bytes::copy_from_slice(b.as_bytes()));
+                        }
+                    }
+                    if let Ok(s) = v.str() {
+                        return Some(Bytes::from(s.to_string()));
+                    }
+                    None
+                });
+
+                if let Some(bytes) = send_res {
+                    if tx.send(Ok(bytes)).await.is_err() {
+                        break;
+                    }
+                } else {
+                    // Unrecognized chunk, end stream
+                    break;
+                }
+            }
+        });
+    } else {
+        // Single blocking worker per stream: pump sync iterator and send chunks
+        tokio::task::spawn_blocking(move || {
+            let mut iterator: Option<Py<PyAny>> = None;
+
+            loop {
+                // Pull next chunk under the GIL
+                let next: Option<Bytes> = Python::with_gil(|py| {
+                    if iterator.is_none() {
+                        let iter_target = resolved_target.clone_ref(py);
+                        let bound = iter_target.bind(py);
+                        let iter_obj = if bound.hasattr("__next__").unwrap_or(false) {
+                            iter_target
+                        } else if bound.hasattr("__iter__").unwrap_or(false) {
+                            match bound.call_method0("__iter__") {
+                                Ok(it) => it.unbind(),
+                                Err(_) => return None,
+                            }
+                        } else {
+                            return None;
+                        };
+                        iterator = Some(iter_obj);
+                    }
+
+                    let it = iterator.as_ref().unwrap().bind(py);
+                    match it.call_method0("__next__") {
+                        Ok(value) => {
+                            if let Ok(b) = value.downcast::<pyo3::types::PyBytes>() {
+                                return Some(Bytes::copy_from_slice(b.as_bytes()));
+                            }
+                            if let Ok(s) = value.extract::<String>() {
+                                return Some(Bytes::from(s));
+                            }
+                            if let Ok(bobj) = value.call_method0("__bytes__") {
+                                if let Ok(b) = bobj.downcast::<pyo3::types::PyBytes>() {
+                                    return Some(Bytes::copy_from_slice(b.as_bytes()));
+                                }
+                            }
+                            if let Ok(s) = value.str() {
+                                return Some(Bytes::from(s.to_string()));
+                            }
+                            None
+                        }
+                        Err(err) => {
+                            if err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) {
+                                None
+                            } else {
+                                None
+                            }
+                        }
+                    }
+                });
+
+                match next {
+                    Some(bytes) => {
+                        if tx.blocking_send(Ok(bytes)).is_err() {
+                            break;
+                        }
+                    }
+                    None => {
+                        break;
+                    }
+                }
+            }
+            // sender dropped -> stream ends
+        });
+    }
+
+    let s = stream::unfold(rx, |mut rx| async move {
+        match rx.recv().await {
+            Some(item) => Some((item, rx)),
+            None => None,
+        }
+    });
+
+    Box::pin(s)
 }

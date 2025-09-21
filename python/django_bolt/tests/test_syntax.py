@@ -7,7 +7,7 @@ import json
 import msgspec
 import pytest
 
-from django_bolt import BoltAPI, JSON
+from django_bolt import BoltAPI, JSON, StreamingResponse
 from django_bolt.param_functions import Query, Path, Header, Cookie, Depends, Form, File as FileParam
 from django_bolt.responses import PlainText, HTML, Redirect, File, FileResponse
 from django_bolt.exceptions import HTTPException
@@ -247,6 +247,29 @@ def server():
     async def get_fileresponse():
         return FileResponse(THIS_FILE, filename="test_syntax.py")
 
+    # Streaming endpoints
+    @api.get("/stream-plain")
+    async def stream_plain():
+        def gen():
+            for i in range(3):
+                yield f"p{i},"
+        return StreamingResponse(gen, media_type="text/plain")
+
+    @api.get("/stream-bytes")
+    async def stream_bytes():
+        def gen():
+            for i in range(2):
+                yield str(i).encode()
+        return StreamingResponse(gen)
+
+    @api.get("/sse")
+    async def stream_sse():
+        def gen():
+            yield "event: message\ndata: hello\n\n"
+            yield "data: 1\n\n"
+            yield ": comment\n\n"
+        return StreamingResponse(gen, media_type="text/event-stream")
+
     # Additional endpoints for forms and file upload
     from typing import Annotated
     @api.post("/form-urlencoded")
@@ -431,6 +454,38 @@ def test_response_helpers(server):
     assert status == 200
     assert headers.get("content-type", "").startswith("text/")
     assert "attachment;" in (headers.get("content-disposition", "").lower())
+
+
+def test_streaming_plain(server):
+    host, port = server
+    status, headers, body = http_get(host, port, "/stream-plain")
+    assert status == 200
+    assert headers.get("content-type", "").startswith("text/plain")
+    assert body == b"p0,p1,p2,"
+
+
+def test_streaming_bytes_default_content_type(server):
+    host, port = server
+    status, headers, body = http_get(host, port, "/stream-bytes")
+    assert status == 200
+    assert headers.get("content-type", "").startswith("application/octet-stream")
+    assert body == b"01"
+
+
+def test_streaming_sse_headers(server):
+    host, port = server
+    status, headers, body = http_get(host, port, "/sse")
+    assert status == 200
+    assert headers.get("content-type", "").startswith("text/event-stream")
+    # SSE-friendly headers are set by the server
+    # Note: Connection header may be managed by the HTTP server automatically
+    assert headers.get("x-accel-buffering", "").lower() == "no"
+    # Body should contain multiple well-formed SSE lines
+    text = body.decode()
+    assert "event: message" in text
+    assert "data: hello" in text
+    assert "data: 1" in text
+    assert ": comment" in text
 
 
 def test_form_and_file(server):

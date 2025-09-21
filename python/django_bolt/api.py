@@ -6,7 +6,7 @@ import msgspec
 
 from .bootstrap import ensure_django_ready
 from django_bolt import _core
-from .responses import JSON, PlainText, HTML, Redirect, File, FileResponse
+from .responses import JSON, PlainText, HTML, Redirect, File, FileResponse, StreamingResponse
 from .exceptions import HTTPException
 from .params import Param, Depends as DependsMarker
 
@@ -496,6 +496,12 @@ class BoltAPI:
                 if result.headers:
                     headers.extend([(k.lower(), v) for k, v in result.headers.items()])
                 return int(result.status_code), headers, b""
+            elif isinstance(result, StreamingResponse):
+                # Pass through to Rust which will perform streaming
+                # Ensure content-type header is present if media_type is set
+                if result.media_type and "content-type" not in {k.lower(): v for k, v in result.headers.items()}:
+                    result.headers["content-type"] = result.media_type
+                return result
             elif isinstance(result, (bytes, bytearray)):
                 status = int(meta.get("default_status_code", 200))
                 return status, [("content-type", "application/octet-stream")], bytes(result)

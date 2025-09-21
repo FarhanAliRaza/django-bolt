@@ -96,3 +96,42 @@ This document outlines concrete, high‑impact strategies to minimize Python GIL
 - Subinterpreters: per‑interpreter state can diverge; avoid sharing Python objects across interpreters.
 - Zero‑copy: ensure Rust buffer lifetimes outlive Python views to avoid UAF.
 - DI/validation ergonomics: keep Pydantic v2 optional to protect hot‑path RPS; use `msgspec.Struct` by default.
+
+## After these optimizations
+
+Once the production‑ready set (multi‑process launcher, single‑arg fast path, lazy `PyRequest`, msgspec I/O, scope‑local loop, tuned Actix) is in place, here’s how we proceed and what to expect:
+
+- Expected impact (directional)
+
+  - JSON echo/validate endpoints: substantial gains vs. pure‑Python stacks due to Rust networking + msgspec. Further wins taper off after the single‑arg/`PyRequest` path is in.
+  - ORM endpoints: dominated by DB I/O; multi‑process and connection pooling matter more than micro‑optimizations in Python.
+  - Latency improvements will mostly come from reducing per‑request allocations and avoiding extra JSON parses/serializations.
+
+- Verification checklist (each change)
+
+  - Measure RPS, p50/p99, CPU%, RSS, context switches with the included benchmarks.
+  - Sample GIL hold time (e.g., py‑spy) during load; confirm short GIL regions around coroutine create/extract only.
+  - Validate no functional regressions with our pytest suite (binding/body/response‑model/coercion tests).
+
+- Guardrails / budgets
+
+  - Feature budgets: new features must stay within a small RPS regression budget on JSON echo (e.g., ≤3–5%).
+  - Keep the hot path: one Python call with one argument; avoid kwargs/varargs.
+  - Prefer precomputed adapters at registration time rather than reflection per request.
+
+- Next experiments (behind flags)
+
+  - Streaming responses from Rust (chunked JSON/NDJSON) for large lists to lower memory and GIL contention.
+  - Selective Rust‑side decode/validation for specific hot endpoints using reflected msgspec schemas, returning lightweight Python proxies.
+  - Subinterpreter pool (PEP 684) per worker thread; validate startup cost and memory vs. gains.
+  - Zero‑copy body buffers and memoryview exposure when safe.
+
+- Ops tuning
+
+  - Default to SO_REUSEPORT multi‑process; set workers low (1–2) per process; scale with `P` primarily.
+  - Confirm keep‑alive settings and kernel backlog; pin CPU where helpful.
+
+- When to stop optimizing
+  - Once p50/p99 and throughput meet the SLA with headroom, prefer shipping features. Use flags to re‑enable deeper paths only if needed.
+
+This playbook keeps Python time small and predictable, uses Rust for the event loop and networking, and applies heavier Rust‑side work only where it clearly beats msgspec + simple FFI.

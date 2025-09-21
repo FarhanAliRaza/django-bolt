@@ -34,6 +34,19 @@ fi
 
 ab -k -c $C -n $N http://$HOST:$PORT/ 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
+echo ""
+echo "## Header/Cookie/Exception/HTML/Redirect/File Endpoints"
+# Header
+ab -k -c $C -n $N -H 'x-test: val' http://$HOST:$PORT/header 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+# Cookie
+ab -k -c $C -n $N -H 'Cookie: session=abc' http://$HOST:$PORT/cookie 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+# HTTPException (non-200 still measures throughput)
+ab -k -c $C -n $N http://$HOST:$PORT/exc 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+# HTML
+ab -k -c $C -n $N http://$HOST:$PORT/html 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+# Redirect
+ab -k -c $C -n $N -r -H 'Accept: */*' http://$HOST:$PORT/redirect 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
 # Additional endpoint: GET /items/{item_id}
 echo ""
 echo "## Items GET Performance (/items/1?q=hello)"

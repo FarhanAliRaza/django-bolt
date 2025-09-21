@@ -1,5 +1,7 @@
 use actix_http::KeepAlive;
-use actix_web::{self as aw, http::StatusCode, web, App, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{
+    self as aw, http::header, http::StatusCode, web, App, HttpRequest, HttpResponse, HttpServer,
+};
 use ahash::AHashMap;
 use once_cell::sync::OnceCell;
 use pyo3::{
@@ -34,6 +36,8 @@ struct PyRequest {
     body: Vec<u8>,
     path_params: AHashMap<String, String>,
     query_params: AHashMap<String, String>,
+    headers: AHashMap<String, String>,
+    cookies: AHashMap<String, String>,
 }
 
 #[pymethods]
@@ -72,6 +76,20 @@ impl PyRequest {
                 }
                 d.into_py(py)
             }
+            "headers" => {
+                let d = PyDict::new_bound(py);
+                for (k, v) in &self.headers {
+                    let _ = d.set_item(k, v);
+                }
+                d.into_py(py)
+            }
+            "cookies" => {
+                let d = PyDict::new_bound(py);
+                for (k, v) in &self.cookies {
+                    let _ = d.set_item(k, v);
+                }
+                d.into_py(py)
+            }
             _ => default.unwrap_or_else(|| py.None()),
         }
     }
@@ -91,6 +109,20 @@ impl PyRequest {
             "query" => {
                 let d = PyDict::new_bound(py);
                 for (k, v) in &self.query_params {
+                    let _ = d.set_item(k, v);
+                }
+                Ok(d.into_py(py))
+            }
+            "headers" => {
+                let d = PyDict::new_bound(py);
+                for (k, v) in &self.headers {
+                    let _ = d.set_item(k, v);
+                }
+                Ok(d.into_py(py))
+            }
+            "cookies" => {
+                let d = PyDict::new_bound(py);
+                for (k, v) in &self.cookies {
                     let _ = d.set_item(k, v);
                 }
                 Ok(d.into_py(py))
@@ -126,7 +158,32 @@ async fn handle_request(
             AHashMap::new()
         };
 
-        // Skip copying headers to minimize GIL work unless needed
+        // Collect headers (lowercased keys)
+        let mut headers_map: AHashMap<String, String> = AHashMap::new();
+        for (k, v) in req.headers().iter() {
+            if let Ok(s) = v.to_str() {
+                headers_map.insert(k.as_str().to_ascii_lowercase(), s.to_string());
+            }
+        }
+
+        // Parse cookies from Cookie header
+        let mut cookies_map: AHashMap<String, String> = AHashMap::new();
+        if let Some(val) = req.headers().get(header::COOKIE) {
+            if let Ok(s) = val.to_str() {
+                for part in s.split(';') {
+                    let p = part.trim();
+                    if p.is_empty() {
+                        continue;
+                    }
+                    if let Some(eq) = p.find('=') {
+                        let (name, value) = (&p[..eq], &p[eq + 1..]);
+                        if !name.is_empty() {
+                            cookies_map.insert(name.to_string(), value.to_string());
+                        }
+                    }
+                }
+            }
+        }
 
         // Call async Python handler via pyo3-asyncio on Actix/Tokio runtime
         let dispatch = state.dispatch.clone();
@@ -140,6 +197,8 @@ async fn handle_request(
                 body: body.to_vec(),
                 path_params,
                 query_params,
+                headers: headers_map,
+                cookies: cookies_map,
             };
             let request_obj = Py::new(py, request)?;
 

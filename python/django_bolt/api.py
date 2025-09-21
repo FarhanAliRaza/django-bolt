@@ -1,10 +1,14 @@
 import inspect
-from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Union, Type
+import re
+import mimetypes
+from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Union, Type, Annotated
 import msgspec
 
 from .bootstrap import ensure_django_ready
 from django_bolt import _core
-from .responses import JSON
+from .responses import JSON, PlainText, HTML, Redirect, File
+from .exceptions import HTTPException
+from .params import Param, Depends as DependsMarker
 
 Request = Dict[str, Any]
 Response = Tuple[int, List[Tuple[str, str]], bytes]
@@ -23,22 +27,22 @@ class BoltAPI:
         # Register this instance globally for autodiscovery
         _BOLT_API_REGISTRY.append(self)
 
-    def get(self, path: str, *, response_model: Optional[Any] = None):
-        return self._route_decorator("GET", path, response_model=response_model)
+    def get(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None):
+        return self._route_decorator("GET", path, response_model=response_model, status_code=status_code)
 
-    def post(self, path: str, *, response_model: Optional[Any] = None):
-        return self._route_decorator("POST", path, response_model=response_model)
+    def post(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None):
+        return self._route_decorator("POST", path, response_model=response_model, status_code=status_code)
 
-    def put(self, path: str, *, response_model: Optional[Any] = None):
-        return self._route_decorator("PUT", path, response_model=response_model)
+    def put(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None):
+        return self._route_decorator("PUT", path, response_model=response_model, status_code=status_code)
 
-    def patch(self, path: str, *, response_model: Optional[Any] = None):
-        return self._route_decorator("PATCH", path, response_model=response_model)
+    def patch(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None):
+        return self._route_decorator("PATCH", path, response_model=response_model, status_code=status_code)
 
-    def delete(self, path: str, *, response_model: Optional[Any] = None):
-        return self._route_decorator("DELETE", path, response_model=response_model)
+    def delete(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None):
+        return self._route_decorator("DELETE", path, response_model=response_model, status_code=status_code)
 
-    def _route_decorator(self, method: str, path: str, *, response_model: Optional[Any] = None):
+    def _route_decorator(self, method: str, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None):
         def decorator(fn: Callable):
             # Enforce async handlers
             if not inspect.iscoroutinefunction(fn):
@@ -47,8 +51,9 @@ class BoltAPI:
             handler_id = self._next_handler_id
             self._next_handler_id += 1
             
-            # Apply prefix to path
+            # Apply prefix to path and convert FastAPI syntax to matchit
             full_path = self.prefix + path if self.prefix else path
+            full_path = self._convert_path(full_path)
             
             self._routes.append((method, full_path, handler_id, fn))
             self._handlers[handler_id] = fn
@@ -58,10 +63,25 @@ class BoltAPI:
             # Allow explicit response model override
             if response_model is not None:
                 meta["response_type"] = response_model
+            if status_code is not None:
+                meta["default_status_code"] = int(status_code)
             self._handler_meta[fn] = meta
             
             return fn
         return decorator
+
+    def _convert_path(self, path: str) -> str:
+        """Convert FastAPI-style paths like /items/{id} and /files/{path:path}
+        Matchit uses the same {param} syntax as FastAPI, but uses *path for catch-all
+        """
+        def repl(m: re.Match[str]) -> str:
+            name = m.group(1)
+            type_ = m.group(2)
+            if type_ == ":path":
+                return f"*{name}"
+            return f"{{{name}}}"
+
+        return re.sub(r"\{([a-zA-Z_][a-zA-Z0-9_]*)(:[a-zA-Z_][a-zA-Z0-9_]*)?\}", repl, path)
 
     def _is_optional(self, annotation: Any) -> bool:
         origin = get_origin(annotation)
@@ -144,23 +164,57 @@ class BoltAPI:
         # Build per-parameter binding plan
         for p in params:
             name = p.name
-            annotation = p.annotation
+            raw_annotation = p.annotation
+            annotation = raw_annotation
+            param_marker: Optional[Param] = None
+            depends_marker: Optional[DependsMarker] = None
+
+            # Unwrap Annotated[T, ...]
+            origin = get_origin(raw_annotation)
+            if origin is Annotated:
+                args = get_args(raw_annotation)
+                if args:
+                    annotation = args[0]
+                for meta_val in args[1:]:
+                    if isinstance(meta_val, Param):
+                        param_marker = meta_val
+                    elif isinstance(meta_val, DependsMarker):
+                        depends_marker = meta_val
+            else:
+                # If default is marker, detect it
+                if isinstance(p.default, Param):
+                    param_marker = p.default
+                elif isinstance(p.default, DependsMarker):
+                    depends_marker = p.default
+
             source: str
+            alias: Optional[str] = None
+            embed: Optional[bool] = None
             if name in {"request", "req"}:
                 source = "request"
+            elif param_marker is not None:
+                source = param_marker.source
+                alias = param_marker.alias
+                embed = param_marker.embed
+            elif depends_marker is not None:
+                source = "dependency"
             else:
                 # Prefer path param, then query, else body
                 source = "auto"  # decide at call time using request mapping
+            
             meta["params"].append({
                 "name": name,
                 "annotation": annotation,
                 "default": p.default,
                 "kind": p.kind,
                 "source": source,
+                "alias": alias,
+                "embed": embed,
+                "dependency": depends_marker,
             })
 
         # Detect single body parameter pattern (POST/PUT/PATCH) with msgspec.Struct
-        body_params = [p for p in meta["params"] if p["source"] == "auto" and self._is_msgspec_struct(p["annotation"])]
+        body_params = [p for p in meta["params"] if p["source"] in {"auto", "body"} and self._is_msgspec_struct(p["annotation"])]
         if len(body_params) == 1:
             meta["body_struct_param"] = body_params[0]["name"]
             meta["body_struct_type"] = body_params[0]["annotation"]
@@ -191,26 +245,100 @@ class BoltAPI:
                 # Access PyRequest mappings lazily
                 params_map = request["params"] if isinstance(request, dict) else request["params"]
                 query_map = request["query"] if isinstance(request, dict) else request["query"]
+                headers_map = request.get("headers", {})
+                cookies_map = request.get("cookies", {})
 
                 # Body decode cache
                 body_obj: Any = None
                 body_loaded: bool = False
+                dep_cache: Dict[Any, Any] = {}
 
                 for p in meta["params"]:
                     name = p["name"]
                     annotation = p["annotation"]
                     default = p["default"]
                     source = p["source"]
+                    alias = p.get("alias")
+                    depends_marker = p.get("dependency")
 
                     if source == "request":
                         value = request
+                    elif source == "dependency":
+                        dep_fn = depends_marker.dependency if depends_marker else None
+                        if dep_fn is None:
+                            raise ValueError(f"Depends for parameter {name} requires a callable")
+                        if depends_marker.use_cache and dep_fn in dep_cache:
+                            value = dep_cache[dep_fn]
+                        else:
+                            dep_meta = self._handler_meta.get(dep_fn)
+                            if dep_meta is None:
+                                dep_meta = self._compile_binder(dep_fn)
+                                self._handler_meta[dep_fn] = dep_meta
+                            if dep_meta.get("mode") == "request_only":
+                                value = await dep_fn(request)
+                            else:
+                                dep_args: List[Any] = []
+                                dep_kwargs: Dict[str, Any] = {}
+                                for dp in dep_meta["params"]:
+                                    dname = dp["name"]
+                                    dan = dp["annotation"]
+                                    dsrc = dp["source"]
+                                    dalias = dp.get("alias")
+                                    if dsrc == "request":
+                                        dval = request
+                                    else:
+                                        key = dalias or dname
+                                        if key in params_map:
+                                            raw = params_map[key]
+                                            dval = self._convert_primitive(str(raw), dan)
+                                        elif key in query_map:
+                                            raw = query_map[key]
+                                            dval = self._convert_primitive(str(raw), dan)
+                                        elif dsrc == "header":
+                                            raw = headers_map.get(key.lower())
+                                            if raw is None:
+                                                raise ValueError(f"Missing required header: {key}")
+                                            dval = self._convert_primitive(str(raw), dan)
+                                        elif dsrc == "cookie":
+                                            raw = cookies_map.get(key)
+                                            if raw is None:
+                                                raise ValueError(f"Missing required cookie: {key}")
+                                            dval = self._convert_primitive(str(raw), dan)
+                                        else:
+                                            dval = None
+                                    if dp["kind"] in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                                        dep_args.append(dval)
+                                    else:
+                                        dep_kwargs[dname] = dval
+                                value = await dep_fn(*dep_args, **dep_kwargs)
+                            if depends_marker.use_cache:
+                                dep_cache[dep_fn] = value
                     else:
-                        if name in params_map:
-                            raw = params_map[name]
+                        key = alias or name
+                        if key in params_map:
+                            raw = params_map[key]
                             value = self._convert_primitive(str(raw), annotation)
-                        elif name in query_map:
-                            raw = query_map[name]
+                        elif key in query_map:
+                            raw = query_map[key]
                             value = self._convert_primitive(str(raw), annotation)
+                        elif source == "header":
+                            raw = headers_map.get(key.lower())
+                            if raw is None:
+                                if default is not inspect._empty or self._is_optional(annotation):
+                                    value = None if default is inspect._empty else default
+                                else:
+                                    raise ValueError(f"Missing required header: {key}")
+                            else:
+                                value = self._convert_primitive(str(raw), annotation)
+                        elif source == "cookie":
+                            raw = cookies_map.get(key)
+                            if raw is None:
+                                if default is not inspect._empty or self._is_optional(annotation):
+                                    value = None if default is inspect._empty else default
+                                else:
+                                    raise ValueError(f"Missing required cookie: {key}")
+                            else:
+                                value = self._convert_primitive(str(raw), annotation)
                         else:
                             # Maybe body param
                             if meta.get("body_struct_param") == name:
@@ -255,10 +383,36 @@ class BoltAPI:
                 if result.headers:
                     headers.extend([(k.lower(), v) for k, v in result.headers.items()])
                 return int(result.status_code), headers, result.to_bytes()
+            elif isinstance(result, PlainText):
+                headers = [("content-type", "text/plain; charset=utf-8")]
+                if result.headers:
+                    headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+                return int(result.status_code), headers, result.to_bytes()
+            elif isinstance(result, HTML):
+                headers = [("content-type", "text/html; charset=utf-8")]
+                if result.headers:
+                    headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+                return int(result.status_code), headers, result.to_bytes()
+            elif isinstance(result, Redirect):
+                headers = [("location", result.url)]
+                if result.headers:
+                    headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+                return int(result.status_code), headers, b""
+            elif isinstance(result, File):
+                data = result.read_bytes()
+                ctype = result.media_type or mimetypes.guess_type(result.path)[0] or "application/octet-stream"
+                headers = [("content-type", ctype)]
+                if result.filename:
+                    headers.append(("content-disposition", f"attachment; filename=\"{result.filename}\""))
+                if result.headers:
+                    headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+                return int(result.status_code), headers, data
             elif isinstance(result, (bytes, bytearray)):
-                return 200, [("content-type", "application/octet-stream")], bytes(result)
+                status = int(meta.get("default_status_code", 200))
+                return status, [("content-type", "application/octet-stream")], bytes(result)
             elif isinstance(result, str):
-                return 200, [("content-type", "text/plain; charset=utf-8")], result.encode()
+                status = int(meta.get("default_status_code", 200))
+                return status, [("content-type", "text/plain; charset=utf-8")], result.encode()
             elif isinstance(result, (dict, list)):
                 # Use msgspec for fast JSON encoding
                 if response_tp is not None:
@@ -270,7 +424,8 @@ class BoltAPI:
                         return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
                 else:
                     data = msgspec.json.encode(result)
-                return 200, [("content-type", "application/json")], data
+                status = int(meta.get("default_status_code", 200))
+                return status, [("content-type", "application/json")], data
             else:
                 # Fallback to msgspec encoding
                 if response_tp is not None:
@@ -282,8 +437,19 @@ class BoltAPI:
                         return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
                 else:
                     data = msgspec.json.encode(result)
-                return 200, [("content-type", "application/json")], data
+                status = int(meta.get("default_status_code", 200))
+                return status, [("content-type", "application/json")], data
                 
+        except HTTPException as he:
+            try:
+                body = msgspec.json.encode({"detail": he.detail})
+                headers = [("content-type", "application/json")]
+            except Exception:
+                body = str(he.detail).encode()
+                headers = [("content-type", "text/plain; charset=utf-8")]
+            if he.headers:
+                headers.extend([(k.lower(), v) for k, v in he.headers.items()])
+            return int(he.status_code), headers, body
         except Exception as e:
             error_msg = f"Handler error: {str(e)}"
             return 500, [("content-type", "text/plain; charset=utf-8")], error_msg.encode()

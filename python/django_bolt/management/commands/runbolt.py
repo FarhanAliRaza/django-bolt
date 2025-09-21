@@ -116,10 +116,13 @@ class Command(BaseCommand):
             )
         
         # Register routes with Rust
-        rust_routes = [
-            (method, path, handler_id, handler)
-            for method, path, handler_id, handler in merged_api._routes
-        ]
+        rust_routes = []
+        for method, path, handler_id, handler in merged_api._routes:
+            # Ensure matchit path syntax
+            from django_bolt.api import BoltAPI
+            convert = getattr(merged_api, "_convert_path", None)
+            norm_path = convert(path) if callable(convert) else path
+            rust_routes.append((method, norm_path, handler_id, handler))
         
         _core.register_routes(rust_routes)
         

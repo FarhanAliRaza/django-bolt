@@ -13,4 +13,44 @@ class JSON:
 
 
 
+class PlainText:
+    def __init__(self, text: str, status_code: int = 200, headers: Optional[Dict[str, str]] = None):
+        self.text = text
+        self.status_code = status_code
+        self.headers = headers or {}
+
+    def to_bytes(self) -> bytes:
+        return self.text.encode()
+
+
+class HTML:
+    def __init__(self, html: str, status_code: int = 200, headers: Optional[Dict[str, str]] = None):
+        self.html = html
+        self.status_code = status_code
+        self.headers = headers or {}
+
+    def to_bytes(self) -> bytes:
+        return self.html.encode()
+
+
+class Redirect:
+    def __init__(self, url: str, status_code: int = 307, headers: Optional[Dict[str, str]] = None):
+        self.url = url
+        self.status_code = status_code
+        self.headers = headers or {}
+
+
+class File:
+    def __init__(self, path: str, *, media_type: Optional[str] = None, filename: Optional[str] = None, status_code: int = 200, headers: Optional[Dict[str, str]] = None):
+        self.path = path
+        self.media_type = media_type
+        self.filename = filename
+        self.status_code = status_code
+        self.headers = headers or {}
+
+    def read_bytes(self) -> bytes:
+        with open(self.path, "rb") as f:
+            return f.read()
+
+
 

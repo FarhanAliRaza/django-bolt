@@ -11,7 +11,7 @@ WORKERS ?= 1
 
 # Build Rust extension in release mode
 build:
-	uvx maturin develop --release
+	uv run maturin develop --release
 
 
 # Start test server in background with multi-process

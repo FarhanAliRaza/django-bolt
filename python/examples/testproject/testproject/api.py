@@ -1,7 +1,10 @@
-from typing import Optional, List
+from typing import Optional, List, Annotated
 import msgspec
 import asyncio
 from django_bolt import BoltAPI, JSON
+from django_bolt.param_functions import Header, Cookie
+from django_bolt.responses import PlainText, HTML, Redirect
+from django_bolt.exceptions import HTTPException
 
 api = BoltAPI()
 
@@ -54,3 +57,29 @@ async def bench_slow(ms: Optional[int] = 100):
     delay = max(0, (ms or 0)) / 1000.0
     await asyncio.sleep(delay)
     return {"ok": True, "ms": ms}
+
+
+# ==== Benchmark endpoints for Header/Cookie/Exception/HTML/Redirect ====
+@api.get("/header")
+async def get_header(x: Annotated[str, Header(alias="x-test")]):
+    return PlainText(x)
+
+
+@api.get("/cookie")
+async def get_cookie(val: Annotated[str, Cookie(alias="session")]):
+    return PlainText(val)
+
+
+@api.get("/exc")
+async def raise_exc():
+    raise HTTPException(status_code=404, detail="Not found")
+
+
+@api.get("/html")
+async def get_html():
+    return HTML("<h1>Hello</h1>")
+
+
+@api.get("/redirect")
+async def get_redirect():
+    return Redirect("/", status_code=302)

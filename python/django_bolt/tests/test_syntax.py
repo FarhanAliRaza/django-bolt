@@ -8,11 +8,19 @@ import msgspec
 import pytest
 
 from django_bolt import BoltAPI, JSON
+from django_bolt.param_functions import Query, Path, Header, Cookie, Depends
+from django_bolt.responses import PlainText, HTML, Redirect, File
+from django_bolt.exceptions import HTTPException
 from django_bolt import _core as core
 
 
 def run_server(api: BoltAPI, host: str, port: int):
-    core.register_routes([(m, p, hid, h) for (m, p, hid, h) in api._routes])
+    # The routes in api._routes are already converted to matchit style,
+    # so we shouldn't convert them again
+    routes = []
+    for m, p, hid, h in api._routes:
+        routes.append((m, p, hid, h))
+    core.register_routes(routes)
     core.start_server_async(api._dispatch, host, port)
 
 
@@ -163,6 +171,52 @@ def server():
     async def no_validate():
         return [{"anything": 1, "extra": "ok"}]
 
+    # ---- New syntax parity endpoints ----
+    # Decorator status_code default
+    @api.get("/status-default", status_code=201)
+    async def status_default():
+        return {"ok": True}
+
+    # Header and Cookie extraction
+    @api.get("/headers-cookies")
+    async def headers_cookies(
+        agent: str = Depends(lambda user_agent: user_agent),
+    ):
+        return {"ok": True}
+
+    # Explicit Header/Cookie parameters using Annotated
+    from typing import Annotated
+
+    @api.get("/header")
+    async def get_header(x: Annotated[str, Header(alias="x-test")]):
+        return PlainText(x)
+
+    @api.get("/cookie")
+    async def get_cookie(val: Annotated[str, Cookie(alias="session")]):
+        return PlainText(val)
+
+    # HTTPException
+    @api.get("/exc")
+    async def raise_exc():
+        raise HTTPException(418, {"detail": "teapot"}, headers={"X-Err": "1"})
+
+    # Response helpers
+    @api.get("/html")
+    async def get_html():
+        return HTML("<h1>Hi</h1>")
+
+    @api.get("/redirect")
+    async def get_redirect():
+        return Redirect("/", status_code=302)
+
+    # File response (serve this test file itself)
+    import os
+    THIS_FILE = os.path.abspath(__file__)
+
+    @api.get("/file")
+    async def get_file():
+        return File(THIS_FILE, filename="test_syntax.py")
+
     host, port = "127.0.0.1", free_port()
     t = threading.Thread(target=run_server, args=(api, host, port), daemon=True)
     t.start()
@@ -299,5 +353,37 @@ def test_no_validation_without_types(server):
     data = json.loads(body)
     # Should return as-is since neither annotation nor response_model provided
     assert data == [{"anything": 1, "extra": "ok"}]
+
+
+def test_status_code_default(server):
+    host, port = server
+    status, headers, body = http_get(host, port, "/status-default")
+    assert status == 201
+
+
+def test_header_and_cookie(server):
+    host, port = server
+    status, headers, body = http_request("GET", host, port, "/header", headers={"x-test": "val"})
+    assert status == 200 and body == b"val"
+    # set cookie via header
+    status, headers, body = http_request("GET", host, port, "/cookie", headers={"Cookie": "session=abc"})
+    assert status == 200 and body == b"abc"
+
+
+def test_http_exception(server):
+    host, port = server
+    status, headers, body = http_get(host, port, "/exc")
+    assert status == 418
+    assert headers.get("x-err") == "1"
+
+
+def test_response_helpers(server):
+    host, port = server
+    status, headers, body = http_get(host, port, "/html")
+    assert status == 200 and headers.get("content-type", "").startswith("text/html")
+    status, headers, body = http_get(host, port, "/redirect")
+    assert status == 302 and headers.get("location") == "/"
+    status, headers, body = http_get(host, port, "/file")
+    assert status == 200 and headers.get("content-type", "").startswith("text/")
 
 

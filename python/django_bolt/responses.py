@@ -53,4 +53,16 @@ class File:
             return f.read()
 
 
+class UploadFile:
+    def __init__(self, name: str, filename: Optional[str], content_type: Optional[str], path: str):
+        self.name = name
+        self.filename = filename
+        self.content_type = content_type
+        self.path = path
+
+    def read(self) -> bytes:
+        with open(self.path, "rb") as f:
+            return f.read()
+
+
 

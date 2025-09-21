@@ -8,7 +8,7 @@ import msgspec
 import pytest
 
 from django_bolt import BoltAPI, JSON
-from django_bolt.param_functions import Query, Path, Header, Cookie, Depends
+from django_bolt.param_functions import Query, Path, Header, Cookie, Depends, Form, File as FileParam
 from django_bolt.responses import PlainText, HTML, Redirect, File
 from django_bolt.exceptions import HTTPException
 from django_bolt import _core as core
@@ -46,6 +46,31 @@ def http_put_json(host: str, port: int, path: str, data: dict):
 
 def http_post(host: str, port: int, path: str):
     return http_request("POST", host, port, path)
+
+def http_post_form(host: str, port: int, path: str, data: dict):
+    from urllib.parse import urlencode
+    payload = urlencode(data).encode()
+    return http_request("POST", host, port, path, body=payload, headers={"Content-Type": "application/x-www-form-urlencoded"})
+
+def http_post_multipart(host: str, port: int, path: str, fields: dict, files: list[tuple[str, bytes, str]]):
+    import uuid
+    boundary = f"----bolt{uuid.uuid4().hex}"
+    lines: list[bytes] = []
+    for k, v in fields.items():
+        lines.append(f"--{boundary}\r\n".encode())
+        lines.append(f"Content-Disposition: form-data; name=\"{k}\"\r\n\r\n".encode())
+        lines.append(str(v).encode())
+        lines.append(b"\r\n")
+    for name, content, filename in files:
+        lines.append(f"--{boundary}\r\n".encode())
+        lines.append(f"Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n".encode())
+        lines.append(b"Content-Type: application/octet-stream\r\n\r\n")
+        lines.append(content)
+        lines.append(b"\r\n")
+    lines.append(f"--{boundary}--\r\n".encode())
+    body = b"".join(lines)
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    return http_request("POST", host, port, path, body=body, headers=headers)
 
 
 def http_patch(host: str, port: int, path: str):
@@ -217,6 +242,17 @@ def server():
     async def get_file():
         return File(THIS_FILE, filename="test_syntax.py")
 
+    # Additional endpoints for forms and file upload
+    from typing import Annotated
+    @api.post("/form-urlencoded")
+    async def form_urlencoded(a: Annotated[str, Form()], b: Annotated[int, Form()]):
+        return {"a": a, "b": b}
+
+    @api.post("/upload")
+    async def upload(files: Annotated[list[dict], FileParam(alias="file")]):
+        # return only metadata
+        return {"count": len(files), "names": [f.get("filename") for f in files]}
+
     host, port = "127.0.0.1", free_port()
     t = threading.Thread(target=run_server, args=(api, host, port), daemon=True)
     t.start()
@@ -385,5 +421,14 @@ def test_response_helpers(server):
     assert status == 302 and headers.get("location") == "/"
     status, headers, body = http_get(host, port, "/file")
     assert status == 200 and headers.get("content-type", "").startswith("text/")
+
+
+def test_form_and_file(server):
+    host, port = server
+    status, headers, body = http_post_form(host, port, "/form-urlencoded", {"a": "x", "b": 3})
+    assert status == 200 and json.loads(body) == {"a": "x", "b": 3}
+    status, headers, body = http_post_multipart(host, port, "/upload", {"note": "hi"}, [("file", b"abc", "a.txt"), ("file", b"def", "b.txt")])
+    data = json.loads(body)
+    assert status == 200 and data["count"] == 2 and set(data["names"]) == {"a.txt", "b.txt"}
 
 

@@ -248,6 +248,63 @@ class BoltAPI:
                 headers_map = request.get("headers", {})
                 cookies_map = request.get("cookies", {})
 
+                # Parse form/multipart data if needed
+                form_map: Dict[str, Any] = {}
+                files_map: Dict[str, Any] = {}
+                content_type = headers_map.get("content-type", "")
+                
+                if content_type.startswith("application/x-www-form-urlencoded"):
+                    from urllib.parse import parse_qs
+                    body_bytes: bytes = request["body"]
+                    form_data = parse_qs(body_bytes.decode("utf-8"))
+                    # parse_qs returns lists, but for single values we want the value directly
+                    form_map = {k: v[0] if len(v) == 1 else v for k, v in form_data.items()}
+                elif content_type.startswith("multipart/form-data"):
+                    # Parse multipart form data
+                    boundary_idx = content_type.find("boundary=")
+                    if boundary_idx >= 0:
+                        boundary = content_type[boundary_idx + 9:].strip()
+                        body_bytes: bytes = request["body"]
+                        # Simple multipart parser
+                        parts = body_bytes.split(f"--{boundary}".encode())
+                        for part in parts[1:-1]:  # Skip first empty and last closing
+                            if b"\r\n\r\n" in part:
+                                header_section, content = part.split(b"\r\n\r\n", 1)
+                                content = content.rstrip(b"\r\n")
+                                headers_text = header_section.decode("utf-8", errors="ignore")
+                                
+                                # Parse Content-Disposition header
+                                name = None
+                                filename = None
+                                for line in headers_text.split("\r\n"):
+                                    if line.startswith("Content-Disposition:"):
+                                        disp = line[20:].strip()
+                                        for param in disp.split("; "):
+                                            if param.startswith('name="'):
+                                                name = param[6:-1]
+                                            elif param.startswith('filename="'):
+                                                filename = param[10:-1]
+                                
+                                if name:
+                                    if filename:
+                                        # It's a file
+                                        file_info = {
+                                            "filename": filename,
+                                            "content": content,
+                                            "size": len(content)
+                                        }
+                                        if name in files_map:
+                                            if isinstance(files_map[name], list):
+                                                files_map[name].append(file_info)
+                                            else:
+                                                files_map[name] = [files_map[name], file_info]
+                                        else:
+                                            files_map[name] = file_info
+                                    else:
+                                        # It's a form field
+                                        value = content.decode("utf-8", errors="ignore")
+                                        form_map[name] = value
+
                 # Body decode cache
                 body_obj: Any = None
                 body_loaded: bool = False
@@ -339,6 +396,29 @@ class BoltAPI:
                                     raise ValueError(f"Missing required cookie: {key}")
                             else:
                                 value = self._convert_primitive(str(raw), annotation)
+                        elif source == "form":
+                            raw = form_map.get(key)
+                            if raw is None:
+                                if default is not inspect._empty or self._is_optional(annotation):
+                                    value = None if default is inspect._empty else default
+                                else:
+                                    raise ValueError(f"Missing required form field: {key}")
+                            else:
+                                value = self._convert_primitive(str(raw), annotation)
+                        elif source == "file":
+                            raw = files_map.get(key)
+                            if raw is None:
+                                if default is not inspect._empty or self._is_optional(annotation):
+                                    value = None if default is inspect._empty else default
+                                else:
+                                    raise ValueError(f"Missing required file: {key}")
+                            else:
+                                # For files, return the raw dict(s) containing filename and content
+                                # If it's a list annotation, ensure we have a list
+                                if hasattr(annotation, "__origin__") and annotation.__origin__ is list:
+                                    value = raw if isinstance(raw, list) else [raw]
+                                else:
+                                    value = raw
                         else:
                             # Maybe body param
                             if meta.get("body_struct_param") == name:

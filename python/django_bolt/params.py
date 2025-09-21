@@ -31,6 +31,14 @@ def Cookie(default: Any = ... , *, alias: Optional[str] = None) -> Any:
     return Param(source="cookie", alias=alias)
 
 
+def Form(default: Any = ... , *, alias: Optional[str] = None) -> Any:  # noqa: N802
+    return Param(source="form", alias=alias)
+
+
+def File(default: Any = ... , *, alias: Optional[str] = None) -> Any:  # noqa: N802
+    return Param(source="file", alias=alias)
+
+
 @dataclass
 class Depends:
     dependency: Optional[Callable[..., Any]] = None

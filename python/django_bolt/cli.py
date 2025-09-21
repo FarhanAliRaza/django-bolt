@@ -3,13 +3,12 @@ import sys
 from pathlib import Path
 import click
 
-from .bootstrap import ensure_django_ready
 from .api import BoltAPI
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def main():
-    """Django-Bolt command line."""
+    """Django-Bolt command line interface."""
 
 
 @main.command()
@@ -25,6 +24,7 @@ def init():
     
     if not project_root:
         click.echo("Error: No Django project found (manage.py not found)", err=True)
+        click.echo("Please run this command from within a Django project directory.")
         return
     
     click.echo(f"Found Django project at: {project_root}")
@@ -79,21 +79,44 @@ def init():
     # 2. Create api.py template
     api_file = project_root / project_name / "api.py"
     if not api_file.exists():
-        api_template = '''from django_bolt import BoltAPI, JSON
+        api_template = '''"""Django-Bolt API routes."""
+from django_bolt import BoltAPI
+import msgspec
+from typing import Optional
 
 api = BoltAPI()
 
 
-@api.get("/hello")
-async def hello(req):
-    """Sample API endpoint"""
-    return JSON({"message": "Hello from Django-Bolt!"})
+@api.get("/")
+async def root():
+    """Root endpoint."""
+    return {"message": "Welcome to Django-Bolt!"}
 
 
 @api.get("/health")
-async def health(req):
-    """Health check endpoint"""
-    return JSON({"status": "ok"})
+async def health():
+    """Health check endpoint."""
+    return {"status": "ok", "service": "django-bolt"}
+
+
+# Example with path parameters
+@api.get("/items/{item_id}")
+async def get_item(item_id: int, q: Optional[str] = None):
+    """Get an item by ID."""
+    return {"item_id": item_id, "q": q}
+
+
+# Example with request body validation using msgspec
+class Item(msgspec.Struct):
+    name: str
+    price: float
+    is_offer: Optional[bool] = None
+
+
+@api.post("/items")
+async def create_item(item: Item):
+    """Create a new item."""
+    return {"item": item, "created": True}
 '''
         api_file.write_text(api_template)
         click.echo(f"✓ Created {api_file.relative_to(project_root)}")
@@ -105,61 +128,6 @@ async def health(req):
     click.echo("1. Run migrations: python manage.py migrate")
     click.echo("2. Start the server: python manage.py runbolt")
     click.echo(f"3. Edit your API routes in {project_name}/api.py")
-
-
-@main.command()
-@click.option("--host", default="0.0.0.0", show_default=True)
-@click.option("--port", default=8000, type=int, show_default=True)
-def run(host: str, port: int):
-    """Run the Django-Bolt server in embedded/attached mode."""
-    info = ensure_django_ready()
-    click.echo(f"[django-bolt] Django setup: mode={info.get('mode')} debug={info.get('debug')}")
-    click.echo(f"[django-bolt] DB: {info.get('database')} name={info.get('database_name')}")
-
-    api = BoltAPI()
-
-    # In the future, we can import user-defined routes via env or module path.
-    # For now, serve an empty API to exercise the stack.
-    click.echo(f"[django-bolt] Listening on http://{host}:{port}")
-    api.serve(host, port)
-
-
-@main.command()
-def migrations():
-    """Show unapplied migrations (attached/embedded)."""
-    ensure_django_ready()
-    from django.core.management import call_command
-
-    call_command("showmigrations", list=True)
-
-
-@main.command()
-def migrate():
-    """Apply migrations (attached/embedded)."""
-    ensure_django_ready()
-    from django.core.management import call_command
-
-    call_command("migrate", interactive=False, run_syncdb=True)
-
-
-@main.command()
-@click.argument("app_label", required=False)
-@click.option("--name", default=None, help="Name of the migration")
-@click.option("--empty", is_flag=True, default=False, help="Create an empty migration")
-def makemigrations(app_label: str | None, name: str | None, empty: bool):
-    """Create new migrations for apps (attached/embedded)."""
-    ensure_django_ready()
-    from django.core.management import call_command
-
-    kwargs = {}
-    if name:
-        kwargs["name"] = name
-    if empty:
-        kwargs["empty"] = True
-
-    if app_label:
-        call_command("makemigrations", app_label, **kwargs)
-    else:
-        call_command("makemigrations", **kwargs)
+    click.echo("\nFor more information, visit: https://github.com/yourusername/django-bolt")
 
 

@@ -2,7 +2,7 @@ from typing import Optional, List, Annotated
 import msgspec
 import asyncio
 from django_bolt import BoltAPI, JSON
-from django_bolt.param_functions import Header, Cookie
+from django_bolt.param_functions import Header, Cookie, Form, File
 from django_bolt.responses import PlainText, HTML, Redirect
 from django_bolt.exceptions import HTTPException
 
@@ -83,3 +83,40 @@ async def get_html():
 @api.get("/redirect")
 async def get_redirect():
     return Redirect("/", status_code=302)
+
+
+# ==== Form and File upload endpoints ====
+@api.post("/form")
+async def handle_form(
+    name: Annotated[str, Form()],
+    age: Annotated[int, Form()],
+    email: Annotated[str, Form()] = "default@example.com"
+):
+    return {"name": name, "age": age, "email": email}
+
+
+@api.post("/upload")
+async def handle_upload(
+    files: Annotated[list[dict], File(alias="file")]
+):
+    # Return file metadata
+    return {
+        "uploaded": len(files),
+        "files": [{"name": f.get("filename"), "size": f.get("size")} for f in files]
+    }
+
+
+@api.post("/mixed-form")
+async def handle_mixed(
+    title: Annotated[str, Form()],
+    description: Annotated[str, Form()],
+    attachments: Annotated[list[dict], File(alias="file")] = None
+):
+    result = {
+        "title": title,
+        "description": description,
+        "has_attachments": bool(attachments)
+    }
+    if attachments:
+        result["attachment_count"] = len(attachments)
+    return result

@@ -1,6 +1,15 @@
 from typing import Any
 
-from .params import Query as _Query, Path as _Path, Body as _Body, Header as _Header, Cookie as _Cookie, Depends as _Depends
+from .params import (
+    Query as _Query,
+    Path as _Path,
+    Body as _Body,
+    Header as _Header,
+    Cookie as _Cookie,
+    Depends as _Depends,
+    Form as _Form,
+    File as _File,
+)
 
 
 def Query(*args: Any, **kwargs: Any) -> Any:  # noqa: N802
@@ -27,6 +36,14 @@ def Depends(*args: Any, **kwargs: Any) -> Any:  # noqa: N802
     return _Depends(*args, **kwargs)
 
 
-__all__ = ["Query", "Path", "Body", "Header", "Cookie", "Depends"]
+def Form(*args: Any, **kwargs: Any) -> Any:  # noqa: N802
+    return _Form(*args, **kwargs)
+
+
+def File(*args: Any, **kwargs: Any) -> Any:  # noqa: N802
+    return _File(*args, **kwargs)
+
+
+__all__ = ["Query", "Path", "Body", "Header", "Cookie", "Depends", "Form", "File"]
 
 

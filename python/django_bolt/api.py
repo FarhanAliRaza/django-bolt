@@ -6,7 +6,7 @@ import msgspec
 
 from .bootstrap import ensure_django_ready
 from django_bolt import _core
-from .responses import JSON, PlainText, HTML, Redirect, File
+from .responses import JSON, PlainText, HTML, Redirect, File, FileResponse
 from .exceptions import HTTPException
 from .params import Param, Depends as DependsMarker
 
@@ -487,6 +487,15 @@ class BoltAPI:
                 if result.headers:
                     headers.extend([(k.lower(), v) for k, v in result.headers.items()])
                 return int(result.status_code), headers, data
+            elif isinstance(result, FileResponse):
+                # Signal Rust/Actix to stream the file directly via NamedFile
+                ctype = result.media_type or mimetypes.guess_type(result.path)[0] or "application/octet-stream"
+                headers = [("x-bolt-file-path", result.path), ("content-type", ctype)]
+                if result.filename:
+                    headers.append(("content-disposition", f"attachment; filename=\"{result.filename}\""))
+                if result.headers:
+                    headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+                return int(result.status_code), headers, b""
             elif isinstance(result, (bytes, bytearray)):
                 status = int(meta.get("default_status_code", 200))
                 return status, [("content-type", "application/octet-stream")], bytes(result)

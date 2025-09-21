@@ -52,6 +52,9 @@ ab -k -c $C -n $N http://$HOST:$PORT/html 2>/dev/null | grep -E "(Requests per s
 echo "\n### Redirect Response (/redirect)"
 ab -k -c $C -n $N -r -H 'Accept: */*' http://$HOST:$PORT/redirect 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
+echo "\n### File Static via FileResponse (/file-static)"
+ab -k -c $C -n $N http://$HOST:$PORT/file-static 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
 # Additional endpoint: GET /items/{item_id}
 echo ""
 echo "## Items GET Performance (/items/1?q=hello)"

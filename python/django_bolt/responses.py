@@ -66,3 +66,20 @@ class UploadFile:
 
 
 
+class FileResponse:
+    def __init__(
+        self,
+        path: str,
+        *,
+        media_type: Optional[str] = None,
+        filename: Optional[str] = None,
+        status_code: int = 200,
+        headers: Optional[Dict[str, str]] = None,
+    ):
+        self.path = path
+        self.media_type = media_type
+        self.filename = filename
+        self.status_code = status_code
+        self.headers = headers or {}
+
+

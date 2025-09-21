@@ -9,7 +9,7 @@ import pytest
 
 from django_bolt import BoltAPI, JSON
 from django_bolt.param_functions import Query, Path, Header, Cookie, Depends, Form, File as FileParam
-from django_bolt.responses import PlainText, HTML, Redirect, File
+from django_bolt.responses import PlainText, HTML, Redirect, File, FileResponse
 from django_bolt.exceptions import HTTPException
 from django_bolt import _core as core
 
@@ -242,6 +242,11 @@ def server():
     async def get_file():
         return File(THIS_FILE, filename="test_syntax.py")
 
+    # FileResponse streamed by Actix NamedFile
+    @api.get("/fileresponse")
+    async def get_fileresponse():
+        return FileResponse(THIS_FILE, filename="test_syntax.py")
+
     # Additional endpoints for forms and file upload
     from typing import Annotated
     @api.post("/form-urlencoded")
@@ -421,6 +426,11 @@ def test_response_helpers(server):
     assert status == 302 and headers.get("location") == "/"
     status, headers, body = http_get(host, port, "/file")
     assert status == 200 and headers.get("content-type", "").startswith("text/")
+    # FileResponse should also succeed and set content-disposition
+    status, headers, body = http_get(host, port, "/fileresponse")
+    assert status == 200
+    assert headers.get("content-type", "").startswith("text/")
+    assert "attachment;" in (headers.get("content-disposition", "").lower())
 
 
 def test_form_and_file(server):

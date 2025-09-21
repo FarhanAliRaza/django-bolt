@@ -3,7 +3,7 @@ import msgspec
 import asyncio
 from django_bolt import BoltAPI, JSON
 from django_bolt.param_functions import Header, Cookie, Form, File
-from django_bolt.responses import PlainText, HTML, Redirect
+from django_bolt.responses import PlainText, HTML, Redirect, FileResponse
 from django_bolt.exceptions import HTTPException
 
 api = BoltAPI()
@@ -120,3 +120,13 @@ async def handle_mixed(
     if attachments:
         result["attachment_count"] = len(attachments)
     return result
+
+
+# ==== File serving endpoint for benchmarks ====
+import os
+THIS_FILE = os.path.abspath(__file__)
+
+
+@api.get("/file-static")
+async def file_static():
+    return FileResponse(THIS_FILE, filename="api.py")

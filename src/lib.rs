@@ -1,4 +1,6 @@
+use actix_files::NamedFile;
 use actix_http::KeepAlive;
+use actix_web::http::header::{HeaderName, HeaderValue};
 use actix_web::{self as aw, http::StatusCode, web, App, HttpRequest, HttpResponse, HttpServer};
 use ahash::AHashMap;
 use once_cell::sync::OnceCell;
@@ -173,12 +175,49 @@ async fn handle_request(
                 }) {
                     Ok((status_code, resp_headers, body_bytes)) => {
                         let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
-                        let mut builder = HttpResponse::build(status);
+                        // Detect FileResponse sentinel header to stream via Actix NamedFile
+                        let mut file_path: Option<String> = None;
+                        let mut headers: Vec<(String, String)> =
+                            Vec::with_capacity(resp_headers.len());
                         for (k, v) in resp_headers {
-                            builder.append_header((k, v));
+                            if k.eq_ignore_ascii_case("x-bolt-file-path") {
+                                file_path = Some(v);
+                            } else {
+                                headers.push((k, v));
+                            }
                         }
 
-                        builder.body(body_bytes)
+                        if let Some(path) = file_path {
+                            // Attempt async open of the file and stream it
+                            match NamedFile::open_async(&path).await {
+                                Ok(file) => {
+                                    // Build response from NamedFile, then apply headers and status
+                                    let mut response = file.into_response(&req);
+                                    // Apply provided status code
+                                    // Best-effort: change status if possible
+                                    response.head_mut().status = status;
+
+                                    // Apply additional headers from Python (excluding sentinel)
+                                    for (k, v) in headers {
+                                        if let Ok(name) = HeaderName::try_from(k) {
+                                            if let Ok(val) = HeaderValue::try_from(v) {
+                                                response.headers_mut().insert(name, val);
+                                            }
+                                        }
+                                    }
+                                    response
+                                }
+                                Err(e) => HttpResponse::InternalServerError()
+                                    .content_type("text/plain; charset=utf-8")
+                                    .body(format!("File open error: {}", e)),
+                            }
+                        } else {
+                            let mut builder = HttpResponse::build(status);
+                            for (k, v) in headers {
+                                builder.append_header((k, v));
+                            }
+                            builder.body(body_bytes)
+                        }
                     }
                     Err(e) => HttpResponse::InternalServerError()
                         .content_type("text/plain; charset=utf-8")

@@ -3,7 +3,7 @@ import msgspec
 import asyncio
 import time
 import json
-from django_bolt import BoltAPI, JSON, StreamingResponse
+from django_bolt import BoltAPI, JSON
 from django_bolt.param_functions import Header, Cookie, Form, File
 from django_bolt.responses import PlainText, HTML, Redirect, FileResponse, StreamingResponse
 from django_bolt.exceptions import HTTPException

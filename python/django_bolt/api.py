@@ -497,10 +497,7 @@ class BoltAPI:
                     headers.extend([(k.lower(), v) for k, v in result.headers.items()])
                 return int(result.status_code), headers, b""
             elif isinstance(result, StreamingResponse):
-                # Pass through to Rust which will perform streaming
-                # Ensure content-type header is present if media_type is set
-                if result.media_type and "content-type" not in {k.lower(): v for k, v in result.headers.items()}:
-                    result.headers["content-type"] = result.media_type
+                # Pass through; Rust will detect and stream from the iterator/generator
                 return result
             elif isinstance(result, (bytes, bytearray)):
                 status = int(meta.get("default_status_code", 200))

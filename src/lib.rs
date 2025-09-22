@@ -374,14 +374,20 @@ fn register_routes(
         router.register(&method, &path, handler_id, handler.into())?;
     }
 
-    GLOBAL_ROUTER.set(Arc::new(RwLock::new(router)))
+    GLOBAL_ROUTER
+        .set(Arc::new(RwLock::new(router)))
         .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Router already initialized"))?;
 
     Ok(())
 }
 
 #[pyfunction]
-fn start_server_async(py: Python<'_>, dispatch: Py<PyAny>, host: String, port: u16) -> PyResult<()> {
+fn start_server_async(
+    py: Python<'_>,
+    dispatch: Py<PyAny>,
+    host: String,
+    port: u16,
+) -> PyResult<()> {
     // Ensure router is initialized
     if GLOBAL_ROUTER.get().is_none() {
         return Err(pyo3::exceptions::PyRuntimeError::new_err(

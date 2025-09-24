@@ -6,36 +6,36 @@ from pathlib import Path
 from django.conf import settings
 
 
-def ensure_django_ready() -> dict:
-    """Ensure Django is properly configured using the project's settings module."""
-    if settings.configured:
-        return _info()
+# def ensure_django_ready() -> dict:
+#     """Ensure Django is properly configured using the project's settings module."""
+#     if settings.configured:
+#         return _info()
 
-    settings_module = os.getenv("DJANGO_SETTINGS_MODULE")
-    if not settings_module:
-        # Try to detect settings module from manage.py location
-        settings_module = _detect_settings_module()
-        if settings_module:
-            os.environ["DJANGO_SETTINGS_MODULE"] = settings_module
+#     settings_module = os.getenv("DJANGO_SETTINGS_MODULE")
+#     if not settings_module:
+#         # Try to detect settings module from manage.py location
+#         settings_module = _detect_settings_module()
+#         if settings_module:
+#             os.environ["DJANGO_SETTINGS_MODULE"] = settings_module
     
-    if not settings_module:
-        raise RuntimeError(
-            "Django settings module not found. Please ensure:\n"
-            "1. You are running from a Django project directory (with manage.py)\n"
-            "2. DJANGO_SETTINGS_MODULE environment variable is set\n"
-            "3. Your project has a valid settings.py file"
-        )
+#     if not settings_module:
+#         raise RuntimeError(
+#             "Django settings module not found. Please ensure:\n"
+#             "1. You are running from a Django project directory (with manage.py)\n"
+#             "2. DJANGO_SETTINGS_MODULE environment variable is set\n"
+#             "3. Your project has a valid settings.py file"
+#         )
     
-    try:
-        importlib.import_module(settings_module)
-        import django
-        django.setup()
-        return _info()
-    except ImportError as e:
-        raise RuntimeError(
-            f"Failed to import Django settings module '{settings_module}': {e}\n"
-            "Please check that your settings module exists and is valid."
-        )
+#     try:
+#         importlib.import_module(settings_module)
+#         import django
+#         django.setup()
+#         return _info()
+#     except ImportError as e:
+#         raise RuntimeError(
+#             f"Failed to import Django settings module '{settings_module}': {e}\n"
+#             "Please check that your settings module exists and is valid."
+#         )
 
 
 def _detect_settings_module() -> str | None:

@@ -4,7 +4,7 @@ import mimetypes
 from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Union, Type, Annotated
 import msgspec
 
-from .bootstrap import ensure_django_ready
+# from .bootstrap import ensure_django_ready
 from django_bolt import _core
 from .responses import JSON, PlainText, HTML, Redirect, File, FileResponse, StreamingResponse
 from .exceptions import HTTPException
@@ -546,26 +546,26 @@ class BoltAPI:
             error_msg = f"Handler error: {str(e)}"
             return 500, [("content-type", "text/plain; charset=utf-8")], error_msg.encode()
     
-    def serve(self, host: str = "0.0.0.0", port: int = 8000) -> None:
-        """Start the async server with registered routes"""
-        info = ensure_django_ready()
-        print(
-            f"[django-bolt] Django setup: mode={info.get('mode')} debug={info.get('debug')}\n"
-            f"[django-bolt] DB: {info.get('database')} name={info.get('database_name')}\n"
-            f"[django-bolt] Settings: {info.get('settings_module') or 'embedded'}"
-        )
+    # def serve(self, host: str = "0.0.0.0", port: int = 8000) -> None:
+    #     """Start the async server with registered routes"""
+    #     info = ensure_django_ready()
+    #     print(
+    #         f"[django-bolt] Django setup: mode={info.get('mode')} debug={info.get('debug')}\n"
+    #         f"[django-bolt] DB: {info.get('database')} name={info.get('database_name')}\n"
+    #         f"[django-bolt] Settings: {info.get('settings_module') or 'embedded'}"
+    #     )
         
-        # Register all routes with Rust router
-        rust_routes = [
-            (method, path, handler_id, handler)
-            for method, path, handler_id, handler in self._routes
-        ]
+    #     # Register all routes with Rust router
+    #     rust_routes = [
+    #         (method, path, handler_id, handler)
+    #         for method, path, handler_id, handler in self._routes
+    #     ]
         
-        # Register routes in Rust
-        _core.register_routes(rust_routes)
+    #     # Register routes in Rust
+    #     _core.register_routes(rust_routes)
         
-        print(f"[django-bolt] Registered {len(self._routes)} routes")
-        print(f"[django-bolt] Starting async server on http://{host}:{port}")
+    #     print(f"[django-bolt] Registered {len(self._routes)} routes")
+    #     print(f"[django-bolt] Starting async server on http://{host}:{port}")
         
-        # Start async server
-        _core.start_server_async(self._dispatch, host, port)
+    #     # Start async server
+    #     _core.start_server_async(self._dispatch, host, port)

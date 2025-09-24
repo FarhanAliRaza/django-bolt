@@ -6,6 +6,7 @@ C ?= 100
 N ?= 10000
 P ?= 4
 WORKERS ?= 1
+MODE ?= bolt
 
 .PHONY: build test-server test-server-bg kill bench clean orm-test setup-test-data seed-data orm-smoke compare-frameworks save-baseline test-py
 
@@ -104,15 +105,52 @@ seed-data:
 	@curl -s http://$(HOST):$(PORT)/users/seed | head -1
 
 
+# Run Django ASGI with Uvicorn in background
+run-django-bg:
+	cd python/examples/testproject && \
+	nohup uv run uvicorn testproject.asgi:application --host $(HOST) --port $(PORT) --workers $(WORKERS) \
+		--loop uvloop --http httptools --log-level error \
+		> /tmp/django-uvicorn-test.log 2>&1 & echo $$! > /tmp/django-uvicorn-test.pid && \
+		echo "Django ASGI started: $$(cat /tmp/django-uvicorn-test.pid) (log: /tmp/django-uvicorn-test.log)"
+
+# Benchmark Django-Bolt vs Django ASGI comparison
+bench-compare: build
+	@echo "=== Django-Bolt vs Django ASGI Performance Comparison ==="
+	@echo ""
+	@echo "1. Testing Django-Bolt (Rust + Python)..."
+	@MODE=bolt P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > /tmp/bench-bolt.txt
+	@echo "Root endpoint (Bolt):"
+	@grep -A1 "## Root Endpoint Performance" /tmp/bench-bolt.txt | grep "Requests per second" | head -1
+	@echo ""
+	@echo "2. Testing Django ASGI (Uvicorn)..."
+	@MODE=django P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > /tmp/bench-django.txt
+	@echo "Root endpoint (Django):"
+	@grep -A1 "## Root Endpoint Performance" /tmp/bench-django.txt | grep "Requests per second" | head -1
+	@echo ""
+	@echo "=== Full Results ==="
+	@echo "Bolt RPS:" && grep "Requests per second" /tmp/bench-bolt.txt | head -5
+	@echo ""
+	@echo "Django RPS:" && grep "Requests per second" /tmp/bench-django.txt | head -5
+
+# Run Django ASGI benchmarks only
+bench-django:
+	@echo "Benchmarking Django ASGI endpoints..."
+	@MODE=django P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh
+
+# Run Bolt benchmarks only 
+bench-bolt:
+	@echo "Benchmarking Django-Bolt endpoints..."
+	@MODE=bolt P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh
+
 # Save baseline vs dev benchmark comparison
 save-bench:
 	@if [ ! -f BENCHMARK_BASELINE.md ]; then \
-		echo "Creating baseline benchmark..."; \
-		P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > BENCHMARK_BASELINE.md; \
+		echo "Creating baseline benchmark (MODE=$(MODE))..."; \
+		MODE=$(MODE) P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > BENCHMARK_BASELINE.md; \
 		echo "✅ Baseline saved to BENCHMARK_BASELINE.md"; \
 	elif [ ! -f BENCHMARK_DEV.md ]; then \
-		echo "Creating dev benchmark..."; \
-		P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > BENCHMARK_DEV.md; \
+		echo "Creating dev benchmark (MODE=$(MODE))..."; \
+		MODE=$(MODE) P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > BENCHMARK_DEV.md; \
 		echo "✅ Dev version saved to BENCHMARK_DEV.md"; \
 		echo ""; \
 		echo "=== PERFORMANCE COMPARISON ==="; \
@@ -126,9 +164,9 @@ save-bench:
 		echo "Streaming (SSE) RPS - Dev:"; \
 		awk '/### Server-Sent Events/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' BENCHMARK_DEV.md || true; \
 	else \
-		echo "Rotating benchmarks: dev -> baseline, new -> dev"; \
+		echo "Rotating benchmarks: dev -> baseline, new -> dev (MODE=$(MODE))"; \
 		mv BENCHMARK_DEV.md BENCHMARK_BASELINE.md; \
-		P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > BENCHMARK_DEV.md; \
+		MODE=$(MODE) P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > BENCHMARK_DEV.md; \
 		echo "✅ New dev version saved, old dev moved to baseline"; \
 		echo ""; \
 		echo "=== PERFORMANCE COMPARISON ==="; \

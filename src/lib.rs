@@ -7,10 +7,13 @@ use ahash::AHashMap;
 use futures_util::stream;
 use futures_util::Stream;
 use once_cell::sync::OnceCell;
+use std::time::Instant;
 use pyo3::{
     prelude::*,
     types::{PyBytes, PyDict, PyString},
 };
+
+mod direct_stream;
 use pyo3_async_runtimes as pyo3_asyncio;
 use pyo3_async_runtimes::TaskLocals;
 use socket2::{Domain, Protocol, Socket, Type};
@@ -338,16 +341,43 @@ async fn handle_request(
                         builder.append_header((k, v));
                     }
                     if media_type == "text/event-stream" {
-                        builder.append_header(("X-Accel-Buffering", "no"));
-                        builder.append_header((
-                            "Cache-Control",
-                            "no-cache, no-store, must-revalidate",
-                        ));
-                        builder.append_header(("Pragma", "no-cache"));
-                        builder.append_header(("Expires", "0"));
+                        // Use optimized SSE streaming
+                        return direct_stream::create_sse_response(content_obj)
+                            .unwrap_or_else(|_| {
+                                builder.append_header(("X-Accel-Buffering", "no"));
+                                builder.append_header((
+                                    "Cache-Control",
+                                    "no-cache, no-store, must-revalidate",
+                                ));
+                                builder.append_header(("Pragma", "no-cache"));
+                                builder.append_header(("Expires", "0"));
+                                builder.content_type("text/event-stream").body("")
+                            });
+                    } else {
+                        // Check if it's async first
+                        let is_async = Python::attach(|py| {
+                            let obj = content_obj.bind(py);
+                            obj.hasattr("__aiter__").unwrap_or(false) 
+                                || obj.hasattr("__anext__").unwrap_or(false)
+                        });
+                        
+                        if is_async {
+                            // Async iterators - use original streaming for now
+                            let stream = create_python_stream(content_obj);
+                            return builder.streaming(stream);
+                        } else {
+                            // For sync streaming, use direct stream
+                            let mut direct = direct_stream::PythonDirectStream::new(content_obj);
+                            
+                            // Try to collect small responses
+                            if let Some(body) = direct.try_collect_small() {
+                                return builder.body(body);
+                            }
+                            
+                            // Large response - use streaming
+                            return builder.streaming(Box::pin(direct));
+                        }
                     }
-                    let stream = create_python_stream(content_obj);
-                    return builder.streaming(stream);
                 } else {
                     return HttpResponse::InternalServerError()
                         .content_type("text/plain; charset=utf-8")
@@ -507,6 +537,9 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
 fn create_python_stream(
     content: Py<PyAny>,
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
+    let debug_timing = std::env::var("DJANGO_BOLT_DEBUG_TIMING").is_ok();
+    let start_time = if debug_timing { Some(Instant::now()) } else { None };
+    
     let channel_capacity: usize = std::env::var("DJANGO_BOLT_STREAM_CHANNEL_CAPACITY")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
@@ -514,6 +547,7 @@ fn create_python_stream(
         .unwrap_or(8);
 
     // Resolve content to an iterator/generator target and detect async iterator support
+    let resolve_start = if debug_timing { Some(Instant::now()) } else { None };
     let (resolved_target, is_async_iter) = Python::attach(|py| {
         let mut target = content.clone_ref(py);
         let obj = content.bind(py);
@@ -527,12 +561,22 @@ fn create_python_stream(
             b.hasattr("__aiter__").unwrap_or(false) || b.hasattr("__anext__").unwrap_or(false);
         (target, has_async)
     });
+    
+    if let Some(start) = resolve_start {
+        eprintln!("[TIMING] Iterator resolution: {:?}, is_async={}", start.elapsed(), is_async_iter);
+    }
 
     let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(channel_capacity);
 
     if is_async_iter {
         // Async generator path: use pyo3-asyncio to await __anext__ in a Tokio task
+        let debug_async = debug_timing;
         tokio::spawn(async move {
+            let mut chunk_count = 0u32;
+            let mut total_gil_time = std::time::Duration::ZERO;
+            let mut total_await_time = std::time::Duration::ZERO;
+            let mut total_send_time = std::time::Duration::ZERO;
+            let task_start = if debug_async { Some(Instant::now()) } else { None };
             // Initialize async iterator
             let async_iter: Option<Py<PyAny>> = Python::attach(|py| {
                 let b = resolved_target.bind(py);
@@ -586,12 +630,17 @@ fn create_python_stream(
 
             while let Some(fut) = next_fut_opt {
                 // Await current item
+                let await_start = if debug_async { Some(Instant::now()) } else { None };
                 let next_obj = match fut.await {
                     Ok(obj) => obj,
                     Err(_) => break,
                 };
+                if let Some(start) = await_start {
+                    total_await_time += start.elapsed();
+                }
 
                 // Convert current item and pipeline creation of the next future in a single GIL block
+                let gil_start = if debug_async { Some(Instant::now()) } else { None };
                 let (bytes_opt, new_next_fut_opt) = Python::attach(|py| {
                     // Convert current chunk to Bytes
                     let v = next_obj.bind(py);
@@ -646,12 +695,21 @@ fn create_python_stream(
 
                     (chunk_bytes, next_future_opt)
                 });
+                
+                if let Some(start) = gil_start {
+                    total_gil_time += start.elapsed();
+                }
 
                 // Send current chunk
                 if let Some(bytes) = bytes_opt {
+                    let send_start = if debug_async { Some(Instant::now()) } else { None };
                     if tx.send(Ok(bytes)).await.is_err() {
                         break;
                     }
+                    if let Some(start) = send_start {
+                        total_send_time += start.elapsed();
+                    }
+                    chunk_count += 1;
                 } else {
                     break;
                 }
@@ -659,14 +717,33 @@ fn create_python_stream(
                 // Continue with next future or finish
                 next_fut_opt = new_next_fut_opt;
             }
+            
+            if let Some(start) = task_start {
+                let total = start.elapsed();
+                eprintln!("[TIMING] Async streaming complete:");
+                eprintln!("  Total time: {:?}", total);
+                eprintln!("  Chunks sent: {}", chunk_count);
+                eprintln!("  GIL time: {:?} ({:.1}%)", total_gil_time, (total_gil_time.as_secs_f64() / total.as_secs_f64()) * 100.0);
+                eprintln!("  Await time: {:?} ({:.1}%)", total_await_time, (total_await_time.as_secs_f64() / total.as_secs_f64()) * 100.0);
+                eprintln!("  Send time: {:?} ({:.1}%)", total_send_time, (total_send_time.as_secs_f64() / total.as_secs_f64()) * 100.0);
+                if chunk_count > 0 {
+                    eprintln!("  Avg per chunk: {:?}", total / chunk_count);
+                }
+            }
         });
     } else {
         // Single blocking worker per stream: pump sync iterator and send chunks
+        let debug_sync = debug_timing;
         tokio::task::spawn_blocking(move || {
             let mut iterator: Option<Py<PyAny>> = None;
+            let mut chunk_count = 0u32;
+            let mut total_gil_time = std::time::Duration::ZERO;
+            let mut total_send_time = std::time::Duration::ZERO;
+            let task_start = if debug_sync { Some(Instant::now()) } else { None };
 
             loop {
                 // Pull next chunk under the GIL
+                let gil_start = if debug_sync { Some(Instant::now()) } else { None };
                 let next: Option<Bytes> = Python::attach(|py| {
                     if iterator.is_none() {
                         let iter_target = resolved_target.clone_ref(py);
@@ -712,16 +789,37 @@ fn create_python_stream(
                         }
                     }
                 });
+                
+                if let Some(start) = gil_start {
+                    total_gil_time += start.elapsed();
+                }
 
                 match next {
                     Some(bytes) => {
+                        let send_start = if debug_sync { Some(Instant::now()) } else { None };
                         if tx.blocking_send(Ok(bytes)).is_err() {
                             break;
                         }
+                        if let Some(start) = send_start {
+                            total_send_time += start.elapsed();
+                        }
+                        chunk_count += 1;
                     }
                     None => {
                         break;
                     }
+                }
+            }
+            
+            if let Some(start) = task_start {
+                let total = start.elapsed();
+                eprintln!("[TIMING] Sync streaming complete:");
+                eprintln!("  Total time: {:?}", total);
+                eprintln!("  Chunks sent: {}", chunk_count);
+                eprintln!("  GIL time: {:?} ({:.1}%)", total_gil_time, (total_gil_time.as_secs_f64() / total.as_secs_f64()) * 100.0);
+                eprintln!("  Send time: {:?} ({:.1}%)", total_send_time, (total_send_time.as_secs_f64() / total.as_secs_f64()) * 100.0);
+                if chunk_count > 0 {
+                    eprintln!("  Avg per chunk: {:?}", total / chunk_count);
                 }
             }
             // sender dropped -> stream ends

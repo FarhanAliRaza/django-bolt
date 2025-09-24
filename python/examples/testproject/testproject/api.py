@@ -143,6 +143,11 @@ async def stream_plain():
     return StreamingResponse(gen, media_type="text/plain")
 
 
+@api.get("/collected")
+async def collected_plain():
+    # Same data but collected into a single response
+    return PlainText("x" * 100)
+
 @api.get("/sse")
 async def sse():
     def gen():

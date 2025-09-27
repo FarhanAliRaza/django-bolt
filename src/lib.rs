@@ -620,19 +620,13 @@ fn create_python_stream(
         let mut target = content.clone_ref(py);
         let obj = content.bind(py);
         if obj.is_callable() {
-            eprintln!("[DEBUG] Content is callable, calling it");
             if let Ok(new_obj) = obj.call0() {
-                eprintln!("[DEBUG] Successfully called content function");
                 target = new_obj.unbind();
-            } else {
-                eprintln!("[DEBUG] Failed to call content function");
             }
         }
         let b = target.bind(py);
         let has_async =
             b.hasattr("__aiter__").unwrap_or(false) || b.hasattr("__anext__").unwrap_or(false);
-        let type_name = b.get_type().name().map(|s| s.to_string()).unwrap_or_else(|_| "unknown".to_string());
-        eprintln!("[DEBUG] Final resolved target: is_async={}, type={}", has_async, type_name);
         (target, has_async)
     });
 
@@ -648,7 +642,6 @@ fn create_python_stream(
 
     if is_async_iter {
         // Async generator path: use pyo3-asyncio to await __anext__ in a Tokio task
-        eprintln!("[INFO] Taking async iterator path for streaming");
         let debug_async = debug_timing;
         tokio::spawn(async move {
             let mut chunk_count = 0u32;
@@ -700,7 +693,6 @@ fn create_python_stream(
 
             if async_iter.is_none() {
                 // Send an error to the channel instead of silently returning
-                eprintln!("[ERROR] Failed to initialize async iterator - content was not async iterable");
                 let _ = tx
                     .send(Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,

@@ -225,7 +225,7 @@ async def sse_async():
         for i in range(3):
             yield f"data: {i}\n\n"
             await asyncio.sleep(0)
-    return StreamingResponse(agen, media_type="text/event-stream")
+    return StreamingResponse(agen(), media_type="text/event-stream")
 
 
 @api.post("/v1/chat/completions-async")
@@ -259,7 +259,7 @@ async def openai_chat_completions_async(payload: ChatCompletionRequest):
             }
             yield f"data: {json.dumps(final, separators=(',', ':'))}\n\n"
             yield "data: [DONE]\n\n"
-        return StreamingResponse(agen, media_type="text/event-stream")
+        return StreamingResponse(agen(), media_type="text/event-stream")
 
     # Non-streaming identical to sync path
     text = (payload.token * max(1, payload.n_chunks)).strip()

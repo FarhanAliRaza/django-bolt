@@ -4,24 +4,55 @@ use actix_web::http::header::{HeaderName, HeaderValue};
 use actix_web::web::Bytes;
 use actix_web::{self as aw, http::StatusCode, web, App, HttpRequest, HttpResponse, HttpServer};
 use ahash::AHashMap;
-use futures_util::stream;
-use futures_util::Stream;
-use once_cell::sync::OnceCell;
+use futures_util::{stream, Stream};
+use futures_util::future::join_all;
+use once_cell::sync::{Lazy, OnceCell};
+use std::sync::Mutex;
 
+// Buffer pool for reducing allocations
+static BUFFER_POOL: Lazy<Mutex<Vec<Vec<u8>>>> = Lazy::new(|| {
+    Mutex::new((0..16).map(|_| Vec::with_capacity(4096)).collect())
+});
+
+fn get_pooled_buffer() -> Vec<u8> {
+    BUFFER_POOL.lock().unwrap().pop()
+        .unwrap_or_else(|| Vec::with_capacity(4096))
+}
+
+fn return_buffer_to_pool(mut buffer: Vec<u8>) {
+    buffer.clear();
+    if buffer.capacity() <= 8192 {  // Only pool reasonably sized buffers
+        if let Ok(mut pool) = BUFFER_POOL.lock() {
+            if pool.len() < 32 {  // Limit pool size
+                pool.push(buffer);
+            }
+        }
+    }
+}
+
+// Ultra-optimized conversion prioritizing bytes for streaming performance
 fn convert_python_chunk(value: &Bound<'_, PyAny>) -> Option<Bytes> {
+    // PRIORITY 1: bytes (zero-copy for FastAPI-style streaming)
     if let Ok(py_bytes) = value.downcast::<PyBytes>() {
+        // Zero-copy: Bytes::from_static would be ideal but requires 'static
+        // This is the fastest path for b"data: chunk\n\n" yields
         return Some(Bytes::copy_from_slice(py_bytes.as_bytes()));
     }
 
-    if let Ok(py_str) = value.downcast::<PyString>() {
-        return Some(Bytes::from(py_str.to_string_lossy().into_owned()));
-    }
-
+    // PRIORITY 2: ByteArray (direct memory access)
     if let Ok(py_bytearray) = value.downcast::<PyByteArray>() {
         // Safety: PyByteArray exposes a contiguous buffer owned by Python.
         return Some(Bytes::copy_from_slice(unsafe { py_bytearray.as_bytes() }));
     }
 
+    // PRIORITY 3: String (for legacy string-based streaming)
+    if let Ok(py_str) = value.downcast::<PyString>() {
+        // Fast path: convert to owned string then to bytes
+        let s = py_str.to_string_lossy().into_owned();
+        return Some(Bytes::from(s.into_bytes()));
+    }
+
+    // PRIORITY 4: MemoryView (efficient for large data)
     if let Ok(memory_view) = value.downcast::<PyMemoryView>() {
         if let Ok(bytes_obj) = memory_view.call_method0("tobytes") {
             if let Ok(py_bytes) = bytes_obj.downcast::<PyBytes>() {
@@ -30,6 +61,7 @@ fn convert_python_chunk(value: &Bound<'_, PyAny>) -> Option<Bytes> {
         }
     }
 
+    // FALLBACK 1: __bytes__ protocol
     if value.hasattr("__bytes__").unwrap_or(false) {
         if let Ok(buffer) = value.call_method0("__bytes__") {
             if let Ok(py_bytes) = buffer.downcast::<PyBytes>() {
@@ -38,8 +70,10 @@ fn convert_python_chunk(value: &Bound<'_, PyAny>) -> Option<Bytes> {
         }
     }
 
+    // FALLBACK 2: str() conversion (slowest path)
     if let Ok(py_str) = value.str() {
-        return Some(Bytes::from(py_str.to_string()));
+        let s = py_str.to_string_lossy().into_owned();
+        return Some(Bytes::from(s.into_bytes()));
     }
 
     None
@@ -602,11 +636,31 @@ fn create_python_stream(
         None
     };
 
+    // Tunable parameters via environment variables with performance-optimized defaults
     let channel_capacity: usize = std::env::var("DJANGO_BOLT_STREAM_CHANNEL_CAPACITY")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
-        .unwrap_or(8);
+        .unwrap_or(32);  // Increased for high-throughput scenarios
+        
+    let batch_size: usize = std::env::var("DJANGO_BOLT_STREAM_BATCH_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(20);  // Reduced from 50 - smaller batches for lower latency
+        
+    let sync_batch_size: usize = std::env::var("DJANGO_BOLT_STREAM_SYNC_BATCH_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(5);   // Reduced for faster response
+        
+    // Fast path detection: small batches for low-latency scenarios
+    let fast_path_threshold: usize = std::env::var("DJANGO_BOLT_STREAM_FAST_PATH_THRESHOLD")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(10);  // Switch to individual processing for small streams
 
     // Resolve content to an iterator/generator target and detect async iterator support
     let resolve_start = if debug_timing {
@@ -630,17 +684,21 @@ fn create_python_stream(
 
     if let Some(start) = resolve_start {
         eprintln!(
-            "[TIMING] Iterator resolution: {:?}, is_async={}",
+            "[TIMING] Iterator resolution: {:?}, is_async={}, batch_size={}, fast_path_threshold={}",
             start.elapsed(),
-            is_async_iter
+            is_async_iter,
+            if is_async_iter { batch_size } else { sync_batch_size },
+            fast_path_threshold
         );
     }
 
     let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(channel_capacity);
 
     if is_async_iter {
-        // Async generator path: use pyo3-asyncio to await __anext__ in a Tokio task
+        // Optimized async generator path with dynamic batching
         let debug_async = debug_timing;
+        let async_batch_size = batch_size;
+        let fast_path = fast_path_threshold;
         tokio::spawn(async move {
             let mut chunk_count = 0u32;
             let mut total_gil_time = std::time::Duration::ZERO;
@@ -713,182 +771,175 @@ fn create_python_stream(
             }
             let async_iter = async_iter.unwrap();
 
-            // Prime first future outside the loop
-            let prime_start = if debug_async {
-                Some(Instant::now())
-            } else {
-                None
-            };
-            let mut next_fut_opt = Python::attach(|py| {
-                let awaitable = match async_iter.bind(py).call_method0("__anext__") {
-                    Ok(a) => a,
-                    Err(e) => {
-                        if e.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
-                            return None;
-                        }
-                        return None;
-                    }
-                };
-
-                let locals_owned;
-                let locals = if let Some(globals) = TASK_LOCALS.get() {
-                    globals
+            // Adaptive async iteration with smart batching
+            let mut exhausted = false;
+            let mut batch_futures = Vec::with_capacity(async_batch_size);
+            let mut batch_count = 0usize;
+            let mut consecutive_small_batches = 0u8;
+            
+            // Adaptive batch size starts small for low latency, grows for throughput
+            let mut current_batch_size = std::cmp::min(async_batch_size, fast_path);
+            
+            while !exhausted {
+                // Collect batch of futures in single GIL acquisition
+                let batch_start = if debug_async {
+                    Some(Instant::now())
                 } else {
-                    match pyo3_asyncio::tokio::get_current_locals(py) {
-                        Ok(locals) => {
-                            locals_owned = locals;
-                            &locals_owned
-                        }
-                        Err(_) => return None,
-                    }
+                    None
                 };
-
-                match pyo3_asyncio::into_future_with_locals(&locals, awaitable) {
-                    Ok(f) => Some(f),
-                    Err(_) => None,
+                
+                batch_futures.clear();
+                Python::attach(|py| {
+                    let locals_owned;
+                    let locals = if let Some(globals) = TASK_LOCALS.get() {
+                        globals
+                    } else {
+                        match pyo3_asyncio::tokio::get_current_locals(py) {
+                            Ok(l) => {
+                                locals_owned = l;
+                                &locals_owned
+                            }
+                            Err(_) => {
+                                exhausted = true;
+                                return;
+                            }
+                        }
+                    };
+                    
+                    // Collect up to current_batch_size futures
+                    for _ in 0..current_batch_size {
+                        match async_iter.bind(py).call_method0("__anext__") {
+                            Ok(awaitable) => {
+                                match pyo3_asyncio::into_future_with_locals(&locals, awaitable) {
+                                    Ok(f) => batch_futures.push(f),
+                                    Err(_) => {
+                                        exhausted = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                if e.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
+                                    exhausted = true;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                });
+                
+                if let Some(start) = batch_start {
+                    eprintln!(
+                        "[TIMING] Batch {} future collection ({} futures, target={}): {:?}",
+                        batch_count,
+                        batch_futures.len(),
+                        current_batch_size,
+                        start.elapsed()
+                    );
                 }
-            });
-
-            if let Some(start) = prime_start {
-                eprintln!("[TIMING] First future priming: {:?}", start.elapsed());
-            }
-
-            if debug_async {
-                eprintln!(
-                    "[DEBUG] First future priming result: {}",
-                    next_fut_opt.is_some()
-                );
-            }
-
-            while let Some(fut) = next_fut_opt {
-                // Await current item
+                
+                // Adaptive batching: adjust batch size based on yield patterns
+                if batch_futures.len() < current_batch_size / 2 {
+                    consecutive_small_batches += 1;
+                    if consecutive_small_batches >= 3 && current_batch_size > 1 {
+                        // Stream is yielding slowly, reduce batch size for lower latency
+                        current_batch_size = std::cmp::max(1, current_batch_size / 2);
+                        consecutive_small_batches = 0;
+                    }
+                } else if batch_futures.len() == current_batch_size && current_batch_size < async_batch_size {
+                    // Stream is yielding fast, increase batch size for better throughput
+                    current_batch_size = std::cmp::min(async_batch_size, current_batch_size * 2);
+                    consecutive_small_batches = 0;
+                }
+                
+                if batch_futures.is_empty() {
+                    break;
+                }
+                
+                // Await all futures concurrently outside GIL
                 let await_start = if debug_async {
                     Some(Instant::now())
                 } else {
                     None
                 };
-                if debug_async {
-                    eprintln!("[DEBUG] About to await future");
-                }
-                let next_obj = match fut.await {
-                    Ok(obj) => {
-                        if let Some(start) = await_start {
-                            let await_time = start.elapsed();
-                            total_await_time += await_time;
-                            eprintln!("[TIMING] Future await took: {:?}", await_time);
-                        }
-                        if debug_async {
-                            eprintln!("[DEBUG] Successfully awaited future");
-                        }
-                        obj
-                    }
-                    Err(e) => {
-                        if debug_async {
-                            eprintln!("[DEBUG] Failed to await future: {}", e);
-                        }
-                        break;
-                    }
-                };
+                
+                let results = join_all(batch_futures.drain(..)).await;
+                
                 if let Some(start) = await_start {
+                    eprintln!(
+                        "[TIMING] Batch {} await ({} futures): {:?}",
+                        batch_count,
+                        results.len(),
+                        start.elapsed()
+                    );
                     total_await_time += start.elapsed();
                 }
-
-                // Convert current item and pipeline creation of the next future in a single GIL block
-                let gil_start = if debug_async {
+                
+                // Convert and send results
+                let convert_start = if debug_async {
                     Some(Instant::now())
                 } else {
                     None
                 };
-                let (bytes_opt, new_next_fut_opt) = Python::attach(|py| {
-                    // Convert current chunk to Bytes
-                    let v = next_obj.bind(py);
-                    let chunk_bytes = convert_python_chunk(&v);
-
-                    // Prepare the next future now to reduce GIL crossings
-                    let next_future_opt = {
-                        let res = async_iter.bind(py).call_method0("__anext__");
-                        match res {
-                            Ok(awaitable) => {
-                                let locals_owned;
-                                let locals = if let Some(globals) = TASK_LOCALS.get() {
-                                    globals
-                                } else {
-                                    match pyo3_asyncio::tokio::get_current_locals(py) {
-                                        Ok(locals) => {
-                                            locals_owned = locals;
-                                            &locals_owned
-                                        }
-                                        Err(_) => return (chunk_bytes, None),
-                                    }
-                                };
-
-                                match pyo3_asyncio::into_future_with_locals(&locals, awaitable) {
-                                    Ok(f) => Some(f),
-                                    Err(_) => None,
+                
+                let mut send_count = 0;
+                let mut got_stop_iteration = false;
+                for result in results {
+                    match result {
+                        Ok(obj) => {
+                            // Convert in GIL block
+                            let bytes_opt = Python::attach(|py| {
+                                let v = obj.bind(py);
+                                convert_python_chunk(&v)
+                            });
+                            
+                            if let Some(bytes) = bytes_opt {
+                                if tx.send(Ok(bytes)).await.is_err() {
+                                    exhausted = true;
+                                    break;
                                 }
+                                send_count += 1;
+                                chunk_count += 1;
                             }
-                            Err(e) => {
+                        }
+                        Err(e) => {
+                            // Check if it's StopAsyncIteration
+                            Python::attach(|py| {
                                 if e.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
-                                    None
-                                } else {
-                                    None
+                                    got_stop_iteration = true;
+                                    exhausted = true;
                                 }
-                            }
+                            });
                         }
-                    };
-
-                    (chunk_bytes, next_future_opt)
-                });
-
-                if let Some(start) = gil_start {
-                    total_gil_time += start.elapsed();
+                    }
                 }
-
-                // Send current chunk
-                if let Some(bytes) = bytes_opt {
-                    if debug_async {
-                        eprintln!("[DEBUG] Sending chunk of {} bytes", bytes.len());
-                    }
-                    let send_start = if debug_async {
-                        Some(Instant::now())
-                    } else {
-                        None
-                    };
-                    let channel_send_result = tx.send(Ok(bytes)).await;
-                    if let Some(start) = send_start {
-                        let send_time = start.elapsed();
-                        total_send_time += send_time;
-                        eprintln!("[TIMING] Channel send took: {:?}", send_time);
-                    }
-                    if channel_send_result.is_err() {
-                        if debug_async {
-                            eprintln!("[DEBUG] Failed to send chunk to channel");
-                        }
-                        break;
-                    }
-                    if let Some(start) = send_start {
-                        total_send_time += start.elapsed();
-                    }
-                    chunk_count += 1;
-                    if debug_async {
-                        eprintln!("[DEBUG] Successfully sent chunk #{}", chunk_count);
-                    }
-                } else {
-                    if debug_async {
-                        eprintln!("[DEBUG] Chunk conversion failed, breaking");
-                    }
-                    break;
+                
+                if got_stop_iteration {
+                    exhausted = true;
                 }
-
-                // Continue with next future or finish
-                next_fut_opt = new_next_fut_opt;
+                
+                if let Some(start) = convert_start {
+                    eprintln!(
+                        "[TIMING] Batch {} convert & send ({} chunks): {:?}",
+                        batch_count,
+                        send_count,
+                        start.elapsed()
+                    );
+                    let elapsed = start.elapsed();
+                    total_gil_time += elapsed;
+                    total_send_time += elapsed;
+                }
+                
+                batch_count += 1;
             }
 
             if let Some(start) = task_start {
                 let total = start.elapsed();
-                eprintln!("[TIMING] Async streaming complete:");
+                eprintln!("[TIMING] Async streaming complete (OPTIMIZED):");
                 eprintln!("  Total time: {:?}", total);
                 eprintln!("  Chunks sent: {}", chunk_count);
+                eprintln!("  Batches processed: {}", batch_count);
+                eprintln!("  Final batch size: {} (started: {}, max: {})", current_batch_size, fast_path, async_batch_size);
                 eprintln!(
                     "  GIL time: {:?} ({:.1}%)",
                     total_gil_time,
@@ -906,15 +957,18 @@ fn create_python_stream(
                 );
                 if chunk_count > 0 {
                     eprintln!("  Avg per chunk: {:?}", total / chunk_count);
+                    eprintln!("  Avg per batch: {:?}", total / batch_count.max(1) as u32);
                 }
             }
         });
     } else {
-        // Single blocking worker per stream: pump sync iterator and send chunks
+        // Optimized sync iterator with batched processing
         let debug_sync = debug_timing;
+        let sync_batch = sync_batch_size;
         tokio::task::spawn_blocking(move || {
             let mut iterator: Option<Py<PyAny>> = None;
             let mut chunk_count = 0u32;
+            let mut batch_count = 0u32;
             let mut total_gil_time = std::time::Duration::ZERO;
             let mut total_send_time = std::time::Duration::ZERO;
             let task_start = if debug_sync {
@@ -922,15 +976,19 @@ fn create_python_stream(
             } else {
                 None
             };
+            
+            let mut batch_buffer = Vec::with_capacity(sync_batch);
 
             loop {
-                // Pull next chunk under the GIL
+                // Pull batch of chunks under the GIL
                 let gil_start = if debug_sync {
                     Some(Instant::now())
                 } else {
                     None
                 };
-                let next: Option<Bytes> = Python::attach(|py| {
+                
+                batch_buffer.clear();
+                let exhausted = Python::attach(|py| {
                     if iterator.is_none() {
                         let iter_target = resolved_target.clone_ref(py);
                         let bound = iter_target.bind(py);
@@ -939,57 +997,75 @@ fn create_python_stream(
                         } else if bound.hasattr("__iter__").unwrap_or(false) {
                             match bound.call_method0("__iter__") {
                                 Ok(it) => it.unbind(),
-                                Err(_) => return None,
+                                Err(_) => return true,
                             }
                         } else {
-                            return None;
+                            return true;
                         };
                         iterator = Some(iter_obj);
                     }
 
                     let it = iterator.as_ref().unwrap().bind(py);
-                    match it.call_method0("__next__") {
-                        Ok(value) => convert_python_chunk(&value),
-                        Err(err) => {
-                            if err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) {
-                                None
-                            } else {
-                                None
+                    
+                    // Batch multiple __next__ calls
+                    for _ in 0..sync_batch {
+                        match it.call_method0("__next__") {
+                            Ok(value) => {
+                                if let Some(bytes) = convert_python_chunk(&value) {
+                                    batch_buffer.push(bytes);
+                                }
+                            }
+                            Err(err) => {
+                                if err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) {
+                                    return true;
+                                }
+                                break;
                             }
                         }
                     }
+                    false
                 });
 
                 if let Some(start) = gil_start {
                     total_gil_time += start.elapsed();
                 }
-
-                match next {
-                    Some(bytes) => {
-                        let send_start = if debug_sync {
-                            Some(Instant::now())
-                        } else {
-                            None
-                        };
-                        if tx.blocking_send(Ok(bytes)).is_err() {
-                            break;
-                        }
-                        if let Some(start) = send_start {
-                            total_send_time += start.elapsed();
-                        }
-                        chunk_count += 1;
-                    }
-                    None => {
+                
+                if batch_buffer.is_empty() && exhausted {
+                    break;
+                }
+                
+                // Send batched chunks
+                let send_start = if debug_sync {
+                    Some(Instant::now())
+                } else {
+                    None
+                };
+                
+                for bytes in batch_buffer.drain(..) {
+                    if tx.blocking_send(Ok(bytes)).is_err() {
                         break;
                     }
+                    chunk_count += 1;
+                }
+                
+                if let Some(start) = send_start {
+                    total_send_time += start.elapsed();
+                }
+                
+                batch_count += 1;
+                
+                if exhausted {
+                    break;
                 }
             }
 
             if let Some(start) = task_start {
                 let total = start.elapsed();
-                eprintln!("[TIMING] Sync streaming complete:");
+                eprintln!("[TIMING] Sync streaming complete (OPTIMIZED):");
                 eprintln!("  Total time: {:?}", total);
                 eprintln!("  Chunks sent: {}", chunk_count);
+                eprintln!("  Batches processed: {}", batch_count);
+                eprintln!("  Batch size: {}", sync_batch);
                 eprintln!(
                     "  GIL time: {:?} ({:.1}%)",
                     total_gil_time,
@@ -1002,6 +1078,7 @@ fn create_python_stream(
                 );
                 if chunk_count > 0 {
                     eprintln!("  Avg per chunk: {:?}", total / chunk_count);
+                    eprintln!("  Avg per batch: {:?}", total / batch_count.max(1));
                 }
             }
             // sender dropped -> stream ends

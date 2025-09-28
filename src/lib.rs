@@ -693,8 +693,56 @@ fn create_python_stream(
     }
 
     let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(channel_capacity);
-
+    
+    // Try to wrap async iterator with our Python collector to avoid PyO3 bridge
+    let mut resolved_target_final = Python::attach(|py| resolved_target.clone_ref(py));
+    let mut is_async_final = is_async_iter;
+    
     if is_async_iter {
+        let wrapped = Python::attach(|py| -> Option<Py<PyAny>> {
+            // Try to import our async collector
+            if let Ok(collector_module) = py.import("django_bolt.async_collector") {
+                if let Ok(collector_class) = collector_module.getattr("AsyncToSyncCollector") {
+                    // Initialize async iterator
+                    let async_iter = {
+                        let b = resolved_target_final.bind(py);
+                        if b.hasattr("__aiter__").unwrap_or(false) {
+                            b.call_method0("__aiter__").ok()
+                        } else if b.hasattr("__anext__").unwrap_or(false) {
+                            Some(b.clone())
+                        } else {
+                            None
+                        }
+                    };
+                    
+                    if let Some(async_iter) = async_iter {
+                        // Wrap with collector - batch_size=20 for optimal performance
+                        if let Ok(wrapped) = collector_class.call1((async_iter, 20)) {
+                            if debug_timing {
+                                eprintln!("[INFO] Using AsyncToSyncCollector to bypass PyO3 async bridge");
+                            }
+                            return Some(wrapped.unbind());
+                        }
+                    }
+                }
+            }
+            None
+        });
+        
+        if let Some(sync_iter) = wrapped {
+            // Success! Use the sync iterator path instead
+            resolved_target_final = sync_iter;
+            is_async_final = false;
+            if debug_timing {
+                eprintln!("[SUCCESS] Wrapped async iterator with AsyncToSyncCollector, using sync path");
+            }
+            // Fall through to sync path below
+        } else if debug_timing {
+            eprintln!("[WARNING] Failed to wrap with AsyncToSyncCollector, using PyO3 bridge");
+        }
+    }
+
+    if is_async_final {
         // Optimized async generator path with dynamic batching
         let debug_async = debug_timing;
         let async_batch_size = batch_size;
@@ -743,7 +791,7 @@ fn create_python_stream(
                     if debug_async {
                         eprintln!("[DEBUG] Using object as async iterator directly");
                     }
-                    Some(resolved_target.clone_ref(py))
+                    Some(resolved_target_final.clone_ref(py))
                 } else {
                     if debug_async {
                         eprintln!("[DEBUG] Object is not an async iterator");
@@ -990,7 +1038,7 @@ fn create_python_stream(
                 batch_buffer.clear();
                 let exhausted = Python::attach(|py| {
                     if iterator.is_none() {
-                        let iter_target = resolved_target.clone_ref(py);
+                        let iter_target = resolved_target_final.clone_ref(py);
                         let bound = iter_target.bind(py);
                         let iter_obj = if bound.hasattr("__next__").unwrap_or(false) {
                             iter_target

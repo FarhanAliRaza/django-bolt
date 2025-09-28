@@ -184,8 +184,6 @@ async fn handle_request(
     let method = req.method().as_str().to_string();
     let path = req.path().to_string();
 
-    // No Rust fast paths; route all requests through Python
-
     // Get the global router
     let router = GLOBAL_ROUTER.get().expect("Router not initialized");
 
@@ -654,6 +652,11 @@ fn create_python_stream(
                 None
             };
             // Initialize async iterator
+            let init_start = if debug_async {
+                Some(Instant::now())
+            } else {
+                None
+            };
             let async_iter: Option<Py<PyAny>> = Python::attach(|py| {
                 let b = resolved_target.bind(py);
                 if debug_async {
@@ -691,6 +694,13 @@ fn create_python_stream(
                 }
             });
 
+            if let Some(start) = init_start {
+                eprintln!(
+                    "[TIMING] Async iterator initialization: {:?}",
+                    start.elapsed()
+                );
+            }
+
             if async_iter.is_none() {
                 // Send an error to the channel instead of silently returning
                 let _ = tx
@@ -704,6 +714,11 @@ fn create_python_stream(
             let async_iter = async_iter.unwrap();
 
             // Prime first future outside the loop
+            let prime_start = if debug_async {
+                Some(Instant::now())
+            } else {
+                None
+            };
             let mut next_fut_opt = Python::attach(|py| {
                 let awaitable = match async_iter.bind(py).call_method0("__anext__") {
                     Ok(a) => a,
@@ -734,6 +749,10 @@ fn create_python_stream(
                 }
             });
 
+            if let Some(start) = prime_start {
+                eprintln!("[TIMING] First future priming: {:?}", start.elapsed());
+            }
+
             if debug_async {
                 eprintln!(
                     "[DEBUG] First future priming result: {}",
@@ -753,6 +772,11 @@ fn create_python_stream(
                 }
                 let next_obj = match fut.await {
                     Ok(obj) => {
+                        if let Some(start) = await_start {
+                            let await_time = start.elapsed();
+                            total_await_time += await_time;
+                            eprintln!("[TIMING] Future await took: {:?}", await_time);
+                        }
                         if debug_async {
                             eprintln!("[DEBUG] Successfully awaited future");
                         }
@@ -830,7 +854,13 @@ fn create_python_stream(
                     } else {
                         None
                     };
-                    if tx.send(Ok(bytes)).await.is_err() {
+                    let channel_send_result = tx.send(Ok(bytes)).await;
+                    if let Some(start) = send_start {
+                        let send_time = start.elapsed();
+                        total_send_time += send_time;
+                        eprintln!("[TIMING] Channel send took: {:?}", send_time);
+                    }
+                    if channel_send_result.is_err() {
                         if debug_async {
                             eprintln!("[DEBUG] Failed to send chunk to channel");
                         }

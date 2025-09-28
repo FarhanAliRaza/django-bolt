@@ -224,7 +224,23 @@ async def sse_async():
     async def agen():
         for i in range(3):
             yield f"data: {i}\n\n"
+    return StreamingResponse(agen(), media_type="text/event-stream")
+
+@api.get("/sse-async-sleep")
+async def sse_async_sleep():
+    async def agen():
+        for i in range(3):
+            yield f"data: {i}\n\n"
             await asyncio.sleep(0)
+    return StreamingResponse(agen(), media_type="text/event-stream")
+
+@api.get("/sse-async-batch")
+async def sse_async_batch():
+    """Optimized async endpoint that yields all data at once to reduce overhead"""
+    async def agen():
+        # Batch all data into single yield to minimize GIL crossings
+        all_data = "".join(f"data: {i}\n\n" for i in range(3))
+        yield all_data
     return StreamingResponse(agen(), media_type="text/event-stream")
 
 

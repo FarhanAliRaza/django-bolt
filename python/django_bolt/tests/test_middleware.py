@@ -8,9 +8,11 @@ import jwt
 import pytest
 from django_bolt import BoltAPI
 from django_bolt.middleware import (
-    rate_limit, cors, auth_required, skip_middleware,
-    Middleware, MiddlewareGroup, CORSMiddleware, RateLimitMiddleware, AuthMiddleware
+    rate_limit, cors, skip_middleware,
+    Middleware, MiddlewareGroup, CORSMiddleware, RateLimitMiddleware
 )
+from django_bolt.auth import JWTAuthentication, APIKeyAuthentication
+from django_bolt.permissions import IsAuthenticated
 import msgspec
 
 
@@ -75,23 +77,27 @@ class TestMiddlewareDecorators:
         assert middleware[0]['credentials'] == True
         assert middleware[0]['max_age'] == 7200
     
-    def test_auth_decorator(self):
-        """Test auth decorator attaches metadata"""
+    def test_auth_via_guards(self):
+        """Test authentication via guards parameter"""
         api = BoltAPI()
-        
-        @api.get("/protected")
-        @auth_required(mode="jwt", secret="test-secret", algorithms=["HS256", "HS384"])
+
+        @api.get(
+            "/protected",
+            auth=[JWTAuthentication(secret="test-secret", algorithms=["HS256", "HS384"])],
+            guards=[IsAuthenticated()]
+        )
         async def protected_endpoint():
             return {"status": "ok"}
-        
-        handler = api._handlers[0]
-        assert hasattr(handler, '__bolt_middleware__')
-        middleware = handler.__bolt_middleware__
-        assert len(middleware) > 0
-        assert middleware[0]['type'] == 'auth'
-        assert middleware[0]['mode'] == 'jwt'
-        assert middleware[0]['secret'] == 'test-secret'
-        assert middleware[0]['algorithms'] == ["HS256", "HS384"]
+
+        # Check that middleware metadata was compiled
+        handler_id = 0
+        assert handler_id in api._handler_middleware
+        meta = api._handler_middleware[handler_id]
+        assert 'auth_backends' in meta
+        assert len(meta['auth_backends']) > 0
+        assert meta['auth_backends'][0]['type'] == 'jwt'
+        assert meta['auth_backends'][0]['secret'] == 'test-secret'
+        assert meta['auth_backends'][0]['algorithms'] == ["HS256", "HS384"]
     
     def test_skip_middleware_decorator(self):
         """Test skip middleware decorator"""
@@ -111,40 +117,45 @@ class TestMiddlewareDecorators:
     def test_multiple_middleware(self):
         """Test multiple middleware decorators on same route"""
         api = BoltAPI()
-        
-        @api.post("/secure")
+
+        @api.post(
+            "/secure",
+            auth=[APIKeyAuthentication(api_keys={"key1", "key2"})],
+            guards=[IsAuthenticated()]
+        )
         @rate_limit(rps=10)
         @cors(origins=["https://app.example.com"])
-        @auth_required(mode="api_key", api_keys={"key1", "key2"})
         async def secure_endpoint(data: dict):
             return {"received": data}
-        
+
         handler = api._handlers[0]
         middleware = handler.__bolt_middleware__
-        assert len(middleware) == 3
-        
+        assert len(middleware) == 2  # rate_limit and cors
+
         # Check they're all there
         types = [m['type'] for m in middleware]
         assert 'rate_limit' in types
         assert 'cors' in types
-        assert 'auth' in types
+
+        # Check auth is in metadata
+        meta = api._handler_middleware[0]
+        assert 'auth_backends' in meta
+        assert len(meta['auth_backends']) > 0
 
 
 class TestMiddlewareGroups:
     """Test middleware grouping functionality"""
-    
+
     def test_middleware_group_creation(self):
         """Test creating and combining middleware groups"""
         cors_mw = CORSMiddleware(origins=["http://localhost:3000"])
         rate_mw = RateLimitMiddleware(rps=100)
-        
+
         group1 = MiddlewareGroup(cors_mw, rate_mw)
         assert len(group1.middleware) == 2
-        
-        auth_mw = AuthMiddleware(mode="jwt", secret="test-secret")
-        group2 = MiddlewareGroup(auth_mw)
-        
-        # Combine groups
+
+        # Test combining groups
+        group2 = MiddlewareGroup(cors_mw)
         combined = group1 + group2
         assert len(combined.middleware) == 3
 
@@ -436,7 +447,7 @@ if __name__ == "__main__":
     test_decorators = TestMiddlewareDecorators()
     test_decorators.test_rate_limit_decorator()
     test_decorators.test_cors_decorator()
-    test_decorators.test_auth_decorator()
+    test_decorators.test_auth_via_guards()
     test_decorators.test_skip_middleware_decorator()
     test_decorators.test_multiple_middleware()
     print("✓ Decorator tests passed")

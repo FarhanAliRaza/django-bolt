@@ -142,48 +142,6 @@ def cors(
     return decorator
 
 
-def auth_required(
-    mode: str = "jwt",
-    algorithms: List[str] = None,
-    secret: str = None,
-    api_keys: Set[str] = None,
-    header: str = "Authorization"
-):
-    """
-    Authentication requirement decorator.
-    
-    Args:
-        mode: Auth mode ("jwt", "api_key", "session")
-        algorithms: JWT algorithms (default ["HS256"])
-        secret: JWT secret (uses Django SECRET_KEY if not provided)
-        api_keys: Set of valid API keys
-        header: Header to check for auth token
-    """
-    def decorator(func):
-        if not hasattr(func, '__bolt_middleware__'):
-            func.__bolt_middleware__ = []
-        
-        # If JWT mode and no secret, we'll use Django's SECRET_KEY
-        final_secret = secret
-        if mode == "jwt" and secret is None:
-            try:
-                from django.conf import settings
-                final_secret = settings.SECRET_KEY
-            except (ImportError, AttributeError):
-                # Django not configured or SECRET_KEY not set
-                # Will be handled by Rust side
-                pass
-        
-        func.__bolt_middleware__.append({
-            'type': 'auth',
-            'mode': mode,
-            'algorithms': algorithms or ["HS256"],
-            'secret': final_secret,
-            'api_keys': api_keys,
-            'header': header
-        })
-        return func
-    return decorator
 
 
 def skip_middleware(*middleware_names: str):
@@ -240,38 +198,3 @@ class RateLimitMiddleware(Middleware):
         return response
 
 
-class AuthMiddleware(Middleware):
-    """Built-in authentication middleware implementation."""
-    
-    def __init__(
-        self,
-        mode: str = "jwt",
-        algorithms: List[str] = None,
-        secret: str = None,
-        api_keys: Set[str] = None,
-        header: str = "Authorization"
-    ):
-        self.mode = mode
-        self.algorithms = algorithms or ["HS256"]
-        
-        # Use Django SECRET_KEY if not provided for JWT
-        if mode == "jwt" and secret is None:
-            try:
-                from django.conf import settings
-                self.secret = settings.SECRET_KEY
-            except (ImportError, AttributeError):
-                raise ValueError(
-                    "JWT authentication requires a secret. "
-                    "Either provide 'secret' parameter or ensure Django SECRET_KEY is configured."
-                )
-        else:
-            self.secret = secret
-            
-        self.api_keys = api_keys
-        self.header = header
-    
-    async def process_request(self, request: Any, call_next: Callable) -> Any:
-        # This will be handled in Rust for performance
-        # Python implementation is for compatibility
-        response = await call_next(request)
-        return response

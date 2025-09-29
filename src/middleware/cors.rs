@@ -1,7 +1,7 @@
 use actix_web::http::header::{
     ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
     ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
-    ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE,
+    ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE, VARY,
 };
 use actix_web::http::StatusCode;
 use actix_web::HttpResponse;
@@ -19,6 +19,7 @@ pub fn handle_preflight(config: &HashMap<String, Py<PyAny>>, py: Python) -> Http
     
     // For simplicity, use first origin or *
     let origin = origins.first().unwrap_or(&"*".to_string()).clone();
+    let is_wildcard = origin == "*";
     builder.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, origin));
     
     // Get allowed methods
@@ -55,7 +56,12 @@ pub fn handle_preflight(config: &HashMap<String, Py<PyAny>>, py: Python) -> Http
         .and_then(|a| a.extract::<u32>(py).ok())
         .unwrap_or(3600);
     builder.insert_header((ACCESS_CONTROL_MAX_AGE, max_age.to_string()));
-    
+
+    // Add Vary header for preflight
+    if !is_wildcard {
+        builder.insert_header((VARY, "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"));
+    }
+
     builder.finish()
 }
 
@@ -88,7 +94,15 @@ pub fn add_cors_headers_to_response(
         ACCESS_CONTROL_ALLOW_ORIGIN,
         origin_to_use.parse().unwrap(),
     );
-    
+
+    // Add Vary: Origin header when not using wildcard
+    if origin_to_use != "*" {
+        response.headers_mut().insert(
+            VARY,
+            "Origin".parse().unwrap(),
+        );
+    }
+
     // Add credentials header if enabled
     if let Some(creds) = config.get("credentials") {
         if let Ok(true) = creds.extract::<bool>(py) {
@@ -98,7 +112,7 @@ pub fn add_cors_headers_to_response(
             );
         }
     }
-    
+
     // Add exposed headers if specified
     if let Some(expose) = config.get("expose_headers") {
         if let Ok(headers) = expose.extract::<Vec<String>>(py) {

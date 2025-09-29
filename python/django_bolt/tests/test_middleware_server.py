@@ -7,7 +7,9 @@ import jwt
 import time
 import pytest
 from django_bolt import BoltAPI
-from django_bolt.middleware import rate_limit, cors, auth_required
+from django_bolt.middleware import rate_limit, cors
+from django_bolt.auth import JWTAuthentication, APIKeyAuthentication
+from django_bolt.permissions import IsAuthenticated
 
 
 def create_test_api():
@@ -60,18 +62,33 @@ def create_test_api():
     async def cors_endpoint():
         return {"cors": "enabled"}
     
-    @api.get("/protected-jwt")
-    @auth_required(mode="jwt", secret="test-secret")
+    @api.get(
+        "/protected-jwt",
+        auth=[JWTAuthentication(secret="test-secret")],
+        guards=[IsAuthenticated()]
+    )
     async def jwt_protected():
         return {"message": "JWT protected content"}
-    
-    @api.get("/protected-api-key")
-    @auth_required(mode="api_key", api_keys={"test-key-123", "test-key-456"})
+
+    @api.get(
+        "/protected-api-key",
+        auth=[APIKeyAuthentication(
+            api_keys={"test-key-123", "test-key-456"},
+            header="authorization"
+        )],
+        guards=[IsAuthenticated()]
+    )
     async def api_key_protected():
         return {"message": "API key protected content"}
-    
-    @api.get("/context-test")
-    @auth_required(mode="api_key", api_keys={"test-key"})
+
+    @api.get(
+        "/context-test",
+        auth=[APIKeyAuthentication(
+            api_keys={"test-key"},
+            header="authorization"
+        )],
+        guards=[IsAuthenticated()]
+    )
     async def context_endpoint(request: dict):
         """Test that middleware context is available"""
         context = request.get("context", None)
@@ -261,8 +278,53 @@ async def _test_server_endpoints():
         print("✅ Middleware server tests completed!")
 
 
+@pytest.fixture(scope="module")
+def test_server():
+    """Start test server for integration tests in subprocess"""
+    import sys
+    import os
+    from conftest import spawn_process, kill_process, wait_for_server
+
+    host = "127.0.0.1"
+    port = 8001
+
+    # Path to the standalone server script
+    current_dir = os.path.dirname(__file__)
+    server_script = os.path.join(current_dir, "middleware_test_server.py")
+
+    # Start server in subprocess
+    python_exec = sys.executable
+    command = [python_exec, server_script, str(port)]
+
+    print(f"\nStarting middleware test server on {host}:{port} in subprocess")
+    process = spawn_process(command)
+
+    # Wait for server to be ready
+    if wait_for_server(host, port, timeout=15):
+        print(f"✓ Middleware test server ready on {host}:{port}")
+    else:
+        print(f"⚠ Middleware test server may not have started properly")
+        # Try to get error output
+        try:
+            stdout, stderr = process.communicate(timeout=1)
+            if stderr:
+                print(f"Server stderr: {stderr.decode()[:500]}")
+        except:
+            pass
+
+    yield f"http://{host}:{port}"
+
+    # Cleanup: kill the server process
+    print("\nStopping middleware test server")
+    kill_process(process)
+    try:
+        process.wait(timeout=2)
+    except:
+        pass
+
+
 @pytest.mark.asyncio
-async def test_server_endpoints():
+async def test_server_endpoints(test_server):
     """Pytest wrapper for server endpoint tests"""
     await _test_server_endpoints()
 

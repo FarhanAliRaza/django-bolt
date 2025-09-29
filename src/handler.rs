@@ -7,9 +7,11 @@ use pyo3::types::PyDict;
 use std::sync::Arc;
 
 use crate::middleware;
+use crate::middleware::auth::{authenticate, populate_auth_context};
+use crate::permissions::{evaluate_guards, GuardResult};
 use crate::request::PyRequest;
 use crate::router::parse_query_string;
-use crate::state::{AppState, GLOBAL_ROUTER, MIDDLEWARE_METADATA, TASK_LOCALS};
+use crate::state::{AppState, GLOBAL_ROUTER, MIDDLEWARE_METADATA, ROUTE_METADATA, TASK_LOCALS};
 use crate::streaming::create_python_stream;
 use crate::direct_stream;
 
@@ -38,7 +40,7 @@ pub async fn handle_request(
         } else if method == "OPTIONS" {
             // For OPTIONS, check if ANY method has this path
             for try_method in &["GET", "POST", "PUT", "PATCH", "DELETE"] {
-                if let Some((route, path_params, handler_id)) = router_guard.find(try_method, &path) {
+                if let Some((_route, _path_params, handler_id)) = router_guard.find(try_method, &path) {
                     // Found a route, use it for middleware metadata
                     return {
                         // Check if this route has CORS middleware
@@ -49,6 +51,7 @@ pub async fn handle_request(
                                     "OPTIONS",
                                     &path,
                                     &AHashMap::new(),
+                                    None,
                                     handler_id,
                                     metadata,
                                 ).await {
@@ -88,21 +91,62 @@ pub async fn handle_request(
         }
     }
 
-    // Check for middleware metadata
+    // Get peer address for rate limiting fallback
+    let peer_addr = req.peer_addr().map(|addr| addr.ip().to_string());
+
+    // Check for middleware metadata (Python-based, for backward compatibility)
     let middleware_meta = MIDDLEWARE_METADATA.get().and_then(|meta_map| {
         meta_map.get(&handler_id).map(|m| Python::attach(|py| m.clone_ref(py)))
     });
 
-    // Process middleware (CORS preflight, rate limiting, auth)
+    // Get parsed route metadata (Rust-native)
+    let route_metadata = ROUTE_METADATA.get().and_then(|meta_map| {
+        meta_map.get(&handler_id).cloned()
+    });
+
+    // Process old-style middleware (CORS preflight, rate limiting, auth)
     if let Some(ref meta) = middleware_meta {
         if let Some(early_response) = middleware::process_middleware(
             &method,
             &path,
             &headers,
+            peer_addr.as_deref(),
             handler_id,
             meta,
         ).await {
             return early_response;
+        }
+    }
+
+    // Execute authentication and guards (new system)
+    let auth_ctx = if let Some(ref route_meta) = route_metadata {
+        if !route_meta.auth_backends.is_empty() {
+            authenticate(&headers, &route_meta.auth_backends)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Evaluate guards
+    if let Some(ref route_meta) = route_metadata {
+        if !route_meta.guards.is_empty() {
+            match evaluate_guards(&route_meta.guards, auth_ctx.as_ref()) {
+                GuardResult::Allow => {
+                    // Pass through
+                }
+                GuardResult::Unauthorized => {
+                    return HttpResponse::Unauthorized()
+                        .content_type("application/json")
+                        .body(r#"{"detail":"Authentication required"}"#);
+                }
+                GuardResult::Forbidden => {
+                    return HttpResponse::Forbidden()
+                        .content_type("application/json")
+                        .body(r#"{"detail":"Permission denied"}"#);
+                }
+            }
         }
     }
 
@@ -123,9 +167,15 @@ pub async fn handle_request(
             }
         }
 
-        // Create context dict if middleware is present
-        let context = if middleware_meta.is_some() {
-            Some(PyDict::new(py).unbind())
+        // Create context dict if middleware or auth is present
+        let context = if middleware_meta.is_some() || auth_ctx.is_some() {
+            let ctx_dict = PyDict::new(py);
+            let ctx_py = ctx_dict.unbind();
+            // Populate with auth context if present
+            if let Some(ref auth) = auth_ctx {
+                populate_auth_context(&ctx_py, auth, py);
+            }
+            Some(ctx_py)
         } else {
             None
         };

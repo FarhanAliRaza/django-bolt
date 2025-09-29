@@ -20,6 +20,7 @@ static IP_LIMITERS: Lazy<DashMap<(usize, String), Arc<Limiter>>> = Lazy::new(Das
 pub fn check_rate_limit(
     handler_id: usize,
     headers: &AHashMap<String, String>,
+    peer_addr: Option<&str>,
     config: &HashMap<String, Py<PyAny>>,
     py: Python,
 ) -> Option<HttpResponse> {
@@ -28,17 +29,17 @@ pub fn check_rate_limit(
         .get("rps")
         .and_then(|r| r.extract::<u32>(py).ok())
         .unwrap_or(100);
-    
+
     let burst = config
         .get("burst")
         .and_then(|b| b.extract::<u32>(py).ok())
         .unwrap_or(rps * 2);
-    
+
     let key_type = config
         .get("key")
         .and_then(|k| k.extract::<String>(py).ok())
         .unwrap_or_else(|| "ip".to_string());
-    
+
     // Determine the rate limit key
     let key = match key_type.as_str() {
         "ip" => {
@@ -50,6 +51,8 @@ pub fn check_rate_limit(
                     // Take first IP if comma-separated
                     ip.split(',').next().unwrap_or(ip).trim().to_string()
                 })
+                // Fallback to peer_addr if headers are missing
+                .or_else(|| peer_addr.map(|s| s.to_string()))
                 .unwrap_or_else(|| "unknown".to_string())
         }
         header_name => {

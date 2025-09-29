@@ -37,37 +37,37 @@ class BoltAPI:
         # Register this instance globally for autodiscovery
         _BOLT_API_REGISTRY.append(self)
 
-    def get(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None):
-        return self._route_decorator("GET", path, response_model=response_model, status_code=status_code)
+    def get(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
+        return self._route_decorator("GET", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
 
-    def post(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None):
-        return self._route_decorator("POST", path, response_model=response_model, status_code=status_code)
+    def post(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
+        return self._route_decorator("POST", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
 
-    def put(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None):
-        return self._route_decorator("PUT", path, response_model=response_model, status_code=status_code)
+    def put(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
+        return self._route_decorator("PUT", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
 
-    def patch(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None):
-        return self._route_decorator("PATCH", path, response_model=response_model, status_code=status_code)
+    def patch(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
+        return self._route_decorator("PATCH", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
 
-    def delete(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None):
-        return self._route_decorator("DELETE", path, response_model=response_model, status_code=status_code)
+    def delete(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
+        return self._route_decorator("DELETE", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
 
-    def _route_decorator(self, method: str, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None):
+    def _route_decorator(self, method: str, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
         def decorator(fn: Callable):
             # Enforce async handlers
             if not inspect.iscoroutinefunction(fn):
                 raise TypeError(f"Handler {fn.__name__} must be async. Use 'async def' instead of 'def'")
-            
+
             handler_id = self._next_handler_id
             self._next_handler_id += 1
-            
+
             # Apply prefix to path and convert FastAPI syntax to matchit
             full_path = self.prefix + path if self.prefix else path
             full_path = self._convert_path(full_path)
-            
+
             self._routes.append((method, full_path, handler_id, fn))
             self._handlers[handler_id] = fn
-            
+
             # Pre-compile lightweight binder for this handler
             meta = self._compile_binder(fn)
             # Allow explicit response model override
@@ -76,12 +76,12 @@ class BoltAPI:
             if status_code is not None:
                 meta["default_status_code"] = int(status_code)
             self._handler_meta[fn] = meta
-            
-            # Compile middleware metadata for this handler
-            middleware_meta = self._compile_middleware_meta(fn, method, full_path)
+
+            # Compile middleware metadata for this handler (including guards and auth)
+            middleware_meta = self._compile_middleware_meta(fn, method, full_path, guards=guards, auth=auth)
             if middleware_meta:
                 self._handler_middleware[handler_id] = middleware_meta
-            
+
             return fn
         return decorator
 
@@ -241,27 +241,27 @@ class BoltAPI:
         meta["mode"] = "mixed"
         return meta
 
-    def _compile_middleware_meta(self, handler: Callable, method: str, path: str) -> Optional[Dict[str, Any]]:
-        """Compile middleware metadata for a handler."""
+    def _compile_middleware_meta(self, handler: Callable, method: str, path: str, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None) -> Optional[Dict[str, Any]]:
+        """Compile middleware metadata for a handler, including guards and auth."""
         # Check for handler-specific middleware
         handler_middleware = []
         skip_middleware = set()
-        
+
         if hasattr(handler, '__bolt_middleware__'):
             handler_middleware = handler.__bolt_middleware__
-        
+
         if hasattr(handler, '__bolt_skip_middleware__'):
             skip_middleware = handler.__bolt_skip_middleware__
-        
+
         # Merge global and handler middleware
         all_middleware = []
-        
+
         # Add global middleware first
         for mw in self.middleware:
             mw_dict = self._middleware_to_dict(mw)
             if mw_dict and mw_dict.get('type') not in skip_middleware:
                 all_middleware.append(mw_dict)
-        
+
         # Add global config-based middleware
         if self.middleware_config:
             for mw_type, config in self.middleware_config.items():
@@ -269,22 +269,79 @@ class BoltAPI:
                     mw_dict = {'type': mw_type}
                     mw_dict.update(config)
                     all_middleware.append(mw_dict)
-        
+
         # Add handler-specific middleware
         for mw in handler_middleware:
             mw_dict = self._middleware_to_dict(mw)
             if mw_dict:
                 all_middleware.append(mw_dict)
-        
-        if not all_middleware:
+
+        # Compile authentication backends
+        auth_backends = []
+        if auth is not None:
+            # Per-route auth override
+            for auth_backend in auth:
+                if hasattr(auth_backend, 'to_metadata'):
+                    auth_backends.append(auth_backend.to_metadata())
+        else:
+            # Use global default authentication classes
+            from django_bolt.auth import get_default_authentication_classes
+            for auth_backend in get_default_authentication_classes():
+                if hasattr(auth_backend, 'to_metadata'):
+                    auth_backends.append(auth_backend.to_metadata())
+
+        # Compile guards/permissions
+        guard_list = []
+        if guards is not None:
+            # Per-route guards override
+            for guard in guards:
+                # Check if it's an instance with to_metadata method
+                if hasattr(guard, 'to_metadata') and callable(getattr(guard, 'to_metadata', None)):
+                    try:
+                        # Try calling as instance method
+                        guard_list.append(guard.to_metadata())
+                    except TypeError:
+                        # If it fails, might be a class, try instantiating
+                        try:
+                            instance = guard()
+                            guard_list.append(instance.to_metadata())
+                        except Exception:
+                            pass
+                elif isinstance(guard, type):
+                    # It's a class reference, instantiate it
+                    try:
+                        instance = guard()
+                        if hasattr(instance, 'to_metadata'):
+                            guard_list.append(instance.to_metadata())
+                    except Exception:
+                        pass
+        else:
+            # Use global default permission classes
+            from django_bolt.permissions import get_default_permission_classes
+            for guard in get_default_permission_classes():
+                if hasattr(guard, 'to_metadata'):
+                    guard_list.append(guard.to_metadata())
+
+        # Only include metadata if something is configured
+        if not all_middleware and not auth_backends and not guard_list:
             return None
-        
-        return {
-            'middleware': all_middleware,
-            'skip': list(skip_middleware),
+
+        result = {
             'method': method,
             'path': path
         }
+
+        if all_middleware:
+            result['middleware'] = all_middleware
+            result['skip'] = list(skip_middleware)
+
+        if auth_backends:
+            result['auth_backends'] = auth_backends
+
+        if guard_list:
+            result['guards'] = guard_list
+
+        return result
     
     def _middleware_to_dict(self, mw: Any) -> Optional[Dict[str, Any]]:
         """Convert middleware specification to dictionary."""

@@ -17,12 +17,22 @@ Response = Tuple[int, List[Tuple[str, str]], bytes]
 _BOLT_API_REGISTRY = []
 
 class BoltAPI:
-    def __init__(self, prefix: str = "") -> None:
+    def __init__(
+        self,
+        prefix: str = "",
+        middleware: Optional[List[Any]] = None,
+        middleware_config: Optional[Dict[str, Any]] = None
+    ) -> None:
         self._routes: List[Tuple[str, str, int, Callable]] = []
         self._handlers: Dict[int, Callable] = {}
         self._handler_meta: Dict[Callable, Dict[str, Any]] = {}
+        self._handler_middleware: Dict[int, Dict[str, Any]] = {}  # Middleware metadata per handler
         self._next_handler_id = 0
         self.prefix = prefix.rstrip("/")  # Remove trailing slash
+        
+        # Global middleware configuration
+        self.middleware = middleware or []
+        self.middleware_config = middleware_config or {}
         
         # Register this instance globally for autodiscovery
         _BOLT_API_REGISTRY.append(self)
@@ -66,6 +76,11 @@ class BoltAPI:
             if status_code is not None:
                 meta["default_status_code"] = int(status_code)
             self._handler_meta[fn] = meta
+            
+            # Compile middleware metadata for this handler
+            middleware_meta = self._compile_middleware_meta(fn, method, full_path)
+            if middleware_meta:
+                self._handler_middleware[handler_id] = middleware_meta
             
             return fn
         return decorator
@@ -225,6 +240,63 @@ class BoltAPI:
 
         meta["mode"] = "mixed"
         return meta
+
+    def _compile_middleware_meta(self, handler: Callable, method: str, path: str) -> Optional[Dict[str, Any]]:
+        """Compile middleware metadata for a handler."""
+        # Check for handler-specific middleware
+        handler_middleware = []
+        skip_middleware = set()
+        
+        if hasattr(handler, '__bolt_middleware__'):
+            handler_middleware = handler.__bolt_middleware__
+        
+        if hasattr(handler, '__bolt_skip_middleware__'):
+            skip_middleware = handler.__bolt_skip_middleware__
+        
+        # Merge global and handler middleware
+        all_middleware = []
+        
+        # Add global middleware first
+        for mw in self.middleware:
+            mw_dict = self._middleware_to_dict(mw)
+            if mw_dict and mw_dict.get('type') not in skip_middleware:
+                all_middleware.append(mw_dict)
+        
+        # Add global config-based middleware
+        if self.middleware_config:
+            for mw_type, config in self.middleware_config.items():
+                if mw_type not in skip_middleware:
+                    mw_dict = {'type': mw_type}
+                    mw_dict.update(config)
+                    all_middleware.append(mw_dict)
+        
+        # Add handler-specific middleware
+        for mw in handler_middleware:
+            mw_dict = self._middleware_to_dict(mw)
+            if mw_dict:
+                all_middleware.append(mw_dict)
+        
+        if not all_middleware:
+            return None
+        
+        return {
+            'middleware': all_middleware,
+            'skip': list(skip_middleware),
+            'method': method,
+            'path': path
+        }
+    
+    def _middleware_to_dict(self, mw: Any) -> Optional[Dict[str, Any]]:
+        """Convert middleware specification to dictionary."""
+        if isinstance(mw, dict):
+            return mw
+        elif hasattr(mw, '__dict__'):
+            # Convert middleware object to dict
+            return {
+                'type': mw.__class__.__name__.lower().replace('middleware', ''),
+                **mw.__dict__
+            }
+        return None
 
     async def _dispatch(self, handler: Callable, request: Dict[str, Any]) -> Response:
         """Async dispatch that calls the handler and returns response tuple"""
@@ -563,6 +635,15 @@ class BoltAPI:
         
         # Register routes in Rust
         _core.register_routes(rust_routes)
+        
+        # Register middleware metadata if any exists
+        if self._handler_middleware:
+            middleware_data = [
+                (handler_id, meta)
+                for handler_id, meta in self._handler_middleware.items()
+            ]
+            _core.register_middleware_metadata(middleware_data)
+            print(f"[django-bolt] Registered middleware for {len(middleware_data)} handlers")
         
         print(f"[django-bolt] Registered {len(self._routes)} routes")
         print(f"[django-bolt] Starting async server on http://{host}:{port}")

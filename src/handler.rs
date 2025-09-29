@@ -6,9 +6,10 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::Arc;
 
+use crate::middleware;
 use crate::request::PyRequest;
 use crate::router::parse_query_string;
-use crate::state::{AppState, GLOBAL_ROUTER, TASK_LOCALS};
+use crate::state::{AppState, GLOBAL_ROUTER, MIDDLEWARE_METADATA, TASK_LOCALS};
 use crate::streaming::create_python_stream;
 use crate::direct_stream;
 
@@ -22,18 +23,54 @@ pub async fn handle_request(
 
     let router = GLOBAL_ROUTER.get().expect("Router not initialized");
 
-    let (route_handler, path_params) = {
+    // For OPTIONS requests, try to find a matching route with any method
+    // to check if CORS middleware is configured
+    let (route_handler, path_params, handler_id) = {
         let router_guard = router.read().await;
-        match router_guard.find(&method, &path) {
-            Some((route, path_params)) => (
+        
+        // First try exact method match
+        if let Some((route, path_params, handler_id)) = router_guard.find(&method, &path) {
+            (
                 Python::attach(|py| route.handler.clone_ref(py)),
                 path_params,
-            ),
-            None => {
-                return HttpResponse::NotFound()
-                    .content_type("text/plain; charset=utf-8")
-                    .body("Not Found");
+                handler_id,
+            )
+        } else if method == "OPTIONS" {
+            // For OPTIONS, check if ANY method has this path
+            for try_method in &["GET", "POST", "PUT", "PATCH", "DELETE"] {
+                if let Some((route, path_params, handler_id)) = router_guard.find(try_method, &path) {
+                    // Found a route, use it for middleware metadata
+                    return {
+                        // Check if this route has CORS middleware
+                        if let Some(meta_map) = MIDDLEWARE_METADATA.get() {
+                            if let Some(metadata) = meta_map.get(&handler_id) {
+                                // Process CORS preflight
+                                if let Some(response) = middleware::process_middleware(
+                                    "OPTIONS",
+                                    &path,
+                                    &AHashMap::new(),
+                                    handler_id,
+                                    metadata,
+                                ).await {
+                                    return response;
+                                }
+                            }
+                        }
+                        // No CORS middleware, return 404
+                        HttpResponse::NotFound()
+                            .content_type("text/plain; charset=utf-8")
+                            .body("Not Found")
+                    };
+                }
             }
+            // No route found at all
+            return HttpResponse::NotFound()
+                .content_type("text/plain; charset=utf-8")
+                .body("Not Found");
+        } else {
+            return HttpResponse::NotFound()
+                .content_type("text/plain; charset=utf-8")
+                .body("Not Found");
         }
     };
 
@@ -43,15 +80,35 @@ pub async fn handle_request(
         AHashMap::new()
     };
 
+    // Extract headers early for middleware processing
+    let mut headers: AHashMap<String, String> = AHashMap::new();
+    for (name, value) in req.headers().iter() {
+        if let Ok(v) = value.to_str() {
+            headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
+        }
+    }
+
+    // Check for middleware metadata
+    let middleware_meta = MIDDLEWARE_METADATA.get().and_then(|meta_map| {
+        meta_map.get(&handler_id).map(|m| Python::attach(|py| m.clone_ref(py)))
+    });
+
+    // Process middleware (CORS preflight, rate limiting, auth)
+    if let Some(ref meta) = middleware_meta {
+        if let Some(early_response) = middleware::process_middleware(
+            &method,
+            &path,
+            &headers,
+            handler_id,
+            meta,
+        ).await {
+            return early_response;
+        }
+    }
+
     let (dispatch, handler) = Python::attach(|py| (state.dispatch.clone_ref(py), route_handler.clone_ref(py)));
 
     let fut = match Python::attach(|py| -> PyResult<_> {
-        let mut headers: AHashMap<String, String> = AHashMap::new();
-        for (name, value) in req.headers().iter() {
-            if let Ok(v) = value.to_str() {
-                headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
-            }
-        }
         let mut cookies: AHashMap<String, String> = AHashMap::new();
         if let Some(raw_cookie) = headers.get("cookie").cloned() {
             for pair in raw_cookie.split(';') {
@@ -66,6 +123,13 @@ pub async fn handle_request(
             }
         }
 
+        // Create context dict if middleware is present
+        let context = if middleware_meta.is_some() {
+            Some(PyDict::new(py).unbind())
+        } else {
+            None
+        };
+
         let request = PyRequest {
             method,
             path,
@@ -74,6 +138,7 @@ pub async fn handle_request(
             query_params,
             headers,
             cookies,
+            context,
         };
         let request_obj = Py::new(py, request)?;
 
@@ -128,9 +193,17 @@ pub async fn handle_request(
                             .body(format!("File open error: {}", e)),
                     };
                 } else {
-                    let mut builder = HttpResponse::build(status);
-                    for (k, v) in headers { builder.append_header((k, v)); }
-                    return builder.body(body_bytes);
+                    let mut response = HttpResponse::build(status);
+                    for (k, v) in headers { response.append_header((k, v)); }
+                    let mut response = response.body(body_bytes);
+                    
+                    // Add CORS headers if middleware is configured
+                    if let Some(ref meta) = middleware_meta {
+                        let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+                        middleware::add_cors_headers(&mut response, origin, meta);
+                    }
+                    
+                    return response;
                 }
             } else {
                 let streaming = Python::attach(|py| {

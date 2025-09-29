@@ -1,5 +1,6 @@
 use actix_http::KeepAlive;
 use actix_web::{self as aw, web, App, HttpServer};
+use ahash::AHashMap;
 use pyo3::prelude::*;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
@@ -8,7 +9,7 @@ use tokio::sync::RwLock;
 
 use crate::handler::handle_request;
 use crate::router::Router;
-use crate::state::{AppState, GLOBAL_ROUTER, TASK_LOCALS};
+use crate::state::{AppState, GLOBAL_ROUTER, MIDDLEWARE_METADATA, TASK_LOCALS};
 
 #[pyfunction]
 pub fn register_routes(
@@ -22,6 +23,21 @@ pub fn register_routes(
     GLOBAL_ROUTER
         .set(Arc::new(RwLock::new(router)))
         .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Router already initialized"))?;
+    Ok(())
+}
+
+#[pyfunction]
+pub fn register_middleware_metadata(
+    _py: Python<'_>,
+    metadata: Vec<(usize, Py<PyAny>)>,
+) -> PyResult<()> {
+    let mut metadata_map = AHashMap::new();
+    for (handler_id, meta) in metadata {
+        metadata_map.insert(handler_id, meta);
+    }
+    MIDDLEWARE_METADATA
+        .set(Arc::new(metadata_map))
+        .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Middleware metadata already initialized"))?;
     Ok(())
 }
 

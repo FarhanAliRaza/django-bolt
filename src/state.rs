@@ -1,3 +1,4 @@
+use ahash::AHashMap;
 use once_cell::sync::OnceCell;
 use pyo3::prelude::*;
 use pyo3_async_runtimes::TaskLocals;
@@ -12,3 +13,4 @@ pub struct AppState {
 
 pub static GLOBAL_ROUTER: OnceCell<Arc<RwLock<Router>>> = OnceCell::new();
 pub static TASK_LOCALS: OnceCell<TaskLocals> = OnceCell::new();
+pub static MIDDLEWARE_METADATA: OnceCell<Arc<AHashMap<usize, Py<PyAny>>>> = OnceCell::new();

@@ -4,6 +4,7 @@ use pyo3::prelude::*;
 
 pub struct Route {
     pub handler: Py<PyAny>,
+    pub handler_id: usize,  // Store handler_id for middleware metadata lookup
 }
 
 pub struct Router {
@@ -29,11 +30,12 @@ impl Router {
         &mut self,
         method: &str,
         path: &str,
-        _handler_id: usize,
+        handler_id: usize,
         handler: Py<PyAny>,
     ) -> PyResult<()> {
         let route = Route {
             handler,
+            handler_id,
         };
 
         let router = match method {
@@ -57,7 +59,7 @@ impl Router {
         Ok(())
     }
 
-    pub fn find(&self, method: &str, path: &str) -> Option<(&Route, AHashMap<String, String>)> {
+    pub fn find(&self, method: &str, path: &str) -> Option<(&Route, AHashMap<String, String>, usize)> {
         let router = match method {
             "GET" => &self.get,
             "POST" => &self.post,
@@ -73,7 +75,7 @@ impl Router {
                 for (key, value) in params.iter() {
                     path_params.insert(key.to_string(), value.to_string());
                 }
-                Some((value, path_params))
+                Some((value, path_params, value.handler_id))
             }
             Err(_) => None,
         }

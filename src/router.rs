@@ -2,9 +2,7 @@ use ahash::AHashMap;
 use matchit::{Match, Router as MatchRouter};
 use pyo3::prelude::*;
 
-#[derive(Clone)]
 pub struct Route {
-    pub handler_id: usize,
     pub handler: Py<PyAny>,
 }
 
@@ -27,25 +25,39 @@ impl Router {
         }
     }
 
-    pub fn register(&mut self, method: &str, path: &str, handler_id: usize, handler: Py<PyAny>) -> PyResult<()> {
-        let route = Route { handler_id, handler };
-        
+    pub fn register(
+        &mut self,
+        method: &str,
+        path: &str,
+        _handler_id: usize,
+        handler: Py<PyAny>,
+    ) -> PyResult<()> {
+        let route = Route {
+            handler,
+        };
+
         let router = match method {
             "GET" => &mut self.get,
             "POST" => &mut self.post,
             "PUT" => &mut self.put,
             "PATCH" => &mut self.patch,
             "DELETE" => &mut self.delete,
-            _ => return Err(pyo3::exceptions::PyValueError::new_err(format!("Unsupported method: {}", method))),
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unsupported method: {}",
+                    method
+                )))
+            }
         };
 
-        router.insert(path, route)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Failed to register route: {}", e)))?;
-        
+        router.insert(path, route).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("Failed to register route: {}", e))
+        })?;
+
         Ok(())
     }
 
-    pub fn find(&self, method: &str, path: &str) -> Option<(Route, AHashMap<String, String>)> {
+    pub fn find(&self, method: &str, path: &str) -> Option<(&Route, AHashMap<String, String>)> {
         let router = match method {
             "GET" => &self.get,
             "POST" => &self.post,
@@ -61,7 +73,7 @@ impl Router {
                 for (key, value) in params.iter() {
                     path_params.insert(key.to_string(), value.to_string());
                 }
-                Some((value.clone(), path_params))
+                Some((value, path_params))
             }
             Err(_) => None,
         }
@@ -80,17 +92,23 @@ pub fn parse_query_string(query: &str) -> AHashMap<String, String> {
             let value = &pair[eq_pos + 1..];
             if !key.is_empty() {
                 params.insert(
-                    urlencoding::decode(key).unwrap_or_else(|_| key.into()).into_owned(),
-                    urlencoding::decode(value).unwrap_or_else(|_| value.into()).into_owned(),
+                    urlencoding::decode(key)
+                        .unwrap_or_else(|_| key.into())
+                        .into_owned(),
+                    urlencoding::decode(value)
+                        .unwrap_or_else(|_| value.into())
+                        .into_owned(),
                 );
             }
         } else if !pair.is_empty() {
             params.insert(
-                urlencoding::decode(pair).unwrap_or_else(|_| pair.into()).into_owned(),
+                urlencoding::decode(pair)
+                    .unwrap_or_else(|_| pair.into())
+                    .into_owned(),
                 String::new(),
             );
         }
     }
-    
+
     params
 }

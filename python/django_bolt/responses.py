@@ -83,3 +83,20 @@ class FileResponse:
         self.headers = headers or {}
 
 
+
+class StreamingResponse:
+    def __init__(
+        self,
+        content: Any,
+        *,
+        status_code: int = 200,
+        media_type: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ):
+        # content can be an iterator/generator, iterable, or a callable returning an iterator
+        self.content = content
+        self.status_code = status_code
+        self.media_type = media_type or "application/octet-stream"
+        self.headers = headers or {}
+        # do not enforce type of content here; Rust side will adapt common iterator/callable patterns
+

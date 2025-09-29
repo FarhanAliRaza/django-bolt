@@ -2,7 +2,7 @@
 
 HOST ?= 127.0.0.1
 PORT ?= 8000
-C ?= 50
+C ?= 100
 N ?= 10000
 P ?= 4
 WORKERS ?= 1
@@ -120,6 +120,11 @@ save-bench:
 		grep "Requests per second" BENCHMARK_BASELINE.md | head -2; \
 		echo "Dev:"; \
 		grep "Requests per second" BENCHMARK_DEV.md | head -2; \
+		echo ""; \
+		echo "Streaming (Plain) RPS - Dev:"; \
+		awk '/### Streaming Plain/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' BENCHMARK_DEV.md || true; \
+		echo "Streaming (SSE) RPS - Dev:"; \
+		awk '/### Server-Sent Events/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' BENCHMARK_DEV.md || true; \
 	else \
 		echo "Rotating benchmarks: dev -> baseline, new -> dev"; \
 		mv BENCHMARK_DEV.md BENCHMARK_BASELINE.md; \
@@ -131,5 +136,14 @@ save-bench:
 		grep "Requests per second" BENCHMARK_BASELINE.md | head -2; \
 		echo "Dev (current):"; \
 		grep "Requests per second" BENCHMARK_DEV.md | head -2; \
+		echo ""; \
+		echo "Streaming (Plain) RPS - Baseline:"; \
+		awk '/### Streaming Plain/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' BENCHMARK_BASELINE.md || true; \
+		echo "Streaming (SSE) RPS - Baseline:"; \
+		awk '/### Server-Sent Events/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' BENCHMARK_BASELINE.md || true; \
+		echo "Streaming (Plain) RPS - Dev:"; \
+		awk '/### Streaming Plain/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' BENCHMARK_DEV.md || true; \
+		echo "Streaming (SSE) RPS - Dev:"; \
+		awk '/### Server-Sent Events/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' BENCHMARK_DEV.md || true; \
 	fi
 

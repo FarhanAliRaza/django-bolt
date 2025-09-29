@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import time
 import socket
@@ -7,7 +8,7 @@ import json
 import msgspec
 import pytest
 
-from django_bolt import BoltAPI, JSON
+from django_bolt import BoltAPI, JSON, StreamingResponse
 from django_bolt.param_functions import Query, Path, Header, Cookie, Depends, Form, File as FileParam
 from django_bolt.responses import PlainText, HTML, Redirect, File, FileResponse
 from django_bolt.exceptions import HTTPException
@@ -24,8 +25,8 @@ def run_server(api: BoltAPI, host: str, port: int):
     core.start_server_async(api._dispatch, host, port)
 
 
-def http_request(method: str, host: str, port: int, path: str, body: bytes | None = None, headers: dict | None = None):
-    conn = http.client.HTTPConnection(host, port, timeout=2)
+def http_request(method: str, host: str, port: int, path: str, body: bytes | None = None, headers: dict | None = None, timeout: int = None):
+    conn = http.client.HTTPConnection(host, port, timeout=timeout or 2)
     try:
         conn.request(method, path, body=body, headers=headers or {})
         resp = conn.getresponse()
@@ -35,8 +36,8 @@ def http_request(method: str, host: str, port: int, path: str, body: bytes | Non
         conn.close()
 
 
-def http_get(host: str, port: int, path: str):
-    return http_request("GET", host, port, path)
+def http_get(host: str, port: int, path: str, timeout: int = None):
+    return http_request("GET", host, port, path, timeout=timeout)
 
 
 def http_put_json(host: str, port: int, path: str, data: dict):
@@ -247,6 +248,82 @@ def server():
     async def get_fileresponse():
         return FileResponse(THIS_FILE, filename="test_syntax.py")
 
+    # Streaming endpoints
+    @api.get("/stream-plain")
+    async def stream_plain():
+        def gen():
+            for i in range(3):
+                yield f"p{i},"
+        return StreamingResponse(gen, media_type="text/plain")
+
+    @api.get("/stream-bytes")
+    async def stream_bytes():
+        def gen():
+            for i in range(2):
+                yield str(i).encode()
+        return StreamingResponse(gen)
+
+    @api.get("/sse")
+    async def stream_sse():
+        def gen():
+            yield "event: message\ndata: hello\n\n"
+            yield "data: 1\n\n"
+            yield ": comment\n\n"
+        return StreamingResponse(gen, media_type="text/event-stream")
+
+    # Async streaming endpoints to test the new async channel bridge
+    @api.get("/stream-async")
+    async def stream_async():
+        async def async_gen():
+            for i in range(3):
+                await asyncio.sleep(0.001)  # Small delay to simulate async work
+                yield f"async-{i},".encode()
+        return StreamingResponse(async_gen(), media_type="text/plain")
+
+    @api.get("/stream-async-sse")
+    async def stream_async_sse():
+        async def async_gen():
+            yield "event: start\ndata: beginning\n\n"
+            await asyncio.sleep(0.001)
+            yield "event: message\ndata: async data\n\n"
+            await asyncio.sleep(0.001)
+            yield "event: end\ndata: finished\n\n"
+        return StreamingResponse(async_gen(), media_type="text/event-stream")
+
+    @api.get("/stream-async-large")
+    async def stream_async_large():
+        """Test async streaming with larger payload to test channel efficiency."""
+        async def async_gen():
+            for i in range(10):
+                await asyncio.sleep(0.001)
+                chunk = f"chunk-{i:02d}-{'x' * 100}\n".encode()  # ~110 bytes per chunk
+                yield chunk
+        return StreamingResponse(async_gen(), media_type="application/octet-stream")
+
+    @api.get("/stream-async-mixed-types")
+    async def stream_async_mixed_types():
+        """Test async streaming with different data types."""
+        async def async_gen():
+            yield b"bytes-chunk\n"
+            await asyncio.sleep(0.001)
+            yield "string-chunk\n"
+            await asyncio.sleep(0.001)
+            yield bytearray(b"bytearray-chunk\n")
+            await asyncio.sleep(0.001)
+            yield memoryview(b"memoryview-chunk\n")
+        return StreamingResponse(async_gen(), media_type="text/plain")
+
+    @api.get("/stream-async-error")
+    async def stream_async_error():
+        """Test async streaming error handling."""
+        async def async_gen():
+            yield b"chunk1\n"
+            await asyncio.sleep(0.001)
+            yield b"chunk2\n"
+            await asyncio.sleep(0.001)
+            raise ValueError("Simulated async error")
+        return StreamingResponse(async_gen(), media_type="text/plain")
+
     # Additional endpoints for forms and file upload
     from typing import Annotated
     @api.post("/form-urlencoded")
@@ -257,6 +334,27 @@ def server():
     async def upload(files: Annotated[list[dict], FileParam(alias="file")]):
         # return only metadata
         return {"count": len(files), "names": [f.get("filename") for f in files]}
+
+    # Add the real problematic async streaming endpoints from the actual server
+    @api.get("/sse-async-test")
+    async def sse_async_test():
+        async def agen():
+            for i in range(3):
+                yield f"data: {i}\n\n"
+                await asyncio.sleep(0)
+        return StreamingResponse(agen(), media_type="text/event-stream")
+
+    @api.post("/v1/chat/completions-async-test")
+    async def chat_completions_async_test(payload: dict):
+        if payload.get("stream", True):
+            async def agen():
+                for i in range(payload.get("n_chunks", 2)):
+                    data = {"chunk": i, "content": " hello"}
+                    yield f"data: {json.dumps(data)}\n\n"
+                    await asyncio.sleep(0)
+                yield "data: [DONE]\n\n"
+            return StreamingResponse(agen(), media_type="text/event-stream")
+        return {"non_streaming": True}
 
     host, port = "127.0.0.1", free_port()
     t = threading.Thread(target=run_server, args=(api, host, port), daemon=True)
@@ -431,6 +529,118 @@ def test_response_helpers(server):
     assert status == 200
     assert headers.get("content-type", "").startswith("text/")
     assert "attachment;" in (headers.get("content-disposition", "").lower())
+
+
+def test_streaming_plain(server):
+    host, port = server
+    status, headers, body = http_get(host, port, "/stream-plain")
+    assert status == 200
+    assert headers.get("content-type", "").startswith("text/plain")
+    assert body == b"p0,p1,p2,"
+
+
+def test_streaming_bytes_default_content_type(server):
+    host, port = server
+    status, headers, body = http_get(host, port, "/stream-bytes")
+    assert status == 200
+    assert headers.get("content-type", "").startswith("application/octet-stream")
+    assert body == b"01"
+
+
+def test_streaming_sse_headers(server):
+    host, port = server
+    status, headers, body = http_get(host, port, "/sse")
+    assert status == 200
+    assert headers.get("content-type", "").startswith("text/event-stream")
+    # SSE-friendly headers are set by the server
+    # Note: Connection header may be managed by the HTTP server automatically
+    assert headers.get("x-accel-buffering", "").lower() == "no"
+    # Body should contain multiple well-formed SSE lines
+    text = body.decode()
+    assert "event: message" in text
+    assert "data: hello" in text
+    assert "data: 1" in text
+    assert ": comment" in text
+
+
+def test_streaming_async_large(server):
+    """Test async streaming with larger payloads."""
+    host, port = server
+    status, headers, body = http_get(host, port, "/stream-async-large")
+    assert status == 200
+    assert headers.get("content-type", "").startswith("application/octet-stream")
+    
+    # Should have 10 chunks
+    lines = body.decode().strip().split('\n')
+    assert len(lines) == 10
+    
+    # Check format of chunks
+    for i, line in enumerate(lines):
+        expected_prefix = f"chunk-{i:02d}-"
+        assert line.startswith(expected_prefix)
+        assert len(line) >= 109  # ~109 bytes per line (110 bytes per chunk with \n)
+        assert line.endswith('x' * 100)
+
+
+def test_streaming_async_mixed_types(server):
+    """Test async streaming with different data types."""
+    host, port = server
+    status, headers, body = http_get(host, port, "/stream-async-mixed-types")
+    assert status == 200
+    assert headers.get("content-type", "").startswith("text/plain")
+    
+    # Check all data types are properly converted
+    text = body.decode()
+    expected_chunks = [
+        "bytes-chunk\n",
+        "string-chunk\n", 
+        "bytearray-chunk\n",
+        "memoryview-chunk\n"
+    ]
+    
+    for expected in expected_chunks:
+        assert expected in text
+
+
+def test_streaming_async_vs_sync_compatibility(server):
+    """Test that async and sync streaming produce the same results for equivalent data."""
+    host, port = server
+    
+    # Get sync streaming result  
+    sync_status, sync_headers, sync_body = http_get(host, port, "/stream-plain")
+    
+    # Get async streaming result
+    async_status, async_headers, async_body = http_get(host, port, "/stream-async")
+    
+    # Both should succeed
+    assert sync_status == 200
+    assert async_status == 200
+    
+    # Both should be text/plain
+    assert sync_headers.get("content-type", "").startswith("text/plain")
+    assert async_headers.get("content-type", "").startswith("text/plain")
+    
+    # Content should be similar format (both have 3 items)
+    sync_text = sync_body.decode()
+    async_text = async_body.decode()
+    
+    # Both should have 3 comma-separated items
+    assert len(sync_text.split(',')) == 4  # "p0,p1,p2," = 4 parts
+    assert len(async_text.split(',')) == 4  # "async-0,async-1,async-2," = 4 parts
+
+
+def test_async_bridge_endpoints_work(server):
+    """Test that async SSE streaming works correctly."""
+    host, port = server
+    
+    # Test the async SSE endpoint - this should expose the real bug
+    status, headers, body = http_get(host, port, "/sse-async-test", timeout=5)
+    assert status == 200, f"Async SSE endpoint failed with status {status}"
+    assert len(body) > 0, f"Async SSE endpoint returned empty body, got {len(body)} bytes"
+    # Check that we actually get SSE formatted data
+    text = body.decode()
+    assert "data: 0" in text, f"Expected SSE data not found in response: {text[:100]}"
+    assert "data: 1" in text, f"Expected SSE data not found in response: {text[:100]}"
 
 
 def test_form_and_file(server):

@@ -9,8 +9,8 @@ name = "django_bolt"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.21.0", features = ["extension-module", "abi3-py312"] }
-pyo3-asyncio-0-21 = { version = "0.21", features = ["tokio-runtime"] }
+pyo3 = { version = "0.26", features = ["extension-module", "abi3-py312"] }
+pyo3-async-runtimes = { version = "0.26", features = ["tokio-runtime"] }
 actix-web = "4"
 actix-http = "3"
 actix-cors = "0.7"

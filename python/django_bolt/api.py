@@ -6,13 +6,13 @@ import msgspec
 
 from .bootstrap import ensure_django_ready
 from django_bolt import _core
-from .responses import JSON, PlainText, HTML, Redirect, File, FileResponse
+from .responses import JSON, PlainText, HTML, Redirect, File, FileResponse, StreamingResponse
 from .exceptions import HTTPException
 from .params import Param, Depends as DependsMarker
 
 Request = Dict[str, Any]
 Response = Tuple[int, List[Tuple[str, str]], bytes]
-
+ 
 # Global registry for BoltAPI instances (used by autodiscovery)
 _BOLT_API_REGISTRY = []
 
@@ -496,6 +496,9 @@ class BoltAPI:
                 if result.headers:
                     headers.extend([(k.lower(), v) for k, v in result.headers.items()])
                 return int(result.status_code), headers, b""
+            elif isinstance(result, StreamingResponse):
+                # Pass through; Rust will detect and stream from the iterator/generator
+                return result
             elif isinstance(result, (bytes, bytearray)):
                 status = int(meta.get("default_status_code", 200))
                 return status, [("content-type", "application/octet-stream")], bytes(result)

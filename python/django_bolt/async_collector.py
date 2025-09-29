@@ -40,21 +40,21 @@ def batch_async(
     
     async def get_next_batch():
         batch = []
-        # Try to gather up to batch_size items immediately
+        # Gather items greedily up to batch_size
+        # This is optimal for small iterators (SSE with 3-5 chunks)
         for _ in range(batch_size):
             try:
                 next_item = await ait.__anext__()
                 batch.append(next_item)
             except StopAsyncIteration:
-                # End of iterator, return what we have
+                # End of iterator
                 break
         return batch
     
     while True:
-        # Get batch without timeout for minimal latency
+        # Direct execution without timeout wrapper for minimal overhead
         batch = loop.run_until_complete(get_next_batch())
         if not batch:
-            # Empty batch means we're done
             return
         yield batch
 

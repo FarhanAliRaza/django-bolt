@@ -415,12 +415,46 @@ async fn handle_request(
                         builder.append_header((k, v));
                     }
                     if media_type == "text/event-stream" {
-                        // Determine if the content is async; async SSE needs the channel-based path
-                        let is_async_sse = Python::attach(|py| {
-                            let obj = content_obj.bind(py);
+                        // Check if it's async and try to wrap with AsyncToSyncCollector
+                        let mut final_content_obj = content_obj;
+                        let mut is_async_sse = false;
+                        
+                        // Check if content is async
+                        let has_async = Python::attach(|py| {
+                            let obj = final_content_obj.bind(py);
                             obj.hasattr("__aiter__").unwrap_or(false)
                                 || obj.hasattr("__anext__").unwrap_or(false)
                         });
+
+                        if has_async {
+                            // Try to wrap async SSE with AsyncToSyncCollector for fast path
+                            let wrapped = Python::attach(|py| -> Option<Py<PyAny>> {
+                                match py.import("django_bolt.async_collector") {
+                                    Ok(collector_module) => {
+                                        if let Ok(collector_class) = collector_module.getattr("AsyncToSyncCollector") {
+                                            let b = final_content_obj.bind(py);
+                                            // Optimized for SSE: small batch (3-5 chunks typical), minimal timeout (1ms)
+                                            // SSE usually yields just a few chunks quickly
+                                            match collector_class.call1((b.clone(), 5, 1)) {
+                                                Ok(wrapped) => return Some(wrapped.unbind()),
+                                                Err(_) => {}
+                                            }
+                                        }
+                                    }
+                                    Err(_) => {}
+                                }
+                                None
+                            });
+                            
+                            if let Some(w) = wrapped {
+                                // Successfully wrapped - use sync path
+                                final_content_obj = w;
+                                is_async_sse = false;
+                            } else {
+                                // Wrapping failed - use async path
+                                is_async_sse = true;
+                            }
+                        }
 
                         if is_async_sse {
                             // Async SSE: use async bridge but still force SSE headers
@@ -434,10 +468,10 @@ async fn handle_request(
                             builder.append_header(("Expires", "0"));
                             builder.content_type("text/event-stream");
 
-                            return builder.streaming(create_python_stream(content_obj));
+                            return builder.streaming(create_python_stream(final_content_obj));
                         } else {
                             // Sync SSE can use the optimized direct stream path
-                            return direct_stream::create_sse_response(content_obj).unwrap_or_else(
+                            return direct_stream::create_sse_response(final_content_obj).unwrap_or_else(
                                 |_| {
                                     builder.append_header(("X-Accel-Buffering", "no"));
                                     builder.append_header((
@@ -451,20 +485,48 @@ async fn handle_request(
                             );
                         }
                     } else {
-                        // Check if it's async first
+                        // Non-SSE streaming - check if async and try to wrap
+                        let mut final_content = content_obj;
                         let is_async = Python::attach(|py| {
-                            let obj = content_obj.bind(py);
+                            let obj = final_content.bind(py);
                             obj.hasattr("__aiter__").unwrap_or(false)
                                 || obj.hasattr("__anext__").unwrap_or(false)
                         });
 
                         if is_async {
-                            // Async iterators - use original streaming for now
-                            let stream = create_python_stream(content_obj);
-                            return builder.streaming(stream);
-                        } else {
+                            // Try to wrap async streaming with AsyncToSyncCollector
+                            let wrapped = Python::attach(|py| -> Option<Py<PyAny>> {
+                                match py.import("django_bolt.async_collector") {
+                                    Ok(collector_module) => {
+                                        if let Ok(collector_class) = collector_module.getattr("AsyncToSyncCollector") {
+                                            let b = final_content.bind(py);
+                                            // For OpenAI-style streaming: more chunks, slightly higher batch/timeout
+                                            // Balances throughput with latency for token streaming
+                                            match collector_class.call1((b.clone(), 20, 2)) {
+                                                Ok(wrapped) => return Some(wrapped.unbind()),
+                                                Err(_) => {}
+                                            }
+                                        }
+                                    }
+                                    Err(_) => {}
+                                }
+                                None
+                            });
+                            
+                            if let Some(w) = wrapped {
+                                // Successfully wrapped - use sync direct stream path
+                                final_content = w;
+                            } else {
+                                // Wrapping failed - fall back to async channel path
+                                let stream = create_python_stream(final_content);
+                                return builder.streaming(stream);
+                            }
+                        }
+                        
+                        // Either was sync originally or successfully wrapped to sync
+                        {
                             // For sync streaming, use direct stream
-                            let mut direct = direct_stream::PythonDirectStream::new(content_obj);
+                            let mut direct = direct_stream::PythonDirectStream::new(final_content);
 
                             // Try to collect small responses
                             if let Some(body) = direct.try_collect_small() {
@@ -699,50 +761,9 @@ fn create_python_stream(
 
     let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(channel_capacity);
     
-    // Try to wrap async iterator with our Python collector to avoid PyO3 bridge
-    let mut resolved_target_final = Python::attach(|py| resolved_target.clone_ref(py));
-    let mut is_async_final = is_async_iter;
-    
-    if is_async_iter {
-        // Use high-performance async collector for all async streaming
-        let wrapped = Python::attach(|py| -> Option<Py<PyAny>> {
-            // Use AsyncToSyncCollector for optimal performance
-            match py.import("django_bolt.async_collector") {
-                Ok(collector_module) => {
-                if let Ok(collector_class) = collector_module.getattr("AsyncToSyncCollector") {
-                    // Pass the async iterable directly
-                    let b = resolved_target_final.bind(py);
-                    
-                    // Use ultra-low latency settings for real-time streaming: batch_size=5, timeout_ms=1
-                    // Optimized for minimal latency over batching efficiency
-                    match collector_class.call1((b.clone(), 5, 1)) {
-                        Ok(wrapped) => return Some(wrapped.unbind()),
-                        Err(e) => {
-                            eprintln!("[ERROR] Failed to wrap with AsyncToSyncCollector: {}", e);
-                            e.print(py);
-                        }
-                    }
-                }
-                },
-                Err(e) => {
-                    eprintln!("[ERROR] Failed to import django_bolt.async_collector: {}", e);
-                    e.print(py);
-                }
-            }
-            None
-        });
-        
-        if let Some(wrapped_iter) = wrapped {
-            // AsyncToSyncCollector provides sync iteration, use sync path
-            resolved_target_final = wrapped_iter;
-            is_async_final = false;
-            // Fall through to sync path below
-        } else if is_async_iter {
-            // AsyncToSyncCollector failed but we still have an async iterator
-            // Keep the async path as a last resort
-            eprintln!("[WARNING] AsyncToSyncCollector unavailable, using direct async iteration (slower)");
-        }
-    }
+    // Content has already been wrapped with AsyncToSyncCollector at routing level if needed
+    let resolved_target_final = Python::attach(|py| resolved_target.clone_ref(py));
+    let is_async_final = is_async_iter;
 
     if is_async_final {
         // Optimized async generator path with dynamic batching

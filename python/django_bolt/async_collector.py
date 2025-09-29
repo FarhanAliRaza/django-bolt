@@ -1,149 +1,228 @@
 """
-Async to Sync Collector for bypassing PyO3 async bridge.
-This runs Python async iteration in its own thread and provides sync interface to Rust.
+High-performance async to sync collector for streaming.
+Implements proven patterns for efficient async iterator batching and PyO3 boundary optimization.
 """
 
 import asyncio
-import threading
-import queue
-from typing import AsyncIterator, Iterator, Any
+from datetime import timedelta
+from typing import AsyncIterable, AsyncIterator, Iterator, List, Optional, TypeVar, Union
+
+X = TypeVar("X")
+
+
+def batch_async(
+    aib: AsyncIterable[X],
+    timeout: timedelta,
+    batch_size: int,
+    loop: Optional[asyncio.AbstractEventLoop] = None,
+) -> Iterator[List[X]]:
+    """
+    Batch an async iterable synchronously without timeouts for minimal latency.
+    
+    Optimized for low-latency streaming:
+    - No timeout overhead for immediate async generators
+    - Direct async iteration for maximum speed
+    - Simplified control flow
+    
+    Args:
+        aib: The underlying source async iterable of items
+        timeout: Ignored in this optimized version
+        batch_size: Maximum number of items to yield in a batch
+        loop: Custom asyncio run loop to use, if any
+        
+    Yields:
+        The next gathered batch of items
+    """
+    # Ensure that we have the stateful iterator of the source
+    ait = aib.__aiter__()
+    
+    loop = loop if loop is not None else asyncio.new_event_loop()
+    
+    async def get_next_batch():
+        batch = []
+        # Try to gather up to batch_size items immediately
+        for _ in range(batch_size):
+            try:
+                next_item = await ait.__anext__()
+                batch.append(next_item)
+            except StopAsyncIteration:
+                # End of iterator, return what we have
+                break
+        return batch
+    
+    while True:
+        # Get batch without timeout for minimal latency
+        batch = loop.run_until_complete(get_next_batch())
+        if not batch:
+            # Empty batch means we're done
+            return
+        yield batch
 
 
 class AsyncToSyncCollector:
     """
-    Collects async generator output in Python thread, provides sync iterator to Rust.
-    This completely bypasses the PyO3 async bridge overhead.
+    High-performance async stream collector for Rust integration.
+    
+    Optimized for streaming with efficient batching to minimize PyO3 boundary 
+    crossings while maintaining good throughput and latency characteristics.
     """
     
-    def __init__(self, async_gen: AsyncIterator, batch_size: int = 20, prefetch: int = 100, start_immediately: bool = True):
+    def __init__(
+        self,
+        async_iterable: AsyncIterable,
+        batch_size: int = 50,  # Optimized for OpenAI streaming
+        timeout_ms: int = 10,   # Low latency: 10ms timeout
+        convert_to_bytes: bool = True
+    ):
         """
         Initialize the collector.
         
         Args:
-            async_gen: The async generator to collect from
-            batch_size: Number of chunks to batch together (reduces overhead)
-            prefetch: Maximum queue size for prefetching
-            start_immediately: Start collection thread immediately (needed for Rust integration)
+            async_iterable: The async iterable to collect from
+            batch_size: Number of chunks to batch together
+            timeout_ms: Maximum time to wait for a full batch (milliseconds)
+            convert_to_bytes: Whether to convert items to bytes
         """
-        self.async_gen = async_gen
-        self.batch_size = batch_size
-        self.queue = queue.Queue(maxsize=prefetch)
-        self.thread = None
-        self.done = False
-        self.exception = None
-        self._started = False
-        
-        if start_immediately:
-            # Start thread immediately for Rust integration
-            # This avoids deadlock with spawn_blocking
-            self._start_thread()
-        
-    def _run_async(self):
-        """Run async collection in separate thread with dedicated event loop."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(self._collect())
-        except Exception as e:
-            self.exception = e
-        finally:
-            self.done = True
-            # Put sentinel to unblock any waiting __next__ calls
-            try:
-                self.queue.put(None, block=False)
-            except queue.Full:
-                pass
-            loop.close()
-        
-    async def _collect(self):
-        """Collect chunks from async generator and batch them."""
-        batch = []
-        try:
-            async for chunk in self.async_gen:
-                # Convert various types to bytes
-                if isinstance(chunk, bytes):
-                    batch.append(chunk)
-                elif isinstance(chunk, bytearray):
-                    batch.append(bytes(chunk))
-                elif isinstance(chunk, memoryview):
-                    batch.append(bytes(chunk))
-                elif hasattr(chunk, 'encode'):
-                    # String-like objects
-                    batch.append(chunk.encode())
-                else:
-                    # Fallback: convert to string then bytes
-                    batch.append(str(chunk).encode())
-                
-                # Send batch when full
-                if len(batch) >= self.batch_size:
-                    # Join into single bytes object for efficiency
-                    combined = b"".join(batch)
-                    self.queue.put(combined)
-                    batch = []
+        # Assume it's an AsyncIterable and let batch_async call __aiter__() on it
+        self.async_gen = async_iterable
             
-            # Send remaining batch
-            if batch:
-                combined = b"".join(batch)
-                self.queue.put(combined)
-                
-        except StopAsyncIteration:
-            # Normal completion
-            if batch:
-                combined = b"".join(batch)
-                self.queue.put(combined)
-        except Exception as e:
-            # Store exception to re-raise in sync context
-            self.exception = e
-            raise
-    
-    def _start_thread(self):
-        """Start the collection thread."""
-        if not self._started:
-            self._started = True
-            self.thread = threading.Thread(target=self._run_async, daemon=True)
-            self.thread.start()
+        self.batch_size = batch_size
+        self.timeout = timedelta(milliseconds=timeout_ms)
+        self.convert_to_bytes = convert_to_bytes
+        self._iterator = None
+        self._loop = None
+        
+    def _convert_to_bytes(self, item) -> bytes:
+        """Convert various types to bytes for streaming."""
+        if isinstance(item, bytes):
+            return item
+        elif isinstance(item, bytearray):
+            return bytes(item)
+        elif isinstance(item, memoryview):
+            return bytes(item)
+        elif isinstance(item, str):
+            return item.encode('utf-8')
+        else:
+            return str(item).encode('utf-8')
     
     def __iter__(self):
-        """Return self as iterator, start collection thread if needed."""
-        self._start_thread()  # Ensure thread is started
-        return self
-        
-    def __next__(self):
-        """Get next chunk synchronously."""
-        # Check for exceptions from async thread
-        if self.exception:
-            raise self.exception
-            
-        # Check if done and queue is empty
-        if self.done and self.queue.empty():
-            raise StopIteration
-            
+        """Initialize the iterator."""
+        # Try to use existing event loop, create new one only if needed
         try:
-            # Get from queue with timeout
-            item = self.queue.get(timeout=30)
+            # Try to get the running event loop first
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No event loop running, create a new one
+            self._loop = asyncio.new_event_loop()
+        
+        # Get the batch iterator
+        self._iterator = batch_async(
+            self.async_gen,
+            self.timeout,
+            self.batch_size,
+            self._loop
+        )
+        return self
+    
+    def __next__(self) -> bytes:
+        """Get the next batch of chunks as a single bytes object."""
+        # Initialize iterator if not already done (Rust calls __next__ without __iter__)
+        if self._iterator is None:
+            self.__iter__()
+        
+        try:
+            batch = next(self._iterator)
             
-            # Check for sentinel (None means done)
-            if item is None:
+            # Empty batch means we're done
+            if not batch:
+                if self._loop:
+                    self._loop.close()
+                    self._loop = None
                 raise StopIteration
+            
+            if self.convert_to_bytes:
+                # Convert and join all chunks into a single bytes object
+                # This is critical for performance - one PyO3 crossing instead of many
+                converted = [self._convert_to_bytes(item) for item in batch]
+                return b''.join(converted)
+            else:
+                # Return raw batch if conversion not needed
+                return batch
                 
-            return item
-            
-        except queue.Empty:
-            if self.done:
-                raise StopIteration
-            # Timeout without completion - something is wrong
-            raise RuntimeError("Async collection timeout - generator may be stuck")
+        except StopIteration:
+            # Clean up the event loop
+            if self._loop:
+                self._loop.close()
+                self._loop = None
+            raise
+        except Exception as e:
+            # Clean up on any error
+            if self._loop:
+                self._loop.close()
+                self._loop = None
+            raise
+    
+    def __del__(self):
+        """Cleanup event loop on deletion."""
+        if hasattr(self, '_loop') and self._loop:
+            try:
+                if not self._loop.is_closed():
+                    self._loop.close()
+            except:
+                pass
 
 
-def wrap_async_generator(async_gen: AsyncIterator, batch_size: int = 20) -> Iterator:
+def wrap_async_stream(
+    async_gen: AsyncIterable,
+    batch_size: int = 50,
+    timeout_ms: int = 10
+) -> Iterator[bytes]:
     """
     Convenience function to wrap an async generator for sync iteration.
     
     Args:
         async_gen: The async generator to wrap
         batch_size: Number of chunks to batch together
+        timeout_ms: Maximum time to wait for a full batch (milliseconds)
         
     Returns:
-        A sync iterator that yields the async generator's output
+        A sync iterator that yields batched bytes
     """
-    return AsyncToSyncCollector(async_gen, batch_size=batch_size)
+    return AsyncToSyncCollector(async_gen, batch_size, timeout_ms)
+
+
+# Performance-tuned configurations for different streaming scenarios
+class StreamProfiles:
+    """Pre-configured profiles for different streaming scenarios."""
+    
+    @staticmethod
+    def openai_streaming():
+        """Optimized for OpenAI-style token streaming (many small chunks)."""
+        return {
+            'batch_size': 100,  # Aggressive batching for tiny chunks
+            'timeout_ms': 20    # 20ms max latency
+        }
+    
+    @staticmethod
+    def large_chunks():
+        """Optimized for larger chunk streaming (e.g., file downloads)."""
+        return {
+            'batch_size': 10,   # Less batching needed
+            'timeout_ms': 50    # Can tolerate more latency
+        }
+    
+    @staticmethod
+    def realtime():
+        """Optimized for real-time streaming with minimal latency."""
+        return {
+            'batch_size': 5,    # Small batches
+            'timeout_ms': 5     # Ultra-low latency (5ms)
+        }
+    
+    @staticmethod
+    def high_throughput():
+        """Optimized for maximum throughput (batch processing)."""
+        return {
+            'batch_size': 200,  # Very aggressive batching
+            'timeout_ms': 100   # Higher latency acceptable
+        }

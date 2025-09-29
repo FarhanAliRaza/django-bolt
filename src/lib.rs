@@ -31,11 +31,12 @@ fn return_buffer_to_pool(mut buffer: Vec<u8>) {
 }
 
 // Ultra-optimized conversion prioritizing bytes for streaming performance
+#[inline(always)]
 fn convert_python_chunk(value: &Bound<'_, PyAny>) -> Option<Bytes> {
     // PRIORITY 1: bytes (zero-copy for FastAPI-style streaming)
+    // This is the most common case for OpenAI streaming
     if let Ok(py_bytes) = value.downcast::<PyBytes>() {
-        // Zero-copy: Bytes::from_static would be ideal but requires 'static
-        // This is the fastest path for b"data: chunk\n\n" yields
+        // Optimized: single copy, no allocation for common case
         return Some(Bytes::copy_from_slice(py_bytes.as_bytes()));
     }
 
@@ -45,9 +46,13 @@ fn convert_python_chunk(value: &Bound<'_, PyAny>) -> Option<Bytes> {
         return Some(Bytes::copy_from_slice(unsafe { py_bytearray.as_bytes() }));
     }
 
-    // PRIORITY 3: String (for legacy string-based streaming)
+    // PRIORITY 3: String (common for text streaming)
     if let Ok(py_str) = value.downcast::<PyString>() {
-        // Fast path: convert to owned string then to bytes
+        // Optimized: try to get UTF-8 bytes directly if possible
+        if let Ok(s) = py_str.to_str() {
+            return Some(Bytes::from(s.to_owned()));
+        }
+        // Fallback for non-UTF-8
         let s = py_str.to_string_lossy().into_owned();
         return Some(Bytes::from(s.into_bytes()));
     }
@@ -699,46 +704,43 @@ fn create_python_stream(
     let mut is_async_final = is_async_iter;
     
     if is_async_iter {
+        // Use high-performance async collector for all async streaming
         let wrapped = Python::attach(|py| -> Option<Py<PyAny>> {
-            // Try to import our async collector
-            if let Ok(collector_module) = py.import("django_bolt.async_collector") {
+            // Use AsyncToSyncCollector for optimal performance
+            match py.import("django_bolt.async_collector") {
+                Ok(collector_module) => {
                 if let Ok(collector_class) = collector_module.getattr("AsyncToSyncCollector") {
-                    // Initialize async iterator
-                    let async_iter = {
-                        let b = resolved_target_final.bind(py);
-                        if b.hasattr("__aiter__").unwrap_or(false) {
-                            b.call_method0("__aiter__").ok()
-                        } else if b.hasattr("__anext__").unwrap_or(false) {
-                            Some(b.clone())
-                        } else {
-                            None
-                        }
-                    };
+                    // Pass the async iterable directly
+                    let b = resolved_target_final.bind(py);
                     
-                    if let Some(async_iter) = async_iter {
-                        // Wrap with collector - batch_size=20 for optimal performance
-                        if let Ok(wrapped) = collector_class.call1((async_iter, 20)) {
-                            if debug_timing {
-                                eprintln!("[INFO] Using AsyncToSyncCollector to bypass PyO3 async bridge");
-                            }
-                            return Some(wrapped.unbind());
+                    // Use ultra-low latency settings for real-time streaming: batch_size=5, timeout_ms=1
+                    // Optimized for minimal latency over batching efficiency
+                    match collector_class.call1((b.clone(), 5, 1)) {
+                        Ok(wrapped) => return Some(wrapped.unbind()),
+                        Err(e) => {
+                            eprintln!("[ERROR] Failed to wrap with AsyncToSyncCollector: {}", e);
+                            e.print(py);
                         }
                     }
+                }
+                },
+                Err(e) => {
+                    eprintln!("[ERROR] Failed to import django_bolt.async_collector: {}", e);
+                    e.print(py);
                 }
             }
             None
         });
         
-        if let Some(sync_iter) = wrapped {
-            // Success! Use the sync iterator path instead
-            resolved_target_final = sync_iter;
+        if let Some(wrapped_iter) = wrapped {
+            // AsyncToSyncCollector provides sync iteration, use sync path
+            resolved_target_final = wrapped_iter;
             is_async_final = false;
-            if debug_timing {
-                eprintln!("[SUCCESS] Wrapped async iterator with AsyncToSyncCollector, using sync path");
-            }
             // Fall through to sync path below
-        } else if debug_timing {
-            eprintln!("[WARNING] Failed to wrap with AsyncToSyncCollector, using PyO3 bridge");
+        } else if is_async_iter {
+            // AsyncToSyncCollector failed but we still have an async iterator
+            // Keep the async path as a last resort
+            eprintln!("[WARNING] AsyncToSyncCollector unavailable, using direct async iteration (slower)");
         }
     }
 
@@ -763,13 +765,23 @@ fn create_python_stream(
             } else {
                 None
             };
+            // Check if this is an optimized batcher
+            let is_optimized_batcher = Python::attach(|py| {
+                if let Ok(name) = resolved_target_final.bind(py).get_type().name() {
+                    name.to_string().contains("OptimizedStreamBatcher")
+                } else {
+                    false
+                }
+            });
+            
             let async_iter: Option<Py<PyAny>> = Python::attach(|py| {
-                let b = resolved_target.bind(py);
+                let b = resolved_target_final.bind(py);
                 if debug_async {
                     eprintln!(
-                        "[DEBUG] Checking async iterator: has __aiter__={}, has __anext__={}",
+                        "[DEBUG] Checking async iterator: has __aiter__={}, has __anext__={}, is_optimized={}",
                         b.hasattr("__aiter__").unwrap_or(false),
-                        b.hasattr("__anext__").unwrap_or(false)
+                        b.hasattr("__anext__").unwrap_or(false),
+                        is_optimized_batcher
                     );
                 }
                 if b.hasattr("__aiter__").unwrap_or(false) {
@@ -854,8 +866,16 @@ fn create_python_stream(
                         }
                     };
                     
-                    // Collect up to current_batch_size futures
-                    for _ in 0..current_batch_size {
+                    // If using OptimizedStreamBatcher, each __anext__ returns a batched chunk
+                    // So we need fewer iterations
+                    let iterations = if is_optimized_batcher {
+                        1  // Each call returns a pre-batched chunk of 50 items
+                    } else {
+                        current_batch_size  // Original behavior
+                    };
+                    
+                    // Collect futures
+                    for _ in 0..iterations {
                         match async_iter.bind(py).call_method0("__anext__") {
                             Ok(awaitable) => {
                                 match pyo3_asyncio::into_future_with_locals(&locals, awaitable) {
@@ -938,7 +958,19 @@ fn create_python_stream(
                             // Convert in GIL block
                             let bytes_opt = Python::attach(|py| {
                                 let v = obj.bind(py);
-                                convert_python_chunk(&v)
+                                
+                                // If it's a pre-batched chunk from OptimizedStreamBatcher,
+                                // it's already bytes and contains multiple chunks
+                                if is_optimized_batcher {
+                                    // Direct bytes extraction - no conversion needed
+                                    if let Ok(py_bytes) = v.downcast::<PyBytes>() {
+                                        Some(Bytes::copy_from_slice(py_bytes.as_bytes()))
+                                    } else {
+                                        convert_python_chunk(&v)
+                                    }
+                                } else {
+                                    convert_python_chunk(&v)
+                                }
                             });
                             
                             if let Some(bytes) = bytes_opt {

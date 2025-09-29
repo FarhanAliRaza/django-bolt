@@ -12,7 +12,7 @@ from .params import Param, Depends as DependsMarker
 
 Request = Dict[str, Any]
 Response = Tuple[int, List[Tuple[str, str]], bytes]
-
+ 
 # Global registry for BoltAPI instances (used by autodiscovery)
 _BOLT_API_REGISTRY = []
 

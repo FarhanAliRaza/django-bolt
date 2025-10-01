@@ -9,8 +9,6 @@ from django_bolt import _core
 from .responses import JSON, PlainText, HTML, Redirect, File, FileResponse, StreamingResponse
 from .exceptions import HTTPException
 from .params import Param, Depends as DependsMarker
-
-
 from .auth.backends import get_default_authentication_classes
 from .auth.guards import get_default_permission_classes
 

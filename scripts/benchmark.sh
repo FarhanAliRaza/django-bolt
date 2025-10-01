@@ -3,7 +3,7 @@
 
 P=${P:-2}
 WORKERS=${WORKERS:-2}
-C=${C:-100}
+C=${C:-50}
 N=${N:-10000}
 HOST=${HOST:-127.0.0.1}
 PORT=${PORT:-8000}
@@ -13,7 +13,6 @@ HEY_TIMEOUT=${HEY_TIMEOUT:-60}
 SLOW_MS=${SLOW_MS:-100}
 SLOW_CONC=${SLOW_CONC:-50}
 SLOW_DURATION=${SLOW_DURATION:-5}
-WORKER_SET=${WORKER_SET:-"1 2 4 8 12 16 24"}
 
 echo "# Django-Bolt Benchmark"
 echo "Generated: $(date)"
@@ -22,8 +21,8 @@ echo ""
 
 echo "## Root Endpoint Performance"
 cd python/examples/testproject
-# DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
-# SERVER_PID=$!
+DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
+SERVER_PID=$!
 sleep 2
 
 # Sanity check: ensure 200 OK before benchmarking
@@ -125,7 +124,7 @@ echo "## ORM Performance"
 uv run python manage.py makemigrations users --noinput >/dev/null 2>&1 || true
 uv run python manage.py migrate --noinput >/dev/null 2>&1 || true
 
-# DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
+DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -150,7 +149,7 @@ echo ""
 echo "## Form and File Upload Performance"
 
 # Start server for form/file tests
-# DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
+DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -225,7 +224,7 @@ JSON
 
 echo "### JSON Parse/Validate (POST /bench/parse)"
 # Start a fresh server for this test
-# DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
+DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -241,18 +240,3 @@ pkill -TERM -f "manage.py runbolt --host $HOST --port $PORT" 2>/dev/null || true
 rm -f "$BODY_FILE"
 
 
-# echo "\n### Slow Async Operation (GET /bench/slow?ms=$SLOW_MS, c=$SLOW_CONC, t=${SLOW_DURATION}s)"
-# for W in $WORKER_SET; do
-#   DJANGO_BOLT_WORKERS=$W nohup uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
-#   SERVER_PID=$!
-#   # Wait up to 3s for readiness
-#   for i in $(seq 1 30); do
-#     CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://$HOST:$PORT/bench/slow?ms=$SLOW_MS")
-#     [ "$CODE" = "200" ] && break
-#     sleep 0.1
-#   done
-#   RPS=$(ab -q -s 5 -k -c $SLOW_CONC -t $SLOW_DURATION "http://$HOST:$PORT/bench/slow?ms=$SLOW_MS" 2>/dev/null | grep "Requests per second" | awk '{print $4}')
-#   echo "workers=$W: ${RPS:-0} rps"
-#   kill $SERVER_PID 2>/dev/null || true
-#   sleep 0.3
-# done

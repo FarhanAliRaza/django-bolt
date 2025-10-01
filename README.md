@@ -1,19 +1,18 @@
 # Django-Bolt ⚡
 
-**High-Performance Python Web Framework with Rust-Powered HTTP Server**
+**High-Performance Fully Typed API Framework for Django**
 
-Django-Bolt is an experimental web framework that integrates with existing Django projects to provide a Rust-powered HTTP server (Actix Web) capable of **60k+ RPS** performance. It uses PyO3 to bridge Python async handlers with Rust's async runtime, msgspec for fast serialization, and supports multi-process scaling with SO_REUSEPORT.
+Django-Bolt is a high-performance API framework for Django that provides Rust-powered API endpoints capable of **60k+ RPS** performance. Similar to Django REST Framework or Django Ninja, it integrates seamlessly with existing Django projects while leveraging Actix Web for HTTP handling, PyO3 to bridge Python async handlers with Rust's async runtime, msgspec for fast serialization, and supports multi-process scaling with SO_REUSEPORT.
 
 **Key Features:**
 
-- 🚀 **60k+ RPS** - Rust-powered HTTP server (Actix Web + Tokio)
-- ⚡ **Zero-Copy Request Handling** - PyO3 integration without GIL overhead
+- 🚀 **High Performance** - Rust-powered HTTP server (Actix Web + Tokio + PYO3)
 - 🔐 **Authentication in Rust** - JWT/API Key validation without Python GIL
 - 📦 **msgspec Serialization** - 5-10x faster than standard JSON
-- 🎯 **Django ORM Integration** - Use your existing Django models
+- 🎯 **Django Integration** - Use your existing Django models and other django features you love (django admin, django packages (All django packages will work except that use django middlware for now. I will work on some compatibilty layer to make them work but it is not a priority right now) )
 - 🔄 **Async/Await** - Full async support with Python coroutines
 - 🎛️ **Middleware System** - CORS, rate limiting, custom middleware
-- 🔒 **Guards & Permissions** - DRF-style route protection
+- 🔒 **Guards & Permissions** - DRF and litestar inspired route protection
 
 ---
 
@@ -47,8 +46,6 @@ async def get_user(user_id: int) -> UserSchema: # 🎉 Reponse is type validated
     user = await User.objects.aget(id=user_id) # 🤯 Yes and Django orm works without any setup
     return {"id": user.id, "username": user.username} # or you could just return the queryset
 
-
-
 ````
 
 ```bash
@@ -61,19 +58,24 @@ python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 4 --workers 1
 
 ## 📊 Performance Benchmarks
 
-Current benchmarks (4 processes × 1 workers on consumer hardware):
+> **⚠️ Disclaimer:** Django-Bolt is a **feature-incomplete framework** currently in development. Benchmarks were run on a Ryzen 5600G with 16GB RAM (8 processes × 1 worker, C=100 N=10000) on localhost. Performance will vary significantly based on hardware, OS, configuration, and workload.
+>
+> **📁 Resources:** Example project available at [python/examples/testproject/](python/examples/testproject/). Run benchmarks with `make save-bench` or see [scripts/benchmark.sh](scripts/benchmark.sh).
 
-| Endpoint Type      | Requests/sec     | Latency (avg) |
-| ------------------ | ---------------- | ------------- |
-| Root endpoint      | **~64,000 RPS**  | <1ms          |
-| JSON parsing       | **~37,000 RPS**  | ~1ms          |
-| ORM reads (SQLite) | **~7-9,000 RPS** | ~5ms          |
+| Endpoint Type              | Requests/sec    |
+| -------------------------- | --------------- |
+| Root endpoint              | **~86,500 RPS** |
+| JSON parsing/validation    | **~81,000 RPS** |
+| Path + Query params        | **~62,500 RPS** |
+| HTML/Redirect responses    | **~88,000 RPS** |
+| Form data handling         | **~69,000 RPS** |
+| ORM reads (SQLite, 10 rec) | **~12,000 RPS** |
 
 **Why so fast?**
 
 - Authentication and guards run in Rust without the Python GIL
 - Request routing uses matchit (zero-copy path matching)
-- No middlwares if dont require any.
+- No middleware overhead if not required
 - JSON serialization with msgspec
 - Multi-process with SO_REUSEPORT (kernel-level load balancing)
 
@@ -148,8 +150,6 @@ Current benchmarks (4 processes × 1 workers on consumer hardware):
 - ✅ **Token Utilities**:
 
   - `create_jwt_for_user(user)` - Generate JWT for Django User
-  - `get_current_user(request)` - Get User from auth context
-  - `extract_user_id_from_context(request)` - Get user ID
 
 - ✅ **Token Revocation** (optional):
   - `InMemoryRevocation` - In-memory token blacklist
@@ -161,31 +161,15 @@ Current benchmarks (4 processes × 1 workers on consumer hardware):
 - ✅ **CLI** - `python -m django_bolt init` for project setup
 - ✅ **Management Command** - `python manage.py runbolt`
 - ✅ **Auto-Discovery** - Finds APIs in all Django apps
-- ✅ **Error Messages** - Clear error messages
+- ⚠️ **Error Messages** - Clear error messages (In Progress)
 - ✅ **Type Hints** - Full type hint support with msgspec
-- ✅ **Test Suite** - Comprehensive tests covering auth, guards, middleware
 
 ---
 
 ## ⚠️ Partially Complete / In Progress
 
-### Session Authentication ⚠️
-
-**Status:** Basic implementation exists, needs optimization and testing
-
-**What Works:**
-
-- Django session cookie validation
-- Basic user authentication via sessions
-
-**What's Missing:**
-
-- [ ] Optimize session lookups (currently hits Python for every request)
-- [ ] Comprehensive test coverage
-- [ ] Documentation and examples
-- [ ] Session middleware integration
-
-**Why It's Slower:** Session auth requires Python execution (Django session lookup) for each request, unlike JWT/API Key which run entirely in Rust.
+- [ ] JWT Auth (Almost done)
+- [ ] API key (only in memory api keys)
 
 ---
 
@@ -193,8 +177,8 @@ Current benchmarks (4 processes × 1 workers on consumer hardware):
 
 ### High Priority 🔥
 
-- [ ] **OpenAPI/Swagger** - Auto-generated API documentation from route definitions
 - [ ] **Request Validation** - More advanced validation (custom validators, nested models)
+- [ ] **OpenAPI/Swagger** - Auto-generated API documentation from route definitions
 - [ ] **Response Compression** - gzip/brotli compression in Rust
 - [ ] **Request Logging** - Structured logging (configurable)
 - [ ] **Pagination** - Built-in pagination helpers
@@ -242,13 +226,13 @@ Current benchmarks (4 processes × 1 workers on consumer hardware):
 ```
 HTTP Request → Actix Web (Rust)
            ↓
-    Route Matching (matchit - zero copy)
+    Route Matching (matchit)
            ↓
     Middleware Pipeline (Rust - no GIL)
       - CORS
       - Rate Limiting
            ↓
-    Authentication (Rust - no GIL)
+    Authentication (Rust - no GIL for most part may require in future)
       - JWT validation
       - API Key validation
            ↓
@@ -269,13 +253,6 @@ HTTP Request → Actix Web (Rust)
            ↓
     HTTP Response
 ```
-
-**Key Performance Points:**
-
-- **No GIL** until Python handler execution
-- Authentication, guards, and middleware run in Rust
-- Multi-process with SO_REUSEPORT (kernel load balancing)
-- msgspec serialization (5-10x faster than standard JSON)
 
 ---
 
@@ -599,7 +576,7 @@ Contributions welcome! Here's how:
 
 - Authentication
 - OpenAPI/Swagger generation
-- More comprehensive tests
+- More comprehensive tests and test utilities
 - Documentation improvements
 
 ---

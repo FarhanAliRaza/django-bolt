@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Django-Bolt is an experimental high-performance Python web framework that integrates with existing Django projects to provide a Rust-powered HTTP server (Actix Web) for 60k+ RPS performance. It uses PyO3 to bridge Python handlers with Rust's async runtime, msgspec for fast serialization, and supports multi-process scaling with SO_REUSEPORT.
+Django-Bolt is a high-performance API framework for Django (similar to Django REST Framework) that provides Rust-powered API endpoints with 60k+ RPS performance. It integrates with existing Django projects, using Actix Web for HTTP handling, PyO3 to bridge Python handlers with Rust's async runtime, msgspec for fast serialization, and supports multi-process scaling with SO_REUSEPORT.
 
 ## Installation & Setup
 
@@ -12,10 +12,6 @@ Django-Bolt is an experimental high-performance Python web framework that integr
 # 1. Create a standard Django project
 django-admin startproject myproject
 cd myproject
-
-# 2. Install Django-Bolt
-pip install django-bolt  # or add to requirements
-
 # 3. Initialize Django-Bolt in your project
 uv run django-bolt init  # Adds django_bolt to INSTALLED_APPS and creates api.py template
 ```
@@ -57,6 +53,7 @@ make rebuild  # Full clean and rebuild
 1. **Rust Server (`src/lib.rs`)**: Actix Web server handling HTTP, routing via matchit, multi-worker tokio runtime. Dispatches to Python via PyO3.
 
 2. **Python API (`python/django_bolt/api.py`)**: Decorator-based routing (`@api.get/post/put/patch/delete`) with:
+
    - Async-only handlers (enforced)
    - msgspec for request/response validation
    - Path/query parameter extraction via type hints
@@ -121,11 +118,13 @@ The `runbolt` management command will automatically discover this file.
 ## Performance Targets
 
 Current benchmarks (2 processes × 2 workers):
+
 - Root endpoint: ~64k RPS
-- JSON parsing: ~37k RPS  
+- JSON parsing: ~37k RPS
 - ORM reads: ~7-9k RPS (SQLite)
 
 Optimization areas:
+
 - Rust-side JSON serialization for large payloads
 - Connection pooling for PostgreSQL
 - Better async handler integration with pyo3-asyncio

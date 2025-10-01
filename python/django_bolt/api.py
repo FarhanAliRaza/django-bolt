@@ -10,16 +10,9 @@ from .responses import JSON, PlainText, HTML, Redirect, File, FileResponse, Stre
 from .exceptions import HTTPException
 from .params import Param, Depends as DependsMarker
 
-# Import auth components (with fallback for migration period)
-try:
-    from .auth.backends import get_default_authentication_classes
-    from .auth.guards import get_default_permission_classes
-except ImportError:
-    # Temporary fallback during migration
-    def get_default_authentication_classes():
-        return []
-    def get_default_permission_classes():
-        return []
+
+from .auth.backends import get_default_authentication_classes
+from .auth.guards import get_default_permission_classes
 
 Request = Dict[str, Any]
 Response = Tuple[int, List[Tuple[str, str]], bytes]

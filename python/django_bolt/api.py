@@ -9,17 +9,9 @@ from django_bolt import _core
 from .responses import JSON, PlainText, HTML, Redirect, File, FileResponse, StreamingResponse
 from .exceptions import HTTPException
 from .params import Param, Depends as DependsMarker
+from .auth.backends import get_default_authentication_classes
+from .auth.guards import get_default_permission_classes
 
-# Import auth components (with fallback for migration period)
-try:
-    from .auth.backends import get_default_authentication_classes
-    from .auth.guards import get_default_permission_classes
-except ImportError:
-    # Temporary fallback during migration
-    def get_default_authentication_classes():
-        return []
-    def get_default_permission_classes():
-        return []
 
 Request = Dict[str, Any]
 Response = Tuple[int, List[Tuple[str, str]], bytes]

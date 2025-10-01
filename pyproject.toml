@@ -29,3 +29,10 @@ python-source = "python"
 members = [
     "ignore",
 ]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pyjwt>=2.10.1",
+    "pytest-asyncio>=1.2.0",
+]

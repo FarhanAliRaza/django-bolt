@@ -6,9 +6,12 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::Arc;
 
+use crate::middleware;
+use crate::middleware::auth::{authenticate, populate_auth_context};
+use crate::permissions::{evaluate_guards, GuardResult};
 use crate::request::PyRequest;
 use crate::router::parse_query_string;
-use crate::state::{AppState, GLOBAL_ROUTER, TASK_LOCALS};
+use crate::state::{AppState, GLOBAL_ROUTER, MIDDLEWARE_METADATA, ROUTE_METADATA, TASK_LOCALS};
 use crate::streaming::create_python_stream;
 use crate::direct_stream;
 
@@ -22,18 +25,53 @@ pub async fn handle_request(
 
     let router = GLOBAL_ROUTER.get().expect("Router not initialized");
 
-    let (route_handler, path_params) = {
-        let router_guard = router.read().await;
-        match router_guard.find(&method, &path) {
-            Some((route, path_params)) => (
+    // For OPTIONS requests, try to find a matching route with any method
+    // to check if CORS middleware is configured
+    let (route_handler, path_params, handler_id) = {
+        // First try exact method match
+        if let Some((route, path_params, handler_id)) = router.find(&method, &path) {
+            (
                 Python::attach(|py| route.handler.clone_ref(py)),
                 path_params,
-            ),
-            None => {
-                return HttpResponse::NotFound()
-                    .content_type("text/plain; charset=utf-8")
-                    .body("Not Found");
+                handler_id,
+            )
+        } else if method == "OPTIONS" {
+            // For OPTIONS, check if ANY method has this path
+            for try_method in &["GET", "POST", "PUT", "PATCH", "DELETE"] {
+                if let Some((_route, _path_params, handler_id)) = router.find(try_method, &path) {
+                    // Found a route, use it for middleware metadata
+                    return {
+                        // Check if this route has CORS middleware
+                        if let Some(meta_map) = MIDDLEWARE_METADATA.get() {
+                            if let Some(metadata) = meta_map.get(&handler_id) {
+                                // Process CORS preflight
+                                if let Some(response) = middleware::process_middleware(
+                                    "OPTIONS",
+                                    &path,
+                                    &AHashMap::new(),
+                                    None,
+                                    handler_id,
+                                    metadata,
+                                ).await {
+                                    return response;
+                                }
+                            }
+                        }
+                        // No CORS middleware, return 404
+                        HttpResponse::NotFound()
+                            .content_type("text/plain; charset=utf-8")
+                            .body("Not Found")
+                    };
+                }
             }
+            // No route found at all
+            return HttpResponse::NotFound()
+                .content_type("text/plain; charset=utf-8")
+                .body("Not Found");
+        } else {
+            return HttpResponse::NotFound()
+                .content_type("text/plain; charset=utf-8")
+                .body("Not Found");
         }
     };
 
@@ -43,28 +81,106 @@ pub async fn handle_request(
         AHashMap::new()
     };
 
-    let (dispatch, handler) = Python::attach(|py| (state.dispatch.clone_ref(py), route_handler.clone_ref(py)));
-
-    let fut = match Python::attach(|py| -> PyResult<_> {
-        let mut headers: AHashMap<String, String> = AHashMap::new();
-        for (name, value) in req.headers().iter() {
-            if let Ok(v) = value.to_str() {
-                headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
-            }
+    // Extract headers early for middleware processing - pre-allocate with typical size
+    let mut headers: AHashMap<String, String> = AHashMap::with_capacity(16);
+    for (name, value) in req.headers().iter() {
+        if let Ok(v) = value.to_str() {
+            headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
         }
-        let mut cookies: AHashMap<String, String> = AHashMap::new();
-        if let Some(raw_cookie) = headers.get("cookie").cloned() {
-            for pair in raw_cookie.split(';') {
-                let part = pair.trim();
-                if let Some(eq) = part.find('=') {
-                    let (k, v) = part.split_at(eq);
-                    let v2 = &v[1..];
-                    if !k.is_empty() {
-                        cookies.insert(k.to_string(), v2.to_string());
-                    }
+    }
+
+    // Get peer address for rate limiting fallback
+    let peer_addr = req.peer_addr().map(|addr| addr.ip().to_string());
+
+    // Check for middleware metadata (Python-based, for backward compatibility)
+    let middleware_meta = MIDDLEWARE_METADATA.get().and_then(|meta_map| {
+        meta_map.get(&handler_id).map(|m| Python::attach(|py| m.clone_ref(py)))
+    });
+
+    // Get parsed route metadata (Rust-native)
+    let route_metadata = ROUTE_METADATA.get().and_then(|meta_map| {
+        meta_map.get(&handler_id).cloned()
+    });
+
+    // Process old-style middleware (CORS preflight, rate limiting, auth)
+    if let Some(ref meta) = middleware_meta {
+        if let Some(early_response) = middleware::process_middleware(
+            &method,
+            &path,
+            &headers,
+            peer_addr.as_deref(),
+            handler_id,
+            meta,
+        ).await {
+            return early_response;
+        }
+    }
+
+    // Execute authentication and guards (new system)
+    let auth_ctx = if let Some(ref route_meta) = route_metadata {
+        if !route_meta.auth_backends.is_empty() {
+            authenticate(&headers, &route_meta.auth_backends)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Evaluate guards
+    if let Some(ref route_meta) = route_metadata {
+        if !route_meta.guards.is_empty() {
+            match evaluate_guards(&route_meta.guards, auth_ctx.as_ref()) {
+                GuardResult::Allow => {
+                    // Pass through
+                }
+                GuardResult::Unauthorized => {
+                    return HttpResponse::Unauthorized()
+                        .content_type("application/json")
+                        .body(r#"{"detail":"Authentication required"}"#);
+                }
+                GuardResult::Forbidden => {
+                    return HttpResponse::Forbidden()
+                        .content_type("application/json")
+                        .body(r#"{"detail":"Permission denied"}"#);
                 }
             }
         }
+    }
+
+    // Pre-parse cookies outside of GIL
+    let mut cookies: AHashMap<String, String> = AHashMap::with_capacity(8);
+    if let Some(raw_cookie) = headers.get("cookie") {
+        for pair in raw_cookie.split(';') {
+            let part = pair.trim();
+            if let Some(eq) = part.find('=') {
+                let (k, v) = part.split_at(eq);
+                let v2 = &v[1..];
+                if !k.is_empty() {
+                    cookies.insert(k.to_string(), v2.to_string());
+                }
+            }
+        }
+    }
+
+    // Single GIL acquisition for all Python operations
+    let fut = match Python::attach(|py| -> PyResult<_> {
+        // Clone Python objects
+        let dispatch = state.dispatch.clone_ref(py);
+        let handler = route_handler.clone_ref(py);
+
+        // Create context dict if middleware or auth is present
+        let context = if middleware_meta.is_some() || auth_ctx.is_some() {
+            let ctx_dict = PyDict::new(py);
+            let ctx_py = ctx_dict.unbind();
+            // Populate with auth context if present
+            if let Some(ref auth) = auth_ctx {
+                populate_auth_context(&ctx_py, auth, py);
+            }
+            Some(ctx_py)
+        } else {
+            None
+        };
 
         let request = PyRequest {
             method,
@@ -74,6 +190,7 @@ pub async fn handle_request(
             query_params,
             headers,
             cookies,
+            context,
         };
         let request_obj = Py::new(py, request)?;
 
@@ -128,9 +245,17 @@ pub async fn handle_request(
                             .body(format!("File open error: {}", e)),
                     };
                 } else {
-                    let mut builder = HttpResponse::build(status);
-                    for (k, v) in headers { builder.append_header((k, v)); }
-                    return builder.body(body_bytes);
+                    let mut response = HttpResponse::build(status);
+                    for (k, v) in headers { response.append_header((k, v)); }
+                    let mut response = response.body(body_bytes);
+                    
+                    // Add CORS headers if middleware is configured
+                    if let Some(ref meta) = middleware_meta {
+                        let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+                        middleware::add_cors_headers(&mut response, origin, meta);
+                    }
+                    
+                    return response;
                 }
             } else {
                 let streaming = Python::attach(|py| {
@@ -163,28 +288,23 @@ pub async fn handle_request(
                     for (k, v) in headers { builder.append_header((k, v)); }
                     if media_type == "text/event-stream" {
                         let mut final_content_obj = content_obj;
-                        let mut is_async_sse = false;
-                        let has_async = Python::attach(|py| {
+                        // Combine async check and wrapping into single GIL acquisition
+                        let (is_async_sse, wrapped_content) = Python::attach(|py| {
                             let obj = final_content_obj.bind(py);
-                            obj.hasattr("__aiter__").unwrap_or(false) || obj.hasattr("__anext__").unwrap_or(false)
+                            let has_async = obj.hasattr("__aiter__").unwrap_or(false) || obj.hasattr("__anext__").unwrap_or(false);
+                            if !has_async {
+                                return (false, None);
+                            }
+                            // Try to wrap async iterator
+                            let wrapped = (|| -> Option<Py<PyAny>> {
+                                let collector_module = py.import("django_bolt.async_collector").ok()?;
+                                let collector_class = collector_module.getattr("AsyncToSyncCollector").ok()?;
+                                collector_class.call1((obj.clone(), 5, 1)).ok().map(|w| w.unbind())
+                            })();
+                            (wrapped.is_none(), wrapped)
                         });
-                        if has_async {
-                            let wrapped = Python::attach(|py| -> Option<Py<PyAny>> {
-                                match py.import("django_bolt.async_collector") {
-                                    Ok(collector_module) => {
-                                        if let Ok(collector_class) = collector_module.getattr("AsyncToSyncCollector") {
-                                            let b = final_content_obj.bind(py);
-                                            match collector_class.call1((b.clone(), 5, 1)) {
-                                                Ok(wrapped) => return Some(wrapped.unbind()),
-                                                Err(_) => {}
-                                            }
-                                        }
-                                    }
-                                    Err(_) => {}
-                                }
-                                None
-                            });
-                            if let Some(w) = wrapped { final_content_obj = w; is_async_sse = false; } else { is_async_sse = true; }
+                        if let Some(w) = wrapped_content {
+                            final_content_obj = w;
                         }
                         if is_async_sse {
                             builder.append_header(("X-Accel-Buffering", "no"));
@@ -204,31 +324,29 @@ pub async fn handle_request(
                         }
                     } else {
                         let mut final_content = content_obj;
-                        let is_async = Python::attach(|py| {
+                        // Combine async check and wrapping into single GIL acquisition
+                        let (needs_async_stream, wrapped_content) = Python::attach(|py| {
                             let obj = final_content.bind(py);
-                            obj.hasattr("__aiter__").unwrap_or(false) || obj.hasattr("__anext__").unwrap_or(false)
+                            let has_async = obj.hasattr("__aiter__").unwrap_or(false) || obj.hasattr("__anext__").unwrap_or(false);
+                            if !has_async {
+                                return (false, None);
+                            }
+                            // Try to wrap async iterator
+                            let wrapped = (|| -> Option<Py<PyAny>> {
+                                let collector_module = py.import("django_bolt.async_collector").ok()?;
+                                let collector_class = collector_module.getattr("AsyncToSyncCollector").ok()?;
+                                collector_class.call1((obj.clone(), 20, 2)).ok().map(|w| w.unbind())
+                            })();
+                            (wrapped.is_none(), wrapped)
                         });
 
-                        if is_async {
-                            let wrapped = Python::attach(|py| -> Option<Py<PyAny>> {
-                                match py.import("django_bolt.async_collector") {
-                                    Ok(collector_module) => {
-                                        if let Ok(collector_class) = collector_module.getattr("AsyncToSyncCollector") {
-                                            let b = final_content.bind(py);
-                                            match collector_class.call1((b.clone(), 20, 2)) {
-                                                Ok(wrapped) => return Some(wrapped.unbind()),
-                                                Err(_) => {}
-                                            }
-                                        }
-                                    }
-                                    Err(_) => {}
-                                }
-                                None
-                            });
-                            if let Some(w) = wrapped { final_content = w; } else {
-                                let stream = create_python_stream(final_content);
-                                return builder.streaming(stream);
-                            }
+                        if needs_async_stream {
+                            let stream = create_python_stream(final_content);
+                            return builder.streaming(stream);
+                        }
+
+                        if let Some(w) = wrapped_content {
+                            final_content = w;
                         }
                         {
                             let mut direct = direct_stream::PythonDirectStream::new(final_content);

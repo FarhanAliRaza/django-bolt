@@ -11,6 +11,7 @@ pub struct PyRequest {
     pub query_params: AHashMap<String, String>,
     pub headers: AHashMap<String, String>,
     pub cookies: AHashMap<String, String>,
+    pub context: Option<Py<PyDict>>,  // Middleware context data
 }
 
 #[pymethods]
@@ -28,6 +29,14 @@ impl PyRequest {
     #[getter]
     fn body<'py>(&self, py: Python<'py>) -> Py<PyAny> {
         PyBytes::new(py, &self.body).into_any().unbind()
+    }
+
+    #[getter]
+    fn context<'py>(&self, py: Python<'py>) -> Py<PyAny> {
+        match &self.context {
+            Some(ctx) => ctx.clone_ref(py).into_any(),
+            None => py.None()
+        }
     }
 
     fn get<'py>(&self, py: Python<'py>, key: &str, default: Option<Py<PyAny>>) -> Py<PyAny> {
@@ -62,6 +71,10 @@ impl PyRequest {
                     let _ = d.set_item(k, v);
                 }
                 d.into_any().unbind()
+            }
+            "context" => match &self.context {
+                Some(ctx) => ctx.clone_ref(py).into_any(),
+                None => py.None()
             }
             _ => default.unwrap_or_else(|| py.None()),
         }
@@ -100,6 +113,10 @@ impl PyRequest {
                 }
                 Ok(d.into_any().unbind())
             }
+            "context" => Ok(match &self.context {
+                Some(ctx) => ctx.clone_ref(py).into_any(),
+                None => py.None()
+            }),
             _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
         }
     }

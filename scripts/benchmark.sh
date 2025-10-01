@@ -3,7 +3,7 @@
 
 P=${P:-2}
 WORKERS=${WORKERS:-2}
-C=${C:-50}
+C=${C:-100}
 N=${N:-10000}
 HOST=${HOST:-127.0.0.1}
 PORT=${PORT:-8000}
@@ -22,8 +22,8 @@ echo ""
 
 echo "## Root Endpoint Performance"
 cd python/examples/testproject
-DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
-SERVER_PID=$!
+# DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
+# SERVER_PID=$!
 sleep 2
 
 # Sanity check: ensure 200 OK before benchmarking
@@ -125,7 +125,7 @@ echo "## ORM Performance"
 uv run python manage.py makemigrations users --noinput >/dev/null 2>&1 || true
 uv run python manage.py migrate --noinput >/dev/null 2>&1 || true
 
-DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
+# DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -150,7 +150,7 @@ echo ""
 echo "## Form and File Upload Performance"
 
 # Start server for form/file tests
-DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
+# DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -225,7 +225,7 @@ JSON
 
 echo "### JSON Parse/Validate (POST /bench/parse)"
 # Start a fresh server for this test
-DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
+# DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
 SERVER_PID=$!
 sleep 2
 

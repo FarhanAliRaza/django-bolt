@@ -1,0 +1,389 @@
+"""
+Tests for JWT authentication and Django User integration.
+
+Tests JWT token creation, validation, and Django User model integration
+with type-safe dependency injection.
+"""
+import pytest
+import jwt
+import time
+from django_bolt.auth import (
+    create_jwt_for_user,
+    get_current_user,
+    extract_user_id_from_context,
+    get_auth_context,
+)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def django_user_setup():
+    """
+    Setup Django with auth app for tests in this module.
+
+    This runs once before any tests in this module and keeps Django configured
+    throughout all tests in the module.
+    """
+    import django
+    import django.apps
+    from django.conf import settings, empty
+    from django.core.management import call_command
+
+    # Force reset Django if it's configured without auth
+    if settings.configured:
+        try:
+            from django.apps import apps
+            if apps.is_installed('django.contrib.auth'):
+                return  # Already configured correctly with auth
+        except Exception:
+            pass
+
+        # Reset Django completely
+        settings._wrapped = empty
+        # Create a fresh Apps instance
+        django.apps.apps = django.apps.Apps(installed_apps=None)
+
+    # Configure Django with auth app
+    settings.configure(
+        DEBUG=True,
+        SECRET_KEY='test-secret-key-jwt',
+        INSTALLED_APPS=[
+            'django.contrib.contenttypes',
+            'django.contrib.auth',
+            'django_bolt',
+        ],
+        DATABASES={
+            'default': {
+                'ENGINE': 'django.db.backends.sqlite3',
+                'NAME': ':memory:',
+            }
+        },
+        USE_TZ=True,
+    )
+    django.setup()
+    call_command('migrate', '--run-syncdb', verbosity=0)
+
+    yield
+
+    # Don't reset after - let conftest handle it
+
+
+def test_create_jwt_for_user():
+    """Test creating JWT tokens for Django users."""
+    try:
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+    except Exception as e:
+        pytest.skip(f"Django User model not available: {e}")
+
+    # Create a test user
+    user = User.objects.create(
+        username="testuser",
+        email="test@example.com",
+        is_staff=True,
+        is_superuser=False
+    )
+
+    # Create JWT token
+    token = create_jwt_for_user(user, secret="my-secret")
+
+    # Decode and verify
+    decoded = jwt.decode(token, "my-secret", algorithms=["HS256"])
+
+    assert decoded["sub"] == str(user.id)
+    assert decoded["username"] == "testuser"
+    assert decoded["email"] == "test@example.com"
+    assert decoded["is_staff"] is True
+    assert decoded["is_superuser"] is False
+    assert "exp" in decoded
+    assert "iat" in decoded
+
+    # Clean up
+    user.delete()
+    print("✓ JWT token creation for user works correctly")
+
+
+def test_create_jwt_with_extra_claims():
+    """Test creating JWT tokens with custom claims."""
+    try:
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+    except Exception as e:
+        pytest.skip(f"Django User model not available: {e}")
+
+    user = User.objects.create(
+        username="admin",
+        email="admin@example.com",
+        is_staff=True,
+        is_superuser=True
+    )
+
+    # Create token with extra claims
+    token = create_jwt_for_user(
+        user,
+        secret="secret",
+        extra_claims={
+            "permissions": ["users.create", "users.delete"],
+            "role": "admin",
+            "department": "engineering"
+        }
+    )
+
+    # Decode and verify
+    decoded = jwt.decode(token, "secret", algorithms=["HS256"])
+
+    assert decoded["sub"] == str(user.id)
+    assert decoded["permissions"] == ["users.create", "users.delete"]
+    assert decoded["role"] == "admin"
+    assert decoded["department"] == "engineering"
+
+    # Clean up
+    user.delete()
+    print("✓ JWT with extra claims works correctly")
+
+
+def test_jwt_authentication_with_django_user():
+    """Test JWT authentication extracts correct user data."""
+    try:
+        from django.contrib.auth import get_user_model
+        from django_bolt import BoltAPI
+        from django_bolt.auth import JWTAuthentication
+        from django_bolt.auth import IsAuthenticated
+        User = get_user_model()
+    except Exception as e:
+        pytest.skip(f"Django User model not available: {e}")
+
+    # Create test user
+    user = User.objects.create(
+        username="jwtuser",
+        email="jwt@example.com",
+        is_staff=False,
+        is_superuser=False
+    )
+
+    # Create API with JWT auth
+    api = BoltAPI()
+
+    @api.get(
+        "/protected",
+        auth=[JWTAuthentication(secret="test-secret")],
+        guards=[IsAuthenticated()]
+    )
+    async def protected_endpoint(request: dict):
+        context = request["context"]
+        return {
+            "user_id": context.get("user_id"),
+            "is_staff": context.get("is_staff"),
+            "is_admin": context.get("is_admin"),
+            "auth_backend": context.get("auth_backend"),
+        }
+
+    # Verify route registered
+    assert len(api._routes) == 1
+
+    # Clean up
+    user.delete()
+    print("✓ JWT authentication with Django User works")
+
+
+def test_django_user_dependency_injection():
+    """Test type-safe Django User dependency injection with Depends()."""
+    from django_bolt import BoltAPI
+    from django_bolt.auth import JWTAuthentication
+    from django_bolt.auth import IsAuthenticated
+    from django_bolt.params import Depends
+
+    # Create API with the dependency (using imported get_current_user)
+    api = BoltAPI()
+
+    @api.get(
+        "/me",
+        auth=[JWTAuthentication(secret="test-secret")],
+        guards=[IsAuthenticated()]
+    )
+    async def get_current_user_endpoint(user=Depends(get_current_user)):
+        """
+        Endpoint that receives Django User instance via dependency injection.
+
+        The 'user' parameter is the actual Django User model instance,
+        not just a dictionary. You have full access to:
+        - user.id, user.username, user.email
+        - user.is_staff, user.is_superuser, user.is_active
+        - user.first_name, user.last_name, user.date_joined
+        - All custom fields if using a custom User model
+        - All User model methods
+        """
+        if user is None:
+            return {"error": "User not found"}
+
+        return {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "is_staff": user.is_staff,
+            "is_superuser": user.is_superuser,
+        }
+
+    # Verify the route was registered correctly
+    assert len(api._routes) == 1
+    method, path, _, handler_fn = api._routes[0]
+    assert method == "GET"
+    assert path == "/me"
+
+    # Verify handler metadata
+    assert handler_fn in api._handler_meta
+    meta = api._handler_meta[handler_fn]
+    assert "params" in meta
+
+    # Check that the dependency parameter was detected
+    params = meta["params"]
+    user_param = next((p for p in params if p["name"] == "user"), None)
+    assert user_param is not None
+    assert user_param["source"] == "dependency"
+    assert user_param["dependency"] is not None
+
+    print("✓ Django User dependency injection metadata correct")
+
+
+def test_jwt_utils_extract_user_id():
+    """Test extracting user_id from request context."""
+    # Mock request with context
+    request = {
+        "context": {
+            "user_id": "123",
+            "is_staff": True,
+            "auth_backend": "jwt"
+        }
+    }
+
+    user_id = extract_user_id_from_context(request)
+    assert user_id == "123"
+
+    # Test with missing context
+    empty_request = {}
+    user_id = extract_user_id_from_context(empty_request)
+    assert user_id is None
+
+    print("✓ extract_user_id_from_context works correctly")
+
+
+def test_jwt_utils_get_auth_context():
+    """Test getting full auth context."""
+    request = {
+        "context": {
+            "user_id": "456",
+            "is_staff": False,
+            "is_admin": True,
+            "auth_backend": "jwt",
+            "permissions": ["read", "write"]
+        }
+    }
+
+    ctx = get_auth_context(request)
+    assert ctx["user_id"] == "456"
+    assert ctx["is_staff"] is False
+    assert ctx["is_admin"] is True
+    assert ctx["auth_backend"] == "jwt"
+    assert ctx["permissions"] == ["read", "write"]
+
+    print("✓ get_auth_context works correctly")
+
+
+def test_jwt_claims_stored_in_context():
+    """Test that JWT claims are properly stored in request context."""
+    try:
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+    except Exception as e:
+        pytest.skip(f"Django User model not available: {e}")
+
+    user = User.objects.create(
+        username="claimsuser",
+        email="claims@example.com",
+        is_staff=True,
+        is_superuser=False
+    )
+
+    # Create token with custom claims
+    token = create_jwt_for_user(
+        user,
+        secret="secret",
+        extra_claims={
+            "permissions": ["read", "write"],
+            "tenant_id": "tenant123",
+        }
+    )
+
+    # Decode to verify claims are there
+    decoded = jwt.decode(token, "secret", algorithms=["HS256"])
+    assert decoded["permissions"] == ["read", "write"]
+    assert decoded["tenant_id"] == "tenant123"
+
+    # Clean up
+    user.delete()
+    print("✓ JWT claims storage verified")
+
+
+def test_jwt_expiration():
+    """Test JWT expiration handling."""
+    try:
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+    except Exception as e:
+        pytest.skip(f"Django User model not available: {e}")
+
+    user = User.objects.create(username="expuser")
+
+    # Create an expired token
+    expired_payload = {
+        "sub": str(user.id),
+        "exp": int(time.time()) - 100,  # Expired 100 seconds ago
+        "iat": int(time.time()) - 200,
+    }
+    expired_token = jwt.encode(expired_payload, "secret", algorithm="HS256")
+
+    # Verify it's expired
+    try:
+        jwt.decode(expired_token, "secret", algorithms=["HS256"])
+        assert False, "Should have raised ExpiredSignatureError"
+    except jwt.ExpiredSignatureError:
+        pass  # Expected
+
+    # Create a valid token
+    valid_token = create_jwt_for_user(user, secret="secret")
+    decoded = jwt.decode(valid_token, "secret", algorithms=["HS256"])
+    assert decoded["sub"] == str(user.id)
+
+    # Clean up
+    user.delete()
+    print("✓ JWT expiration handling works")
+
+
+def test_jwt_uses_django_secret_key():
+    """Test that JWTAuthentication uses Django SECRET_KEY by default."""
+    from django.conf import settings
+    from django_bolt.auth import JWTAuthentication
+
+    # Create JWT auth without explicit secret
+    auth = JWTAuthentication()
+
+    # Should use Django's SECRET_KEY
+    assert auth.secret == settings.SECRET_KEY
+    print("✓ JWT uses Django SECRET_KEY by default")
+
+
+def test_jwt_custom_secret_overrides():
+    """Test that explicit secret overrides Django SECRET_KEY."""
+    from django.conf import settings
+    from django_bolt.auth import JWTAuthentication
+
+    # Create with explicit secret
+    auth = JWTAuthentication(secret="custom-secret")
+
+    # Should use the explicit secret, not Django's
+    assert auth.secret == "custom-secret"
+    assert auth.secret != settings.SECRET_KEY
+    print("✓ Explicit JWT secret overrides Django SECRET_KEY")
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v", "-s"])

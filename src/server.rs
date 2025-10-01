@@ -1,14 +1,16 @@
 use actix_http::KeepAlive;
 use actix_web::{self as aw, web, App, HttpServer};
+use ahash::AHashMap;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use crate::handler::handle_request;
+use crate::metadata::RouteMetadata;
 use crate::router::Router;
-use crate::state::{AppState, GLOBAL_ROUTER, TASK_LOCALS};
+use crate::state::{AppState, GLOBAL_ROUTER, MIDDLEWARE_METADATA, ROUTE_METADATA, TASK_LOCALS};
 
 #[pyfunction]
 pub fn register_routes(
@@ -20,8 +22,44 @@ pub fn register_routes(
         router.register(&method, &path, handler_id, handler.into())?;
     }
     GLOBAL_ROUTER
-        .set(Arc::new(RwLock::new(router)))
+        .set(Arc::new(router))
         .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Router already initialized"))?;
+    Ok(())
+}
+
+#[pyfunction]
+pub fn register_middleware_metadata(
+    py: Python<'_>,
+    metadata: Vec<(usize, Py<PyAny>)>,
+) -> PyResult<()> {
+    let mut metadata_map = AHashMap::new();
+    let mut parsed_metadata_map = AHashMap::new();
+
+    for (handler_id, meta) in metadata {
+        // Store raw Python metadata for backward compatibility
+        metadata_map.insert(handler_id, meta.clone_ref(py));
+
+        // Parse into typed Rust metadata
+        if let Ok(py_dict) = meta.bind(py).downcast::<PyDict>() {
+            match RouteMetadata::from_python(py_dict, py) {
+                Ok(parsed) => {
+                    parsed_metadata_map.insert(handler_id, parsed);
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to parse metadata for handler {}: {}", handler_id, e);
+                }
+            }
+        }
+    }
+
+    MIDDLEWARE_METADATA
+        .set(Arc::new(metadata_map))
+        .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Middleware metadata already initialized"))?;
+
+    ROUTE_METADATA
+        .set(Arc::new(parsed_metadata_map))
+        .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Route metadata already initialized"))?;
+
     Ok(())
 }
 

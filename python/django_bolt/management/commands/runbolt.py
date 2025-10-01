@@ -123,8 +123,20 @@ class Command(BaseCommand):
             convert = getattr(merged_api, "_convert_path", None)
             norm_path = convert(path) if callable(convert) else path
             rust_routes.append((method, norm_path, handler_id, handler))
-        
+
         _core.register_routes(rust_routes)
+
+        # Register middleware metadata if present
+        if merged_api._handler_middleware:
+            middleware_data = [
+                (handler_id, meta)
+                for handler_id, meta in merged_api._handler_middleware.items()
+            ]
+            _core.register_middleware_metadata(middleware_data)
+            if process_id is not None:
+                self.stdout.write(f"[django-bolt] Process {process_id}: Registered middleware for {len(middleware_data)} handlers")
+            else:
+                self.stdout.write(f"[django-bolt] Registered middleware for {len(middleware_data)} handlers")
         
         if process_id is not None:
             self.stdout.write(f"[django-bolt] Process {process_id}: Starting server on http://{options['host']}:{options['port']}")
@@ -219,29 +231,37 @@ class Command(BaseCommand):
         """Merge multiple BoltAPI instances into one"""
         if len(apis) == 1:
             return apis[0][1]  # Return the single API
-        
+
         # Create a new merged API
         merged = BoltAPI()
         route_map = {}  # Track conflicts
-        
+
         for api_path, api in apis:
             self.stdout.write(f"[django-bolt] Merging API from {api_path}")
-            
+
             for method, path, handler_id, handler in api._routes:
                 route_key = f"{method} {path}"
-                
+
                 if route_key in route_map:
                     raise CommandError(
                         f"Route conflict: {route_key} defined in both "
                         f"{route_map[route_key]} and {api_path}"
                     )
-                
+
                 route_map[route_key] = api_path
                 merged._routes.append((method, path, handler_id, handler))
                 merged._handlers[handler_id] = handler
-        
+
+                # Merge handler metadata
+                if handler in api._handler_meta:
+                    merged._handler_meta[handler] = api._handler_meta[handler]
+
+                # Merge middleware metadata
+                if handler_id in api._handler_middleware:
+                    merged._handler_middleware[handler_id] = api._handler_middleware[handler_id]
+
         # Update next handler ID
         if merged._routes:
             merged._next_handler_id = max(h_id for _, _, h_id, _ in merged._routes) + 1
-        
+
         return merged

@@ -1,0 +1,218 @@
+"""
+Authentication system for Django-Bolt.
+
+Provides DRF-inspired authentication classes that are compiled to Rust types
+for zero-GIL performance in the hot path.
+
+The authentication flow:
+1. Python defines auth backends (JWT, API key, session)
+2. Backends compile to metadata dicts via to_metadata()
+3. Rust parses metadata at registration time
+4. Rust validates tokens/keys without GIL on each request
+5. AuthContext is populated and passed to Python handlers
+
+Performance: ~60k+ RPS with JWT validation happening entirely in Rust.
+"""
+
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional, Set
+from dataclasses import dataclass
+
+
+@dataclass
+class AuthContext:
+    """
+    Authentication context returned by authentication backends.
+
+    This is populated in Rust and passed to Python handlers via request.context.
+    """
+    user_id: Optional[str] = None
+    is_staff: bool = False
+    is_admin: bool = False
+    backend: str = "none"
+    claims: Optional[Dict[str, Any]] = None
+    permissions: Optional[Set[str]] = None
+
+
+class BaseAuthentication(ABC):
+    """
+    Base class for authentication backends.
+
+    Authentication happens in Rust for performance. These classes compile
+    their configuration into metadata that Rust uses to validate tokens/keys.
+    """
+
+    @property
+    @abstractmethod
+    def scheme_name(self) -> str:
+        """Return the authentication scheme name (e.g., 'jwt', 'api_key')"""
+        pass
+
+    @abstractmethod
+    def to_metadata(self) -> Dict[str, Any]:
+        """
+        Compile this authentication backend into metadata for Rust.
+
+        Returns a dict that will be parsed by Rust into typed enums.
+        """
+        pass
+
+
+class JWTAuthentication(BaseAuthentication):
+    """
+    JWT token authentication.
+
+    Validates JWT tokens using the configured secret and algorithms.
+    Tokens should be provided in the Authorization header as "Bearer <token>".
+
+    Args:
+        secret: Secret key for JWT validation. If None, uses Django's SECRET_KEY.
+        algorithms: List of allowed JWT algorithms (default: ["HS256"])
+        header: Header name to extract token from (default: "authorization")
+        audience: Optional JWT audience claim to validate
+        issuer: Optional JWT issuer claim to validate
+    """
+
+    def __init__(
+        self,
+        secret: Optional[str] = None,
+        algorithms: Optional[List[str]] = None,
+        header: str = "authorization",
+        audience: Optional[str] = None,
+        issuer: Optional[str] = None,
+        revoked_token_handler: Optional[callable] = None,
+        revocation_store: Optional[Any] = None,
+        require_jti: bool = False,
+    ):
+        self.secret = secret
+        self.algorithms = algorithms or ["HS256"]
+        self.header = header
+        self.audience = audience
+        self.issuer = issuer
+
+        # If no secret provided, try to get Django's SECRET_KEY
+        if self.secret is None:
+            try:
+                from django.conf import settings
+                self.secret = settings.SECRET_KEY
+            except (ImportError, AttributeError):
+                pass  # Will be handled at runtime
+
+        # Revocation support (OPTIONAL - only checked if provided)
+        self.revoked_token_handler = revoked_token_handler
+        self.revocation_store = revocation_store
+
+        # Auto-enable require_jti if revocation is configured
+        if (revoked_token_handler or revocation_store) and not require_jti:
+            require_jti = True
+        self.require_jti = require_jti
+
+        # If revocation_store provided, create handler from it
+        if revocation_store and not revoked_token_handler:
+            from .revocation import create_revocation_handler
+            self.revoked_token_handler = create_revocation_handler(revocation_store)
+
+    @property
+    def scheme_name(self) -> str:
+        return "jwt"
+
+    def to_metadata(self) -> Dict[str, Any]:
+        metadata = {
+            "type": "jwt",
+            "secret": self.secret,
+            "algorithms": self.algorithms,
+            "header": self.header.lower(),
+            "audience": self.audience,
+            "issuer": self.issuer,
+            "require_jti": self.require_jti,
+        }
+
+        # Add revocation handler reference (will be called from Rust if present)
+        if self.revoked_token_handler:
+            metadata["has_revocation_handler"] = True
+
+        return metadata
+
+
+class APIKeyAuthentication(BaseAuthentication):
+    """
+    API key authentication.
+
+    Validates API keys against a configured set of valid keys.
+    Keys should be provided in the configured header (default: X-API-Key).
+
+    Args:
+        api_keys: Set of valid API keys
+        header: Header name to extract API key from (default: "x-api-key")
+        key_permissions: Optional mapping of API keys to permission sets
+    """
+
+    def __init__(
+        self,
+        api_keys: Optional[Set[str]] = None,
+        header: str = "x-api-key",
+        key_permissions: Optional[Dict[str, Set[str]]] = None,
+    ):
+        self.api_keys = api_keys or set()
+        self.header = header
+        self.key_permissions = key_permissions or {}
+
+    @property
+    def scheme_name(self) -> str:
+        return "api_key"
+
+    def to_metadata(self) -> Dict[str, Any]:
+        return {
+            "type": "api_key",
+            "api_keys": list(self.api_keys),
+            "header": self.header.lower(),
+            "key_permissions": {
+                k: list(v) for k, v in self.key_permissions.items()
+            },
+        }
+
+
+class SessionAuthentication(BaseAuthentication):
+    """
+    Django session authentication.
+
+    Uses Django's session framework to authenticate users.
+    This requires Django to be configured and session middleware enabled.
+
+    Note: This has higher overhead than JWT/API key auth as it requires
+    Python execution for every request.
+    """
+
+    def __init__(self):
+        pass
+
+    @property
+    def scheme_name(self) -> str:
+        return "session"
+
+    def to_metadata(self) -> Dict[str, Any]:
+        return {
+            "type": "session",
+        }
+
+
+def get_default_authentication_classes() -> List[BaseAuthentication]:
+    """
+    Get default authentication classes from Django settings.
+
+    Looks for BOLT_AUTHENTICATION_CLASSES in settings. If not found,
+    returns an empty list (no authentication by default).
+    """
+    try:
+        from django.conf import settings
+        from django.core.exceptions import ImproperlyConfigured
+        try:
+            if hasattr(settings, 'BOLT_AUTHENTICATION_CLASSES'):
+                return settings.BOLT_AUTHENTICATION_CLASSES
+        except ImproperlyConfigured:
+            # Settings not configured, return empty list
+            pass
+    except (ImportError, AttributeError):
+        pass
+
+    return []

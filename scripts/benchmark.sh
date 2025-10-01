@@ -3,7 +3,7 @@
 
 P=${P:-2}
 WORKERS=${WORKERS:-2}
-C=${C:-50}
+C=${C:-100}
 N=${N:-10000}
 HOST=${HOST:-127.0.0.1}
 PORT=${PORT:-8000}

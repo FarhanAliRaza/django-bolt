@@ -81,8 +81,8 @@ pub async fn handle_request(
         AHashMap::new()
     };
 
-    // Extract headers early for middleware processing
-    let mut headers: AHashMap<String, String> = AHashMap::new();
+    // Extract headers early for middleware processing - pre-allocate with typical size
+    let mut headers: AHashMap<String, String> = AHashMap::with_capacity(16);
     for (name, value) in req.headers().iter() {
         if let Ok(v) = value.to_str() {
             headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
@@ -148,22 +148,26 @@ pub async fn handle_request(
         }
     }
 
-    let (dispatch, handler) = Python::attach(|py| (state.dispatch.clone_ref(py), route_handler.clone_ref(py)));
-
-    let fut = match Python::attach(|py| -> PyResult<_> {
-        let mut cookies: AHashMap<String, String> = AHashMap::new();
-        if let Some(raw_cookie) = headers.get("cookie").cloned() {
-            for pair in raw_cookie.split(';') {
-                let part = pair.trim();
-                if let Some(eq) = part.find('=') {
-                    let (k, v) = part.split_at(eq);
-                    let v2 = &v[1..];
-                    if !k.is_empty() {
-                        cookies.insert(k.to_string(), v2.to_string());
-                    }
+    // Pre-parse cookies outside of GIL
+    let mut cookies: AHashMap<String, String> = AHashMap::with_capacity(8);
+    if let Some(raw_cookie) = headers.get("cookie") {
+        for pair in raw_cookie.split(';') {
+            let part = pair.trim();
+            if let Some(eq) = part.find('=') {
+                let (k, v) = part.split_at(eq);
+                let v2 = &v[1..];
+                if !k.is_empty() {
+                    cookies.insert(k.to_string(), v2.to_string());
                 }
             }
         }
+    }
+
+    // Single GIL acquisition for all Python operations
+    let fut = match Python::attach(|py| -> PyResult<_> {
+        // Clone Python objects
+        let dispatch = state.dispatch.clone_ref(py);
+        let handler = route_handler.clone_ref(py);
 
         // Create context dict if middleware or auth is present
         let context = if middleware_meta.is_some() || auth_ctx.is_some() {
@@ -284,28 +288,23 @@ pub async fn handle_request(
                     for (k, v) in headers { builder.append_header((k, v)); }
                     if media_type == "text/event-stream" {
                         let mut final_content_obj = content_obj;
-                        let mut is_async_sse = false;
-                        let has_async = Python::attach(|py| {
+                        // Combine async check and wrapping into single GIL acquisition
+                        let (is_async_sse, wrapped_content) = Python::attach(|py| {
                             let obj = final_content_obj.bind(py);
-                            obj.hasattr("__aiter__").unwrap_or(false) || obj.hasattr("__anext__").unwrap_or(false)
+                            let has_async = obj.hasattr("__aiter__").unwrap_or(false) || obj.hasattr("__anext__").unwrap_or(false);
+                            if !has_async {
+                                return (false, None);
+                            }
+                            // Try to wrap async iterator
+                            let wrapped = (|| -> Option<Py<PyAny>> {
+                                let collector_module = py.import("django_bolt.async_collector").ok()?;
+                                let collector_class = collector_module.getattr("AsyncToSyncCollector").ok()?;
+                                collector_class.call1((obj.clone(), 5, 1)).ok().map(|w| w.unbind())
+                            })();
+                            (wrapped.is_none(), wrapped)
                         });
-                        if has_async {
-                            let wrapped = Python::attach(|py| -> Option<Py<PyAny>> {
-                                match py.import("django_bolt.async_collector") {
-                                    Ok(collector_module) => {
-                                        if let Ok(collector_class) = collector_module.getattr("AsyncToSyncCollector") {
-                                            let b = final_content_obj.bind(py);
-                                            match collector_class.call1((b.clone(), 5, 1)) {
-                                                Ok(wrapped) => return Some(wrapped.unbind()),
-                                                Err(_) => {}
-                                            }
-                                        }
-                                    }
-                                    Err(_) => {}
-                                }
-                                None
-                            });
-                            if let Some(w) = wrapped { final_content_obj = w; is_async_sse = false; } else { is_async_sse = true; }
+                        if let Some(w) = wrapped_content {
+                            final_content_obj = w;
                         }
                         if is_async_sse {
                             builder.append_header(("X-Accel-Buffering", "no"));
@@ -325,31 +324,29 @@ pub async fn handle_request(
                         }
                     } else {
                         let mut final_content = content_obj;
-                        let is_async = Python::attach(|py| {
+                        // Combine async check and wrapping into single GIL acquisition
+                        let (needs_async_stream, wrapped_content) = Python::attach(|py| {
                             let obj = final_content.bind(py);
-                            obj.hasattr("__aiter__").unwrap_or(false) || obj.hasattr("__anext__").unwrap_or(false)
+                            let has_async = obj.hasattr("__aiter__").unwrap_or(false) || obj.hasattr("__anext__").unwrap_or(false);
+                            if !has_async {
+                                return (false, None);
+                            }
+                            // Try to wrap async iterator
+                            let wrapped = (|| -> Option<Py<PyAny>> {
+                                let collector_module = py.import("django_bolt.async_collector").ok()?;
+                                let collector_class = collector_module.getattr("AsyncToSyncCollector").ok()?;
+                                collector_class.call1((obj.clone(), 20, 2)).ok().map(|w| w.unbind())
+                            })();
+                            (wrapped.is_none(), wrapped)
                         });
 
-                        if is_async {
-                            let wrapped = Python::attach(|py| -> Option<Py<PyAny>> {
-                                match py.import("django_bolt.async_collector") {
-                                    Ok(collector_module) => {
-                                        if let Ok(collector_class) = collector_module.getattr("AsyncToSyncCollector") {
-                                            let b = final_content.bind(py);
-                                            match collector_class.call1((b.clone(), 20, 2)) {
-                                                Ok(wrapped) => return Some(wrapped.unbind()),
-                                                Err(_) => {}
-                                            }
-                                        }
-                                    }
-                                    Err(_) => {}
-                                }
-                                None
-                            });
-                            if let Some(w) = wrapped { final_content = w; } else {
-                                let stream = create_python_stream(final_content);
-                                return builder.streaming(stream);
-                            }
+                        if needs_async_stream {
+                            let stream = create_python_stream(final_content);
+                            return builder.streaming(stream);
+                        }
+
+                        if let Some(w) = wrapped_content {
+                            final_content = w;
                         }
                         {
                             let mut direct = direct_stream::PythonDirectStream::new(final_content);

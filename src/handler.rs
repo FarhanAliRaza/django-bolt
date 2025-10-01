@@ -28,10 +28,8 @@ pub async fn handle_request(
     // For OPTIONS requests, try to find a matching route with any method
     // to check if CORS middleware is configured
     let (route_handler, path_params, handler_id) = {
-        let router_guard = router.read().await;
-        
         // First try exact method match
-        if let Some((route, path_params, handler_id)) = router_guard.find(&method, &path) {
+        if let Some((route, path_params, handler_id)) = router.find(&method, &path) {
             (
                 Python::attach(|py| route.handler.clone_ref(py)),
                 path_params,
@@ -40,7 +38,7 @@ pub async fn handle_request(
         } else if method == "OPTIONS" {
             // For OPTIONS, check if ANY method has this path
             for try_method in &["GET", "POST", "PUT", "PATCH", "DELETE"] {
-                if let Some((_route, _path_params, handler_id)) = router_guard.find(try_method, &path) {
+                if let Some((_route, _path_params, handler_id)) = router.find(try_method, &path) {
                     // Found a route, use it for middleware metadata
                     return {
                         // Check if this route has CORS middleware

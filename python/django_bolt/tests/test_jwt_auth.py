@@ -3,21 +3,11 @@ Tests for JWT authentication and Django User integration.
 
 Tests JWT token creation, validation, and Django User model integration
 with type-safe dependency injection.
-
-IMPORTANT: These tests require Django with the auth app installed. When running
-the full test suite with `make test-py`, some of these tests may be skipped if
-other tests have configured Django without the auth app.
-
-To run these tests independently (recommended):
-    pytest python/django_bolt/tests/test_jwt_auth.py -v
-
-Or run only JWT tests:
-    pytest -k jwt_auth -v
 """
 import pytest
 import jwt
 import time
-from django_bolt.jwt_utils import (
+from django_bolt.auth import (
     create_jwt_for_user,
     get_current_user,
     extract_user_id_from_context,
@@ -25,33 +15,34 @@ from django_bolt.jwt_utils import (
 )
 
 
-def _ensure_django_setup():
+@pytest.fixture(scope="module", autouse=True)
+def django_user_setup():
     """
-    Ensure Django is configured with auth app.
+    Setup Django with auth app for tests in this module.
 
-    Note: These tests will be skipped if Django is already configured
-    by other tests without the auth app. This is expected behavior when
-    running the full test suite. To run these tests in isolation:
-        pytest python/django_bolt/tests/test_jwt_auth.py
+    This runs once before any tests in this module and keeps Django configured
+    throughout all tests in the module.
     """
     import django
-    from django.conf import settings
+    import django.apps
+    from django.conf import settings, empty
     from django.core.management import call_command
 
+    # Force reset Django if it's configured without auth
     if settings.configured:
-        # Check if auth is installed
         try:
             from django.apps import apps
-            if not apps.is_installed('django.contrib.auth'):
-                pytest.skip(
-                    "Django configured without auth app - skipping test. "
-                    "Run JWT tests in isolation: pytest test_jwt_auth.py"
-                )
-            return  # Already configured correctly
+            if apps.is_installed('django.contrib.auth'):
+                return  # Already configured correctly with auth
         except Exception:
-            pytest.skip("Django configuration issue - skipping test")
+            pass
 
-    # Configure Django
+        # Reset Django completely
+        settings._wrapped = empty
+        # Create a fresh Apps instance
+        django.apps.apps = django.apps.Apps(installed_apps=None)
+
+    # Configure Django with auth app
     settings.configure(
         DEBUG=True,
         SECRET_KEY='test-secret-key-jwt',
@@ -71,10 +62,13 @@ def _ensure_django_setup():
     django.setup()
     call_command('migrate', '--run-syncdb', verbosity=0)
 
+    yield
+
+    # Don't reset after - let conftest handle it
+
 
 def test_create_jwt_for_user():
     """Test creating JWT tokens for Django users."""
-    _ensure_django_setup()
     try:
         from django.contrib.auth import get_user_model
         User = get_user_model()
@@ -110,7 +104,6 @@ def test_create_jwt_for_user():
 
 def test_create_jwt_with_extra_claims():
     """Test creating JWT tokens with custom claims."""
-    _ensure_django_setup()
     try:
         from django.contrib.auth import get_user_model
         User = get_user_model()
@@ -150,12 +143,11 @@ def test_create_jwt_with_extra_claims():
 
 def test_jwt_authentication_with_django_user():
     """Test JWT authentication extracts correct user data."""
-    _ensure_django_setup()
     try:
         from django.contrib.auth import get_user_model
         from django_bolt import BoltAPI
         from django_bolt.auth import JWTAuthentication
-        from django_bolt.permissions import IsAuthenticated
+        from django_bolt.auth import IsAuthenticated
         User = get_user_model()
     except Exception as e:
         pytest.skip(f"Django User model not available: {e}")
@@ -197,7 +189,7 @@ def test_django_user_dependency_injection():
     """Test type-safe Django User dependency injection with Depends()."""
     from django_bolt import BoltAPI
     from django_bolt.auth import JWTAuthentication
-    from django_bolt.permissions import IsAuthenticated
+    from django_bolt.auth import IsAuthenticated
     from django_bolt.params import Depends
 
     # Create API with the dependency (using imported get_current_user)
@@ -298,7 +290,6 @@ def test_jwt_utils_get_auth_context():
 
 def test_jwt_claims_stored_in_context():
     """Test that JWT claims are properly stored in request context."""
-    _ensure_django_setup()
     try:
         from django.contrib.auth import get_user_model
         User = get_user_model()
@@ -334,7 +325,6 @@ def test_jwt_claims_stored_in_context():
 
 def test_jwt_expiration():
     """Test JWT expiration handling."""
-    _ensure_django_setup()
     try:
         from django.contrib.auth import get_user_model
         User = get_user_model()
@@ -370,7 +360,6 @@ def test_jwt_expiration():
 
 def test_jwt_uses_django_secret_key():
     """Test that JWTAuthentication uses Django SECRET_KEY by default."""
-    _ensure_django_setup()
     from django.conf import settings
     from django_bolt.auth import JWTAuthentication
 
@@ -384,7 +373,6 @@ def test_jwt_uses_django_secret_key():
 
 def test_jwt_custom_secret_overrides():
     """Test that explicit secret overrides Django SECRET_KEY."""
-    _ensure_django_setup()
     from django.conf import settings
     from django_bolt.auth import JWTAuthentication
 

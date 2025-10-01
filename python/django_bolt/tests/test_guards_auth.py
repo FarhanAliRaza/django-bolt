@@ -7,10 +7,17 @@ import jwt
 import time
 import pytest
 from django_bolt import BoltAPI
-from django_bolt.auth import JWTAuthentication, APIKeyAuthentication, AuthContext
-from django_bolt.permissions import (
-    AllowAny, IsAuthenticated, IsAdminUser, IsStaff,
-    HasPermission, HasAnyPermission, HasAllPermissions
+from django_bolt.auth import (
+    JWTAuthentication,
+    APIKeyAuthentication,
+    AuthContext,
+    AllowAny,
+    IsAuthenticated,
+    IsAdminUser,
+    IsStaff,
+    HasPermission,
+    HasAnyPermission,
+    HasAllPermissions
 )
 
 

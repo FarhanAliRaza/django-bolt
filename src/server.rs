@@ -6,7 +6,6 @@ use pyo3::types::PyDict;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use crate::handler::handle_request;
 use crate::metadata::RouteMetadata;
@@ -23,7 +22,7 @@ pub fn register_routes(
         router.register(&method, &path, handler_id, handler.into())?;
     }
     GLOBAL_ROUTER
-        .set(Arc::new(RwLock::new(router)))
+        .set(Arc::new(router))
         .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Router already initialized"))?;
     Ok(())
 }

@@ -4,7 +4,7 @@ Test that JWT authentication uses Django SECRET_KEY when not specified
 import pytest
 from django_bolt import BoltAPI
 from django_bolt.auth import JWTAuthentication
-from django_bolt.permissions import IsAuthenticated
+from django_bolt.auth import IsAuthenticated
 
 
 def test_jwt_auth_uses_django_secret_key():

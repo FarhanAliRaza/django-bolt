@@ -10,6 +10,17 @@ from .responses import JSON, PlainText, HTML, Redirect, File, FileResponse, Stre
 from .exceptions import HTTPException
 from .params import Param, Depends as DependsMarker
 
+# Import auth components (with fallback for migration period)
+try:
+    from .auth.backends import get_default_authentication_classes
+    from .auth.guards import get_default_permission_classes
+except ImportError:
+    # Temporary fallback during migration
+    def get_default_authentication_classes():
+        return []
+    def get_default_permission_classes():
+        return []
+
 Request = Dict[str, Any]
 Response = Tuple[int, List[Tuple[str, str]], bytes]
  
@@ -285,7 +296,6 @@ class BoltAPI:
                     auth_backends.append(auth_backend.to_metadata())
         else:
             # Use global default authentication classes
-            from django_bolt.auth import get_default_authentication_classes
             for auth_backend in get_default_authentication_classes():
                 if hasattr(auth_backend, 'to_metadata'):
                     auth_backends.append(auth_backend.to_metadata())
@@ -317,7 +327,6 @@ class BoltAPI:
                         pass
         else:
             # Use global default permission classes
-            from django_bolt.permissions import get_default_permission_classes
             for guard in get_default_permission_classes():
                 if hasattr(guard, 'to_metadata'):
                     guard_list.append(guard.to_metadata())

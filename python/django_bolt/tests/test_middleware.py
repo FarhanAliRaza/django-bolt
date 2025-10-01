@@ -12,7 +12,7 @@ from django_bolt.middleware import (
     Middleware, MiddlewareGroup, CORSMiddleware, RateLimitMiddleware
 )
 from django_bolt.auth import JWTAuthentication, APIKeyAuthentication
-from django_bolt.permissions import IsAuthenticated
+from django_bolt.auth import IsAuthenticated
 import msgspec
 
 

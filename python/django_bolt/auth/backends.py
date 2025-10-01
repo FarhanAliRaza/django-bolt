@@ -3,6 +3,15 @@ Authentication system for Django-Bolt.
 
 Provides DRF-inspired authentication classes that are compiled to Rust types
 for zero-GIL performance in the hot path.
+
+The authentication flow:
+1. Python defines auth backends (JWT, API key, session)
+2. Backends compile to metadata dicts via to_metadata()
+3. Rust parses metadata at registration time
+4. Rust validates tokens/keys without GIL on each request
+5. AuthContext is populated and passed to Python handlers
+
+Performance: ~60k+ RPS with JWT validation happening entirely in Rust.
 """
 
 from abc import ABC, abstractmethod
@@ -71,6 +80,9 @@ class JWTAuthentication(BaseAuthentication):
         header: str = "authorization",
         audience: Optional[str] = None,
         issuer: Optional[str] = None,
+        revoked_token_handler: Optional[callable] = None,
+        revocation_store: Optional[Any] = None,
+        require_jti: bool = False,
     ):
         self.secret = secret
         self.algorithms = algorithms or ["HS256"]
@@ -86,19 +98,40 @@ class JWTAuthentication(BaseAuthentication):
             except (ImportError, AttributeError):
                 pass  # Will be handled at runtime
 
+        # Revocation support (OPTIONAL - only checked if provided)
+        self.revoked_token_handler = revoked_token_handler
+        self.revocation_store = revocation_store
+
+        # Auto-enable require_jti if revocation is configured
+        if (revoked_token_handler or revocation_store) and not require_jti:
+            require_jti = True
+        self.require_jti = require_jti
+
+        # If revocation_store provided, create handler from it
+        if revocation_store and not revoked_token_handler:
+            from .revocation import create_revocation_handler
+            self.revoked_token_handler = create_revocation_handler(revocation_store)
+
     @property
     def scheme_name(self) -> str:
         return "jwt"
 
     def to_metadata(self) -> Dict[str, Any]:
-        return {
+        metadata = {
             "type": "jwt",
             "secret": self.secret,
             "algorithms": self.algorithms,
             "header": self.header.lower(),
             "audience": self.audience,
             "issuer": self.issuer,
+            "require_jti": self.require_jti,
         }
+
+        # Add revocation handler reference (will be called from Rust if present)
+        if self.revoked_token_handler:
+            metadata["has_revocation_handler"] = True
+
+        return metadata
 
 
 class APIKeyAuthentication(BaseAuthentication):

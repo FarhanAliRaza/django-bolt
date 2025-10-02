@@ -24,7 +24,7 @@ COMING VERY SOON NEAR YOUR DJANGO PROJECTS
 
 For now you can build and use it locally if you want.
 
-````
+
 
 ### Run Your First API
 

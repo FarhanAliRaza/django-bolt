@@ -367,6 +367,429 @@ class BoltAPI:
             }
         return None
 
+    def _parse_form_data(self, request: Dict[str, Any], headers_map: Dict[str, str]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Parse form and multipart data from request."""
+        form_map: Dict[str, Any] = {}
+        files_map: Dict[str, Any] = {}
+        content_type = headers_map.get("content-type", "")
+
+        if content_type.startswith("application/x-www-form-urlencoded"):
+            from urllib.parse import parse_qs
+            body_bytes: bytes = request["body"]
+            form_data = parse_qs(body_bytes.decode("utf-8"))
+            # parse_qs returns lists, but for single values we want the value directly
+            form_map = {k: v[0] if len(v) == 1 else v for k, v in form_data.items()}
+        elif content_type.startswith("multipart/form-data"):
+            form_map, files_map = self._parse_multipart_data(request, content_type)
+
+        return form_map, files_map
+
+    def _parse_multipart_data(self, request: Dict[str, Any], content_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Parse multipart form data."""
+        form_map: Dict[str, Any] = {}
+        files_map: Dict[str, Any] = {}
+
+        boundary_idx = content_type.find("boundary=")
+        if boundary_idx < 0:
+            return form_map, files_map
+
+        boundary = content_type[boundary_idx + 9:].strip()
+        body_bytes: bytes = request["body"]
+        parts = body_bytes.split(f"--{boundary}".encode())
+
+        for part in parts[1:-1]:  # Skip first empty and last closing
+            if b"\r\n\r\n" not in part:
+                continue
+
+            header_section, content = part.split(b"\r\n\r\n", 1)
+            content = content.rstrip(b"\r\n")
+            headers_text = header_section.decode("utf-8", errors="ignore")
+
+            name, filename = self._parse_content_disposition(headers_text)
+
+            if name:
+                if filename:
+                    self._add_file_to_map(files_map, name, filename, content)
+                else:
+                    value = content.decode("utf-8", errors="ignore")
+                    form_map[name] = value
+
+        return form_map, files_map
+
+    def _parse_content_disposition(self, headers_text: str) -> Tuple[Optional[str], Optional[str]]:
+        """Parse Content-Disposition header to extract name and filename."""
+        name = None
+        filename = None
+
+        for line in headers_text.split("\r\n"):
+            if not line.startswith("Content-Disposition:"):
+                continue
+
+            disp = line[20:].strip()
+            for param in disp.split("; "):
+                if param.startswith('name="'):
+                    name = param[6:-1]
+                elif param.startswith('filename="'):
+                    filename = param[10:-1]
+
+        return name, filename
+
+    def _add_file_to_map(self, files_map: Dict[str, Any], name: str, filename: str, content: bytes) -> None:
+        """Add file info to files map, handling multiple files with same name."""
+        file_info = {
+            "filename": filename,
+            "content": content,
+            "size": len(content)
+        }
+
+        if name in files_map:
+            if isinstance(files_map[name], list):
+                files_map[name].append(file_info)
+            else:
+                files_map[name] = [files_map[name], file_info]
+        else:
+            files_map[name] = file_info
+
+    async def _resolve_dependency(self, dep_fn: Callable, depends_marker: DependsMarker,
+                                   request: Dict[str, Any], dep_cache: Dict[Any, Any],
+                                   params_map: Dict[str, Any], query_map: Dict[str, Any],
+                                   headers_map: Dict[str, str], cookies_map: Dict[str, str]) -> Any:
+        """Resolve a dependency injection."""
+        if depends_marker.use_cache and dep_fn in dep_cache:
+            return dep_cache[dep_fn]
+
+        dep_meta = self._handler_meta.get(dep_fn)
+        if dep_meta is None:
+            dep_meta = self._compile_binder(dep_fn)
+            self._handler_meta[dep_fn] = dep_meta
+
+        if dep_meta.get("mode") == "request_only":
+            value = await dep_fn(request)
+        else:
+            value = await self._call_dependency(dep_fn, dep_meta, request, params_map,
+                                                query_map, headers_map, cookies_map)
+
+        if depends_marker.use_cache:
+            dep_cache[dep_fn] = value
+
+        return value
+
+    async def _call_dependency(self, dep_fn: Callable, dep_meta: Dict[str, Any],
+                               request: Dict[str, Any], params_map: Dict[str, Any],
+                               query_map: Dict[str, Any], headers_map: Dict[str, str],
+                               cookies_map: Dict[str, str]) -> Any:
+        """Call a dependency function with resolved parameters."""
+        dep_args: List[Any] = []
+        dep_kwargs: Dict[str, Any] = {}
+
+        for dp in dep_meta["params"]:
+            dname = dp["name"]
+            dan = dp["annotation"]
+            dsrc = dp["source"]
+            dalias = dp.get("alias")
+
+            if dsrc == "request":
+                dval = request
+            else:
+                dval = self._extract_dependency_value(dp, params_map, query_map,
+                                                      headers_map, cookies_map)
+
+            if dp["kind"] in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                dep_args.append(dval)
+            else:
+                dep_kwargs[dname] = dval
+
+        return await dep_fn(*dep_args, **dep_kwargs)
+
+    def _extract_dependency_value(self, param: Dict[str, Any], params_map: Dict[str, Any],
+                                  query_map: Dict[str, Any], headers_map: Dict[str, str],
+                                  cookies_map: Dict[str, str]) -> Any:
+        """Extract value for a dependency parameter."""
+        dname = param["name"]
+        dan = param["annotation"]
+        dsrc = param["source"]
+        dalias = param.get("alias")
+        key = dalias or dname
+
+        if key in params_map:
+            return self._convert_primitive(str(params_map[key]), dan)
+        elif key in query_map:
+            return self._convert_primitive(str(query_map[key]), dan)
+        elif dsrc == "header":
+            raw = headers_map.get(key.lower())
+            if raw is None:
+                raise ValueError(f"Missing required header: {key}")
+            return self._convert_primitive(str(raw), dan)
+        elif dsrc == "cookie":
+            raw = cookies_map.get(key)
+            if raw is None:
+                raise ValueError(f"Missing required cookie: {key}")
+            return self._convert_primitive(str(raw), dan)
+        else:
+            return None
+
+    def _extract_parameter_value(self, param: Dict[str, Any], request: Dict[str, Any],
+                                 params_map: Dict[str, Any], query_map: Dict[str, Any],
+                                 headers_map: Dict[str, str], cookies_map: Dict[str, str],
+                                 form_map: Dict[str, Any], files_map: Dict[str, Any],
+                                 meta: Dict[str, Any], body_obj: Any, body_loaded: bool) -> Tuple[Any, Any, bool]:
+        """Extract value for a handler parameter."""
+        name = param["name"]
+        annotation = param["annotation"]
+        default = param["default"]
+        source = param["source"]
+        alias = param.get("alias")
+        key = alias or name
+
+        if key in params_map:
+            return self._convert_primitive(str(params_map[key]), annotation), body_obj, body_loaded
+        elif key in query_map:
+            return self._convert_primitive(str(query_map[key]), annotation), body_obj, body_loaded
+        elif source == "header":
+            return self._extract_header_value(key, annotation, default, headers_map), body_obj, body_loaded
+        elif source == "cookie":
+            return self._extract_cookie_value(key, annotation, default, cookies_map), body_obj, body_loaded
+        elif source == "form":
+            return self._extract_form_value(key, annotation, default, form_map), body_obj, body_loaded
+        elif source == "file":
+            return self._extract_file_value(key, annotation, default, files_map), body_obj, body_loaded
+        else:
+            # Maybe body param
+            if meta.get("body_struct_param") == name:
+                if not body_loaded:
+                    body_bytes: bytes = request["body"]
+                    value = msgspec.json.decode(body_bytes, type=meta["body_struct_type"])  # type: ignore
+                    return value, value, True
+                else:
+                    return body_obj, body_obj, body_loaded
+            else:
+                if default is not inspect._empty or self._is_optional(annotation):
+                    return (None if default is inspect._empty else default), body_obj, body_loaded
+                else:
+                    raise ValueError(f"Missing required parameter: {name}")
+
+    def _extract_header_value(self, key: str, annotation: Any, default: Any, headers_map: Dict[str, str]) -> Any:
+        """Extract value from headers."""
+        raw = headers_map.get(key.lower())
+        if raw is None:
+            if default is not inspect._empty or self._is_optional(annotation):
+                return None if default is inspect._empty else default
+            else:
+                raise ValueError(f"Missing required header: {key}")
+        return self._convert_primitive(str(raw), annotation)
+
+    def _extract_cookie_value(self, key: str, annotation: Any, default: Any, cookies_map: Dict[str, str]) -> Any:
+        """Extract value from cookies."""
+        raw = cookies_map.get(key)
+        if raw is None:
+            if default is not inspect._empty or self._is_optional(annotation):
+                return None if default is inspect._empty else default
+            else:
+                raise ValueError(f"Missing required cookie: {key}")
+        return self._convert_primitive(str(raw), annotation)
+
+    def _extract_form_value(self, key: str, annotation: Any, default: Any, form_map: Dict[str, Any]) -> Any:
+        """Extract value from form data."""
+        raw = form_map.get(key)
+        if raw is None:
+            if default is not inspect._empty or self._is_optional(annotation):
+                return None if default is inspect._empty else default
+            else:
+                raise ValueError(f"Missing required form field: {key}")
+        return self._convert_primitive(str(raw), annotation)
+
+    def _extract_file_value(self, key: str, annotation: Any, default: Any, files_map: Dict[str, Any]) -> Any:
+        """Extract value from uploaded files."""
+        raw = files_map.get(key)
+        if raw is None:
+            if default is not inspect._empty or self._is_optional(annotation):
+                return None if default is inspect._empty else default
+            else:
+                raise ValueError(f"Missing required file: {key}")
+
+        # For files, return the raw dict(s) containing filename and content
+        # If it's a list annotation, ensure we have a list
+        if hasattr(annotation, "__origin__") and annotation.__origin__ is list:
+            return raw if isinstance(raw, list) else [raw]
+        else:
+            return raw
+
+    async def _build_handler_arguments(self, meta: Dict[str, Any], request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+        """Build arguments for handler invocation."""
+        args: List[Any] = []
+        kwargs: Dict[str, Any] = {}
+
+        # Access PyRequest mappings
+        params_map = request["params"]
+        query_map = request["query"]
+        headers_map = request.get("headers", {})
+        cookies_map = request.get("cookies", {})
+
+        # Parse form/multipart data if needed
+        form_map, files_map = self._parse_form_data(request, headers_map)
+
+        # Body decode cache
+        body_obj: Any = None
+        body_loaded: bool = False
+        dep_cache: Dict[Any, Any] = {}
+
+        for p in meta["params"]:
+            name = p["name"]
+            source = p["source"]
+            depends_marker = p.get("dependency")
+
+            if source == "request":
+                value = request
+            elif source == "dependency":
+                dep_fn = depends_marker.dependency if depends_marker else None
+                if dep_fn is None:
+                    raise ValueError(f"Depends for parameter {name} requires a callable")
+                value = await self._resolve_dependency(dep_fn, depends_marker, request, dep_cache,
+                                                      params_map, query_map, headers_map, cookies_map)
+            else:
+                value, body_obj, body_loaded = self._extract_parameter_value(
+                    p, request, params_map, query_map, headers_map, cookies_map,
+                    form_map, files_map, meta, body_obj, body_loaded
+                )
+
+            # Respect positional-only/keyword-only kinds
+            if p["kind"] in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                args.append(value)
+            else:
+                kwargs[name] = value
+
+        return args, kwargs
+
+    async def _serialize_response(self, result: Any, meta: Dict[str, Any]) -> Response:
+        """Serialize handler result to HTTP response."""
+        response_tp = meta.get("response_type")
+
+        # Handle different response types
+        if isinstance(result, JSON):
+            return await self._serialize_json_response(result, response_tp)
+        elif isinstance(result, PlainText):
+            return self._serialize_plaintext_response(result)
+        elif isinstance(result, HTML):
+            return self._serialize_html_response(result)
+        elif isinstance(result, Redirect):
+            return self._serialize_redirect_response(result)
+        elif isinstance(result, File):
+            return self._serialize_file_response(result)
+        elif isinstance(result, FileResponse):
+            return self._serialize_file_streaming_response(result)
+        elif isinstance(result, StreamingResponse):
+            return result
+        elif isinstance(result, (bytes, bytearray)):
+            status = int(meta.get("default_status_code", 200))
+            return status, [("content-type", "application/octet-stream")], bytes(result)
+        elif isinstance(result, str):
+            status = int(meta.get("default_status_code", 200))
+            return status, [("content-type", "text/plain; charset=utf-8")], result.encode()
+        elif isinstance(result, (dict, list)):
+            return await self._serialize_json_data(result, response_tp, meta)
+        else:
+            # Fallback to msgspec encoding
+            return await self._serialize_json_data(result, response_tp, meta)
+
+    async def _serialize_json_response(self, result: JSON, response_tp: Optional[Any]) -> Response:
+        """Serialize JSON response object."""
+        headers = [("content-type", "application/json")]
+
+        if response_tp is not None:
+            try:
+                validated = await self._coerce_to_response_type_async(result.data, response_tp)
+                data_bytes = msgspec.json.encode(validated)
+            except Exception as e:
+                err = f"Response validation error: {e}"
+                return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+        else:
+            data_bytes = result.to_bytes()
+
+        if result.headers:
+            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+
+        return int(result.status_code), headers, data_bytes
+
+    def _serialize_plaintext_response(self, result: PlainText) -> Response:
+        """Serialize plain text response."""
+        headers = [("content-type", "text/plain; charset=utf-8")]
+        if result.headers:
+            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+        return int(result.status_code), headers, result.to_bytes()
+
+    def _serialize_html_response(self, result: HTML) -> Response:
+        """Serialize HTML response."""
+        headers = [("content-type", "text/html; charset=utf-8")]
+        if result.headers:
+            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+        return int(result.status_code), headers, result.to_bytes()
+
+    def _serialize_redirect_response(self, result: Redirect) -> Response:
+        """Serialize redirect response."""
+        headers = [("location", result.url)]
+        if result.headers:
+            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+        return int(result.status_code), headers, b""
+
+    def _serialize_file_response(self, result: File) -> Response:
+        """Serialize file response."""
+        data = result.read_bytes()
+        ctype = result.media_type or mimetypes.guess_type(result.path)[0] or "application/octet-stream"
+        headers = [("content-type", ctype)]
+
+        if result.filename:
+            headers.append(("content-disposition", f"attachment; filename=\"{result.filename}\""))
+        if result.headers:
+            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+
+        return int(result.status_code), headers, data
+
+    def _serialize_file_streaming_response(self, result: FileResponse) -> Response:
+        """Serialize file streaming response."""
+        ctype = result.media_type or mimetypes.guess_type(result.path)[0] or "application/octet-stream"
+        headers = [("x-bolt-file-path", result.path), ("content-type", ctype)]
+
+        if result.filename:
+            headers.append(("content-disposition", f"attachment; filename=\"{result.filename}\""))
+        if result.headers:
+            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+
+        return int(result.status_code), headers, b""
+
+    async def _serialize_json_data(self, result: Any, response_tp: Optional[Any], meta: Dict[str, Any]) -> Response:
+        """Serialize dict/list/other data as JSON."""
+        if response_tp is not None:
+            try:
+                validated = await self._coerce_to_response_type_async(result, response_tp)
+                data = msgspec.json.encode(validated)
+            except Exception as e:
+                err = f"Response validation error: {e}"
+                return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+        else:
+            data = msgspec.json.encode(result)
+
+        status = int(meta.get("default_status_code", 200))
+        return status, [("content-type", "application/json")], data
+
+    def _handle_http_exception(self, he: HTTPException) -> Response:
+        """Handle HTTPException and return response."""
+        try:
+            body = msgspec.json.encode({"detail": he.detail})
+            headers = [("content-type", "application/json")]
+        except Exception:
+            body = str(he.detail).encode()
+            headers = [("content-type", "text/plain; charset=utf-8")]
+
+        if he.headers:
+            headers.extend([(k.lower(), v) for k, v in he.headers.items()])
+
+        return int(he.status_code), headers, body
+
+    def _handle_generic_exception(self, e: Exception) -> Response:
+        """Handle generic exception and return error response."""
+        error_msg = f"Handler error: {str(e)}"
+        return 500, [("content-type", "text/plain; charset=utf-8")], error_msg.encode()
+
     async def _dispatch(self, handler: Callable, request: Dict[str, Any]) -> Response:
         """Async dispatch that calls the handler and returns response tuple"""
         try:
@@ -375,317 +798,21 @@ class BoltAPI:
                 meta = self._compile_binder(handler)
                 self._handler_meta[handler] = meta
 
-            # Fast path
+            # Fast path for request-only handlers
             if meta.get("mode") == "request_only":
                 result = await handler(request)
             else:
-                # Collect args in order
-                args: List[Any] = []
-                kwargs: Dict[str, Any] = {}
-
-                # Access PyRequest mappings lazily
-                params_map = request["params"] if isinstance(request, dict) else request["params"]
-                query_map = request["query"] if isinstance(request, dict) else request["query"]
-                headers_map = request.get("headers", {})
-                cookies_map = request.get("cookies", {})
-
-                # Parse form/multipart data if needed
-                form_map: Dict[str, Any] = {}
-                files_map: Dict[str, Any] = {}
-                content_type = headers_map.get("content-type", "")
-                
-                if content_type.startswith("application/x-www-form-urlencoded"):
-                    from urllib.parse import parse_qs
-                    body_bytes: bytes = request["body"]
-                    form_data = parse_qs(body_bytes.decode("utf-8"))
-                    # parse_qs returns lists, but for single values we want the value directly
-                    form_map = {k: v[0] if len(v) == 1 else v for k, v in form_data.items()}
-                elif content_type.startswith("multipart/form-data"):
-                    # Parse multipart form data
-                    boundary_idx = content_type.find("boundary=")
-                    if boundary_idx >= 0:
-                        boundary = content_type[boundary_idx + 9:].strip()
-                        body_bytes: bytes = request["body"]
-                        # Simple multipart parser
-                        parts = body_bytes.split(f"--{boundary}".encode())
-                        for part in parts[1:-1]:  # Skip first empty and last closing
-                            if b"\r\n\r\n" in part:
-                                header_section, content = part.split(b"\r\n\r\n", 1)
-                                content = content.rstrip(b"\r\n")
-                                headers_text = header_section.decode("utf-8", errors="ignore")
-                                
-                                # Parse Content-Disposition header
-                                name = None
-                                filename = None
-                                for line in headers_text.split("\r\n"):
-                                    if line.startswith("Content-Disposition:"):
-                                        disp = line[20:].strip()
-                                        for param in disp.split("; "):
-                                            if param.startswith('name="'):
-                                                name = param[6:-1]
-                                            elif param.startswith('filename="'):
-                                                filename = param[10:-1]
-                                
-                                if name:
-                                    if filename:
-                                        # It's a file
-                                        file_info = {
-                                            "filename": filename,
-                                            "content": content,
-                                            "size": len(content)
-                                        }
-                                        if name in files_map:
-                                            if isinstance(files_map[name], list):
-                                                files_map[name].append(file_info)
-                                            else:
-                                                files_map[name] = [files_map[name], file_info]
-                                        else:
-                                            files_map[name] = file_info
-                                    else:
-                                        # It's a form field
-                                        value = content.decode("utf-8", errors="ignore")
-                                        form_map[name] = value
-
-                # Body decode cache
-                body_obj: Any = None
-                body_loaded: bool = False
-                dep_cache: Dict[Any, Any] = {}
-
-                for p in meta["params"]:
-                    name = p["name"]
-                    annotation = p["annotation"]
-                    default = p["default"]
-                    source = p["source"]
-                    alias = p.get("alias")
-                    depends_marker = p.get("dependency")
-
-                    if source == "request":
-                        value = request
-                    elif source == "dependency":
-                        dep_fn = depends_marker.dependency if depends_marker else None
-                        if dep_fn is None:
-                            raise ValueError(f"Depends for parameter {name} requires a callable")
-                        if depends_marker.use_cache and dep_fn in dep_cache:
-                            value = dep_cache[dep_fn]
-                        else:
-                            dep_meta = self._handler_meta.get(dep_fn)
-                            if dep_meta is None:
-                                dep_meta = self._compile_binder(dep_fn)
-                                self._handler_meta[dep_fn] = dep_meta
-                            if dep_meta.get("mode") == "request_only":
-                                value = await dep_fn(request)
-                            else:
-                                dep_args: List[Any] = []
-                                dep_kwargs: Dict[str, Any] = {}
-                                for dp in dep_meta["params"]:
-                                    dname = dp["name"]
-                                    dan = dp["annotation"]
-                                    dsrc = dp["source"]
-                                    dalias = dp.get("alias")
-                                    if dsrc == "request":
-                                        dval = request
-                                    else:
-                                        key = dalias or dname
-                                        if key in params_map:
-                                            raw = params_map[key]
-                                            dval = self._convert_primitive(str(raw), dan)
-                                        elif key in query_map:
-                                            raw = query_map[key]
-                                            dval = self._convert_primitive(str(raw), dan)
-                                        elif dsrc == "header":
-                                            raw = headers_map.get(key.lower())
-                                            if raw is None:
-                                                raise ValueError(f"Missing required header: {key}")
-                                            dval = self._convert_primitive(str(raw), dan)
-                                        elif dsrc == "cookie":
-                                            raw = cookies_map.get(key)
-                                            if raw is None:
-                                                raise ValueError(f"Missing required cookie: {key}")
-                                            dval = self._convert_primitive(str(raw), dan)
-                                        else:
-                                            dval = None
-                                    if dp["kind"] in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
-                                        dep_args.append(dval)
-                                    else:
-                                        dep_kwargs[dname] = dval
-                                value = await dep_fn(*dep_args, **dep_kwargs)
-                            if depends_marker.use_cache:
-                                dep_cache[dep_fn] = value
-                    else:
-                        key = alias or name
-                        if key in params_map:
-                            raw = params_map[key]
-                            value = self._convert_primitive(str(raw), annotation)
-                        elif key in query_map:
-                            raw = query_map[key]
-                            value = self._convert_primitive(str(raw), annotation)
-                        elif source == "header":
-                            raw = headers_map.get(key.lower())
-                            if raw is None:
-                                if default is not inspect._empty or self._is_optional(annotation):
-                                    value = None if default is inspect._empty else default
-                                else:
-                                    raise ValueError(f"Missing required header: {key}")
-                            else:
-                                value = self._convert_primitive(str(raw), annotation)
-                        elif source == "cookie":
-                            raw = cookies_map.get(key)
-                            if raw is None:
-                                if default is not inspect._empty or self._is_optional(annotation):
-                                    value = None if default is inspect._empty else default
-                                else:
-                                    raise ValueError(f"Missing required cookie: {key}")
-                            else:
-                                value = self._convert_primitive(str(raw), annotation)
-                        elif source == "form":
-                            raw = form_map.get(key)
-                            if raw is None:
-                                if default is not inspect._empty or self._is_optional(annotation):
-                                    value = None if default is inspect._empty else default
-                                else:
-                                    raise ValueError(f"Missing required form field: {key}")
-                            else:
-                                value = self._convert_primitive(str(raw), annotation)
-                        elif source == "file":
-                            raw = files_map.get(key)
-                            if raw is None:
-                                if default is not inspect._empty or self._is_optional(annotation):
-                                    value = None if default is inspect._empty else default
-                                else:
-                                    raise ValueError(f"Missing required file: {key}")
-                            else:
-                                # For files, return the raw dict(s) containing filename and content
-                                # If it's a list annotation, ensure we have a list
-                                if hasattr(annotation, "__origin__") and annotation.__origin__ is list:
-                                    value = raw if isinstance(raw, list) else [raw]
-                                else:
-                                    value = raw
-                        else:
-                            # Maybe body param
-                            if meta.get("body_struct_param") == name:
-                                if not body_loaded:
-                                    body_bytes: bytes = request["body"]
-                                    value = msgspec.json.decode(body_bytes, type=meta["body_struct_type"])  # type: ignore
-                                    body_obj = value
-                                    body_loaded = True
-                                else:
-                                    value = body_obj
-                            else:
-                                if default is not inspect._empty or self._is_optional(annotation):
-                                    value = None if default is inspect._empty else default
-                                else:
-                                    raise ValueError(f"Missing required parameter: {name}")
-
-                    # Respect positional-only/keyword-only kinds; default to positional order
-                    if p["kind"] in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
-                        args.append(value)
-                    else:
-                        kwargs[name] = value
-
+                # Build handler arguments
+                args, kwargs = await self._build_handler_arguments(meta, request)
                 result = await handler(*args, **kwargs)
-            
-            # Apply optional response validation/serialization via msgspec
-            response_tp = meta.get("response_type")
 
-            # Handle different response types
-            if isinstance(result, JSON):
-                if response_tp is not None:
-                    try:
-                        validated = await self._coerce_to_response_type_async(result.data, response_tp)
-                        data_bytes = msgspec.json.encode(validated)
-                    except Exception as e:
-                        err = f"Response validation error: {e}"
-                        return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
-                    headers = [("content-type", "application/json")]
-                    if result.headers:
-                        headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-                    return int(result.status_code), headers, data_bytes
-                headers = [("content-type", "application/json")]
-                if result.headers:
-                    headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-                return int(result.status_code), headers, result.to_bytes()
-            elif isinstance(result, PlainText):
-                headers = [("content-type", "text/plain; charset=utf-8")]
-                if result.headers:
-                    headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-                return int(result.status_code), headers, result.to_bytes()
-            elif isinstance(result, HTML):
-                headers = [("content-type", "text/html; charset=utf-8")]
-                if result.headers:
-                    headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-                return int(result.status_code), headers, result.to_bytes()
-            elif isinstance(result, Redirect):
-                headers = [("location", result.url)]
-                if result.headers:
-                    headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-                return int(result.status_code), headers, b""
-            elif isinstance(result, File):
-                data = result.read_bytes()
-                ctype = result.media_type or mimetypes.guess_type(result.path)[0] or "application/octet-stream"
-                headers = [("content-type", ctype)]
-                if result.filename:
-                    headers.append(("content-disposition", f"attachment; filename=\"{result.filename}\""))
-                if result.headers:
-                    headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-                return int(result.status_code), headers, data
-            elif isinstance(result, FileResponse):
-                # Signal Rust/Actix to stream the file directly via NamedFile
-                ctype = result.media_type or mimetypes.guess_type(result.path)[0] or "application/octet-stream"
-                headers = [("x-bolt-file-path", result.path), ("content-type", ctype)]
-                if result.filename:
-                    headers.append(("content-disposition", f"attachment; filename=\"{result.filename}\""))
-                if result.headers:
-                    headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-                return int(result.status_code), headers, b""
-            elif isinstance(result, StreamingResponse):
-                # Pass through; Rust will detect and stream from the iterator/generator
-                return result
-            elif isinstance(result, (bytes, bytearray)):
-                status = int(meta.get("default_status_code", 200))
-                return status, [("content-type", "application/octet-stream")], bytes(result)
-            elif isinstance(result, str):
-                status = int(meta.get("default_status_code", 200))
-                return status, [("content-type", "text/plain; charset=utf-8")], result.encode()
-            elif isinstance(result, (dict, list)):
-                # Use msgspec for fast JSON encoding
-                if response_tp is not None:
-                    try:
-                        validated = await self._coerce_to_response_type_async(result, response_tp)
-                        data = msgspec.json.encode(validated)
-                    except Exception as e:
-                        err = f"Response validation error: {e}"
-                        return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
-                else:
-                    data = msgspec.json.encode(result)
-                status = int(meta.get("default_status_code", 200))
-                return status, [("content-type", "application/json")], data
-            else:
-                # Fallback to msgspec encoding
-                if response_tp is not None:
-                    try:
-                        validated = await self._coerce_to_response_type_async(result, response_tp)
-                        data = msgspec.json.encode(validated)
-                    except Exception as e:
-                        err = f"Response validation error: {e}"
-                        return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
-                else:
-                    data = msgspec.json.encode(result)
-                status = int(meta.get("default_status_code", 200))
-                return status, [("content-type", "application/json")], data
-                
+            # Serialize response
+            return await self._serialize_response(result, meta)
+
         except HTTPException as he:
-            try:
-                body = msgspec.json.encode({"detail": he.detail})
-                headers = [("content-type", "application/json")]
-            except Exception:
-                body = str(he.detail).encode()
-                headers = [("content-type", "text/plain; charset=utf-8")]
-            if he.headers:
-                headers.extend([(k.lower(), v) for k, v in he.headers.items()])
-            return int(he.status_code), headers, body
+            return self._handle_http_exception(he)
         except Exception as e:
-            error_msg = f"Handler error: {str(e)}"
-            return 500, [("content-type", "text/plain; charset=utf-8")], error_msg.encode()
+            return self._handle_generic_exception(e)
     
     def serve(self, host: str = "0.0.0.0", port: int = 8000) -> None:
         """Start the async server with registered routes"""

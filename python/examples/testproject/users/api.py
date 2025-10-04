@@ -30,7 +30,7 @@ async def list_full_10() -> list[UserFull]:
     return User.objects.all()[:100]
 
 
-@api.get("/mini10", response_model=list[UserMini])
+@api.get("/mini10")
 async def list_mini_10() -> list[UserMini]:
     return User.objects.only("id", "username")[:10]
 

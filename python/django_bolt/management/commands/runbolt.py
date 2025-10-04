@@ -223,7 +223,7 @@ class Command(BaseCommand):
             self.stdout.write(f"[django-bolt] Process {process_id}: Found {len(merged_api._routes)} routes from {len(apis)} APIs")
         else:
             self.stdout.write(
-                self.style.SUCCESS(f"[django-bolt] Found {len(merged_api._routes)} routes from {len(apis)} APIs")
+                self.style.SUCCESS(f"[django-bolt] Found {len(merged_api._routes)} routes")
             )
         
         # Register routes with Rust

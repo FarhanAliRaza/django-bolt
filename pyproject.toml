@@ -17,6 +17,7 @@ dependencies = [
     "pydantic>=2",
     "msgspec>=0.18",
     "maturin>=1.9.4",
+    "watchfiles>=0.24",
 ]
 [project.scripts]
 django-bolt = "django_bolt.cli:main"

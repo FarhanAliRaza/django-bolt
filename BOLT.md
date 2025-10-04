@@ -132,7 +132,9 @@ Failed requests: 0
 Requests per second: 7288.12 [#/sec] (mean)
 Time per request: 6.860 [ms] (mean)
 Time per request: 0.137 [ms] (mean, across all concurrent requests)
-\n### Users Mini10 (/users/mini10)
+
+### Users Mini10 (/users/mini10)
+
 Failed requests: 0
 Requests per second: 8725.05 [#/sec] (mean)
 Time per request: 5.731 [ms] (mean)
@@ -140,17 +142,22 @@ Time per request: 0.115 [ms] (mean, across all concurrent requests)
 
 ## Form and File Upload Performance
 
-\n### Form Data (POST /form)
+### Form Data (POST /form)
+
 Failed requests: 0
 Requests per second: 48388.66 [#/sec] (mean)
 Time per request: 1.033 [ms] (mean)
 Time per request: 0.021 [ms] (mean, across all concurrent requests)
-\n### File Upload (POST /upload)
+
+### File Upload (POST /upload)
+
 Failed requests: 0
 Requests per second: 55896.52 [#/sec] (mean)
 Time per request: 0.895 [ms] (mean)
 Time per request: 0.018 [ms] (mean, across all concurrent requests)
-\n### Mixed Form with Files (POST /mixed-form)
+
+### Mixed Form with Files (POST /mixed-form)
+
 Failed requests: 0
 Requests per second: 56939.83 [#/sec] (mean)
 Time per request: 0.878 [ms] (mean)

@@ -27,18 +27,10 @@ async def users_root():
 
 @api.get("/full10", response_model=list[UserFull])
 async def list_full_10() -> list[UserFull]:
-    @sync_to_async
-    def fetch():
-        return list(User.objects.all()[:10])
-
-    return await fetch()
+    return User.objects.all()[:10]
 
 
 @api.get("/mini10", response_model=list[UserMini])
 async def list_mini_10() -> list[UserMini]:
-    @sync_to_async
-    def fetch():
-        return list(User.objects.only("id", "username")[:10])
-
-    return await fetch()
+    return User.objects.only("id", "username")[:10]
 

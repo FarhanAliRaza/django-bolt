@@ -13,7 +13,7 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)"
+            "--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0)"
         )
         parser.add_argument(
             "--port", type=int, default=8000, help="Port to bind to (default: 8000)"
@@ -30,15 +30,126 @@ class Command(BaseCommand):
             default="off",
             help="Admin integration mode (default: off)",
         )
+        parser.add_argument(
+            "--dev",
+            action="store_true",
+            help="Enable auto-reload on file changes (development mode)"
+        )
 
     def handle(self, *args, **options):
         processes = options['processes']
-        
-        if processes > 1:
-            self.start_multiprocess(options)
+        dev_mode = options.get('dev', False)
+
+        # Dev mode: force single process + enable auto-reload
+        if dev_mode:
+            if processes > 1:
+                self.stdout.write(
+                    self.style.WARNING(
+                        "[django-bolt] Dev mode enabled: forcing --processes=1 for auto-reload"
+                    )
+                )
+                options['processes'] = 1
+
+            self.stdout.write(
+                self.style.SUCCESS("[django-bolt] 🔥 Development mode enabled (auto-reload on file changes)")
+            )
+            self.run_with_autoreload(options)
         else:
-            self.start_single_process(options)
-    
+            # Production mode (current logic)
+            if processes > 1:
+                self.start_multiprocess(options)
+            else:
+                self.start_single_process(options)
+
+    def run_with_autoreload(self, options):
+        """Run server with auto-reload using watchfiles"""
+        import sys
+        import os
+        import signal
+        import subprocess
+        from pathlib import Path
+
+        try:
+            from watchfiles import watch
+        except ImportError:
+            self.stdout.write(
+                self.style.ERROR(
+                    "[django-bolt] Error: watchfiles not installed. "
+                    "Install it with: pip install watchfiles"
+                )
+            )
+            sys.exit(1)
+
+        # Watch paths - Django project base directory
+        watch_path = Path(settings.BASE_DIR)
+
+        self.stdout.write(f"[django-bolt] Watching for changes in: {watch_path}")
+        self.stdout.write("[django-bolt] Press Ctrl+C to quit\n")
+
+        # Keep track of server process
+        server_process = None
+
+        def start_server_subprocess():
+            """Start server in subprocess"""
+            nonlocal server_process
+
+            # Build command to restart ourselves without --dev
+            cmd = [
+                sys.executable,
+                "manage.py",
+                "runbolt",
+                "--host", options['host'],
+                "--port", str(options['port']),
+                "--workers", str(options['workers']),
+            ]
+
+            server_process = subprocess.Popen(
+                cmd,
+                cwd=settings.BASE_DIR,
+                env=os.environ.copy(),
+            )
+            return server_process
+
+        def stop_server():
+            """Stop server subprocess"""
+            nonlocal server_process
+            if server_process and server_process.poll() is None:
+                self.stdout.write("[django-bolt] 🔄 Stopping server...")
+                server_process.terminate()
+                try:
+                    server_process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    server_process.kill()
+                    server_process.wait()
+
+        # Handle Ctrl+C
+        def signal_handler(signum, frame):
+            stop_server()
+            self.stdout.write("\n[django-bolt] Shutting down...")
+            sys.exit(0)
+
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+        # Start initial server
+        start_server_subprocess()
+
+        # Watch for changes
+        try:
+            for changes in watch(watch_path, watch_filter=lambda change, path: path.endswith('.py'), debounce=300):
+                if changes:
+                    # Get first changed file for display
+                    change_type, changed_file = list(changes)[0]
+                    rel_path = Path(changed_file).relative_to(watch_path)
+                    self.stdout.write(f"[django-bolt] 🔄 File changed: {rel_path} - Reloading...")
+
+                    # Stop and restart server
+                    stop_server()
+                    start_server_subprocess()
+        except KeyboardInterrupt:
+            stop_server()
+            self.stdout.write("\n[django-bolt] Shutting down...")
+
     def start_multiprocess(self, options):
         """Start multiple processes with SO_REUSEPORT"""
         import os

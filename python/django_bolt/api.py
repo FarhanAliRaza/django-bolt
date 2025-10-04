@@ -120,6 +120,18 @@ class BoltAPI:
         except Exception:
             return False
 
+    async def _coerce_to_response_type_async(self, value: Any, annotation: Any) -> Any:
+        """Async version that handles Django QuerySets"""
+        # Check if value is a Django QuerySet
+        if hasattr(value, '_iterable_class') and hasattr(value, 'model'):
+            # It's a QuerySet - convert to list asynchronously
+            result = []
+            async for item in value:
+                result.append(item)
+            value = result
+
+        return self._coerce_to_response_type(value, annotation)
+
     def _coerce_to_response_type(self, value: Any, annotation: Any) -> Any:
         """Coerce arbitrary Python objects (including Django models) into the
         declared response type using msgspec. Supports:
@@ -579,7 +591,7 @@ class BoltAPI:
             if isinstance(result, JSON):
                 if response_tp is not None:
                     try:
-                        validated = self._coerce_to_response_type(result.data, response_tp)
+                        validated = await self._coerce_to_response_type_async(result.data, response_tp)
                         data_bytes = msgspec.json.encode(validated)
                     except Exception as e:
                         err = f"Response validation error: {e}"
@@ -638,7 +650,7 @@ class BoltAPI:
                 # Use msgspec for fast JSON encoding
                 if response_tp is not None:
                     try:
-                        validated = self._coerce_to_response_type(result, response_tp)
+                        validated = await self._coerce_to_response_type_async(result, response_tp)
                         data = msgspec.json.encode(validated)
                     except Exception as e:
                         err = f"Response validation error: {e}"
@@ -651,7 +663,7 @@ class BoltAPI:
                 # Fallback to msgspec encoding
                 if response_tp is not None:
                     try:
-                        validated = self._coerce_to_response_type(result, response_tp)
+                        validated = await self._coerce_to_response_type_async(result, response_tp)
                         data = msgspec.json.encode(validated)
                     except Exception as e:
                         err = f"Response validation error: {e}"

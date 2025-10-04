@@ -39,22 +39,22 @@ ab -k -c $C -n $N http://$HOST:$PORT/ 2>/dev/null | grep -E "(Requests per secon
 echo ""
 echo "## Response Type Endpoints"
 
-printf "\n### Header Endpoint (/header)\n"
+printf "### Header Endpoint (/header)\n"
 ab -k -c $C -n $N -H 'x-test: val' http://$HOST:$PORT/header 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
-printf "\n### Cookie Endpoint (/cookie)\n"
+printf "### Cookie Endpoint (/cookie)\n"
 ab -k -c $C -n $N -H 'Cookie: session=abc' http://$HOST:$PORT/cookie 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
-printf "\n### Exception Endpoint (/exc)\n"
+printf "### Exception Endpoint (/exc)\n"
 ab -k -c $C -n $N http://$HOST:$PORT/exc 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
-printf "\n### HTML Response (/html)\n"
+printf "### HTML Response (/html)\n"
 ab -k -c $C -n $N http://$HOST:$PORT/html 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
-printf "\n### Redirect Response (/redirect)\n"
+printf "### Redirect Response (/redirect)\n"
 ab -k -c $C -n $N -r -H 'Accept: */*' http://$HOST:$PORT/redirect 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
-printf "\n### File Static via FileResponse (/file-static)\n"
+printf "### File Static via FileResponse (/file-static)\n"
 ab -k -c $C -n $N http://$HOST:$PORT/file-static 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
 # Streaming and SSE tests using hey (better than ab for streaming)
@@ -72,21 +72,21 @@ elif [ -f "$HOME/.local/bin/hey" ]; then
 fi
 
 if [ -n "$HEY_BIN" ]; then
-    printf "\n### Streaming Plain Text (/stream)\n"
+    printf "### Streaming Plain Text (/stream)\n"
     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C http://$HOST:$PORT/stream 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(stream timed out after ${HEY_TIMEOUT}s)"
     
-    printf "\n### Server-Sent Events (/sse)\n"
+    printf "### Server-Sent Events (/sse)\n"
     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Accept: text/event-stream" http://$HOST:$PORT/sse 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(sse timed out after ${HEY_TIMEOUT}s)"
 
-    printf "\n### Server-Sent Events (async) (/sse-async)\n"
+    printf "### Server-Sent Events (async) (/sse-async)\n"
     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Accept: text/event-stream" http://$HOST:$PORT/sse-async 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(sse-async timed out after ${HEY_TIMEOUT}s)"
 
-    printf "\n### OpenAI Chat Completions (stream) (/v1/chat/completions)\n"
+    printf "### OpenAI Chat Completions (stream) (/v1/chat/completions)\n"
     BODY_STREAM='{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}],"stream":true,"n_chunks":50,"token":" hi","delay_ms":0}'
     echo "$BODY_STREAM" > /tmp/bolt_chat_stream.json
     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Content-Type: application/json" -m POST -D /tmp/bolt_chat_stream.json http://$HOST:$PORT/v1/chat/completions 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Bytes In|Bytes Out|Status code distribution:)" | head -15 || echo "(chat stream timed out after ${HEY_TIMEOUT}s)"
 
-    printf "\n### OpenAI Chat Completions (async stream) (/v1/chat/completions-async)\n"
+    printf "### OpenAI Chat Completions (async stream) (/v1/chat/completions-async)\n"
     BODY_STREAM_ASYNC='{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}],"stream":true,"n_chunks":50,"token":" hi","delay_ms":0}'
     echo "$BODY_STREAM_ASYNC" > /tmp/bolt_chat_stream_async.json
     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Content-Type: application/json" -m POST -D /tmp/bolt_chat_stream_async.json http://$HOST:$PORT/v1/chat/completions-async 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Bytes In|Bytes Out|Status code distribution:)" | head -15 || echo "(chat async stream timed out after ${HEY_TIMEOUT}s)"
@@ -139,7 +139,7 @@ fi
 echo "### Users Full10 (/users/full10)"
 ab -k -c $C -n $N http://$HOST:$PORT/users/full10 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
-echo "\n### Users Mini10 (/users/mini10)"
+echo "### Users Mini10 (/users/mini10)"
 ab -k -c $C -n $N http://$HOST:$PORT/users/mini10 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
 kill -TERM -$SERVER_PID 2>/dev/null || true
@@ -153,14 +153,14 @@ DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST
 SERVER_PID=$!
 sleep 2
 
-echo "\n### Form Data (POST /form)"
+echo "### Form Data (POST /form)"
 # Create form data
 FORM_FILE=$(mktemp)
 echo "name=TestUser&age=25&email=test%40example.com" > "$FORM_FILE"
 ab -k -c $C -n $N -p "$FORM_FILE" -T 'application/x-www-form-urlencoded' http://$HOST:$PORT/form 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 rm -f "$FORM_FILE"
 
-echo "\n### File Upload (POST /upload)"
+echo "### File Upload (POST /upload)"
 # Create a multipart form data file
 UPLOAD_FILE=$(mktemp)
 BOUNDARY="----BoltBenchmark$(date +%s)"
@@ -181,7 +181,7 @@ ab -k -c $C -n $N -p "$UPLOAD_FILE" -T "multipart/form-data; boundary=$BOUNDARY"
 rm -f "$UPLOAD_FILE"
 
 # Mixed form with files benchmark
-echo "\n### Mixed Form with Files (POST /mixed-form)"
+echo "### Mixed Form with Files (POST /mixed-form)"
 MIXED_FILE=$(mktemp)
 BOUNDARY="----BoltMixed$(date +%s)"
 cat > "$MIXED_FILE" << EOF

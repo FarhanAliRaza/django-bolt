@@ -27,7 +27,7 @@ async def users_root():
 
 @api.get("/full10")
 async def list_full_10() -> list[UserFull]:
-    return User.objects.all()[:100]
+    return User.objects.all()[:10]
 
 
 @api.get("/mini10")

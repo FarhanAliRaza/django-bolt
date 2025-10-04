@@ -40,8 +40,9 @@ class Command(BaseCommand):
         processes = options['processes']
         dev_mode = options.get('dev', False)
 
-        # Dev mode: force single process + enable auto-reload
+        # Dev mode: force single process + single worker + enable auto-reload
         if dev_mode:
+            options['workers'] = 1
             if processes > 1:
                 self.stdout.write(
                     self.style.WARNING(

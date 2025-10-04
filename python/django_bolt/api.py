@@ -1,16 +1,21 @@
 import inspect
-import re
-import mimetypes
-from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Union, Type, Annotated
 import msgspec
+from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Annotated
 
 from .bootstrap import ensure_django_ready
 from django_bolt import _core
-from .responses import JSON, PlainText, HTML, Redirect, File, FileResponse, StreamingResponse
+from .responses import StreamingResponse
 from .exceptions import HTTPException
 from .params import Param, Depends as DependsMarker
-from .auth.backends import get_default_authentication_classes
-from .auth.guards import get_default_permission_classes
+
+# Import modularized components
+from .binding import (
+    is_optional, is_msgspec_struct, extract_parameter_value
+)
+from .request_parsing import parse_form_data
+from .dependencies import resolve_dependency
+from .serialization import serialize_response
+from .middleware.compiler import compile_middleware_meta
 
 Request = Dict[str, Any]
 Response = Tuple[int, List[Tuple[str, str]], bytes]
@@ -63,9 +68,8 @@ class BoltAPI:
             handler_id = self._next_handler_id
             self._next_handler_id += 1
 
-            # Apply prefix to path and convert FastAPI syntax to matchit
+            # Apply prefix to path (conversion happens in Rust)
             full_path = self.prefix + path if self.prefix else path
-            full_path = self._convert_path(full_path)
 
             self._routes.append((method, full_path, handler_id, fn))
             self._handlers[handler_id] = fn
@@ -80,105 +84,16 @@ class BoltAPI:
             self._handler_meta[fn] = meta
 
             # Compile middleware metadata for this handler (including guards and auth)
-            middleware_meta = self._compile_middleware_meta(fn, method, full_path, guards=guards, auth=auth)
+            middleware_meta = compile_middleware_meta(
+                fn, method, full_path,
+                self.middleware, self.middleware_config,
+                guards=guards, auth=auth
+            )
             if middleware_meta:
                 self._handler_middleware[handler_id] = middleware_meta
 
             return fn
         return decorator
-
-    def _convert_path(self, path: str) -> str:
-        """Convert FastAPI-style paths like /items/{id} and /files/{path:path}
-        Matchit uses the same {param} syntax as FastAPI, but uses *path for catch-all
-        """
-        def repl(m: re.Match[str]) -> str:
-            name = m.group(1)
-            type_ = m.group(2)
-            if type_ == ":path":
-                return f"*{name}"
-            return f"{{{name}}}"
-
-        return re.sub(r"\{([a-zA-Z_][a-zA-Z0-9_]*)(:[a-zA-Z_][a-zA-Z0-9_]*)?\}", repl, path)
-
-    def _is_optional(self, annotation: Any) -> bool:
-        origin = get_origin(annotation)
-        if origin is Union:
-            args = get_args(annotation)
-            return type(None) in args
-        return False
-
-    def _unwrap_optional(self, annotation: Any) -> Any:
-        origin = get_origin(annotation)
-        if origin is Union:
-            args = tuple(a for a in get_args(annotation) if a is not type(None))
-            return args[0] if len(args) == 1 else Union[args]  # type: ignore
-        return annotation
-
-    def _is_msgspec_struct(self, tp: Any) -> bool:
-        try:
-            return isinstance(tp, type) and issubclass(tp, msgspec.Struct)
-        except Exception:
-            return False
-
-    async def _coerce_to_response_type_async(self, value: Any, annotation: Any) -> Any:
-        """Async version that handles Django QuerySets"""
-        # Check if value is a Django QuerySet
-        if hasattr(value, '_iterable_class') and hasattr(value, 'model'):
-            # It's a QuerySet - convert to list asynchronously
-            result = []
-            async for item in value:
-                result.append(item)
-            value = result
-
-        return self._coerce_to_response_type(value, annotation)
-
-    def _coerce_to_response_type(self, value: Any, annotation: Any) -> Any:
-        """Coerce arbitrary Python objects (including Django models) into the
-        declared response type using msgspec. Supports:
-          - msgspec.Struct: build mapping from attributes if needed
-          - list[T]: recursively coerce elements
-          - dict/primitive: defer to msgspec.convert
-        """
-        origin = get_origin(annotation)
-        # Handle List[T]
-        if origin in (list, List):
-            args = get_args(annotation)
-            elem_type = args[0] if args else Any
-            return [self._coerce_to_response_type(elem, elem_type) for elem in (value or [])]
-
-        # Handle Struct
-        if self._is_msgspec_struct(annotation):
-            if isinstance(value, annotation):
-                return value
-            if isinstance(value, dict):
-                return msgspec.convert(value, annotation)
-            # Build mapping from attributes based on struct annotations
-            fields = getattr(annotation, "__annotations__", {})
-            mapped = {name: getattr(value, name, None) for name in fields.keys()}
-            return msgspec.convert(mapped, annotation)
-
-        # Default convert path
-        return msgspec.convert(value, annotation)
-
-    def _convert_primitive(self, value: str, annotation: Any) -> Any:
-        tp = self._unwrap_optional(annotation)
-        if tp is str or tp is Any or tp is None or tp is inspect._empty:
-            return value
-        if tp is int:
-            return int(value)
-        if tp is float:
-            return float(value)
-        if tp is bool:
-            v = value.lower()
-            if v in ("1", "true", "t", "yes", "y", "on"): return True
-            if v in ("0", "false", "f", "no", "n", "off"): return False
-            # Fallback: non-empty -> True
-            return bool(value)
-        # Fallback: try msgspec decode for JSON in value
-        try:
-            return msgspec.json.decode(value.encode())
-        except Exception:
-            return value
 
     def _compile_binder(self, fn: Callable) -> Dict[str, Any]:
         sig = inspect.signature(fn)
@@ -230,7 +145,7 @@ class BoltAPI:
             else:
                 # Prefer path param, then query, else body
                 source = "auto"  # decide at call time using request mapping
-            
+
             meta["params"].append({
                 "name": name,
                 "annotation": annotation,
@@ -243,7 +158,7 @@ class BoltAPI:
             })
 
         # Detect single body parameter pattern (POST/PUT/PATCH) with msgspec.Struct
-        body_params = [p for p in meta["params"] if p["source"] in {"auto", "body"} and self._is_msgspec_struct(p["annotation"])]
+        body_params = [p for p in meta["params"] if p["source"] in {"auto", "body"} and is_msgspec_struct(p["annotation"])]
         if len(body_params) == 1:
             meta["body_struct_param"] = body_params[0]["name"]
             meta["body_struct_type"] = body_params[0]["annotation"]
@@ -254,365 +169,6 @@ class BoltAPI:
 
         meta["mode"] = "mixed"
         return meta
-
-    def _compile_middleware_meta(self, handler: Callable, method: str, path: str, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None) -> Optional[Dict[str, Any]]:
-        """Compile middleware metadata for a handler, including guards and auth."""
-        # Check for handler-specific middleware
-        handler_middleware = []
-        skip_middleware = set()
-
-        if hasattr(handler, '__bolt_middleware__'):
-            handler_middleware = handler.__bolt_middleware__
-
-        if hasattr(handler, '__bolt_skip_middleware__'):
-            skip_middleware = handler.__bolt_skip_middleware__
-
-        # Merge global and handler middleware
-        all_middleware = []
-
-        # Add global middleware first
-        for mw in self.middleware:
-            mw_dict = self._middleware_to_dict(mw)
-            if mw_dict and mw_dict.get('type') not in skip_middleware:
-                all_middleware.append(mw_dict)
-
-        # Add global config-based middleware
-        if self.middleware_config:
-            for mw_type, config in self.middleware_config.items():
-                if mw_type not in skip_middleware:
-                    mw_dict = {'type': mw_type}
-                    mw_dict.update(config)
-                    all_middleware.append(mw_dict)
-
-        # Add handler-specific middleware
-        for mw in handler_middleware:
-            mw_dict = self._middleware_to_dict(mw)
-            if mw_dict:
-                all_middleware.append(mw_dict)
-
-        # Compile authentication backends
-        auth_backends = []
-        if auth is not None:
-            # Per-route auth override
-            for auth_backend in auth:
-                if hasattr(auth_backend, 'to_metadata'):
-                    auth_backends.append(auth_backend.to_metadata())
-        else:
-            # Use global default authentication classes
-            for auth_backend in get_default_authentication_classes():
-                if hasattr(auth_backend, 'to_metadata'):
-                    auth_backends.append(auth_backend.to_metadata())
-
-        # Compile guards/permissions
-        guard_list = []
-        if guards is not None:
-            # Per-route guards override
-            for guard in guards:
-                # Check if it's an instance with to_metadata method
-                if hasattr(guard, 'to_metadata') and callable(getattr(guard, 'to_metadata', None)):
-                    try:
-                        # Try calling as instance method
-                        guard_list.append(guard.to_metadata())
-                    except TypeError:
-                        # If it fails, might be a class, try instantiating
-                        try:
-                            instance = guard()
-                            guard_list.append(instance.to_metadata())
-                        except Exception:
-                            pass
-                elif isinstance(guard, type):
-                    # It's a class reference, instantiate it
-                    try:
-                        instance = guard()
-                        if hasattr(instance, 'to_metadata'):
-                            guard_list.append(instance.to_metadata())
-                    except Exception:
-                        pass
-        else:
-            # Use global default permission classes
-            for guard in get_default_permission_classes():
-                if hasattr(guard, 'to_metadata'):
-                    guard_list.append(guard.to_metadata())
-
-        # Only include metadata if something is configured
-        if not all_middleware and not auth_backends and not guard_list:
-            return None
-
-        result = {
-            'method': method,
-            'path': path
-        }
-
-        if all_middleware:
-            result['middleware'] = all_middleware
-            result['skip'] = list(skip_middleware)
-
-        if auth_backends:
-            result['auth_backends'] = auth_backends
-
-        if guard_list:
-            result['guards'] = guard_list
-
-        return result
-    
-    def _middleware_to_dict(self, mw: Any) -> Optional[Dict[str, Any]]:
-        """Convert middleware specification to dictionary."""
-        if isinstance(mw, dict):
-            return mw
-        elif hasattr(mw, '__dict__'):
-            # Convert middleware object to dict
-            return {
-                'type': mw.__class__.__name__.lower().replace('middleware', ''),
-                **mw.__dict__
-            }
-        return None
-
-    def _parse_form_data(self, request: Dict[str, Any], headers_map: Dict[str, str]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        """Parse form and multipart data from request."""
-        form_map: Dict[str, Any] = {}
-        files_map: Dict[str, Any] = {}
-        content_type = headers_map.get("content-type", "")
-
-        if content_type.startswith("application/x-www-form-urlencoded"):
-            from urllib.parse import parse_qs
-            body_bytes: bytes = request["body"]
-            form_data = parse_qs(body_bytes.decode("utf-8"))
-            # parse_qs returns lists, but for single values we want the value directly
-            form_map = {k: v[0] if len(v) == 1 else v for k, v in form_data.items()}
-        elif content_type.startswith("multipart/form-data"):
-            form_map, files_map = self._parse_multipart_data(request, content_type)
-
-        return form_map, files_map
-
-    def _parse_multipart_data(self, request: Dict[str, Any], content_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        """Parse multipart form data."""
-        form_map: Dict[str, Any] = {}
-        files_map: Dict[str, Any] = {}
-
-        boundary_idx = content_type.find("boundary=")
-        if boundary_idx < 0:
-            return form_map, files_map
-
-        boundary = content_type[boundary_idx + 9:].strip()
-        body_bytes: bytes = request["body"]
-        parts = body_bytes.split(f"--{boundary}".encode())
-
-        for part in parts[1:-1]:  # Skip first empty and last closing
-            if b"\r\n\r\n" not in part:
-                continue
-
-            header_section, content = part.split(b"\r\n\r\n", 1)
-            content = content.rstrip(b"\r\n")
-            headers_text = header_section.decode("utf-8", errors="ignore")
-
-            name, filename = self._parse_content_disposition(headers_text)
-
-            if name:
-                if filename:
-                    self._add_file_to_map(files_map, name, filename, content)
-                else:
-                    value = content.decode("utf-8", errors="ignore")
-                    form_map[name] = value
-
-        return form_map, files_map
-
-    def _parse_content_disposition(self, headers_text: str) -> Tuple[Optional[str], Optional[str]]:
-        """Parse Content-Disposition header to extract name and filename."""
-        name = None
-        filename = None
-
-        for line in headers_text.split("\r\n"):
-            if not line.startswith("Content-Disposition:"):
-                continue
-
-            disp = line[20:].strip()
-            for param in disp.split("; "):
-                if param.startswith('name="'):
-                    name = param[6:-1]
-                elif param.startswith('filename="'):
-                    filename = param[10:-1]
-
-        return name, filename
-
-    def _add_file_to_map(self, files_map: Dict[str, Any], name: str, filename: str, content: bytes) -> None:
-        """Add file info to files map, handling multiple files with same name."""
-        file_info = {
-            "filename": filename,
-            "content": content,
-            "size": len(content)
-        }
-
-        if name in files_map:
-            if isinstance(files_map[name], list):
-                files_map[name].append(file_info)
-            else:
-                files_map[name] = [files_map[name], file_info]
-        else:
-            files_map[name] = file_info
-
-    async def _resolve_dependency(self, dep_fn: Callable, depends_marker: DependsMarker,
-                                   request: Dict[str, Any], dep_cache: Dict[Any, Any],
-                                   params_map: Dict[str, Any], query_map: Dict[str, Any],
-                                   headers_map: Dict[str, str], cookies_map: Dict[str, str]) -> Any:
-        """Resolve a dependency injection."""
-        if depends_marker.use_cache and dep_fn in dep_cache:
-            return dep_cache[dep_fn]
-
-        dep_meta = self._handler_meta.get(dep_fn)
-        if dep_meta is None:
-            dep_meta = self._compile_binder(dep_fn)
-            self._handler_meta[dep_fn] = dep_meta
-
-        if dep_meta.get("mode") == "request_only":
-            value = await dep_fn(request)
-        else:
-            value = await self._call_dependency(dep_fn, dep_meta, request, params_map,
-                                                query_map, headers_map, cookies_map)
-
-        if depends_marker.use_cache:
-            dep_cache[dep_fn] = value
-
-        return value
-
-    async def _call_dependency(self, dep_fn: Callable, dep_meta: Dict[str, Any],
-                               request: Dict[str, Any], params_map: Dict[str, Any],
-                               query_map: Dict[str, Any], headers_map: Dict[str, str],
-                               cookies_map: Dict[str, str]) -> Any:
-        """Call a dependency function with resolved parameters."""
-        dep_args: List[Any] = []
-        dep_kwargs: Dict[str, Any] = {}
-
-        for dp in dep_meta["params"]:
-            dname = dp["name"]
-            dan = dp["annotation"]
-            dsrc = dp["source"]
-            dalias = dp.get("alias")
-
-            if dsrc == "request":
-                dval = request
-            else:
-                dval = self._extract_dependency_value(dp, params_map, query_map,
-                                                      headers_map, cookies_map)
-
-            if dp["kind"] in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
-                dep_args.append(dval)
-            else:
-                dep_kwargs[dname] = dval
-
-        return await dep_fn(*dep_args, **dep_kwargs)
-
-    def _extract_dependency_value(self, param: Dict[str, Any], params_map: Dict[str, Any],
-                                  query_map: Dict[str, Any], headers_map: Dict[str, str],
-                                  cookies_map: Dict[str, str]) -> Any:
-        """Extract value for a dependency parameter."""
-        dname = param["name"]
-        dan = param["annotation"]
-        dsrc = param["source"]
-        dalias = param.get("alias")
-        key = dalias or dname
-
-        if key in params_map:
-            return self._convert_primitive(str(params_map[key]), dan)
-        elif key in query_map:
-            return self._convert_primitive(str(query_map[key]), dan)
-        elif dsrc == "header":
-            raw = headers_map.get(key.lower())
-            if raw is None:
-                raise ValueError(f"Missing required header: {key}")
-            return self._convert_primitive(str(raw), dan)
-        elif dsrc == "cookie":
-            raw = cookies_map.get(key)
-            if raw is None:
-                raise ValueError(f"Missing required cookie: {key}")
-            return self._convert_primitive(str(raw), dan)
-        else:
-            return None
-
-    def _extract_parameter_value(self, param: Dict[str, Any], request: Dict[str, Any],
-                                 params_map: Dict[str, Any], query_map: Dict[str, Any],
-                                 headers_map: Dict[str, str], cookies_map: Dict[str, str],
-                                 form_map: Dict[str, Any], files_map: Dict[str, Any],
-                                 meta: Dict[str, Any], body_obj: Any, body_loaded: bool) -> Tuple[Any, Any, bool]:
-        """Extract value for a handler parameter."""
-        name = param["name"]
-        annotation = param["annotation"]
-        default = param["default"]
-        source = param["source"]
-        alias = param.get("alias")
-        key = alias or name
-
-        if key in params_map:
-            return self._convert_primitive(str(params_map[key]), annotation), body_obj, body_loaded
-        elif key in query_map:
-            return self._convert_primitive(str(query_map[key]), annotation), body_obj, body_loaded
-        elif source == "header":
-            return self._extract_header_value(key, annotation, default, headers_map), body_obj, body_loaded
-        elif source == "cookie":
-            return self._extract_cookie_value(key, annotation, default, cookies_map), body_obj, body_loaded
-        elif source == "form":
-            return self._extract_form_value(key, annotation, default, form_map), body_obj, body_loaded
-        elif source == "file":
-            return self._extract_file_value(key, annotation, default, files_map), body_obj, body_loaded
-        else:
-            # Maybe body param
-            if meta.get("body_struct_param") == name:
-                if not body_loaded:
-                    body_bytes: bytes = request["body"]
-                    value = msgspec.json.decode(body_bytes, type=meta["body_struct_type"])  # type: ignore
-                    return value, value, True
-                else:
-                    return body_obj, body_obj, body_loaded
-            else:
-                if default is not inspect._empty or self._is_optional(annotation):
-                    return (None if default is inspect._empty else default), body_obj, body_loaded
-                else:
-                    raise ValueError(f"Missing required parameter: {name}")
-
-    def _extract_header_value(self, key: str, annotation: Any, default: Any, headers_map: Dict[str, str]) -> Any:
-        """Extract value from headers."""
-        raw = headers_map.get(key.lower())
-        if raw is None:
-            if default is not inspect._empty or self._is_optional(annotation):
-                return None if default is inspect._empty else default
-            else:
-                raise ValueError(f"Missing required header: {key}")
-        return self._convert_primitive(str(raw), annotation)
-
-    def _extract_cookie_value(self, key: str, annotation: Any, default: Any, cookies_map: Dict[str, str]) -> Any:
-        """Extract value from cookies."""
-        raw = cookies_map.get(key)
-        if raw is None:
-            if default is not inspect._empty or self._is_optional(annotation):
-                return None if default is inspect._empty else default
-            else:
-                raise ValueError(f"Missing required cookie: {key}")
-        return self._convert_primitive(str(raw), annotation)
-
-    def _extract_form_value(self, key: str, annotation: Any, default: Any, form_map: Dict[str, Any]) -> Any:
-        """Extract value from form data."""
-        raw = form_map.get(key)
-        if raw is None:
-            if default is not inspect._empty or self._is_optional(annotation):
-                return None if default is inspect._empty else default
-            else:
-                raise ValueError(f"Missing required form field: {key}")
-        return self._convert_primitive(str(raw), annotation)
-
-    def _extract_file_value(self, key: str, annotation: Any, default: Any, files_map: Dict[str, Any]) -> Any:
-        """Extract value from uploaded files."""
-        raw = files_map.get(key)
-        if raw is None:
-            if default is not inspect._empty or self._is_optional(annotation):
-                return None if default is inspect._empty else default
-            else:
-                raise ValueError(f"Missing required file: {key}")
-
-        # For files, return the raw dict(s) containing filename and content
-        # If it's a list annotation, ensure we have a list
-        if hasattr(annotation, "__origin__") and annotation.__origin__ is list:
-            return raw if isinstance(raw, list) else [raw]
-        else:
-            return raw
 
     async def _build_handler_arguments(self, meta: Dict[str, Any], request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
         """Build arguments for handler invocation."""
@@ -626,7 +182,7 @@ class BoltAPI:
         cookies_map = request.get("cookies", {})
 
         # Parse form/multipart data if needed
-        form_map, files_map = self._parse_form_data(request, headers_map)
+        form_map, files_map = parse_form_data(request, headers_map)
 
         # Body decode cache
         body_obj: Any = None
@@ -644,10 +200,13 @@ class BoltAPI:
                 dep_fn = depends_marker.dependency if depends_marker else None
                 if dep_fn is None:
                     raise ValueError(f"Depends for parameter {name} requires a callable")
-                value = await self._resolve_dependency(dep_fn, depends_marker, request, dep_cache,
-                                                      params_map, query_map, headers_map, cookies_map)
+                value = await resolve_dependency(
+                    dep_fn, depends_marker, request, dep_cache,
+                    params_map, query_map, headers_map, cookies_map,
+                    self._handler_meta, self._compile_binder
+                )
             else:
-                value, body_obj, body_loaded = self._extract_parameter_value(
+                value, body_obj, body_loaded = extract_parameter_value(
                     p, request, params_map, query_map, headers_map, cookies_map,
                     form_map, files_map, meta, body_obj, body_loaded
                 )
@@ -660,116 +219,6 @@ class BoltAPI:
 
         return args, kwargs
 
-    async def _serialize_response(self, result: Any, meta: Dict[str, Any]) -> Response:
-        """Serialize handler result to HTTP response."""
-        response_tp = meta.get("response_type")
-
-        # Handle different response types
-        if isinstance(result, JSON):
-            return await self._serialize_json_response(result, response_tp)
-        elif isinstance(result, PlainText):
-            return self._serialize_plaintext_response(result)
-        elif isinstance(result, HTML):
-            return self._serialize_html_response(result)
-        elif isinstance(result, Redirect):
-            return self._serialize_redirect_response(result)
-        elif isinstance(result, File):
-            return self._serialize_file_response(result)
-        elif isinstance(result, FileResponse):
-            return self._serialize_file_streaming_response(result)
-        elif isinstance(result, StreamingResponse):
-            return result
-        elif isinstance(result, (bytes, bytearray)):
-            status = int(meta.get("default_status_code", 200))
-            return status, [("content-type", "application/octet-stream")], bytes(result)
-        elif isinstance(result, str):
-            status = int(meta.get("default_status_code", 200))
-            return status, [("content-type", "text/plain; charset=utf-8")], result.encode()
-        elif isinstance(result, (dict, list)):
-            return await self._serialize_json_data(result, response_tp, meta)
-        else:
-            # Fallback to msgspec encoding
-            return await self._serialize_json_data(result, response_tp, meta)
-
-    async def _serialize_json_response(self, result: JSON, response_tp: Optional[Any]) -> Response:
-        """Serialize JSON response object."""
-        headers = [("content-type", "application/json")]
-
-        if response_tp is not None:
-            try:
-                validated = await self._coerce_to_response_type_async(result.data, response_tp)
-                data_bytes = msgspec.json.encode(validated)
-            except Exception as e:
-                err = f"Response validation error: {e}"
-                return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
-        else:
-            data_bytes = result.to_bytes()
-
-        if result.headers:
-            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-
-        return int(result.status_code), headers, data_bytes
-
-    def _serialize_plaintext_response(self, result: PlainText) -> Response:
-        """Serialize plain text response."""
-        headers = [("content-type", "text/plain; charset=utf-8")]
-        if result.headers:
-            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-        return int(result.status_code), headers, result.to_bytes()
-
-    def _serialize_html_response(self, result: HTML) -> Response:
-        """Serialize HTML response."""
-        headers = [("content-type", "text/html; charset=utf-8")]
-        if result.headers:
-            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-        return int(result.status_code), headers, result.to_bytes()
-
-    def _serialize_redirect_response(self, result: Redirect) -> Response:
-        """Serialize redirect response."""
-        headers = [("location", result.url)]
-        if result.headers:
-            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-        return int(result.status_code), headers, b""
-
-    def _serialize_file_response(self, result: File) -> Response:
-        """Serialize file response."""
-        data = result.read_bytes()
-        ctype = result.media_type or mimetypes.guess_type(result.path)[0] or "application/octet-stream"
-        headers = [("content-type", ctype)]
-
-        if result.filename:
-            headers.append(("content-disposition", f"attachment; filename=\"{result.filename}\""))
-        if result.headers:
-            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-
-        return int(result.status_code), headers, data
-
-    def _serialize_file_streaming_response(self, result: FileResponse) -> Response:
-        """Serialize file streaming response."""
-        ctype = result.media_type or mimetypes.guess_type(result.path)[0] or "application/octet-stream"
-        headers = [("x-bolt-file-path", result.path), ("content-type", ctype)]
-
-        if result.filename:
-            headers.append(("content-disposition", f"attachment; filename=\"{result.filename}\""))
-        if result.headers:
-            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-
-        return int(result.status_code), headers, b""
-
-    async def _serialize_json_data(self, result: Any, response_tp: Optional[Any], meta: Dict[str, Any]) -> Response:
-        """Serialize dict/list/other data as JSON."""
-        if response_tp is not None:
-            try:
-                validated = await self._coerce_to_response_type_async(result, response_tp)
-                data = msgspec.json.encode(validated)
-            except Exception as e:
-                err = f"Response validation error: {e}"
-                return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
-        else:
-            data = msgspec.json.encode(result)
-
-        status = int(meta.get("default_status_code", 200))
-        return status, [("content-type", "application/json")], data
 
     def _handle_http_exception(self, he: HTTPException) -> Response:
         """Handle HTTPException and return response."""
@@ -807,7 +256,7 @@ class BoltAPI:
                 result = await handler(*args, **kwargs)
 
             # Serialize response
-            return await self._serialize_response(result, meta)
+            return await serialize_response(result, meta)
 
         except HTTPException as he:
             return self._handle_http_exception(he)

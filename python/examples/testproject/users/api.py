@@ -25,9 +25,9 @@ async def users_root():
     return {"ok": True}
 
 
-@api.get("/full10", response_model=list[UserFull])
+@api.get("/full10")
 async def list_full_10() -> list[UserFull]:
-    return User.objects.all()[:10]
+    return User.objects.all()[:100]
 
 
 @api.get("/mini10", response_model=list[UserMini])

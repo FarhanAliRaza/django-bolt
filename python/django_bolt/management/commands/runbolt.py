@@ -114,7 +114,6 @@ class Command(BaseCommand):
             """Stop server subprocess"""
             nonlocal server_process
             if server_process and server_process.poll() is None:
-                self.stdout.write("[django-bolt] 🔄 Stopping server...")
                 server_process.terminate()
                 try:
                     server_process.wait(timeout=3)

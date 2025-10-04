@@ -7,6 +7,55 @@ pub struct Route {
     pub handler_id: usize,  // Store handler_id for middleware metadata lookup
 }
 
+/// Convert FastAPI-style paths like /items/{id} and /files/{path:path}
+/// Matchit uses the same {param} syntax as FastAPI, but uses *path for catch-all
+pub fn convert_path(path: &str) -> String {
+    let mut result = String::with_capacity(path.len());
+    let mut chars = path.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '{' {
+            result.push(ch);
+            let mut param = String::new();
+
+            // Collect parameter name and optional type
+            while let Some(&next_ch) = chars.peek() {
+                if next_ch == '}' {
+                    chars.next(); // consume '}'
+                    break;
+                }
+                param.push(chars.next().unwrap());
+            }
+
+            // Check if it has :path suffix
+            if let Some(colon_pos) = param.find(':') {
+                let name = &param[..colon_pos];
+                let type_ = &param[colon_pos + 1..];
+
+                if type_ == "path" {
+                    // Convert {name:path} to *name (catch-all)
+                    result.pop(); // Remove the '{'
+                    result.push('*');
+                    result.push_str(name);
+                    continue; // Skip the closing '}'
+                }
+            }
+
+            // Regular parameter: just keep the name
+            if let Some(colon_pos) = param.find(':') {
+                result.push_str(&param[..colon_pos]);
+            } else {
+                result.push_str(&param);
+            }
+            result.push('}');
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
 pub struct Router {
     get: MatchRouter<Route>,
     post: MatchRouter<Route>,
@@ -33,6 +82,9 @@ impl Router {
         handler_id: usize,
         handler: Py<PyAny>,
     ) -> PyResult<()> {
+        // Convert path from FastAPI syntax to matchit syntax
+        let converted_path = convert_path(path);
+
         let route = Route {
             handler,
             handler_id,
@@ -52,7 +104,7 @@ impl Router {
             }
         };
 
-        router.insert(path, route).map_err(|e| {
+        router.insert(&converted_path, route).map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("Failed to register route: {}", e))
         })?;
 

@@ -1,17 +1,23 @@
 import inspect
 import msgspec
-from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Annotated
+import re
+from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Annotated, get_type_hints
 
 from .bootstrap import ensure_django_ready
 from django_bolt import _core
 from .responses import StreamingResponse
 from .exceptions import HTTPException
 from .params import Param, Depends as DependsMarker
+from .typing import FieldDefinition
 
 # Import modularized components
 from .binding import (
-    is_optional, is_msgspec_struct, extract_parameter_value
+    coerce_to_response_type,
+    coerce_to_response_type_async,
+    convert_primitive,
+    create_extractor,
 )
+from .typing import is_msgspec_struct, is_optional
 from .request_parsing import parse_form_data
 from .dependencies import resolve_dependency
 from .serialization import serialize_response
@@ -19,9 +25,114 @@ from .middleware.compiler import compile_middleware_meta
 
 Request = Dict[str, Any]
 Response = Tuple[int, List[Tuple[str, str]], bytes]
- 
+
 # Global registry for BoltAPI instances (used by autodiscovery)
 _BOLT_API_REGISTRY = []
+
+
+def _extract_path_params(path: str) -> set[str]:
+    """
+    Extract path parameter names from a route pattern.
+
+    Examples:
+        "/users/{user_id}" -> {"user_id"}
+        "/posts/{post_id}/comments/{comment_id}" -> {"post_id", "comment_id"}
+    """
+    return set(re.findall(r'\{(\w+)\}', path))
+
+
+def extract_parameter_value(
+    param: Dict[str, Any],
+    request: Dict[str, Any],
+    params_map: Dict[str, Any],
+    query_map: Dict[str, Any],
+    headers_map: Dict[str, str],
+    cookies_map: Dict[str, str],
+    form_map: Dict[str, Any],
+    files_map: Dict[str, Any],
+    meta: Dict[str, Any],
+    body_obj: Any,
+    body_loaded: bool
+) -> Tuple[Any, Any, bool]:
+    """
+    Extract value for a handler parameter (backward compatibility function).
+
+    This function maintains backward compatibility while using the new
+    extractor-based system internally.
+    """
+    name = param["name"]
+    annotation = param["annotation"]
+    default = param["default"]
+    source = param["source"]
+    alias = param.get("alias")
+    key = alias or name
+
+    # Handle different sources
+    if source == "path":
+        if key in params_map:
+            return convert_primitive(str(params_map[key]), annotation), body_obj, body_loaded
+        raise ValueError(f"Missing required path parameter: {key}")
+
+    elif source == "query":
+        if key in query_map:
+            return convert_primitive(str(query_map[key]), annotation), body_obj, body_loaded
+        elif default is not inspect.Parameter.empty or is_optional(annotation):
+            return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
+        raise ValueError(f"Missing required query parameter: {key}")
+
+    elif source == "header":
+        lower_key = key.lower()
+        if lower_key in headers_map:
+            return convert_primitive(str(headers_map[lower_key]), annotation), body_obj, body_loaded
+        elif default is not inspect.Parameter.empty or is_optional(annotation):
+            return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
+        raise ValueError(f"Missing required header: {key}")
+
+    elif source == "cookie":
+        if key in cookies_map:
+            return convert_primitive(str(cookies_map[key]), annotation), body_obj, body_loaded
+        elif default is not inspect.Parameter.empty or is_optional(annotation):
+            return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
+        raise ValueError(f"Missing required cookie: {key}")
+
+    elif source == "form":
+        if key in form_map:
+            return convert_primitive(str(form_map[key]), annotation), body_obj, body_loaded
+        elif default is not inspect.Parameter.empty or is_optional(annotation):
+            return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
+        raise ValueError(f"Missing required form field: {key}")
+
+    elif source == "file":
+        if key in files_map:
+            return files_map[key], body_obj, body_loaded
+        elif default is not inspect.Parameter.empty or is_optional(annotation):
+            return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
+        raise ValueError(f"Missing required file: {key}")
+
+    elif source == "body":
+        # Handle body parameter
+        if meta.get("body_struct_param") == name:
+            if not body_loaded:
+                body_bytes: bytes = request["body"]
+                if is_msgspec_struct(meta["body_struct_type"]):
+                    from .binding import get_msgspec_decoder
+                    decoder = get_msgspec_decoder(meta["body_struct_type"])
+                    value = decoder.decode(body_bytes)
+                else:
+                    value = msgspec.json.decode(body_bytes, type=meta["body_struct_type"])
+                return value, value, True
+            else:
+                return body_obj, body_obj, body_loaded
+        else:
+            if default is not inspect.Parameter.empty or is_optional(annotation):
+                return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
+            raise ValueError(f"Missing required parameter: {name}")
+
+    else:
+        # Unknown source
+        if default is not inspect.Parameter.empty or is_optional(annotation):
+            return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
+        raise ValueError(f"Missing required parameter: {name}")
 
 class BoltAPI:
     def __init__(
@@ -74,8 +185,8 @@ class BoltAPI:
             self._routes.append((method, full_path, handler_id, fn))
             self._handlers[handler_id] = fn
 
-            # Pre-compile lightweight binder for this handler
-            meta = self._compile_binder(fn)
+            # Pre-compile lightweight binder for this handler with HTTP method validation
+            meta = self._compile_binder(fn, method, full_path)
             # Allow explicit response model override
             if response_model is not None:
                 meta["response_type"] = response_model
@@ -95,79 +206,126 @@ class BoltAPI:
             return fn
         return decorator
 
-    def _compile_binder(self, fn: Callable) -> Dict[str, Any]:
+    def _compile_binder(self, fn: Callable, http_method: str, path: str) -> Dict[str, Any]:
+        """
+        Compile parameter binding metadata for a handler function.
+
+        This method:
+        1. Parses function signature and type hints
+        2. Creates FieldDefinition for each parameter
+        3. Infers parameter sources (path, query, body, etc.)
+        4. Validates HTTP method compatibility
+        5. Pre-compiles extractors for performance
+
+        Args:
+            fn: Handler function
+            http_method: HTTP method (GET, POST, etc.)
+            path: Route path pattern
+
+        Returns:
+            Metadata dictionary for parameter binding
+
+        Raises:
+            TypeError: If GET/HEAD/DELETE handlers have body parameters
+        """
         sig = inspect.signature(fn)
-        params = list(sig.parameters.values())
-        meta: Dict[str, Any] = {"sig": sig, "params": []}
+        type_hints = get_type_hints(fn, include_extras=True)
+
+        # Extract path parameters from route pattern
+        path_params = _extract_path_params(path)
+
+        meta: Dict[str, Any] = {
+            "sig": sig,
+            "fields": [],
+            "path_params": path_params,
+            "http_method": http_method,
+        }
 
         # Quick path: single parameter that looks like request
+        params = list(sig.parameters.values())
         if len(params) == 1 and params[0].name in {"request", "req"}:
             meta["mode"] = "request_only"
             return meta
 
-        # Build per-parameter binding plan
-        for p in params:
-            name = p.name
-            raw_annotation = p.annotation
-            annotation = raw_annotation
-            param_marker: Optional[Param] = None
-            depends_marker: Optional[DependsMarker] = None
+        # Parse each parameter into FieldDefinition
+        field_definitions: List[FieldDefinition] = []
 
-            # Unwrap Annotated[T, ...]
-            origin = get_origin(raw_annotation)
+        for param in params:
+            name = param.name
+            annotation = type_hints.get(name, param.annotation)
+
+            # Extract explicit markers from Annotated or default
+            explicit_marker = None
+
+            # Check Annotated[T, ...]
+            origin = get_origin(annotation)
             if origin is Annotated:
-                args = get_args(raw_annotation)
-                if args:
-                    annotation = args[0]
+                args = get_args(annotation)
+                annotation = args[0] if args else annotation  # Unwrap to get actual type
                 for meta_val in args[1:]:
-                    if isinstance(meta_val, Param):
-                        param_marker = meta_val
-                    elif isinstance(meta_val, DependsMarker):
-                        depends_marker = meta_val
-            else:
-                # If default is marker, detect it
-                if isinstance(p.default, Param):
-                    param_marker = p.default
-                elif isinstance(p.default, DependsMarker):
-                    depends_marker = p.default
+                    if isinstance(meta_val, (Param, DependsMarker)):
+                        explicit_marker = meta_val
+                        break
 
-            source: str
-            alias: Optional[str] = None
-            embed: Optional[bool] = None
-            if name in {"request", "req"}:
-                source = "request"
-            elif param_marker is not None:
-                source = param_marker.source
-                alias = param_marker.alias
-                embed = param_marker.embed
-            elif depends_marker is not None:
-                source = "dependency"
-            else:
-                # Prefer path param, then query, else body
-                source = "auto"  # decide at call time using request mapping
+            # Check default value for marker
+            if explicit_marker is None and isinstance(param.default, (Param, DependsMarker)):
+                explicit_marker = param.default
 
-            meta["params"].append({
-                "name": name,
-                "annotation": annotation,
-                "default": p.default,
-                "kind": p.kind,
-                "source": source,
-                "alias": alias,
-                "embed": embed,
-                "dependency": depends_marker,
+            # Create FieldDefinition with inference
+            field = FieldDefinition.from_parameter(
+                parameter=param,
+                annotation=annotation,
+                path_params=path_params,
+                http_method=http_method,
+                explicit_marker=explicit_marker,
+            )
+
+            field_definitions.append(field)
+
+        # HTTP Method Validation: Ensure GET/HEAD/DELETE don't have body params
+        body_fields = [f for f in field_definitions if f.source == "body"]
+        if http_method in ("GET", "HEAD", "DELETE") and body_fields:
+            param_names = [f.name for f in body_fields]
+            raise TypeError(
+                f"Handler {fn.__name__} for {http_method} {path} cannot have body parameters.\n"
+                f"Found body parameters: {param_names}\n"
+                f"Solutions:\n"
+                f"  1. Change HTTP method to POST/PUT/PATCH\n"
+                f"  2. Use Query() marker for query parameters\n"
+                f"  3. Use simple types (str, int) which auto-infer as query params"
+            )
+
+        # Convert FieldDefinitions to dict format for backward compatibility
+        # (We'll optimize this away in Phase 4)
+        for field in field_definitions:
+            meta["fields"].append({
+                "name": field.name,
+                "annotation": field.annotation,
+                "default": field.default,
+                "kind": field.kind,
+                "source": field.source,
+                "alias": field.alias,
+                "embed": field.embed,
+                "dependency": field.dependency,
+                "field_def": field,  # Store FieldDefinition for future use
             })
 
-        # Detect single body parameter pattern (POST/PUT/PATCH) with msgspec.Struct
-        body_params = [p for p in meta["params"] if p["source"] in {"auto", "body"} and is_msgspec_struct(p["annotation"])]
-        if len(body_params) == 1:
-            meta["body_struct_param"] = body_params[0]["name"]
-            meta["body_struct_type"] = body_params[0]["annotation"]
+        # Detect single body parameter for fast path
+        if len(body_fields) == 1:
+            body_field = body_fields[0]
+            if body_field.is_msgspec_struct:
+                meta["body_struct_param"] = body_field.name
+                meta["body_struct_type"] = body_field.annotation
 
         # Capture return type for response validation/serialization
         if sig.return_annotation is not inspect._empty:
             meta["response_type"] = sig.return_annotation
 
         meta["mode"] = "mixed"
+
+        # Maintain backward compatibility with old "params" key
+        meta["params"] = meta["fields"]
+
         return meta
 
     async def _build_handler_arguments(self, meta: Dict[str, Any], request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:

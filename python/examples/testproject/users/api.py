@@ -27,10 +27,12 @@ async def users_root():
 
 @api.get("/full10")
 async def list_full_10() -> list[UserFull]:
-    return User.objects.all()[:10]
+    # Optimized: only fetch needed fields instead of all()
+    return User.objects.only("id", "username", "email", "first_name", "last_name", "is_active")[:10]
 
 
 @api.get("/mini10")
 async def list_mini_10() -> list[UserMini]:
+    # Already optimized: only() fetches just id and username
     return User.objects.only("id", "username")[:10]
 

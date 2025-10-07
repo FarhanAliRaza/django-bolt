@@ -1,5 +1,7 @@
 # Django-Bolt ⚡
 
+[![Seeking Remote Work](https://img.shields.io/badge/🌍-Actively%20Seeking%20Remote%20Work-success?style=for-the-badge)](mailto:farhanalirazaazeemi@gmail.com)
+
 **High-Performance Fully Typed API Framework for Django**
 
 Django-Bolt is a high-performance API framework for Django that provides Rust-powered API endpoints capable of **60k+ RPS** performance. Similar to Django REST Framework or Django Ninja, it integrates seamlessly with existing Django projects while leveraging Actix Web for HTTP handling, PyO3 to bridge Python async handlers with Rust's async runtime, msgspec for fast serialization, and supports multi-process scaling with SO_REUSEPORT.
@@ -24,8 +26,6 @@ COMING VERY SOON NEAR YOUR DJANGO PROJECTS
 
 For now you can build and use it locally if you want.
 
-
-
 ### Run Your First API
 
 ```python
@@ -46,7 +46,7 @@ async def get_user(user_id: int) -> UserSchema: # 🎉 Reponse is type validated
     user = await User.objects.aget(id=user_id) # 🤯 Yes and Django orm works without any setup
     return {"id": user.id, "username": user.username} # or you could just return the queryset
 
-````
+```
 
 ```bash
 # Start the server

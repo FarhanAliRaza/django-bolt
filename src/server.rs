@@ -92,7 +92,19 @@ pub fn start_server_async(
         });
     });
 
-    let app_state = Arc::new(AppState { dispatch: dispatch.into() });
+    // Get debug mode from Django settings (reuse Django's DEBUG setting)
+    let debug = Python::attach(|py| {
+        (|| -> PyResult<bool> {
+            let django_conf = py.import("django.conf")?;
+            let settings = django_conf.getattr("settings")?;
+            settings.getattr("DEBUG")?.extract::<bool>()
+        })().unwrap_or(false)
+    });
+
+    let app_state = Arc::new(AppState {
+        dispatch: dispatch.into(),
+        debug,
+    });
 
     py.detach(|| {
         aw::rt::System::new()

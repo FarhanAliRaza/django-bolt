@@ -1,6 +1,7 @@
 import inspect
 import msgspec
 import re
+import time
 from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Annotated, get_type_hints
 
 from .bootstrap import ensure_django_ready
@@ -139,7 +140,9 @@ class BoltAPI:
         self,
         prefix: str = "",
         middleware: Optional[List[Any]] = None,
-        middleware_config: Optional[Dict[str, Any]] = None
+        middleware_config: Optional[Dict[str, Any]] = None,
+        enable_logging: bool = True,
+        logging_config: Optional[Any] = None
     ) -> None:
         self._routes: List[Tuple[str, str, int, Callable]] = []
         self._handlers: Dict[int, Callable] = {}
@@ -147,11 +150,27 @@ class BoltAPI:
         self._handler_middleware: Dict[int, Dict[str, Any]] = {}  # Middleware metadata per handler
         self._next_handler_id = 0
         self.prefix = prefix.rstrip("/")  # Remove trailing slash
-        
+
         # Global middleware configuration
         self.middleware = middleware or []
         self.middleware_config = middleware_config or {}
-        
+
+        # Logging configuration (opt-in, setup happens at server startup)
+        self.enable_logging = enable_logging
+        self._logging_middleware = None
+
+        if enable_logging:
+            # Create logging middleware (actual logging setup happens at server startup)
+            if logging_config is not None:
+                print(f"[BOLT-DEBUG-INIT] Creating LoggingMiddleware with custom config: request_log_fields={logging_config.request_log_fields}, response_log_fields={logging_config.response_log_fields}")
+                from .logging.middleware import LoggingMiddleware
+                self._logging_middleware = LoggingMiddleware(logging_config)
+            else:
+                print(f"[BOLT-DEBUG-INIT] Creating LoggingMiddleware with default config")
+                # Use default logging configuration
+                from .logging.middleware import create_logging_middleware
+                self._logging_middleware = create_logging_middleware()
+
         # Register this instance globally for autodiscovery
         _BOLT_API_REGISTRY.append(self)
 
@@ -393,12 +412,20 @@ class BoltAPI:
         return int(he.status_code), headers, body
 
     def _handle_generic_exception(self, e: Exception) -> Response:
-        """Handle generic exception and return error response."""
-        error_msg = f"Handler error: {str(e)}"
-        return 500, [("content-type", "text/plain; charset=utf-8")], error_msg.encode()
+        """Handle generic exception using error_handlers module."""
+        from . import error_handlers
+        # Use the error handler which respects Django DEBUG setting
+        return error_handlers.handle_exception(e, debug=False)  # debug will be checked dynamically
 
     async def _dispatch(self, handler: Callable, request: Dict[str, Any]) -> Response:
         """Async dispatch that calls the handler and returns response tuple"""
+        # Start timing
+        start_time = time.time() if self._logging_middleware else None
+
+        # Log request if logging enabled
+        if self._logging_middleware:
+            self._logging_middleware.log_request(request)
+
         try:
             meta = self._handler_meta.get(handler)
             if meta is None:
@@ -414,11 +441,28 @@ class BoltAPI:
                 result = await handler(*args, **kwargs)
 
             # Serialize response
-            return await serialize_response(result, meta)
+            response = await serialize_response(result, meta)
+
+            # Log response if logging enabled
+            if self._logging_middleware and start_time is not None:
+                duration = time.time() - start_time
+                status_code = response[0] if isinstance(response, tuple) else 200
+                self._logging_middleware.log_response(request, status_code, duration)
+
+            return response
 
         except HTTPException as he:
+            # Log exception if logging enabled
+            if self._logging_middleware and start_time is not None:
+                duration = time.time() - start_time
+                self._logging_middleware.log_response(request, he.status_code, duration)
+
             return self._handle_http_exception(he)
         except Exception as e:
+            # Log exception if logging enabled
+            if self._logging_middleware:
+                self._logging_middleware.log_exception(request, e, exc_info=True)
+
             return self._handle_generic_exception(e)
     
     def serve(self, host: str = "0.0.0.0", port: int = 8000) -> None:

@@ -202,11 +202,15 @@ class Command(BaseCommand):
     
     def start_single_process(self, options, process_id=None):
         """Start a single process server"""
+        # Setup Django logging once at server startup (one-shot, respects existing LOGGING)
+        from django_bolt.logging.config import setup_django_logging
+        setup_django_logging()
+
         if process_id is not None:
             self.stdout.write(f"[django-bolt] Process {process_id}: Starting autodiscovery...")
         else:
             self.stdout.write("[django-bolt] Starting autodiscovery...")
-        
+
         # Autodiscover BoltAPI instances
         apis = self.autodiscover_apis()
         

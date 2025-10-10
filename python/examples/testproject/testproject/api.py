@@ -6,9 +6,37 @@ import json
 from django_bolt import BoltAPI, JSON
 from django_bolt.param_functions import Header, Cookie, Form, File
 from django_bolt.responses import PlainText, HTML, Redirect, FileResponse, StreamingResponse
-from django_bolt.exceptions import HTTPException
+from django_bolt.exceptions import (
+    HTTPException,
+    NotFound,
+    BadRequest,
+    Unauthorized,
+    UnprocessableEntity,
+    RequestValidationError,
+)
+from django_bolt.health import register_health_checks, add_health_check
+from django_bolt.logging import LoggingConfig
 
-api = BoltAPI()
+# Configure custom logging (optional - automatically enabled by default)
+# Example of customizing which fields to log
+logging_config = LoggingConfig(
+    logger_name="django_bolt",
+    request_log_fields={"path", "client_ip", "user_agent"},
+    response_log_fields={"status_code", "duration"},
+    obfuscate_headers={"authorization", "cookie", "x-api-key"},
+    skip_paths={"/health", "/ready"},  # Don't log health checks
+    log_level="DEBUG",  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+)
+
+# Create BoltAPI with custom logging configuration
+# Note: Logging is automatically enabled by default, this just customizes it
+api = BoltAPI(logging_config=logging_config)
+
+# Or for default logging (recommended for most use cases):
+# api = BoltAPI()  # Automatically logs all requests/responses with sensible defaults
+
+# Register health check endpoints (/health and /ready)
+register_health_checks(api)
 
 
 class Item(msgspec.Struct):
@@ -413,3 +441,115 @@ async def openai_chat_completions_ultra_optimized(payload: ChatCompletionRequest
         ],
     }
     return response
+
+# ==== Error Handling & Logging Examples ====
+
+# Example 1: Using specialized HTTP exceptions
+@api.get("/errors/not-found/{resource_id}")
+async def error_not_found(resource_id: int):
+    """Example of NotFound exception with custom message."""
+    if resource_id == 0:
+        raise NotFound(detail=f"Resource {resource_id} not found")
+    return {"resource_id": resource_id, "status": "found"}
+
+
+@api.get("/errors/bad-request")
+async def error_bad_request(value: Optional[int] = None):
+    """Example of BadRequest exception."""
+    if value is None or value < 0:
+        raise BadRequest(detail="Value must be a positive integer")
+    return {"value": value, "doubled": value * 2}
+
+
+@api.get("/errors/unauthorized")
+async def error_unauthorized():
+    """Example of Unauthorized exception with headers."""
+    raise Unauthorized(
+        detail="Authentication required",
+        headers={"WWW-Authenticate": "Bearer realm=\"API\""}
+    )
+
+
+# Example 2: Validation errors with field-level details
+class UserCreate(msgspec.Struct):
+    username: str
+    email: str
+    age: int
+
+
+@api.post("/errors/validation")
+async def error_validation(user: UserCreate):
+    """Example of manual validation with RequestValidationError."""
+    errors = []
+
+    if len(user.username) < 3:
+        errors.append({
+            "loc": ["body", "username"],
+            "msg": "Username must be at least 3 characters",
+            "type": "value_error.min_length",
+        })
+
+    if "@" not in user.email:
+        errors.append({
+            "loc": ["body", "email"],
+            "msg": "Invalid email format",
+            "type": "value_error.email",
+        })
+
+    if user.age < 0 or user.age > 150:
+        errors.append({
+            "loc": ["body", "age"],
+            "msg": "Age must be between 0 and 150",
+            "type": "value_error.range",
+        })
+
+    if errors:
+        raise RequestValidationError(errors, body=user)
+
+    return {"status": "created", "user": user}
+
+
+# Example 3: Generic exception (will show traceback in DEBUG mode)
+@api.get("/errors/internal")
+async def error_internal():
+    """Example of generic exception that triggers debug mode behavior.
+    
+    In DEBUG=True: Returns 500 with full traceback
+    In DEBUG=False: Returns 500 with generic message
+    """
+    # This simulates an unexpected error
+    result = 1 / 0  # ZeroDivisionError
+    return {"result": result}
+
+
+# Example 4: Custom error with extra data
+@api.get("/errors/complex")
+async def error_complex():
+    """Example of HTTPException with extra structured data."""
+    raise UnprocessableEntity(
+        detail="Multiple validation errors occurred",
+        extra={
+            "errors": [
+                {"field": "email", "reason": "Email already exists"},
+                {"field": "username", "reason": "Username contains invalid characters"},
+            ],
+            "suggestion": "Please correct the highlighted fields",
+            "documentation": "https://api.example.com/docs/validation"
+        }
+    )
+
+
+# Example 5: Custom health check
+async def check_external_api():
+    """Custom health check for external API."""
+    try:
+        # Simulate checking external service
+        # In real app: await httpx.get("https://api.example.com/health")
+        await asyncio.sleep(0.001)
+        return True, "External API OK"
+    except Exception as e:
+        return False, f"External API error: {str(e)}"
+
+
+# Add custom health check to /ready endpoint
+add_health_check(check_external_api)

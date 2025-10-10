@@ -4,6 +4,7 @@ Provides request/response logging with support for Django's logging configuratio
 """
 
 import time
+import random
 import logging
 from typing import Dict, Any, Optional, Callable, Awaitable
 from .config import LoggingConfig
@@ -126,6 +127,10 @@ class LoggingMiddleware:
         if not self.config.should_log_request(path):
             return
 
+        # Requests are always DEBUG level. Short-circuit if disabled.
+        if not self.logger.isEnabledFor(logging.DEBUG):
+            return
+
         data = self.extract_request_data(request)
 
         # Build log message from configured fields only
@@ -159,6 +164,31 @@ class LoggingMiddleware:
         if not self.config.should_log_request(path, status_code):
             return
 
+        # Determine log level early and short-circuit if disabled for success path
+        if status_code >= 500:
+            log_level = logging.ERROR
+        elif status_code >= 400:
+            log_level = logging.WARNING
+        else:
+            log_level = logging.INFO
+
+        # For successful responses, apply gating: level check, sampling, and slow-only
+        if status_code < 400:
+            if not self.logger.isEnabledFor(log_level):
+                return
+            # Sampling gate
+            if self.config.sample_rate is not None:
+                try:
+                    if random.random() > float(self.config.sample_rate):
+                        return
+                except Exception:
+                    pass
+            # Slow-only gate
+            if self.config.min_duration_ms is not None:
+                duration_ms_check = (duration * 1000.0)
+                if duration_ms_check < float(self.config.min_duration_ms):
+                    return
+
         data = {}
         message_parts = []
 
@@ -189,15 +219,6 @@ class LoggingMiddleware:
 
         # Build log message from configured fields only
         message = " ".join(message_parts) if message_parts else f"Response: {status_code}"
-
-        # Log with appropriate level based on status code
-        # Successful requests always use INFO, errors use WARNING/ERROR
-        if status_code >= 500:
-            log_level = logging.ERROR
-        elif status_code >= 400:
-            log_level = logging.WARNING
-        else:
-            log_level = logging.INFO  # Successful requests are always INFO
 
         self.logger.log(log_level, message, extra=data)
 

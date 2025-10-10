@@ -159,7 +159,7 @@ class BoltAPI:
         self.enable_logging = enable_logging
         self._logging_middleware = None
 
-        if enable_logging:
+        if self.enable_logging:
             # Create logging middleware (actual logging setup happens at server startup)
             if logging_config is not None:
                 from .logging.middleware import LoggingMiddleware
@@ -431,11 +431,24 @@ class BoltAPI:
             if original_api and original_api._logging_middleware:
                 logging_middleware = original_api._logging_middleware
 
-        # Start timing
-        start_time = time.time() if logging_middleware else None
-
-        # Log request if logging enabled
+        # Start timing only if we might log
+        start_time = None
         if logging_middleware:
+            # Determine if INFO logs are enabled or a slow-only threshold exists
+            logger = logging_middleware.logger
+            should_time = False
+            try:
+                if logger.isEnabledFor(__import__('logging').INFO):
+                    should_time = True
+            except Exception:
+                pass
+            if not should_time:
+                # If slow-only is configured, we still need timing
+                should_time = bool(getattr(logging_middleware.config, 'min_duration_ms', None))
+            if should_time:
+                start_time = time.time()
+
+            # Log request if logging enabled (DEBUG-level guard happens inside)
             logging_middleware.log_request(request)
 
         try:

@@ -123,24 +123,52 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "standard": {
-            "format": "%(levelname)s %(asctime)s %(name)s %(message)s",
+
+if not DEBUG:
+
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "standard": {
+                "format": "%(levelname)s %(asctime)s %(name)s %(message)s",
+            },
         },
-    },
-    "handlers": {
-        "console": {
-            "class": "logging.StreamHandler",
-            "formatter": "standard",
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+                "formatter": "standard",
+            },
         },
-    },
-    "loggers": {
-        "django": {"handlers": ["console"], "level": "ERROR"},
-        "django.server": {"handlers": ["console"], "level": "ERROR", "propagate": False},
-        "django_bolt": {"handlers": ["console"], "level": "ERROR", "propagate": False},
-    },
-    "root": {"handlers": ["console"], "level": "ERROR"},
-}
+        "loggers": {
+            "django": {"handlers": ["console"], "level": "ERROR"},
+            "django.server": {"handlers": ["console"], "level": "ERROR", "propagate": False},
+            "django_bolt": {"handlers": ["console"], "level": "ERROR", "propagate": False},
+        },
+        "root": {"handlers": ["console"], "level": "ERROR"},
+    }
+else:
+    
+    
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "standard": {
+                "format": "%(levelname)s %(asctime)s %(name)s %(message)s",
+            },
+        },
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+                "formatter": "standard",
+            },
+        },
+        "loggers": {
+            "django": {"handlers": ["console"], "level": "INFO"},
+            "django.server": {"handlers": ["console"], "level": "INFO", "propagate": False},
+            "django_bolt": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        },
+        "root": {"handlers": ["console"], "level": "INFO"},
+    }
+    

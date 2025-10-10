@@ -206,11 +206,13 @@ def generic_exception_handler(
 
     if debug:
         # Include exception details and traceback in debug mode
-        tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
+        tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+        # Split into individual lines for better JSON display, stripping trailing newlines
+        tb_formatted = [line.rstrip('\n') for line in ''.join(tb_lines).split('\n') if line.strip()]
         extra = {
             "exception": str(exc),
             "exception_type": type(exc).__name__,
-            "traceback": tb,
+            "traceback": tb_formatted,
         }
         detail = f"{type(exc).__name__}: {str(exc)}"
 

@@ -197,15 +197,39 @@ class TestErrorHandlers:
 
     def test_generic_exception_handler_debug(self):
         """Test generic exception handler in debug mode."""
+        # Configure Django settings for ExceptionReporter
+        import django
+        from django.conf import settings
+        if not settings.configured:
+            settings.configure(
+                DEBUG=True,
+                SECRET_KEY='test-secret-key',
+                INSTALLED_APPS=[],
+                ROOT_URLCONF='',
+            )
+            django.setup()
+
         exc = ValueError("Something went wrong")
-        status, headers, body = generic_exception_handler(exc, debug=True)
+
+        # Create a mock request dict
+        request_dict = {
+            "method": "GET",
+            "path": "/test",
+            "headers": {"user-agent": "test"},
+            "query_params": {}
+        }
+
+        status, headers, body = generic_exception_handler(exc, debug=True, request=request_dict)
 
         assert status == 500
-        import json
-        data = json.loads(body)
-        assert "ValueError" in data["detail"]
-        assert "extra" in data
-        assert "traceback" in data["extra"]
+        # Should return HTML in debug mode
+        headers_dict = dict(headers)
+        assert headers_dict.get("content-type") == "text/html; charset=utf-8"
+        # Verify it's HTML content
+        html_content = body.decode("utf-8")
+        assert "<!DOCTYPE html>" in html_content or "<html>" in html_content
+        assert "ValueError" in html_content
+        assert "Something went wrong" in html_content
 
     def test_handle_exception_http_exception(self):
         """Test main exception handler with HTTPException."""

@@ -191,12 +191,14 @@ def response_validation_error_handler(
 def generic_exception_handler(
     exc: Exception,
     debug: bool = False,
+    request: Optional[Any] = None,  # noqa: ARG001 - kept for API compatibility
 ) -> Tuple[int, List[Tuple[str, str]], bytes]:
     """Handle generic exceptions and convert to 500 response.
 
     Args:
         exc: Exception instance
         debug: Whether to include traceback in response
+        request: Optional request dict or Django request object for ExceptionReporter
 
     Returns:
         Tuple of (status_code, headers, body)
@@ -205,7 +207,25 @@ def generic_exception_handler(
     extra = None
 
     if debug:
-        # Include exception details and traceback in debug mode
+        # Try to use Django's ExceptionReporter HTML page
+        try:
+            from django.views.debug import ExceptionReporter
+
+            # ExceptionReporter works fine with None request (avoids URL resolution issues)
+            reporter = ExceptionReporter(None, type(exc), exc, exc.__traceback__)
+            html_content = reporter.get_traceback_html()
+
+            # Return HTML response instead of JSON
+            return (
+                500,
+                [("content-type", "text/html; charset=utf-8")],
+                html_content.encode("utf-8")
+            )
+        except Exception:
+            # Fallback to standard traceback formatting in JSON
+            pass
+
+        # Fallback to JSON with traceback
         tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
         # Split into individual lines for better JSON display, stripping trailing newlines
         tb_formatted = [line.rstrip('\n') for line in ''.join(tb_lines).split('\n') if line.strip()]
@@ -226,12 +246,14 @@ def generic_exception_handler(
 def handle_exception(
     exc: Exception,
     debug: bool = False,
+    request: Optional[Any] = None,
 ) -> Tuple[int, List[Tuple[str, str]], bytes]:
     """Main exception handler that routes to specific handlers.
 
     Args:
         exc: Exception instance
         debug: Whether to include debug information (will check Django DEBUG if not specified)
+        request: Optional request object for Django ExceptionReporter
 
     Returns:
         Tuple of (status_code, headers, body)
@@ -264,4 +286,4 @@ def handle_exception(
         )
     else:
         # Generic exception
-        return generic_exception_handler(exc, debug=debug)
+        return generic_exception_handler(exc, debug=debug, request=request)

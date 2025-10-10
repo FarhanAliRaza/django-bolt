@@ -409,11 +409,11 @@ class BoltAPI:
 
         return int(he.status_code), headers, body
 
-    def _handle_generic_exception(self, e: Exception) -> Response:
+    def _handle_generic_exception(self, e: Exception, request: Dict[str, Any] = None) -> Response:
         """Handle generic exception using error_handlers module."""
         from . import error_handlers
         # Use the error handler which respects Django DEBUG setting
-        return error_handlers.handle_exception(e, debug=False)  # debug will be checked dynamically
+        return error_handlers.handle_exception(e, debug=False, request=request)  # debug will be checked dynamically
 
     async def _dispatch(self, handler: Callable, request: Dict[str, Any], handler_id: int = None) -> Response:
         """Async dispatch that calls the handler and returns response tuple.
@@ -475,7 +475,7 @@ class BoltAPI:
             if logging_middleware:
                 logging_middleware.log_exception(request, e, exc_info=True)
 
-            return self._handle_generic_exception(e)
+            return self._handle_generic_exception(e, request=request)
     
     def serve(self, host: str = "0.0.0.0", port: int = 8000) -> None:
         """Start the async server with registered routes"""

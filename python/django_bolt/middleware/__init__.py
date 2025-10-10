@@ -13,6 +13,7 @@ from .middleware import (
     rate_limit,
     cors,
     skip_middleware,
+    no_compress,
     CORSMiddleware,
     RateLimitMiddleware,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "rate_limit",
     "cors",
     "skip_middleware",
+    "no_compress",
     "CORSMiddleware",
     "RateLimitMiddleware",
 ]

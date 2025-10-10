@@ -13,7 +13,7 @@ Django-Bolt is a high-performance API framework for Django that provides Rust-po
 - 📦 **msgspec Serialization** - 5-10x faster than standard JSON
 - 🎯 **Django Integration** - Use your existing Django models and other django features you love (django admin, django packages (All django packages will work except that use django middlware for now. I will work on some compatibilty layer to make them work but it is not a priority right now) )
 - 🔄 **Async/Await** - Full async support with Python coroutines
-- 🎛️ **Middleware System** - CORS, rate limiting, custom middleware
+- 🎛️ **Middleware System** - CORS, rate limiting, compression, custom middleware
 - 🔒 **Guards & Permissions** - DRF and litestar inspired route protection
 
 ---
@@ -116,7 +116,8 @@ python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 4 --workers 1
 - ✅ **Per-Route Middleware** - `@middleware`, `@rate_limit`, `@cors` decorators
 - ✅ **CORS Middleware** - Full CORS support with preflight
 - ✅ **Rate Limiting** - Token bucket algorithm (in Rust, no GIL)
-- ✅ **Skip Middleware** - `@skip_middleware("cors", "rate_limit")`
+- ✅ **Compression** - Automatic gzip/brotli/zstd compression (client-negotiated)
+- ✅ **Skip Middleware** - `@skip_middleware("cors", "rate_limit", "compression")`
 - ✅ **Middleware Config** - Dictionary-based configuration
 
 ### Authentication & Authorization ✅

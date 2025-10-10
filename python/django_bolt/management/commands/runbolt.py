@@ -263,9 +263,23 @@ class Command(BaseCommand):
         # Set environment variable for Rust to read worker count
         import os
         os.environ['DJANGO_BOLT_WORKERS'] = str(options['workers'])
-        
+
+        # Determine compression config (server-level in Actix)
+        # Priority: Django setting > first API with compression config
+        compression_config = None
+        if hasattr(settings, 'BOLT_COMPRESSION'):
+            # Use Django setting if provided (highest priority)
+            if settings.BOLT_COMPRESSION is not None and settings.BOLT_COMPRESSION is not False:
+                compression_config = settings.BOLT_COMPRESSION.to_rust_config()
+        else:
+            # Check if any API has compression configured
+            for api_path, api in apis:
+                if hasattr(api, 'compression') and api.compression is not None:
+                    compression_config = api.compression.to_rust_config()
+                    break
+
         # Start the server
-        _core.start_server_async(merged_api._dispatch, options["host"], options["port"])
+        _core.start_server_async(merged_api._dispatch, options["host"], options["port"], compression_config)
 
     def autodiscover_apis(self):
         """Discover BoltAPI instances from installed apps.

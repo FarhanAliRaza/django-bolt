@@ -92,7 +92,9 @@ def compile_middleware_meta(
                 guard_list.append(guard.to_metadata())
 
     # Only include metadata if something is configured
-    if not all_middleware and not auth_backends and not guard_list:
+    # Note: include result even when only skip flags are present so Rust can
+    #       honor route-level skips like `compression`.
+    if not all_middleware and not auth_backends and not guard_list and not skip_middleware:
         return None
 
     result = {
@@ -102,6 +104,9 @@ def compile_middleware_meta(
 
     if all_middleware:
         result['middleware'] = all_middleware
+
+    # Always include skip flags if present (even without middleware/auth/guards)
+    if skip_middleware:
         result['skip'] = list(skip_middleware)
 
     if auth_backends:

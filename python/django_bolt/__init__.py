@@ -1,5 +1,6 @@
 from .api import BoltAPI
 from .responses import JSON, StreamingResponse
+from .compression import CompressionConfig
 
 # Auth module
 from .auth import (
@@ -33,6 +34,7 @@ from .middleware import (
     rate_limit,
     cors,
     skip_middleware,
+    no_compress,
     CORSMiddleware,
     RateLimitMiddleware,
 )
@@ -41,6 +43,7 @@ __all__ = [
     "BoltAPI",
     "JSON",
     "StreamingResponse",
+    "CompressionConfig",
     # Auth - Authentication
     "JWTAuthentication",
     "APIKeyAuthentication",
@@ -54,11 +57,12 @@ __all__ = [
     "HasPermission",
     "HasAnyPermission",
     "HasAllPermissions",
-    # Auth - Middleware
+    # Middleware
     "middleware",
     "rate_limit",
     "cors",
     "skip_middleware",
+    "no_compress",
     "CORSMiddleware",
     "RateLimitMiddleware",
     # Auth - JWT Token & Utilities

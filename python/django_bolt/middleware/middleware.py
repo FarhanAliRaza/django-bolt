@@ -147,9 +147,20 @@ def cors(
 def skip_middleware(*middleware_names: str):
     """
     Skip specific global middleware for this route.
-    
+
     Args:
-        middleware_names: Names of middleware to skip
+        middleware_names: Names of middleware to skip (e.g., "cors", "rate_limit", "compression")
+
+    Examples:
+        @api.get("/no-compression")
+        @skip_middleware("compression")
+        async def no_compress():
+            return {"data": "large response without compression"}
+
+        @api.get("/minimal")
+        @skip_middleware("cors", "compression")
+        async def minimal():
+            return {"fast": True}
     """
     def decorator(func):
         if not hasattr(func, '__bolt_skip_middleware__'):
@@ -157,6 +168,22 @@ def skip_middleware(*middleware_names: str):
         func.__bolt_skip_middleware__.update(middleware_names)
         return func
     return decorator
+
+
+def no_compress(func):
+    """
+    Disable compression for this route.
+
+    Shorthand for @skip_middleware("compression").
+
+    Examples:
+        @api.get("/stream")
+        @no_compress
+        async def stream_data():
+            # Compression would slow down streaming
+            return StreamingResponse(...)
+    """
+    return skip_middleware("compression")(func)
 
 
 class CORSMiddleware(Middleware):

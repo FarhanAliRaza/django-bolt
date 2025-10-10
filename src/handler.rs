@@ -6,6 +6,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::Arc;
 
+use crate::direct_stream;
 use crate::error;
 use crate::middleware;
 use crate::middleware::auth::{authenticate, populate_auth_context};
@@ -14,7 +15,6 @@ use crate::request::PyRequest;
 use crate::router::parse_query_string;
 use crate::state::{AppState, GLOBAL_ROUTER, MIDDLEWARE_METADATA, ROUTE_METADATA, TASK_LOCALS};
 use crate::streaming::create_python_stream;
-use crate::direct_stream;
 
 pub async fn handle_request(
     req: HttpRequest,
@@ -57,7 +57,9 @@ pub async fn handle_request(
                                     None,
                                     handler_id,
                                     metadata,
-                                ).await {
+                                )
+                                .await
+                                {
                                     return response;
                                 }
                             }
@@ -99,13 +101,20 @@ pub async fn handle_request(
 
     // Check for middleware metadata (Python-based, for backward compatibility)
     let middleware_meta = MIDDLEWARE_METADATA.get().and_then(|meta_map| {
-        meta_map.get(&handler_id).map(|m| Python::attach(|py| m.clone_ref(py)))
+        meta_map
+            .get(&handler_id)
+            .map(|m| Python::attach(|py| m.clone_ref(py)))
     });
 
     // Get parsed route metadata (Rust-native)
-    let route_metadata = ROUTE_METADATA.get().and_then(|meta_map| {
-        meta_map.get(&handler_id).cloned()
-    });
+    let route_metadata = ROUTE_METADATA
+        .get()
+        .and_then(|meta_map| meta_map.get(&handler_id).cloned());
+    // Compute skip flags (e.g., skip compression)
+    let skip_compression = route_metadata
+        .as_ref()
+        .map(|m| m.skip.contains("compression"))
+        .unwrap_or(false);
 
     // Process old-style middleware (CORS preflight, rate limiting, auth)
     if let Some(ref meta) = middleware_meta {
@@ -116,7 +125,9 @@ pub async fn handle_request(
             peer_addr.as_deref(),
             handler_id,
             meta,
-        ).await {
+        )
+        .await
+        {
             return early_response;
         }
     }
@@ -200,7 +211,9 @@ pub async fn handle_request(
         let request_obj = Py::new(py, request)?;
 
         let locals_owned;
-        let locals = if let Some(globals) = TASK_LOCALS.get() { globals } else {
+        let locals = if let Some(globals) = TASK_LOCALS.get() {
+            globals
+        } else {
             locals_owned = pyo3_async_runtimes::tokio::get_current_locals(py)?;
             &locals_owned
         };
@@ -217,7 +230,13 @@ pub async fn handle_request(
                 e.restore(py);
                 if let Some(exc) = PyErr::take(py) {
                     let exc_value = exc.value(py);
-                    error::handle_python_exception(py, exc_value, &path_clone, &method_clone, state.debug)
+                    error::handle_python_exception(
+                        py,
+                        exc_value,
+                        &path_clone,
+                        &method_clone,
+                        state.debug,
+                    )
                 } else {
                     error::build_error_response(
                         py,
@@ -259,6 +278,13 @@ pub async fn handle_request(
                                     }
                                 }
                             }
+                            if skip_compression {
+                                if let Ok(val) = HeaderValue::try_from("identity") {
+                                    response
+                                        .headers_mut()
+                                        .insert(actix_web::http::header::CONTENT_ENCODING, val);
+                                }
+                            }
                             response
                         }
                         Err(e) => HttpResponse::InternalServerError()
@@ -266,16 +292,21 @@ pub async fn handle_request(
                             .body(format!("File open error: {}", e)),
                     };
                 } else {
-                    let mut response = HttpResponse::build(status);
-                    for (k, v) in headers { response.append_header((k, v)); }
-                    let mut response = response.body(body_bytes);
-                    
+                    let mut builder = HttpResponse::build(status);
+                    for (k, v) in headers {
+                        builder.append_header((k, v));
+                    }
+                    if skip_compression {
+                        builder.append_header(("Content-Encoding", "identity"));
+                    }
+                    let mut response = builder.body(body_bytes);
+
                     // Add CORS headers if middleware is configured
                     if let Some(ref meta) = middleware_meta {
                         let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
                         middleware::add_cors_headers(&mut response, origin, meta);
                     }
-                    
+
                     return response;
                 }
             } else {
@@ -285,42 +316,70 @@ pub async fn handle_request(
                         let m = py.import("django_bolt.responses")?;
                         let cls = m.getattr("StreamingResponse")?;
                         obj.is_instance(&cls)
-                    })().unwrap_or(false);
-                    if !is_streaming && !obj.hasattr("content").unwrap_or(false) { return None; }
-                    let status_code: u16 = obj.getattr("status_code").and_then(|v| v.extract()).unwrap_or(200);
+                    })()
+                    .unwrap_or(false);
+                    if !is_streaming && !obj.hasattr("content").unwrap_or(false) {
+                        return None;
+                    }
+                    let status_code: u16 = obj
+                        .getattr("status_code")
+                        .and_then(|v| v.extract())
+                        .unwrap_or(200);
                     let mut headers: Vec<(String, String)> = Vec::new();
                     if let Ok(hobj) = obj.getattr("headers") {
                         if let Ok(hdict) = hobj.downcast::<PyDict>() {
                             for (k, v) in hdict {
-                                if let (Ok(ks), Ok(vs)) = (k.extract::<String>(), v.extract::<String>()) { headers.push((ks, vs)); }
+                                if let (Ok(ks), Ok(vs)) =
+                                    (k.extract::<String>(), v.extract::<String>())
+                                {
+                                    headers.push((ks, vs));
+                                }
                             }
                         }
                     }
-                    let media_type: String = obj.getattr("media_type").and_then(|v| v.extract()).unwrap_or_else(|_| "application/octet-stream".to_string());
-                    let has_ct = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
-                    if !has_ct { headers.push(("content-type".to_string(), media_type.clone())); }
-                    let content_obj: Py<PyAny> = match obj.getattr("content") { Ok(c) => c.unbind(), Err(_) => return None };
+                    let media_type: String = obj
+                        .getattr("media_type")
+                        .and_then(|v| v.extract())
+                        .unwrap_or_else(|_| "application/octet-stream".to_string());
+                    let has_ct = headers
+                        .iter()
+                        .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+                    if !has_ct {
+                        headers.push(("content-type".to_string(), media_type.clone()));
+                    }
+                    let content_obj: Py<PyAny> = match obj.getattr("content") {
+                        Ok(c) => c.unbind(),
+                        Err(_) => return None,
+                    };
                     Some((status_code, headers, media_type, content_obj))
                 });
 
                 if let Some((status_code, headers, media_type, content_obj)) = streaming {
                     let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
                     let mut builder = HttpResponse::build(status);
-                    for (k, v) in headers { builder.append_header((k, v)); }
+                    for (k, v) in headers {
+                        builder.append_header((k, v));
+                    }
                     if media_type == "text/event-stream" {
                         let mut final_content_obj = content_obj;
                         // Combine async check and wrapping into single GIL acquisition
                         let (is_async_sse, wrapped_content) = Python::attach(|py| {
                             let obj = final_content_obj.bind(py);
-                            let has_async = obj.hasattr("__aiter__").unwrap_or(false) || obj.hasattr("__anext__").unwrap_or(false);
+                            let has_async = obj.hasattr("__aiter__").unwrap_or(false)
+                                || obj.hasattr("__anext__").unwrap_or(false);
                             if !has_async {
                                 return (false, None);
                             }
                             // Try to wrap async iterator
                             let wrapped = (|| -> Option<Py<PyAny>> {
-                                let collector_module = py.import("django_bolt.async_collector").ok()?;
-                                let collector_class = collector_module.getattr("AsyncToSyncCollector").ok()?;
-                                collector_class.call1((obj.clone(), 5, 1)).ok().map(|w| w.unbind())
+                                let collector_module =
+                                    py.import("django_bolt.async_collector").ok()?;
+                                let collector_class =
+                                    collector_module.getattr("AsyncToSyncCollector").ok()?;
+                                collector_class
+                                    .call1((obj.clone(), 5, 1))
+                                    .ok()
+                                    .map(|w| w.unbind())
                             })();
                             (wrapped.is_none(), wrapped)
                         });
@@ -329,39 +388,73 @@ pub async fn handle_request(
                         }
                         if is_async_sse {
                             builder.append_header(("X-Accel-Buffering", "no"));
-                            builder.append_header(("Cache-Control", "no-cache, no-store, must-revalidate"));
+                            builder.append_header((
+                                "Cache-Control",
+                                "no-cache, no-store, must-revalidate",
+                            ));
                             builder.append_header(("Pragma", "no-cache"));
                             builder.append_header(("Expires", "0"));
+                            if skip_compression {
+                                builder.append_header(("Content-Encoding", "identity"));
+                            }
                             builder.content_type("text/event-stream");
                             return builder.streaming(create_python_stream(final_content_obj));
                         } else {
-                            return direct_stream::create_sse_response(final_content_obj).unwrap_or_else(|_| {
-                                builder.append_header(("X-Accel-Buffering", "no"));
-                                builder.append_header(("Cache-Control", "no-cache, no-store, must-revalidate"));
-                                builder.append_header(("Pragma", "no-cache"));
-                                builder.append_header(("Expires", "0"));
-                                builder.content_type("text/event-stream").body("")
-                            });
+                            match direct_stream::create_sse_response(final_content_obj) {
+                                Ok(mut resp) => {
+                                    if skip_compression {
+                                        if let Ok(val) = HeaderValue::try_from("identity") {
+                                            resp.headers_mut().insert(
+                                                actix_web::http::header::CONTENT_ENCODING,
+                                                val,
+                                            );
+                                        }
+                                    }
+                                    return resp;
+                                }
+                                Err(_) => {
+                                    builder.append_header(("X-Accel-Buffering", "no"));
+                                    builder.append_header((
+                                        "Cache-Control",
+                                        "no-cache, no-store, must-revalidate",
+                                    ));
+                                    builder.append_header(("Pragma", "no-cache"));
+                                    builder.append_header(("Expires", "0"));
+                                    if skip_compression {
+                                        builder.append_header(("Content-Encoding", "identity"));
+                                    }
+                                    return builder.content_type("text/event-stream").body("");
+                                }
+                            }
                         }
                     } else {
                         let mut final_content = content_obj;
                         // Combine async check and wrapping into single GIL acquisition
                         let (needs_async_stream, wrapped_content) = Python::attach(|py| {
                             let obj = final_content.bind(py);
-                            let has_async = obj.hasattr("__aiter__").unwrap_or(false) || obj.hasattr("__anext__").unwrap_or(false);
+                            let has_async = obj.hasattr("__aiter__").unwrap_or(false)
+                                || obj.hasattr("__anext__").unwrap_or(false);
                             if !has_async {
                                 return (false, None);
                             }
                             // Try to wrap async iterator
                             let wrapped = (|| -> Option<Py<PyAny>> {
-                                let collector_module = py.import("django_bolt.async_collector").ok()?;
-                                let collector_class = collector_module.getattr("AsyncToSyncCollector").ok()?;
-                                collector_class.call1((obj.clone(), 20, 2)).ok().map(|w| w.unbind())
+                                let collector_module =
+                                    py.import("django_bolt.async_collector").ok()?;
+                                let collector_class =
+                                    collector_module.getattr("AsyncToSyncCollector").ok()?;
+                                collector_class
+                                    .call1((obj.clone(), 20, 2))
+                                    .ok()
+                                    .map(|w| w.unbind())
                             })();
                             (wrapped.is_none(), wrapped)
                         });
 
                         if needs_async_stream {
+                            if skip_compression {
+                                builder.append_header(("Content-Encoding", "identity"));
+                            }
                             let stream = create_python_stream(final_content);
                             return builder.streaming(stream);
                         }
@@ -371,7 +464,15 @@ pub async fn handle_request(
                         }
                         {
                             let mut direct = direct_stream::PythonDirectStream::new(final_content);
-                            if let Some(body) = direct.try_collect_small() { return builder.body(body); }
+                            if let Some(body) = direct.try_collect_small() {
+                                if skip_compression {
+                                    builder.append_header(("Content-Encoding", "identity"));
+                                }
+                                return builder.body(body);
+                            }
+                            if skip_compression {
+                                builder.append_header(("Content-Encoding", "identity"));
+                            }
                             return builder.streaming(Box::pin(direct));
                         }
                     }
@@ -396,7 +497,13 @@ pub async fn handle_request(
                 e.restore(py);
                 if let Some(exc) = PyErr::take(py) {
                     let exc_value = exc.value(py);
-                    error::handle_python_exception(py, exc_value, &path_clone, &method_clone, state.debug)
+                    error::handle_python_exception(
+                        py,
+                        exc_value,
+                        &path_clone,
+                        &method_clone,
+                        state.debug,
+                    )
                 } else {
                     error::build_error_response(
                         py,
@@ -411,5 +518,3 @@ pub async fn handle_request(
         }
     }
 }
-
-

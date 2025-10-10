@@ -15,11 +15,9 @@ from django_bolt.exceptions import (
     RequestValidationError,
 )
 from django_bolt.health import register_health_checks, add_health_check
-from django_bolt.logging import LoggingConfig
+from django_bolt.middleware import no_compress
 
 
-# Create BoltAPI with custom logging configuration
-# Note: Logging is automatically enabled by default, this just customizes it
 api = BoltAPI()
 
 # Or for default logging (recommended for most use cases):
@@ -154,6 +152,7 @@ async def file_static():
 
 # ==== Streaming endpoints for benchmarks ====
 @api.get("/stream")
+@no_compress
 async def stream_plain():
     def gen():
         for i in range(100):
@@ -167,6 +166,7 @@ async def collected_plain():
     return PlainText("x" * 100)
 
 @api.get("/sse")
+@no_compress
 async def sse():
     def gen():
         for i in range(3):
@@ -207,6 +207,7 @@ class ChatCompletionChunk(msgspec.Struct):
 
 
 @api.post("/v1/chat/completions")
+@no_compress
 async def openai_chat_completions(payload: ChatCompletionRequest):
     created = int(time.time())
     model = payload.model or "gpt-4o-mini"
@@ -255,6 +256,7 @@ async def openai_chat_completions(payload: ChatCompletionRequest):
 
 
 @api.get("/sse-async")
+@no_compress
 async def sse_async():
     async def agen():
         for i in range(3):
@@ -270,6 +272,7 @@ async def sse_async_sleep():
     return StreamingResponse(agen(), media_type="text/event-stream")
 
 @api.get("/sse-async-batch")
+@no_compress
 async def sse_async_batch():
     """Optimized async endpoint that yields all data at once to reduce overhead"""
     async def agen():
@@ -280,6 +283,7 @@ async def sse_async_batch():
 
 
 @api.post("/v1/chat/completions-async")
+@no_compress
 async def openai_chat_completions_async(payload: ChatCompletionRequest):
     created = int(time.time())
     model = payload.model or "gpt-4o-mini"
@@ -365,6 +369,7 @@ async def openai_chat_completions_async(payload: ChatCompletionRequest):
 
 
 @api.post("/v1/chat/completions-ultra")
+@no_compress
 async def openai_chat_completions_ultra_optimized(payload: ChatCompletionRequest):
     """Ultra-optimized version with msgspec structs and minimal allocations."""
     created = int(time.time())
@@ -543,3 +548,59 @@ async def check_external_api():
 
 # Add custom health check to /ready endpoint
 add_health_check(check_external_api)
+
+
+# ==== Compression Test Endpoint ====
+@api.get("/compression-test")
+# @no_compress
+async def compression_test():
+    """
+    Endpoint to test compression.
+
+    Returns a large JSON response (>1KB) that should be compressed
+    when client sends Accept-Encoding: gzip, br, deflate headers.
+
+    Test with:
+        curl -H "Accept-Encoding: gzip, br" http://localhost:8000/compression-test -v
+
+    Check for "Content-Encoding" header in response.
+    """
+    # Generate large data (>1KB to trigger compression)
+    large_data = {
+        "message": "This is a compression test endpoint",
+        "compression_info": {
+            "enabled": "Compression is enabled by default in Django-Bolt",
+            "algorithms": ["brotli", "gzip", "zstd"],
+            "automatic": "Actix Web automatically compresses based on Accept-Encoding header",
+            "threshold": "Responses larger than ~1KB are compressed",
+        },
+        "sample_data": [
+            {
+                "id": i,
+                "name": f"Item {i}",
+                "description": "This is a sample description that adds to the response size. " * 5,
+                "metadata": {
+                    "created_at": "2025-01-01T00:00:00Z",
+                    "updated_at": "2025-01-02T00:00:00Z",
+                    "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"],
+                    "properties": {
+                        "key1": "value1",
+                        "key2": "value2",
+                        "key3": "value3",
+                    }
+                }
+            }
+            for i in range(50)  # 50 items to ensure >1KB
+        ],
+        "instructions": {
+            "step1": "Send a request with 'Accept-Encoding: gzip, br' header",
+            "step2": "Check response headers for 'Content-Encoding'",
+            "step3": "Compare response size with/without compression",
+            "note": "Small responses (<1KB) won't be compressed even with Accept-Encoding",
+        }
+    }
+
+    return large_data
+
+
+

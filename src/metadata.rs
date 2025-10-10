@@ -2,7 +2,6 @@
 ///
 /// This module handles parsing Python metadata dicts into strongly-typed
 /// Rust enums at registration time, eliminating per-request GIL overhead.
-
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::{HashMap, HashSet};
@@ -16,6 +15,7 @@ pub struct RouteMetadata {
     pub middleware: Vec<MiddlewareConfig>,
     pub auth_backends: Vec<AuthBackend>,
     pub guards: Vec<Guard>,
+    pub skip: HashSet<String>,
 }
 
 /// Parsed middleware configuration
@@ -31,6 +31,7 @@ impl RouteMetadata {
         let mut middleware = Vec::new();
         let mut auth_backends = Vec::new();
         let mut guards = Vec::new();
+        let mut skip: HashSet<String> = HashSet::new();
 
         // Parse middleware list
         if let Ok(Some(mw_list)) = py_meta.get_item("middleware") {
@@ -79,10 +80,20 @@ impl RouteMetadata {
             }
         }
 
+        // Parse skip list (e.g., ["compression", "cors"]) into a set
+        if let Ok(Some(skip_list)) = py_meta.get_item("skip") {
+            if let Ok(names) = skip_list.extract::<Vec<String>>() {
+                for name in names {
+                    skip.insert(name.to_lowercase());
+                }
+            }
+        }
+
         Ok(RouteMetadata {
             middleware,
             auth_backends,
             guards,
+            skip,
         })
     }
 }
@@ -102,8 +113,12 @@ fn parse_auth_backend(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<A
                 .get("header")
                 .and_then(|h| h.extract::<String>(py).ok())
                 .unwrap_or_else(|| "authorization".to_string());
-            let audience = dict.get("audience").and_then(|a| a.extract::<String>(py).ok());
-            let issuer = dict.get("issuer").and_then(|i| i.extract::<String>(py).ok());
+            let audience = dict
+                .get("audience")
+                .and_then(|a| a.extract::<String>(py).ok());
+            let issuer = dict
+                .get("issuer")
+                .and_then(|i| i.extract::<String>(py).ok());
 
             Some(AuthBackend::JWT {
                 secret,

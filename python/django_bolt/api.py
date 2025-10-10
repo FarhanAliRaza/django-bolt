@@ -142,7 +142,8 @@ class BoltAPI:
         middleware: Optional[List[Any]] = None,
         middleware_config: Optional[Dict[str, Any]] = None,
         enable_logging: bool = True,
-        logging_config: Optional[Any] = None
+        logging_config: Optional[Any] = None,
+        compression: Optional[Any] = None
     ) -> None:
         self._routes: List[Tuple[str, str, int, Callable]] = []
         self._handlers: Dict[int, Callable] = {}
@@ -168,6 +169,19 @@ class BoltAPI:
                 # Use default logging configuration
                 from .logging.middleware import create_logging_middleware
                 self._logging_middleware = create_logging_middleware()
+
+        # Compression configuration
+        # compression=None means disabled, not providing compression arg means default enabled
+        if compression is False:
+            # Explicitly disabled
+            self.compression = None
+        elif compression is None:
+            # Not provided, use default
+            from .compression import CompressionConfig
+            self.compression = CompressionConfig()
+        else:
+            # Custom config provided
+            self.compression = compression
 
         # Register this instance globally for autodiscovery
         _BOLT_API_REGISTRY.append(self)

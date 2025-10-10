@@ -1,5 +1,5 @@
 use actix_http::KeepAlive;
-use actix_web::{self as aw, web, App, HttpServer};
+use actix_web::{self as aw, middleware::Compress, web, App, HttpServer};
 use ahash::AHashMap;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -69,6 +69,7 @@ pub fn start_server_async(
     dispatch: Py<PyAny>,
     host: String,
     port: u16,
+    compression_config: Option<Py<PyAny>>,
 ) -> PyResult<()> {
     if GLOBAL_ROUTER.get().is_none() {
         return Err(pyo3::exceptions::PyRuntimeError::new_err("Routes not registered"));
@@ -106,6 +107,16 @@ pub fn start_server_async(
         debug,
     });
 
+    // Note: compression_config is provided but not used yet in Rust
+    // Actix's Compress middleware is always enabled and automatically negotiates
+    // with client based on Accept-Encoding header. It only compresses when:
+    // 1. Client sends Accept-Encoding: gzip, br, etc.
+    // 2. Response is large enough (default 1KB threshold)
+    // 3. Content-Type is compressible
+    //
+    // Future: Use compression_config to configure levels, algorithms, etc.
+    let _use_compression = compression_config.is_some();
+
     py.detach(|| {
         aw::rt::System::new()
             .block_on(async move {
@@ -118,6 +129,7 @@ pub fn start_server_async(
                     let server = HttpServer::new(move || {
                         App::new()
                             .app_data(web::Data::new(app_state.clone()))
+                            .wrap(Compress::default())  // Always enabled, client-negotiated
                             .default_service(web::route().to(handle_request))
                     })
                     .keep_alive(KeepAlive::Os)

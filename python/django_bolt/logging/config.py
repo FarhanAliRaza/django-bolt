@@ -260,7 +260,18 @@ def _ensure_queue_logging(base_level: str) -> QueueHandler:
 
         listener = QueueListener(_QUEUE, console_handler)
         listener.start()
-        atexit.register(listener.stop)
+
+        # Only register atexit once for cleanup
+        def _cleanup_listener():
+            """Safely stop the listener, handling already-stopped case."""
+            try:
+                if _QUEUE_LISTENER is not None and hasattr(_QUEUE_LISTENER, '_thread'):
+                    if _QUEUE_LISTENER._thread is not None:
+                        _QUEUE_LISTENER.stop()
+            except Exception:
+                pass
+
+        atexit.register(_cleanup_listener)
         _QUEUE_LISTENER = listener
 
     return queue_handler

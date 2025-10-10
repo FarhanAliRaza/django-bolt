@@ -202,11 +202,15 @@ class Command(BaseCommand):
     
     def start_single_process(self, options, process_id=None):
         """Start a single process server"""
+        # Setup Django logging once at server startup (one-shot, respects existing LOGGING)
+        from django_bolt.logging.config import setup_django_logging
+        setup_django_logging()
+
         if process_id is not None:
             self.stdout.write(f"[django-bolt] Process {process_id}: Starting autodiscovery...")
         else:
             self.stdout.write("[django-bolt] Starting autodiscovery...")
-        
+
         # Autodiscover BoltAPI instances
         apis = self.autodiscover_apis()
         
@@ -264,56 +268,86 @@ class Command(BaseCommand):
         _core.start_server_async(merged_api._dispatch, options["host"], options["port"])
 
     def autodiscover_apis(self):
-        """Discover BoltAPI instances from installed apps"""
+        """Discover BoltAPI instances from installed apps.
+
+        Deduplicates by object identity to ensure each handler uses the FIRST
+        API instance created (with correct config), not duplicates from re-imports.
+        """
         apis = []
-        
+
         # Check explicit settings first
         if hasattr(settings, 'BOLT_API'):
             for api_path in settings.BOLT_API:
                 api = self.import_api(api_path)
                 if api:
                     apis.append((api_path, api))
-            return apis
-        
+            return self._deduplicate_apis(apis)
+
         # Try project-level API first (common pattern)
         project_name = settings.ROOT_URLCONF.split('.')[0]  # Extract project name from ROOT_URLCONF
         project_candidates = [
             f"{project_name}.api:api",
             f"{project_name}.bolt_api:api",
         ]
-        
+
         for candidate in project_candidates:
             api = self.import_api(candidate)
             if api:
                 apis.append((candidate, api))
-        
+
+        # Track which apps we've already imported (to avoid duplicates)
+        imported_apps = {api_path.split(':')[0].split('.')[0] for api_path, _ in apis}
+
         # Autodiscover from installed apps
         for app_config in apps.get_app_configs():
             # Skip django_bolt itself
             if app_config.name == 'django_bolt':
                 continue
-                
+
+            # Skip if we already imported this app at project level
+            app_base = app_config.name.split('.')[0]
+            if app_base in imported_apps:
+                continue
+
             # Check if app config has bolt_api hint
             if hasattr(app_config, 'bolt_api'):
                 api = self.import_api(app_config.bolt_api)
                 if api:
                     apis.append((app_config.bolt_api, api))
                 continue
-            
+
             # Try standard locations
             app_name = app_config.name
             candidates = [
                 f"{app_name}.api:api",
                 f"{app_name}.bolt_api:api",
             ]
-            
+
             for candidate in candidates:
                 api = self.import_api(candidate)
                 if api:
                     apis.append((candidate, api))
                     break  # Only take first match per app
-        
-        return apis
+
+        return self._deduplicate_apis(apis)
+
+    def _deduplicate_apis(self, apis):
+        """Deduplicate APIs by object identity.
+
+        This ensures each handler uses the FIRST API instance created (with original
+        config), not duplicates from module re-imports. Critical for preserving
+        per-API logging, auth, and middleware configs.
+        """
+        seen_ids = set()
+        deduplicated = []
+        for api_path, api in apis:
+            api_id = id(api)
+            if api_id not in seen_ids:
+                seen_ids.add(api_id)
+                deduplicated.append((api_path, api))
+            else:
+                self.stdout.write(f"[django-bolt] Skipped duplicate API instance from {api_path}")
+        return deduplicated
 
     def import_api(self, dotted_path):
         """Import a BoltAPI instance from dotted path like 'myapp.api:api'"""
@@ -339,18 +373,28 @@ class Command(BaseCommand):
         return None
 
     def merge_apis(self, apis):
-        """Merge multiple BoltAPI instances into one"""
+        """Merge multiple BoltAPI instances into one, preserving per-API context.
+
+        Uses Litestar-style approach: each handler maintains reference to its original
+        API instance, allowing it to use that API's logging, auth, and middleware config.
+        """
         if len(apis) == 1:
             return apis[0][1]  # Return the single API
 
-        # Create a new merged API
-        merged = BoltAPI()
+        # Create a new merged API without logging (handlers will use their original APIs)
+        merged = BoltAPI(enable_logging=False)
         route_map = {}  # Track conflicts
+
+        # Map handler_id -> original API instance (preserves per-API context)
+        merged._handler_api_map = {}
+
+        # Track next available handler_id to avoid collisions
+        next_handler_id = 0
 
         for api_path, api in apis:
             self.stdout.write(f"[django-bolt] Merging API from {api_path}")
 
-            for method, path, handler_id, handler in api._routes:
+            for method, path, old_handler_id, handler in api._routes:
                 route_key = f"{method} {path}"
 
                 if route_key in route_map:
@@ -359,20 +403,28 @@ class Command(BaseCommand):
                         f"{route_map[route_key]} and {api_path}"
                     )
 
+                # CRITICAL: Assign NEW unique handler_id to avoid collisions
+                # Each API starts handler_ids at 0, so we must renumber during merge
+                new_handler_id = next_handler_id
+                next_handler_id += 1
+
                 route_map[route_key] = api_path
-                merged._routes.append((method, path, handler_id, handler))
-                merged._handlers[handler_id] = handler
+                merged._routes.append((method, path, new_handler_id, handler))
+                merged._handlers[new_handler_id] = handler
+
+                # CRITICAL: Store reference to original API for this handler
+                # This preserves logging, auth, middleware, and all per-API config
+                merged._handler_api_map[new_handler_id] = api
 
                 # Merge handler metadata
                 if handler in api._handler_meta:
                     merged._handler_meta[handler] = api._handler_meta[handler]
 
-                # Merge middleware metadata
-                if handler_id in api._handler_middleware:
-                    merged._handler_middleware[handler_id] = api._handler_middleware[handler_id]
+                # Merge middleware metadata (use NEW handler_id)
+                if old_handler_id in api._handler_middleware:
+                    merged._handler_middleware[new_handler_id] = api._handler_middleware[old_handler_id]
 
         # Update next handler ID
-        if merged._routes:
-            merged._next_handler_id = max(h_id for _, _, h_id, _ in merged._routes) + 1
+        merged._next_handler_id = next_handler_id
 
         return merged

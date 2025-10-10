@@ -1,6 +1,7 @@
 import inspect
 import msgspec
 import re
+import time
 from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Annotated, get_type_hints
 
 from .bootstrap import ensure_django_ready
@@ -139,7 +140,9 @@ class BoltAPI:
         self,
         prefix: str = "",
         middleware: Optional[List[Any]] = None,
-        middleware_config: Optional[Dict[str, Any]] = None
+        middleware_config: Optional[Dict[str, Any]] = None,
+        enable_logging: bool = True,
+        logging_config: Optional[Any] = None
     ) -> None:
         self._routes: List[Tuple[str, str, int, Callable]] = []
         self._handlers: Dict[int, Callable] = {}
@@ -147,11 +150,25 @@ class BoltAPI:
         self._handler_middleware: Dict[int, Dict[str, Any]] = {}  # Middleware metadata per handler
         self._next_handler_id = 0
         self.prefix = prefix.rstrip("/")  # Remove trailing slash
-        
+
         # Global middleware configuration
         self.middleware = middleware or []
         self.middleware_config = middleware_config or {}
-        
+
+        # Logging configuration (opt-in, setup happens at server startup)
+        self.enable_logging = enable_logging
+        self._logging_middleware = None
+
+        if self.enable_logging:
+            # Create logging middleware (actual logging setup happens at server startup)
+            if logging_config is not None:
+                from .logging.middleware import LoggingMiddleware
+                self._logging_middleware = LoggingMiddleware(logging_config)
+            else:
+                # Use default logging configuration
+                from .logging.middleware import create_logging_middleware
+                self._logging_middleware = create_logging_middleware()
+
         # Register this instance globally for autodiscovery
         _BOLT_API_REGISTRY.append(self)
 
@@ -392,13 +409,48 @@ class BoltAPI:
 
         return int(he.status_code), headers, body
 
-    def _handle_generic_exception(self, e: Exception) -> Response:
-        """Handle generic exception and return error response."""
-        error_msg = f"Handler error: {str(e)}"
-        return 500, [("content-type", "text/plain; charset=utf-8")], error_msg.encode()
+    def _handle_generic_exception(self, e: Exception, request: Dict[str, Any] = None) -> Response:
+        """Handle generic exception using error_handlers module."""
+        from . import error_handlers
+        # Use the error handler which respects Django DEBUG setting
+        return error_handlers.handle_exception(e, debug=False, request=request)  # debug will be checked dynamically
 
-    async def _dispatch(self, handler: Callable, request: Dict[str, Any]) -> Response:
-        """Async dispatch that calls the handler and returns response tuple"""
+    async def _dispatch(self, handler: Callable, request: Dict[str, Any], handler_id: int = None) -> Response:
+        """Async dispatch that calls the handler and returns response tuple.
+
+        Args:
+            handler: The route handler function
+            request: The request dictionary
+            handler_id: Handler ID to lookup original API (for merged APIs)
+        """
+        # For merged APIs, use the original API's logging middleware
+        # This preserves per-API logging, auth, and middleware config (Litestar-style)
+        logging_middleware = self._logging_middleware
+        if handler_id is not None and hasattr(self, '_handler_api_map'):
+            original_api = self._handler_api_map.get(handler_id)
+            if original_api and original_api._logging_middleware:
+                logging_middleware = original_api._logging_middleware
+
+        # Start timing only if we might log
+        start_time = None
+        if logging_middleware:
+            # Determine if INFO logs are enabled or a slow-only threshold exists
+            logger = logging_middleware.logger
+            should_time = False
+            try:
+                if logger.isEnabledFor(__import__('logging').INFO):
+                    should_time = True
+            except Exception:
+                pass
+            if not should_time:
+                # If slow-only is configured, we still need timing
+                should_time = bool(getattr(logging_middleware.config, 'min_duration_ms', None))
+            if should_time:
+                start_time = time.time()
+
+            # Log request if logging enabled (DEBUG-level guard happens inside)
+            logging_middleware.log_request(request)
+
         try:
             meta = self._handler_meta.get(handler)
             if meta is None:
@@ -414,12 +466,29 @@ class BoltAPI:
                 result = await handler(*args, **kwargs)
 
             # Serialize response
-            return await serialize_response(result, meta)
+            response = await serialize_response(result, meta)
+
+            # Log response if logging enabled
+            if logging_middleware and start_time is not None:
+                duration = time.time() - start_time
+                status_code = response[0] if isinstance(response, tuple) else 200
+                logging_middleware.log_response(request, status_code, duration)
+
+            return response
 
         except HTTPException as he:
+            # Log exception if logging enabled
+            if logging_middleware and start_time is not None:
+                duration = time.time() - start_time
+                logging_middleware.log_response(request, he.status_code, duration)
+
             return self._handle_http_exception(he)
         except Exception as e:
-            return self._handle_generic_exception(e)
+            # Log exception if logging enabled
+            if logging_middleware:
+                logging_middleware.log_exception(request, e, exc_info=True)
+
+            return self._handle_generic_exception(e, request=request)
     
     def serve(self, host: str = "0.0.0.0", port: int = 8000) -> None:
         """Start the async server with registered routes"""

@@ -6,6 +6,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::Arc;
 
+use crate::error;
 use crate::middleware;
 use crate::middleware::auth::{authenticate, populate_auth_context};
 use crate::permissions::{evaluate_guards, GuardResult};
@@ -22,6 +23,10 @@ pub async fn handle_request(
 ) -> HttpResponse {
     let method = req.method().as_str().to_string();
     let path = req.path().to_string();
+
+    // Clone path and method for error handling
+    let path_clone = path.clone();
+    let method_clone = method.clone();
 
     let router = GLOBAL_ROUTER.get().expect("Router not initialized");
 
@@ -200,14 +205,30 @@ pub async fn handle_request(
             &locals_owned
         };
 
-        let coroutine = dispatch.call1(py, (handler, request_obj))?;
+        // Pass handler_id to dispatch so it can lookup the original API instance
+        let coroutine = dispatch.call1(py, (handler, request_obj, handler_id))?;
         pyo3_async_runtimes::into_future_with_locals(&locals, coroutine.into_bound(py))
     }) {
         Ok(f) => f,
         Err(e) => {
-            return HttpResponse::InternalServerError()
-                .content_type("text/plain; charset=utf-8")
-                .body(format!("Handler error (create coroutine): {}", e));
+            // Use new error handler
+            return Python::attach(|py| {
+                // Convert PyErr to exception instance
+                e.restore(py);
+                if let Some(exc) = PyErr::take(py) {
+                    let exc_value = exc.value(py);
+                    error::handle_python_exception(py, exc_value, &path_clone, &method_clone, state.debug)
+                } else {
+                    error::build_error_response(
+                        py,
+                        500,
+                        "Handler error: failed to create coroutine".to_string(),
+                        vec![],
+                        None,
+                        state.debug,
+                    )
+                }
+            });
         }
     };
 
@@ -355,16 +376,38 @@ pub async fn handle_request(
                         }
                     }
                 } else {
-                    return HttpResponse::InternalServerError()
-                        .content_type("text/plain; charset=utf-8")
-                        .body("Handler error: unsupported response type (expected tuple or StreamingResponse)");
+                    return Python::with_gil(|py| {
+                        error::build_error_response(
+                            py,
+                            500,
+                            "Handler returned unsupported response type (expected tuple or StreamingResponse)".to_string(),
+                            vec![],
+                            None,
+                            state.debug,
+                        )
+                    });
                 }
             }
         }
         Err(e) => {
-            return HttpResponse::InternalServerError()
-                .content_type("text/plain; charset=utf-8")
-                .body(format!("Handler error (await): {}", e));
+            // Use new error handler for Python exceptions during handler execution
+            return Python::attach(|py| {
+                // Convert PyErr to exception instance
+                e.restore(py);
+                if let Some(exc) = PyErr::take(py) {
+                    let exc_value = exc.value(py);
+                    error::handle_python_exception(py, exc_value, &path_clone, &method_clone, state.debug)
+                } else {
+                    error::build_error_response(
+                        py,
+                        500,
+                        "Handler execution error".to_string(),
+                        vec![],
+                        None,
+                        state.debug,
+                    )
+                }
+            });
         }
     }
 }

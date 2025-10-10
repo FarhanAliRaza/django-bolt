@@ -204,15 +204,54 @@ def create_body_extractor(name: str, annotation: Any) -> Callable:
     Create a pre-compiled extractor for request body.
 
     Uses cached msgspec decoder for maximum performance.
+    Converts msgspec.DecodeError (JSON parsing errors) to RequestValidationError for proper 422 responses.
     """
+    from .exceptions import RequestValidationError
+
     if is_msgspec_struct(annotation):
         decoder = get_msgspec_decoder(annotation)
         def extract(body_bytes: bytes) -> Any:
-            return decoder.decode(body_bytes)
+            try:
+                return decoder.decode(body_bytes)
+            except msgspec.ValidationError:
+                # Re-raise ValidationError as-is (field validation errors handled by error_handlers.py)
+                # IMPORTANT: Must catch ValidationError BEFORE DecodeError since ValidationError subclasses DecodeError
+                raise
+            except msgspec.DecodeError as e:
+                # JSON parsing error (malformed JSON) - return 422 with error details
+                raise RequestValidationError(
+                    errors=[
+                        {
+                            "type": "json_invalid",
+                            "loc": ["body"],
+                            "msg": str(e),
+                            "input": body_bytes.decode("utf-8", errors="replace")[:100] if body_bytes else "",
+                        }
+                    ],
+                    body=body_bytes,
+                ) from e
     else:
         # Fallback to generic msgspec decode
         def extract(body_bytes: bytes) -> Any:
-            return msgspec.json.decode(body_bytes, type=annotation)
+            try:
+                return msgspec.json.decode(body_bytes, type=annotation)
+            except msgspec.ValidationError:
+                # Re-raise ValidationError as-is (field validation errors handled by error_handlers.py)
+                # IMPORTANT: Must catch ValidationError BEFORE DecodeError since ValidationError subclasses DecodeError
+                raise
+            except msgspec.DecodeError as e:
+                # JSON parsing error (malformed JSON) - return 422 with error details
+                raise RequestValidationError(
+                    errors=[
+                        {
+                            "type": "json_invalid",
+                            "loc": ["body"],
+                            "msg": str(e),
+                            "input": body_bytes.decode("utf-8", errors="replace")[:100] if body_bytes else "",
+                        }
+                    ],
+                    body=body_bytes,
+                ) from e
 
     return extract
 

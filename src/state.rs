@@ -9,6 +9,7 @@ use crate::metadata::RouteMetadata;
 
 pub struct AppState {
     pub dispatch: Py<PyAny>,
+    pub debug: bool,
 }
 
 pub static GLOBAL_ROUTER: OnceCell<Arc<Router>> = OnceCell::new();

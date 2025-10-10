@@ -205,7 +205,8 @@ pub async fn handle_request(
             &locals_owned
         };
 
-        let coroutine = dispatch.call1(py, (handler, request_obj))?;
+        // Pass handler_id to dispatch so it can lookup the original API instance
+        let coroutine = dispatch.call1(py, (handler, request_obj, handler_id))?;
         pyo3_async_runtimes::into_future_with_locals(&locals, coroutine.into_bound(py))
     }) {
         Ok(f) => f,

@@ -25,7 +25,8 @@ logging_config = LoggingConfig(
     response_log_fields={"status_code", "duration"},
     obfuscate_headers={"authorization", "cookie", "x-api-key"},
     skip_paths={"/health", "/ready"},  # Don't log health checks
-    log_level="DEBUG",  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+    # Note: Log levels are automatic (DEBUG for requests, INFO for 2xx/3xx, WARNING for 4xx, ERROR for 5xx)
+    # To control which logs appear, set the logger level in settings.py LOGGING config
 )
 
 # Create BoltAPI with custom logging configuration

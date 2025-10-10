@@ -57,10 +57,23 @@ class LoggingConfig:
     # Maximum body size to log (in bytes)
     max_body_log_size: int = 1024
 
-    # Log level for requests
+    # Note: Individual log levels are determined automatically:
+    # - Requests: DEBUG
+    # - Successful responses (2xx/3xx): INFO
+    # - Client errors (4xx): WARNING
+    # - Server errors (5xx): ERROR
+    #
+    # To control which logs appear, configure Django's LOGGING in settings.py:
+    # LOGGING = {
+    #     "loggers": {
+    #         "django_bolt": {"level": "INFO"},  # Show INFO and above
+    #     }
+    # }
+
+    # Deprecated: log_level is no longer used (kept for backward compatibility)
     log_level: str = "INFO"
 
-    # Log level for errors
+    # Log level for exceptions (used by log_exception method)
     error_log_level: str = "ERROR"
 
     # Custom exception logging handler

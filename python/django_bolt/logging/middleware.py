@@ -137,10 +137,8 @@ class LoggingMiddleware:
 
         message = " ".join(message_parts) if message_parts else f"Request: {path}"
 
-        # Log with appropriate level
-        log_level = getattr(logging, self.config.log_level.upper(), logging.INFO)
-        print(f"[BOLT-DEBUG] log_request called: message={message}, level={log_level}, logger={self.logger.name}")
-        self.logger.log(log_level, message, extra=data)
+        # Log requests at DEBUG level (less important than responses)
+        self.logger.log(logging.DEBUG, message, extra=data)
 
     def log_response(
         self,
@@ -164,34 +162,27 @@ class LoggingMiddleware:
         data = {}
         message_parts = []
 
-        print(f"[BOLT-DEBUG] request_log_fields={self.config.request_log_fields}")
-        print(f"[BOLT-DEBUG] response_log_fields={self.config.response_log_fields}")
-
         # Only include method if configured
         if "method" in self.config.request_log_fields:
             method = request.get("method", "")
             data["method"] = method
             message_parts.append(method)
-            print(f"[BOLT-DEBUG] Added method to message: {method}")
 
         # Only include path if configured
         if "path" in self.config.request_log_fields:
             data["path"] = path
             message_parts.append(path)
-            print(f"[BOLT-DEBUG] Added path to message: {path}")
 
         # Only include status_code if configured
         if "status_code" in self.config.response_log_fields:
             data["status_code"] = status_code
             message_parts.append(f"{status_code}")
-            print(f"[BOLT-DEBUG] Added status_code to message: {status_code}")
 
         # Only include duration if configured
         if "duration" in self.config.response_log_fields:
             duration_ms = round(duration * 1000, 2)
             data["duration_ms"] = duration_ms
             message_parts.append(f"({duration_ms}ms)")
-            print(f"[BOLT-DEBUG] Added duration to message: {duration_ms}ms")
 
         if "size" in self.config.response_log_fields and response_size is not None:
             data["response_size"] = response_size
@@ -200,14 +191,14 @@ class LoggingMiddleware:
         message = " ".join(message_parts) if message_parts else f"Response: {status_code}"
 
         # Log with appropriate level based on status code
+        # Successful requests always use INFO, errors use WARNING/ERROR
         if status_code >= 500:
             log_level = logging.ERROR
         elif status_code >= 400:
             log_level = logging.WARNING
         else:
-            log_level = getattr(logging, self.config.log_level.upper(), logging.INFO)
+            log_level = logging.INFO  # Successful requests are always INFO
 
-        print(f"[BOLT-DEBUG] log_response called: message={message}, level={log_level}, logger={self.logger.name}")
         self.logger.log(log_level, message, extra=data)
 
     def log_exception(

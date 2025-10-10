@@ -138,9 +138,9 @@ LOGGING = {
         },
     },
     "loggers": {
-        "django": {"handlers": ["console"], "level": "DEBUG"},
-        "django.server": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-        "django_bolt": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "django": {"handlers": ["console"], "level": "ERROR"},
+        "django.server": {"handlers": ["console"], "level": "ERROR", "propagate": False},
+        "django_bolt": {"handlers": ["console"], "level": "ERROR", "propagate": False},
     },
-    "root": {"handlers": ["console"], "level": "DEBUG"},
+    "root": {"handlers": ["console"], "level": "ERROR"},
 }

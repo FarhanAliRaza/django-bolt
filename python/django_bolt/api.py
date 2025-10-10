@@ -162,11 +162,9 @@ class BoltAPI:
         if enable_logging:
             # Create logging middleware (actual logging setup happens at server startup)
             if logging_config is not None:
-                print(f"[BOLT-DEBUG-INIT] Creating LoggingMiddleware with custom config: request_log_fields={logging_config.request_log_fields}, response_log_fields={logging_config.response_log_fields}")
                 from .logging.middleware import LoggingMiddleware
                 self._logging_middleware = LoggingMiddleware(logging_config)
             else:
-                print(f"[BOLT-DEBUG-INIT] Creating LoggingMiddleware with default config")
                 # Use default logging configuration
                 from .logging.middleware import create_logging_middleware
                 self._logging_middleware = create_logging_middleware()
@@ -417,14 +415,28 @@ class BoltAPI:
         # Use the error handler which respects Django DEBUG setting
         return error_handlers.handle_exception(e, debug=False)  # debug will be checked dynamically
 
-    async def _dispatch(self, handler: Callable, request: Dict[str, Any]) -> Response:
-        """Async dispatch that calls the handler and returns response tuple"""
+    async def _dispatch(self, handler: Callable, request: Dict[str, Any], handler_id: int = None) -> Response:
+        """Async dispatch that calls the handler and returns response tuple.
+
+        Args:
+            handler: The route handler function
+            request: The request dictionary
+            handler_id: Handler ID to lookup original API (for merged APIs)
+        """
+        # For merged APIs, use the original API's logging middleware
+        # This preserves per-API logging, auth, and middleware config (Litestar-style)
+        logging_middleware = self._logging_middleware
+        if handler_id is not None and hasattr(self, '_handler_api_map'):
+            original_api = self._handler_api_map.get(handler_id)
+            if original_api and original_api._logging_middleware:
+                logging_middleware = original_api._logging_middleware
+
         # Start timing
-        start_time = time.time() if self._logging_middleware else None
+        start_time = time.time() if logging_middleware else None
 
         # Log request if logging enabled
-        if self._logging_middleware:
-            self._logging_middleware.log_request(request)
+        if logging_middleware:
+            logging_middleware.log_request(request)
 
         try:
             meta = self._handler_meta.get(handler)
@@ -444,24 +456,24 @@ class BoltAPI:
             response = await serialize_response(result, meta)
 
             # Log response if logging enabled
-            if self._logging_middleware and start_time is not None:
+            if logging_middleware and start_time is not None:
                 duration = time.time() - start_time
                 status_code = response[0] if isinstance(response, tuple) else 200
-                self._logging_middleware.log_response(request, status_code, duration)
+                logging_middleware.log_response(request, status_code, duration)
 
             return response
 
         except HTTPException as he:
             # Log exception if logging enabled
-            if self._logging_middleware and start_time is not None:
+            if logging_middleware and start_time is not None:
                 duration = time.time() - start_time
-                self._logging_middleware.log_response(request, he.status_code, duration)
+                logging_middleware.log_response(request, he.status_code, duration)
 
             return self._handle_http_exception(he)
         except Exception as e:
             # Log exception if logging enabled
-            if self._logging_middleware:
-                self._logging_middleware.log_exception(request, e, exc_info=True)
+            if logging_middleware:
+                logging_middleware.log_exception(request, e, exc_info=True)
 
             return self._handle_generic_exception(e)
     

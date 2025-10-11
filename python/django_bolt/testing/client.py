@@ -15,11 +15,20 @@ from django_bolt import BoltAPI
 
 
 class BoltTestTransport(httpx.BaseTransport):
-    """HTTP transport that routes requests through django-bolt's per-instance test handler."""
+    """HTTP transport that routes requests through django-bolt's per-instance test handler.
 
-    def __init__(self, app_id: int, raise_server_exceptions: bool = True):
+    Args:
+        app_id: Test app instance ID
+        raise_server_exceptions: If True, raise exceptions from handlers
+        use_http_layer: If True, route through Actix HTTP layer (enables testing of
+                        middleware like CORS, rate limiting, compression). If False (default),
+                        use fast direct dispatch for unit tests.
+    """
+
+    def __init__(self, app_id: int, raise_server_exceptions: bool = True, use_http_layer: bool = False):
         self.app_id = app_id
         self.raise_server_exceptions = raise_server_exceptions
+        self.use_http_layer = use_http_layer
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         """Handle a request by routing it through Rust."""
@@ -54,15 +63,27 @@ class BoltTestTransport(httpx.BaseTransport):
         method = request.method
 
         try:
-            # Call Rust test handler with app_id
-            status_code, resp_headers, resp_body = _core.handle_test_request_for(
-                app_id=self.app_id,
-                method=method,
-                path=path,
-                headers=headers,
-                body=body_bytes,
-                query_string=query_string,
-            )
+            # Choose handler based on mode
+            if self.use_http_layer:
+                # Route through Actix HTTP layer (for middleware testing)
+                status_code, resp_headers, resp_body = _core.handle_actix_http_request(
+                    app_id=self.app_id,
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=body_bytes,
+                    query_string=query_string,
+                )
+            else:
+                # Fast direct dispatch (for unit tests)
+                status_code, resp_headers, resp_body = _core.handle_test_request_for(
+                    app_id=self.app_id,
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=body_bytes,
+                    query_string=query_string,
+                )
 
             # Build httpx Response
             return Response(
@@ -113,6 +134,7 @@ class TestClient(httpx.Client):
         api: BoltAPI,
         base_url: str = "http://testserver.local",
         raise_server_exceptions: bool = True,
+        use_http_layer: bool = False,
         **kwargs: Any,
     ):
         """Initialize test client.
@@ -121,6 +143,8 @@ class TestClient(httpx.Client):
             api: BoltAPI instance to test
             base_url: Base URL for requests
             raise_server_exceptions: If True, raise exceptions from handlers
+            use_http_layer: If True, route through Actix HTTP layer (enables testing
+                           CORS, rate limiting, compression). Default False for fast tests.
             **kwargs: Additional arguments passed to httpx.Client
         """
         from django_bolt import _core
@@ -148,7 +172,7 @@ class TestClient(httpx.Client):
 
         super().__init__(
             base_url=base_url,
-            transport=BoltTestTransport(self.app_id, raise_server_exceptions),
+            transport=BoltTestTransport(self.app_id, raise_server_exceptions, use_http_layer),
             follow_redirects=True,
             **kwargs,
         )
@@ -179,9 +203,19 @@ class AsyncTestClient(httpx.AsyncClient):
         api: BoltAPI,
         base_url: str = "http://testserver.local",
         raise_server_exceptions: bool = True,
+        use_http_layer: bool = False,
         **kwargs: Any,
     ):
-        """Initialize async test client."""
+        """Initialize async test client.
+
+        Args:
+            api: BoltAPI instance to test
+            base_url: Base URL for requests
+            raise_server_exceptions: If True, raise exceptions from handlers
+            use_http_layer: If True, route through Actix HTTP layer (enables testing
+                           CORS, rate limiting, compression). Default False for fast tests.
+            **kwargs: Additional arguments passed to httpx.AsyncClient
+        """
         from django_bolt import _core
 
         # Create test app instance
@@ -207,15 +241,15 @@ class AsyncTestClient(httpx.AsyncClient):
 
         # Create async transport
         class AsyncTransport(httpx.AsyncBaseTransport):
-            def __init__(self, app_id: int, raise_exceptions: bool):
-                self._sync_transport = BoltTestTransport(app_id, raise_exceptions)
+            def __init__(self, app_id: int, raise_exceptions: bool, use_http_layer: bool):
+                self._sync_transport = BoltTestTransport(app_id, raise_exceptions, use_http_layer)
 
             async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
                 return self._sync_transport.handle_request(request)
 
         super().__init__(
             base_url=base_url,
-            transport=AsyncTransport(self.app_id, raise_server_exceptions),
+            transport=AsyncTransport(self.app_id, raise_server_exceptions, use_http_layer),
             follow_redirects=True,
             **kwargs,
         )

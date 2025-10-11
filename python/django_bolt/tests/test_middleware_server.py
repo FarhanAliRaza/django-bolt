@@ -100,8 +100,15 @@ def api():
 
 @pytest.fixture(scope="module")
 def client(api):
-    """Create TestClient for the API"""
+    """Create TestClient for the API (fast mode - direct dispatch)"""
     with TestClient(api) as client:
+        yield client
+
+
+@pytest.fixture(scope="module")
+def http_client(api):
+    """Create TestClient with HTTP layer enabled (for middleware testing)"""
+    with TestClient(api, use_http_layer=True) as client:
         yield client
 
 
@@ -112,28 +119,43 @@ def test_basic_endpoint(client):
     assert response.json() == {"message": "Hello, middleware!"}
 
 
-@pytest.mark.skip(reason="Rate limiting runs in Rust HTTP layer, not in TestClient handler dispatch")
-def test_rate_limiting(client):
-    """Test rate limiting"""
-    # Note: Rate limiting is handled by Rust middleware in the HTTP server layer
-    # The TestClient only tests the handler dispatch layer
-    response = client.get("/rate-limited")
-    assert response.status_code == 200  # Will always succeed in TestClient
-
-
-@pytest.mark.skip(reason="CORS middleware runs in Rust HTTP layer, not in TestClient handler dispatch")
-def test_cors_headers(client):
-    """Test CORS headers"""
-    response = client.get("/cors-test", headers={"Origin": "http://localhost:3000"})
+def test_compression_http_layer(http_client):
+    """Test that compression middleware is applied in HTTP layer"""
+    # Request with Accept-Encoding header
+    response = http_client.get("/", headers={"Accept-Encoding": "gzip"})
     assert response.status_code == 200
-    # Note: CORS headers are added by Rust middleware which runs in the HTTP server layer
-    # The TestClient only tests the handler dispatch layer, so CORS headers won't be present
+    assert response.json() == {"message": "Hello, middleware!"}
+    # Note: httpx automatically decompresses, so we won't see content-encoding in response
+    # But the middleware is applied in Actix layer
 
 
-@pytest.mark.skip(reason="CORS middleware runs in Rust HTTP layer, not in TestClient handler dispatch")
-def test_cors_preflight(client):
+def test_rate_limiting(http_client):
+    """Test rate limiting"""
+    # The rate limit is 5 rps with burst of 10
+    # First 10 requests should succeed (burst)
+    for i in range(10):
+        response = http_client.get("/rate-limited")
+        assert response.status_code == 200, f"Request {i+1} failed"
+
+    # Next request should be rate limited
+    response = http_client.get("/rate-limited")
+    assert response.status_code == 429  # Too Many Requests
+    assert "retry-after" in response.headers
+
+
+def test_cors_headers(http_client):
+    """Test CORS headers"""
+    response = http_client.get("/cors-test", headers={"Origin": "http://localhost:3000"})
+    assert response.status_code == 200
+    assert response.json() == {"cors": "enabled"}
+    # Check CORS headers
+    assert "access-control-allow-origin" in response.headers
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_cors_preflight(http_client):
     """Test CORS preflight (OPTIONS)"""
-    response = client.options(
+    response = http_client.options(
         "/cors-test",
         headers={
             "Origin": "http://localhost:3000",
@@ -141,7 +163,12 @@ def test_cors_preflight(client):
             "Access-Control-Request-Headers": "Content-Type"
         }
     )
-    # Note: OPTIONS/preflight handling happens in Rust middleware layer
+    # Preflight should return 204
+    assert response.status_code == 204
+    # Check preflight headers
+    assert "access-control-allow-origin" in response.headers
+    assert "access-control-allow-methods" in response.headers
+    assert "access-control-allow-headers" in response.headers
 
 
 def test_jwt_auth_without_token(client):

@@ -15,6 +15,11 @@ use crate::permissions::{evaluate_guards, GuardResult};
 use crate::request::PyRequest;
 use crate::router::{parse_query_string, Router};
 
+// Actix testing imports
+use actix_web::{test, web, App};
+use actix_web::dev::Service;
+use bytes::Bytes;
+
 // Macro for conditional debug output - only enabled with DJANGO_BOLT_TEST_DEBUG env var
 macro_rules! test_debug {
     ($($arg:tt)*) => {
@@ -22,6 +27,46 @@ macro_rules! test_debug {
             eprintln!($($arg)*);
         }
     };
+}
+
+/// Helper to convert serde_json::Value to Python object
+fn json_to_python(value: &serde_json::Value, py: Python) -> PyResult<Py<PyAny>> {
+    match value {
+        serde_json::Value::Null => Ok(py.None()),
+        serde_json::Value::Bool(b) => {
+            let py_bool = pyo3::types::PyBool::new(py, *b);
+            Ok(py_bool.as_any().clone().unbind())
+        }
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                let py_int = pyo3::types::PyInt::new(py, i);
+                Ok(py_int.as_any().clone().unbind())
+            } else if let Some(f) = n.as_f64() {
+                let py_float = pyo3::types::PyFloat::new(py, f);
+                Ok(py_float.as_any().clone().unbind())
+            } else {
+                Ok(py.None())
+            }
+        }
+        serde_json::Value::String(s) => {
+            let py_str = pyo3::types::PyString::new(py, s);
+            Ok(py_str.as_any().clone().unbind())
+        }
+        serde_json::Value::Array(arr) => {
+            let py_list = pyo3::types::PyList::empty(py);
+            for item in arr {
+                py_list.append(json_to_python(item, py)?)?;
+            }
+            Ok(py_list.as_any().clone().unbind())
+        }
+        serde_json::Value::Object(obj) => {
+            let py_dict = pyo3::types::PyDict::new(py);
+            for (k, v) in obj {
+                py_dict.set_item(k, json_to_python(v, py)?)?;
+            }
+            Ok(py_dict.as_any().clone().unbind())
+        }
+    }
 }
 
 /// Test-only application state stored per instance (identified by app_id)
@@ -535,4 +580,256 @@ async def consume_agen(agen):
     Err(pyo3::exceptions::PyTypeError::new_err(
         "Handler returned unsupported response type (expected tuple or StreamingResponse)",
     ))
+}
+
+#[pyfunction]
+pub fn handle_actix_http_request(
+    py: Python<'_>,
+    app_id: u64,
+    method: String,
+    path: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+    query_string: Option<String>,
+) -> PyResult<(u16, Vec<(String, String)>, Vec<u8>)> {
+    // We need to run this in a tokio runtime since actix test functions are async
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?;
+    
+    runtime.block_on(async {
+        // Verify test app exists
+        let reg = registry();
+        let entry = reg
+            .get(&app_id)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err(format!("Test app {} not found", app_id)))?;
+        drop(entry);
+
+        // Create custom handler that uses per-instance router via handle_test_request_for
+        let handler = move |req: actix_web::HttpRequest, body: web::Bytes| {
+            async move {
+                // Extract request info
+                let method = req.method().as_str().to_uppercase();
+                let path = req.path().to_string();
+                let query_string = req.query_string();
+                let query = if query_string.is_empty() {
+                    None
+                } else {
+                    Some(query_string.to_string())
+                };
+
+                // Extract headers
+                let headers: Vec<(String, String)> = req
+                    .headers()
+                    .iter()
+                    .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+                    .collect();
+
+                let body_bytes = body.to_vec();
+
+                // Get request origin for CORS
+                let request_origin = req.headers()
+                    .get("origin")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+
+                // Check if this is a CORS preflight (OPTIONS request)
+                let is_preflight = method == "OPTIONS"
+                    && request_origin.is_some()
+                    && req.headers().contains_key("access-control-request-method");
+
+                // Get middleware config from route metadata
+                let (cors_config, rate_limit_config, handler_id_opt, should_skip_cors) = Python::with_gil(|py| -> (Option<std::collections::HashMap<String, Py<PyAny>>>, Option<std::collections::HashMap<String, Py<PyAny>>>, Option<usize>, bool) {
+                    let Some(entry) = registry().get(&app_id) else {
+                        return (None, None, None, false);
+                    };
+                    let app = entry.read();
+
+                    // For preflight, we need to check the actual route method, not OPTIONS
+                    let lookup_method = if is_preflight {
+                        // Get the requested method from Access-Control-Request-Method header
+                        req.headers()
+                            .get("access-control-request-method")
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.to_uppercase())
+                            .unwrap_or_else(|| method.clone())
+                    } else {
+                        method.clone()
+                    };
+
+                    // Find the route to get handler_id
+                    if let Some((_route, _params, handler_id)) = app.router.find(&lookup_method, &path) {
+                        // Get route metadata
+                        if let Some(route_meta) = app.route_metadata.get(&handler_id) {
+                            // Check if CORS is skipped
+                            let skip_cors = route_meta.skip.contains("cors");
+
+                            let mut cors_cfg = None;
+                            let mut rate_cfg = None;
+
+                            // Find middleware configs
+                            for mw in &route_meta.middleware {
+                                match mw.mw_type.as_str() {
+                                    "cors" => {
+                                        let mut config = std::collections::HashMap::new();
+                                        for (k, v) in &mw.config {
+                                            if let Ok(py_val) = json_to_python(v, py) {
+                                                config.insert(k.clone(), py_val);
+                                            }
+                                        }
+                                        cors_cfg = Some(config);
+                                    }
+                                    "rate_limit" => {
+                                        let mut config = std::collections::HashMap::new();
+                                        for (k, v) in &mw.config {
+                                            if let Ok(py_val) = json_to_python(v, py) {
+                                                config.insert(k.clone(), py_val);
+                                            }
+                                        }
+                                        rate_cfg = Some(config);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            return (cors_cfg, rate_cfg, Some(handler_id), skip_cors);
+                        }
+                    }
+                    (None, None, None, false)
+                });
+
+                // Handle CORS preflight
+                if is_preflight && !should_skip_cors {
+                    if let Some(config) = cors_config {
+                        return Python::with_gil(|py| {
+                            use crate::middleware::cors::handle_preflight;
+                            let response = handle_preflight(&config, py);
+                            Ok::<_, actix_web::Error>(response)
+                        });
+                    }
+                }
+
+                // Check rate limiting
+                if let (Some(handler_id), Some(rate_cfg)) = (handler_id_opt, rate_limit_config.as_ref()) {
+                    let rate_limit_response = Python::with_gil(|py| {
+                        use crate::middleware::rate_limit::check_rate_limit;
+                        // Convert headers to AHashMap
+                        let header_map: ahash::AHashMap<String, String> = headers.iter()
+                            .map(|(k, v)| (k.to_lowercase(), v.clone()))
+                            .collect();
+                        check_rate_limit(handler_id, &header_map, None, rate_cfg, py)
+                    });
+
+                    if let Some(response) = rate_limit_response {
+                        return Ok(response);
+                    }
+                }
+
+                // Call handle_test_request_for which does all the routing/auth/guards
+                let result = Python::with_gil(|py| {
+                    handle_test_request_for(
+                        py,
+                        app_id,
+                        method.clone(),
+                        path.clone(),
+                        headers.clone(),
+                        body_bytes,
+                        query,
+                    )
+                });
+
+                match result {
+                    Ok((status_code, resp_headers, resp_body)) => {
+                        let mut response = actix_web::HttpResponse::build(
+                            actix_web::http::StatusCode::from_u16(status_code)
+                                .unwrap_or(actix_web::http::StatusCode::OK)
+                        );
+                        for (name, value) in &resp_headers {
+                            response.insert_header((name.as_str(), value.as_str()));
+                        }
+
+                        let mut http_response = response.body(resp_body);
+
+                        // Add CORS headers to response if not skipped
+                        if !should_skip_cors {
+                            if let Some(config) = cors_config {
+                                Python::with_gil(|py| {
+                                    use crate::middleware::cors::add_cors_headers_to_response;
+                                    add_cors_headers_to_response(
+                                        &mut http_response,
+                                        request_origin.as_deref(),
+                                        &config,
+                                        py,
+                                    );
+                                });
+                            }
+                        }
+
+                        Ok::<_, actix_web::Error>(http_response)
+                    }
+                    Err(e) => {
+                        Ok(actix_web::HttpResponse::InternalServerError()
+                            .body(format!("Handler error: {}", e)))
+                    }
+                }
+            }
+        };
+
+        // Create Actix test service with middleware
+        let app = test::init_service(
+            App::new()
+                .wrap(actix_web::middleware::Compress::default())
+                // CORS handled in handler closure (preflight + response headers)
+                // Rate limiting handled in handler closure (per-route state)
+                .default_service(web::route().to(handler))
+        ).await;
+        
+        // Build full URI
+        let uri = if let Some(qs) = query_string {
+            format!("{}?{}", path, qs)
+        } else {
+            path
+        };
+        
+        // Create test request
+        let mut req = test::TestRequest::with_uri(&uri);
+        
+        // Set method
+        req = match method.to_uppercase().as_str() {
+            "GET" => req.method(actix_web::http::Method::GET),
+            "POST" => req.method(actix_web::http::Method::POST),
+            "PUT" => req.method(actix_web::http::Method::PUT),
+            "PATCH" => req.method(actix_web::http::Method::PATCH),
+            "DELETE" => req.method(actix_web::http::Method::DELETE),
+            "OPTIONS" => req.method(actix_web::http::Method::OPTIONS),
+            "HEAD" => req.method(actix_web::http::Method::HEAD),
+            _ => req.method(actix_web::http::Method::GET),
+        };
+        
+        // Set headers
+        for (name, value) in headers {
+            req = req.insert_header((name, value));
+        }
+        
+        // Set body
+        if !body.is_empty() {
+            req = req.set_payload(Bytes::from(body));
+        }
+        
+        // Call service
+        let request = req.to_request();
+        let response = app.call(request).await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Service call failed: {}", e)))?;
+        
+        // Extract response
+        let status = response.status().as_u16();
+        
+        let resp_headers: Vec<(String, String)> = response
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+        
+        let resp_body = test::read_body(response).await.to_vec();
+        
+        Ok((status, resp_headers, resp_body))
+    })
 }

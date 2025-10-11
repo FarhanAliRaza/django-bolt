@@ -3,6 +3,8 @@ Tests for JWT authentication and Django User integration.
 
 Tests JWT token creation, validation, and Django User model integration
 with type-safe dependency injection.
+
+Uses pytest-django for proper Django configuration.
 """
 import pytest
 import jwt
@@ -14,66 +16,14 @@ from django_bolt.auth import (
     get_auth_context,
 )
 
-
-@pytest.fixture(scope="module", autouse=True)
-def django_user_setup():
-    """
-    Setup Django with auth app for tests in this module.
-
-    This runs once before any tests in this module and keeps Django configured
-    throughout all tests in the module.
-    """
-    import django
-    import django.apps
-    from django.conf import settings, empty
-    from django.core.management import call_command
-
-    # Force reset Django if it's configured without auth
-    if settings.configured:
-        try:
-            from django.apps import apps
-            if apps.is_installed('django.contrib.auth'):
-                return  # Already configured correctly with auth
-        except Exception:
-            pass
-
-        # Reset Django completely
-        settings._wrapped = empty
-        # Create a fresh Apps instance
-        django.apps.apps = django.apps.Apps(installed_apps=None)
-
-    # Configure Django with auth app
-    settings.configure(
-        DEBUG=True,
-        SECRET_KEY='test-secret-key-jwt',
-        INSTALLED_APPS=[
-            'django.contrib.contenttypes',
-            'django.contrib.auth',
-            'django_bolt',
-        ],
-        DATABASES={
-            'default': {
-                'ENGINE': 'django.db.backends.sqlite3',
-                'NAME': ':memory:',
-            }
-        },
-        USE_TZ=True,
-    )
-    django.setup()
-    call_command('migrate', '--run-syncdb', verbosity=0)
-
-    yield
-
-    # Don't reset after - let conftest handle it
+# Mark all tests to use Django DB
+pytestmark = pytest.mark.django_db
 
 
 def test_create_jwt_for_user():
     """Test creating JWT tokens for Django users."""
-    try:
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-    except Exception as e:
-        pytest.skip(f"Django User model not available: {e}")
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
 
     # Create a test user
     user = User.objects.create(
@@ -104,11 +54,8 @@ def test_create_jwt_for_user():
 
 def test_create_jwt_with_extra_claims():
     """Test creating JWT tokens with custom claims."""
-    try:
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-    except Exception as e:
-        pytest.skip(f"Django User model not available: {e}")
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
 
     user = User.objects.create(
         username="admin",
@@ -143,14 +90,11 @@ def test_create_jwt_with_extra_claims():
 
 def test_jwt_authentication_with_django_user():
     """Test JWT authentication extracts correct user data."""
-    try:
-        from django.contrib.auth import get_user_model
-        from django_bolt import BoltAPI
-        from django_bolt.auth import JWTAuthentication
-        from django_bolt.auth import IsAuthenticated
-        User = get_user_model()
-    except Exception as e:
-        pytest.skip(f"Django User model not available: {e}")
+    from django.contrib.auth import get_user_model
+    from django_bolt import BoltAPI
+    from django_bolt.auth import JWTAuthentication
+    from django_bolt.auth import IsAuthenticated
+    User = get_user_model()
 
     # Create test user
     user = User.objects.create(
@@ -290,11 +234,8 @@ def test_jwt_utils_get_auth_context():
 
 def test_jwt_claims_stored_in_context():
     """Test that JWT claims are properly stored in request context."""
-    try:
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-    except Exception as e:
-        pytest.skip(f"Django User model not available: {e}")
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
 
     user = User.objects.create(
         username="claimsuser",
@@ -325,11 +266,8 @@ def test_jwt_claims_stored_in_context():
 
 def test_jwt_expiration():
     """Test JWT expiration handling."""
-    try:
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-    except Exception as e:
-        pytest.skip(f"Django User model not available: {e}")
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
 
     user = User.objects.create(username="expuser")
 

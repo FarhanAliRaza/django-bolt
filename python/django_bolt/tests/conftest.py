@@ -11,7 +11,11 @@ import socket
 import subprocess
 import sys
 import time
+import logging
 import pytest
+
+# Suppress httpx INFO logs during tests
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def spawn_process(command):

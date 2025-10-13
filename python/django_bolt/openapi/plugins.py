@@ -394,17 +394,15 @@ class StoplightRenderPlugin(OpenAPIRenderPlugin):
         self.css_url = css_url or f"https://unpkg.com/@stoplight/elements@{version}/styles.min.css"
         super().__init__(path=path, **kwargs)
 
-    def render(self, request: Request, openapi_schema: dict[str, Any]) -> bytes:
+    def render(self, openapi_schema: dict[str, Any], schema_url: str) -> str:
         """Render an HTML page for StopLight Elements.
 
-        .. note:: Override this method to customize the template.
-
         Args:
-            request: The request.
             openapi_schema: The OpenAPI schema as a dictionary.
+            schema_url: URL to the OpenAPI JSON schema.
 
         Returns:
-            A rendered html string.
+            A rendered HTML string.
         """
         head = f"""
           <head>
@@ -421,7 +419,7 @@ class StoplightRenderPlugin(OpenAPIRenderPlugin):
         body = f"""
           <body>
             <elements-api
-                apiDescriptionUrl="{self.get_openapi_json_route(request)}"
+                apiDescriptionUrl="{schema_url}"
                 router="hash"
                 layout="sidebar"
             />
@@ -434,7 +432,7 @@ class StoplightRenderPlugin(OpenAPIRenderPlugin):
                 {head}
                 {body}
             </html>
-        """.encode()
+        """
 
 
 

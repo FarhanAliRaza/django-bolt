@@ -120,14 +120,21 @@ class OpenAPIRouteRegistrar:
                 def make_handler(p):
                     async def ui_handler():
                         """Serve OpenAPI UI."""
-                        schema = self._get_schema()
-                        rendered = p.render(schema, schema_url)
-                        # Return with proper content-type from plugin
-                        return HTML(
-                            rendered,
-                            status_code=200,
-                            headers={"content-type": p.media_type}
-                        )
+                        try:
+                            schema = self._get_schema()
+                            rendered = p.render(schema, schema_url)
+                            # Return with proper content-type from plugin
+                            return HTML(
+                                rendered,
+                                status_code=200,
+                                headers={"content-type": p.media_type}
+                            )
+                        except Exception as e:
+                            # Re-raise with more context for debugging
+                            raise Exception(
+                                f"Failed to render OpenAPI UI plugin {p.__class__.__name__}: "
+                                f"{type(e).__name__}: {str(e)}"
+                            ) from e
                     return ui_handler
 
                 self.api.get(full_path)(make_handler(plugin))

@@ -205,8 +205,6 @@ class BoltAPI:
                     ScalarRenderPlugin(path="/scalar"),
                     RapidocRenderPlugin(path="/rapidoc"),
                     StoplightRenderPlugin(path="/stoplight"),
-                    JsonRenderPlugin(path="/json"),
-                    YamlRenderPlugin(path="/yaml"),
                 ]
             )
         else:

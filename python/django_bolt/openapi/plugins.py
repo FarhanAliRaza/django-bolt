@@ -15,9 +15,10 @@ __all__ = (
     "RedocRenderPlugin",
     "ScalarRenderPlugin",
     "RapidocRenderPlugin",
+    "StoplightRenderPlugin",
 )
 
-_favicon_url = "https://cdn.jsdelivr.net/gh/litestar-org/branding@main/assets/Branding%20-%20PNG%20-%20Transparent/Badge%20-%20Blue%20and%20Yellow.png"
+_favicon_url = "https://cdn.jsdelivr.net/gh/FarhanAliRaza/django-bolt@master/docs/favicon.png"
 _default_favicon = f"<link rel='icon' type='image/png' href='{_favicon_url}'>"
 _default_style = "<style>body { margin: 0; padding: 0 }</style>"
 
@@ -376,7 +377,7 @@ class StoplightRenderPlugin(OpenAPIRenderPlugin):
         version: str = "7.7.18",
         js_url: str | None = None,
         css_url: str | None = None,
-        path: str | Sequence[str] = "/elements",
+        path: Union[str, List[str]] = "/elements",
         **kwargs: Any,
     ) -> None:
         """Initialize the OpenAPI UI render plugin.

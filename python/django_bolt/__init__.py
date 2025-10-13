@@ -39,6 +39,18 @@ from .middleware import (
     RateLimitMiddleware,
 )
 
+# OpenAPI module
+from .openapi import (
+    OpenAPIConfig,
+    SwaggerRenderPlugin,
+    RedocRenderPlugin,
+    ScalarRenderPlugin,
+    RapidocRenderPlugin,
+    StoplightRenderPlugin,
+    JsonRenderPlugin,
+    YamlRenderPlugin,
+)
+
 __all__ = [
     "BoltAPI",
     "JSON",
@@ -71,6 +83,15 @@ __all__ = [
     "get_current_user",
     "extract_user_id_from_context",
     "get_auth_context",
+    # OpenAPI
+    "OpenAPIConfig",
+    "SwaggerRenderPlugin",
+    "RedocRenderPlugin",
+    "ScalarRenderPlugin",
+    "RapidocRenderPlugin",
+    "StoplightRenderPlugin",
+    "JsonRenderPlugin",
+    "YamlRenderPlugin",
 ]
 
 default_app_config = 'django_bolt.apps.DjangoBoltConfig'

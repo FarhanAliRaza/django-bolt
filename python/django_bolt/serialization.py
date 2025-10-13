@@ -42,7 +42,17 @@ async def serialize_response(result: Any, meta: Dict[str, Any]) -> Response:
 
 async def serialize_json_response(result: JSON, response_tp: Optional[Any]) -> Response:
     """Serialize JSON response object."""
-    headers = [("content-type", "application/json")]
+    # Check if content-type is already provided in custom headers
+    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+
+    if has_custom_content_type:
+        # Use only custom headers (including custom content-type)
+        headers = [(k.lower(), v) for k, v in result.headers.items()]
+    else:
+        # Use default content-type and extend with custom headers
+        headers = [("content-type", "application/json")]
+        if result.headers:
+            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
 
     if response_tp is not None:
         try:
@@ -54,25 +64,40 @@ async def serialize_json_response(result: JSON, response_tp: Optional[Any]) -> R
     else:
         data_bytes = result.to_bytes()
 
-    if result.headers:
-        headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-
     return int(result.status_code), headers, data_bytes
 
 
 def serialize_plaintext_response(result: PlainText) -> Response:
     """Serialize plain text response."""
-    headers = [("content-type", "text/plain; charset=utf-8")]
-    if result.headers:
-        headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+    # Check if content-type is already provided in custom headers
+    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+
+    if has_custom_content_type:
+        # Use only custom headers (including custom content-type)
+        headers = [(k.lower(), v) for k, v in result.headers.items()]
+    else:
+        # Use default content-type and extend with custom headers
+        headers = [("content-type", "text/plain; charset=utf-8")]
+        if result.headers:
+            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+
     return int(result.status_code), headers, result.to_bytes()
 
 
 def serialize_html_response(result: HTML) -> Response:
     """Serialize HTML response."""
-    headers = [("content-type", "text/html; charset=utf-8")]
-    if result.headers:
-        headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+    # Check if content-type is already provided in custom headers
+    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+
+    if has_custom_content_type:
+        # Use only custom headers (including custom content-type)
+        headers = [(k.lower(), v) for k, v in result.headers.items()]
+    else:
+        # Use default content-type and extend with custom headers
+        headers = [("content-type", "text/html; charset=utf-8")]
+        if result.headers:
+            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+
     return int(result.status_code), headers, result.to_bytes()
 
 

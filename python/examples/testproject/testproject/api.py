@@ -3,7 +3,7 @@ import msgspec
 import asyncio
 import time
 import json
-from django_bolt import BoltAPI, JSON
+from django_bolt import BoltAPI, JSON, OpenAPIConfig, SwaggerRenderPlugin, RedocRenderPlugin
 from django_bolt.param_functions import Header, Cookie, Form, File
 from django_bolt.responses import PlainText, HTML, Redirect, FileResponse, StreamingResponse
 from django_bolt.exceptions import (
@@ -18,7 +18,17 @@ from django_bolt.health import register_health_checks, add_health_check
 from django_bolt.middleware import no_compress
 
 
-api = BoltAPI()
+api = BoltAPI(
+    openapi_config=OpenAPIConfig(
+        title="Django Bolt Test API",
+        version="1.0.0",
+        description="High-performance API framework for Django with 60k+ RPS",
+        render_plugins=[
+            SwaggerRenderPlugin(),
+            RedocRenderPlugin(),
+        ]
+    )
+)
 
 # Or for default logging (recommended for most use cases):
 # api = BoltAPI()  # Automatically logs all requests/responses with sensible defaults
@@ -33,8 +43,14 @@ class Item(msgspec.Struct):
     is_offer: Optional[bool] = None
 
 
+
+
 @api.get("/")
-async def read_root():
+async def read_root() -> dict:
+    """
+    Root endpoint.
+    Returns a simple "Hello World" dictionary.
+    """
     return {"Hello": "World"}
 
 

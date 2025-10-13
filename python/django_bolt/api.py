@@ -143,7 +143,8 @@ class BoltAPI:
         middleware_config: Optional[Dict[str, Any]] = None,
         enable_logging: bool = True,
         logging_config: Optional[Any] = None,
-        compression: Optional[Any] = None
+        compression: Optional[Any] = None,
+        openapi_config: Optional[Any] = None
     ) -> None:
         self._routes: List[Tuple[str, str, int, Callable]] = []
         self._handlers: Dict[int, Callable] = {}
@@ -182,6 +183,11 @@ class BoltAPI:
         else:
             # Custom config provided
             self.compression = compression
+
+        # OpenAPI configuration
+        self.openapi_config = openapi_config
+        self._openapi_schema: Optional[Dict[str, Any]] = None
+        self._openapi_routes_registered = False
 
         # Register this instance globally for autodiscovery
         _BOLT_API_REGISTRY.append(self)
@@ -503,7 +509,106 @@ class BoltAPI:
                 logging_middleware.log_exception(request, e, exc_info=True)
 
             return self._handle_generic_exception(e, request=request)
-    
+
+    def _get_openapi_schema(self) -> Dict[str, Any]:
+        """Get or generate OpenAPI schema.
+
+        Returns:
+            OpenAPI schema as dictionary.
+        """
+        if self._openapi_schema is None:
+            from .openapi.schema_generator import SchemaGenerator
+
+            generator = SchemaGenerator(self, self.openapi_config)
+            openapi = generator.generate()
+            self._openapi_schema = openapi.to_schema()
+
+        return self._openapi_schema
+
+    def _register_openapi_routes(self) -> None:
+        """Register OpenAPI documentation routes."""
+        if not self.openapi_config or self._openapi_routes_registered:
+            return
+
+        from .openapi.plugins import JsonRenderPlugin, YamlRenderPlugin
+        from .responses import HTML, Redirect, JSON, PlainText
+
+        # Always register JSON endpoint
+        json_plugin = JsonRenderPlugin()
+
+        @self.get(f"{self.openapi_config.path}/openapi.json")
+        async def openapi_json_handler(request):
+            """Serve OpenAPI schema as JSON."""
+            schema = self._get_openapi_schema()
+            rendered = json_plugin.render(schema, "")
+            # Return with proper OpenAPI JSON content-type
+            return JSON(
+                rendered,
+                status_code=200,
+                headers={"content-type": json_plugin.media_type}
+            )
+
+        # Always register YAML endpoints
+        yaml_plugin = YamlRenderPlugin()
+
+        @self.get(f"{self.openapi_config.path}/openapi.yaml")
+        async def openapi_yaml_handler(request):
+            """Serve OpenAPI schema as YAML."""
+            schema = self._get_openapi_schema()
+            rendered = yaml_plugin.render(schema, "")
+            # Return with proper YAML content-type
+            return PlainText(
+                rendered,
+                status_code=200,
+                headers={"content-type": yaml_plugin.media_type}
+            )
+
+        @self.get(f"{self.openapi_config.path}/openapi.yml")
+        async def openapi_yml_handler(request):
+            """Serve OpenAPI schema as YAML (alternative extension)."""
+            schema = self._get_openapi_schema()
+            rendered = yaml_plugin.render(schema, "")
+            # Return with proper YAML content-type
+            return PlainText(
+                rendered,
+                status_code=200,
+                headers={"content-type": yaml_plugin.media_type}
+            )
+
+        # Register UI plugin routes
+        schema_url = f"{self.openapi_config.path}/openapi.json"
+
+        for plugin in self.openapi_config.render_plugins:
+            for plugin_path in plugin.paths:
+                full_path = f"{self.openapi_config.path}{plugin_path}"
+
+                # Create closure to capture plugin reference
+                def make_handler(p):
+                    async def ui_handler():
+                        """Serve OpenAPI UI."""
+                        schema = self._get_openapi_schema()
+                        rendered = p.render(schema, schema_url)
+                        # Return with proper content-type from plugin
+                        return HTML(
+                            rendered,
+                            status_code=200,
+                            headers={"content-type": p.media_type}
+                        )
+                    return ui_handler
+
+                self.get(full_path)(make_handler(plugin))
+
+        # Add root redirect to default plugin
+        if self.openapi_config.default_plugin:
+            default_path = self.openapi_config.default_plugin.paths[0]
+
+            @self.get(self.openapi_config.path)
+            async def openapi_root_redirect():
+                """Redirect to default OpenAPI UI."""
+                return Redirect(f"{self.openapi_config.path}{default_path}")
+
+        self._openapi_routes_registered = True
+
     def serve(self, host: str = "0.0.0.0", port: int = 8000) -> None:
         """Start the async server with registered routes"""
         info = ensure_django_ready()
@@ -512,7 +617,12 @@ class BoltAPI:
             f"[django-bolt] DB: {info.get('database')} name={info.get('database_name')}\n"
             f"[django-bolt] Settings: {info.get('settings_module') or 'embedded'}"
         )
-        
+
+        # Register OpenAPI routes if configured
+        if self.openapi_config:
+            self._register_openapi_routes()
+            print(f"[django-bolt] OpenAPI docs available at http://{host}:{port}{self.openapi_config.path}")
+
         # Register all routes with Rust router
         rust_routes = [
             (method, path, handler_id, handler)

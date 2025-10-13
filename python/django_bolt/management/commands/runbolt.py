@@ -213,15 +213,37 @@ class Command(BaseCommand):
 
         # Autodiscover BoltAPI instances
         apis = self.autodiscover_apis()
-        
+
         if not apis:
             self.stdout.write(
                 self.style.WARNING("No BoltAPI instances found. Create api.py files with api = BoltAPI()")
             )
             return
-        
-        # Merge all APIs and collect routes
+
+        # Merge all APIs and collect routes FIRST
         merged_api = self.merge_apis(apis)
+
+        # Register OpenAPI routes AFTER merging (so schema includes all routes)
+        openapi_enabled = False
+        openapi_config = None
+
+        # Find first API with OpenAPI config
+        for api_path, api in apis:
+            if api.openapi_config:
+                openapi_config = api.openapi_config
+                openapi_enabled = True
+                break
+
+        # Register OpenAPI routes on merged API if any API had OpenAPI enabled
+        if openapi_enabled and openapi_config:
+            # Transfer OpenAPI config to merged API
+            merged_api.openapi_config = openapi_config
+            merged_api._register_openapi_routes()
+
+            if process_id is not None:
+                self.stdout.write(f"[django-bolt] Process {process_id}: OpenAPI docs enabled at {openapi_config.path}")
+            else:
+                self.stdout.write(f"[django-bolt] OpenAPI docs enabled at {openapi_config.path}")
         
         if process_id is not None:
             self.stdout.write(f"[django-bolt] Process {process_id}: Found {len(merged_api._routes)} routes from {len(apis)} APIs")

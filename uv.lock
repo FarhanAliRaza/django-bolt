@@ -114,6 +114,7 @@ dependencies = [
     { name = "maturin" },
     { name = "msgspec" },
     { name = "pydantic" },
+    { name = "pyyaml" },
     { name = "watchfiles" },
 ]
 
@@ -131,6 +132,7 @@ requires-dist = [
     { name = "maturin", specifier = ">=1.9.4" },
     { name = "msgspec", specifier = ">=0.18" },
     { name = "pydantic", specifier = ">=2" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "watchfiles", specifier = ">=0.24" },
 ]
 

@@ -144,7 +144,7 @@ class BoltAPI:
         enable_logging: bool = True,
         logging_config: Optional[Any] = None,
         compression: Optional[Any] = None,
-        openapi_config: Optional[Any] = None
+        openapi_config: Optional[Any] = None,
     ) -> None:
         self._routes: List[Tuple[str, str, int, Callable]] = []
         self._handlers: Dict[int, Callable] = {}
@@ -188,6 +188,11 @@ class BoltAPI:
         self.openapi_config = openapi_config
         self._openapi_schema: Optional[Dict[str, Any]] = None
         self._openapi_routes_registered = False
+
+        # Django admin configuration (controlled by --no-admin flag)
+        self._admin_routes_registered = False
+        self._static_routes_registered = False
+        self._asgi_handler = None
 
         # Register this instance globally for autodiscovery
         _BOLT_API_REGISTRY.append(self)
@@ -526,88 +531,38 @@ class BoltAPI:
         return self._openapi_schema
 
     def _register_openapi_routes(self) -> None:
-        """Register OpenAPI documentation routes."""
-        if not self.openapi_config or self._openapi_routes_registered:
-            return
+        """Register OpenAPI documentation routes.
 
-        from .openapi.plugins import JsonRenderPlugin, YamlRenderPlugin
-        from .responses import HTML, Redirect, JSON, PlainText
+        Delegates to OpenAPIRouteRegistrar for cleaner separation of concerns.
+        """
+        from .openapi.routes import OpenAPIRouteRegistrar
 
-        # Always register JSON endpoint
-        json_plugin = JsonRenderPlugin()
+        registrar = OpenAPIRouteRegistrar(self)
+        registrar.register_routes()
 
-        @self.get(f"{self.openapi_config.path}/openapi.json")
-        async def openapi_json_handler(request):
-            """Serve OpenAPI schema as JSON."""
-            schema = self._get_openapi_schema()
-            rendered = json_plugin.render(schema, "")
-            # Return with proper OpenAPI JSON content-type
-            return JSON(
-                rendered,
-                status_code=200,
-                headers={"content-type": json_plugin.media_type}
-            )
+    def _register_admin_routes(self, host: str = "localhost", port: int = 8000) -> None:
+        """Register Django admin routes via ASGI bridge.
 
-        # Always register YAML endpoints
-        yaml_plugin = YamlRenderPlugin()
+        Delegates to AdminRouteRegistrar for cleaner separation of concerns.
 
-        @self.get(f"{self.openapi_config.path}/openapi.yaml")
-        async def openapi_yaml_handler(request):
-            """Serve OpenAPI schema as YAML."""
-            schema = self._get_openapi_schema()
-            rendered = yaml_plugin.render(schema, "")
-            # Return with proper YAML content-type
-            return PlainText(
-                rendered,
-                status_code=200,
-                headers={"content-type": yaml_plugin.media_type}
-            )
+        Args:
+            host: Server hostname for ASGI scope
+            port: Server port for ASGI scope
+        """
+        from .admin.routes import AdminRouteRegistrar
 
-        @self.get(f"{self.openapi_config.path}/openapi.yml")
-        async def openapi_yml_handler(request):
-            """Serve OpenAPI schema as YAML (alternative extension)."""
-            schema = self._get_openapi_schema()
-            rendered = yaml_plugin.render(schema, "")
-            # Return with proper YAML content-type
-            return PlainText(
-                rendered,
-                status_code=200,
-                headers={"content-type": yaml_plugin.media_type}
-            )
+        registrar = AdminRouteRegistrar(self)
+        registrar.register_routes(host, port)
 
-        # Register UI plugin routes
-        schema_url = f"{self.openapi_config.path}/openapi.json"
+    def _register_static_routes(self) -> None:
+        """Register static file serving routes for Django admin.
 
-        for plugin in self.openapi_config.render_plugins:
-            for plugin_path in plugin.paths:
-                full_path = f"{self.openapi_config.path}{plugin_path}"
+        Delegates to StaticRouteRegistrar for cleaner separation of concerns.
+        """
+        from .admin.static_routes import StaticRouteRegistrar
 
-                # Create closure to capture plugin reference
-                def make_handler(p):
-                    async def ui_handler():
-                        """Serve OpenAPI UI."""
-                        schema = self._get_openapi_schema()
-                        rendered = p.render(schema, schema_url)
-                        # Return with proper content-type from plugin
-                        return HTML(
-                            rendered,
-                            status_code=200,
-                            headers={"content-type": p.media_type}
-                        )
-                    return ui_handler
-
-                self.get(full_path)(make_handler(plugin))
-
-        # Add root redirect to default plugin
-        if self.openapi_config.default_plugin:
-            default_path = self.openapi_config.default_plugin.paths[0]
-
-            @self.get(self.openapi_config.path)
-            async def openapi_root_redirect():
-                """Redirect to default OpenAPI UI."""
-                return Redirect(f"{self.openapi_config.path}{default_path}")
-
-        self._openapi_routes_registered = True
+        registrar = StaticRouteRegistrar(self)
+        registrar.register_routes()
 
     def serve(self, host: str = "0.0.0.0", port: int = 8000) -> None:
         """Start the async server with registered routes"""
@@ -617,6 +572,19 @@ class BoltAPI:
             f"[django-bolt] DB: {info.get('database')} name={info.get('database_name')}\n"
             f"[django-bolt] Settings: {info.get('settings_module') or 'embedded'}"
         )
+
+        # Register Django admin routes if enabled
+        if self.enable_admin:
+            self._register_admin_routes(host, port)
+            if self._admin_routes_registered:
+                from .admin.admin_detection import detect_admin_url_prefix
+                admin_prefix = detect_admin_url_prefix() or 'admin'
+                print(f"[django-bolt] Django admin available at http://{host}:{port}/{admin_prefix}/")
+
+                # Also register static file routes for admin
+                self._register_static_routes()
+                if self._static_routes_registered:
+                    print(f"[django-bolt] Static files serving enabled")
 
         # Register OpenAPI routes if configured
         if self.openapi_config:
@@ -643,6 +611,11 @@ class BoltAPI:
         
         print(f"[django-bolt] Registered {len(self._routes)} routes")
         print(f"[django-bolt] Starting async server on http://{host}:{port}")
-        
+
+        # Get compression config
+        compression_config = None
+        if self.compression is not None:
+            compression_config = self.compression.to_rust_config()
+
         # Start async server
-        _core.start_server_async(self._dispatch, host, port)
+        _core.start_server_async(self._dispatch, host, port, compression_config)

@@ -25,10 +25,9 @@ class Command(BaseCommand):
             "--workers", type=int, default=2, help="Workers per process (default: 2)"
         )
         parser.add_argument(
-            "--admin-mode",
-            choices=["off", "wsgi", "asgi"],
-            default="off",
-            help="Admin integration mode (default: off)",
+            "--no-admin",
+            action="store_true",
+            help="Disable Django admin integration (admin enabled by default)",
         )
         parser.add_argument(
             "--dev",
@@ -103,6 +102,10 @@ class Command(BaseCommand):
                 "--port", str(options['port']),
                 "--workers", str(options['workers']),
             ]
+
+            # Pass through --no-admin flag if present
+            if options.get('no_admin', False):
+                cmd.append('--no-admin')
 
             server_process = subprocess.Popen(
                 cmd,
@@ -244,7 +247,31 @@ class Command(BaseCommand):
                 self.stdout.write(f"[django-bolt] Process {process_id}: OpenAPI docs enabled at {openapi_config.path}")
             else:
                 self.stdout.write(f"[django-bolt] OpenAPI docs enabled at {openapi_config.path}")
-        
+
+        # Register Django admin routes if not disabled
+        # Admin is controlled solely by --no-admin command-line flag
+        admin_enabled = not options.get('no_admin', False)
+
+        if admin_enabled:
+            # Register admin routes
+            merged_api._register_admin_routes(options['host'], options['port'])
+
+            if merged_api._admin_routes_registered:
+                from django_bolt.admin.admin_detection import detect_admin_url_prefix
+                admin_prefix = detect_admin_url_prefix() or 'admin'
+                if process_id is not None:
+                    self.stdout.write(f"[django-bolt] Process {process_id}: Django admin enabled at http://{options['host']}:{options['port']}/{admin_prefix}/")
+                else:
+                    self.stdout.write(self.style.SUCCESS(f"[django-bolt] Django admin enabled at http://{options['host']}:{options['port']}/{admin_prefix}/"))
+
+                # Also register static file routes for admin
+                merged_api._register_static_routes()
+                if merged_api._static_routes_registered:
+                    if process_id is not None:
+                        self.stdout.write(f"[django-bolt] Process {process_id}: Static files serving enabled")
+                    else:
+                        self.stdout.write("[django-bolt] Static files serving enabled")
+
         if process_id is not None:
             self.stdout.write(f"[django-bolt] Process {process_id}: Found {len(merged_api._routes)} routes from {len(apis)} APIs")
         else:

@@ -33,11 +33,12 @@ pub fn convert_path(path: &str) -> String {
                 let type_ = &param[colon_pos + 1..];
 
                 if type_ == "path" {
-                    // Convert {name:path} to *name (catch-all)
-                    result.pop(); // Remove the '{'
+                    // Convert {name:path} to {*name} (catch-all)
+                    // matchit requires catch-all to be inside braces: {*param}
                     result.push('*');
                     result.push_str(name);
-                    continue; // Skip the closing '}'
+                    result.push('}');
+                    continue;
                 }
             }
 

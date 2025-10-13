@@ -12,6 +12,14 @@ async def serialize_response(result: Any, meta: Dict[str, Any]) -> Response:
     """Serialize handler result to HTTP response."""
     response_tp = meta.get("response_type")
 
+    # Check if result is already a raw response tuple (status, headers, body)
+    # This is used by ASGI bridge and other low-level handlers
+    if isinstance(result, tuple) and len(result) == 3:
+        status, headers, body = result
+        # Validate it looks like a response tuple
+        if isinstance(status, int) and isinstance(headers, list) and isinstance(body, (bytes, bytearray)):
+            return status, headers, bytes(body)
+
     # Handle different response types
     if isinstance(result, JSON):
         return await serialize_json_response(result, response_tp)

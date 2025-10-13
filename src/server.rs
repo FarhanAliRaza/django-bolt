@@ -93,18 +93,34 @@ pub fn start_server_async(
         });
     });
 
-    // Get debug mode from Django settings (reuse Django's DEBUG setting)
-    let debug = Python::attach(|py| {
-        (|| -> PyResult<bool> {
+    // Get configuration from Django settings ONCE at startup (not per-request)
+    let (debug, max_header_size, cors_allowed_origins) = Python::attach(|py| {
+        let debug = (|| -> PyResult<bool> {
             let django_conf = py.import("django.conf")?;
             let settings = django_conf.getattr("settings")?;
             settings.getattr("DEBUG")?.extract::<bool>()
-        })().unwrap_or(false)
+        })().unwrap_or(false);
+
+        let max_header_size = (|| -> PyResult<usize> {
+            let django_conf = py.import("django.conf")?;
+            let settings = django_conf.getattr("settings")?;
+            settings.getattr("BOLT_MAX_HEADER_SIZE")?.extract::<usize>()
+        })().unwrap_or(8192); // Default 8KB
+
+        let cors_allowed_origins = (|| -> PyResult<Vec<String>> {
+            let django_conf = py.import("django.conf")?;
+            let settings = django_conf.getattr("settings")?;
+            settings.getattr("BOLT_CORS_ALLOWED_ORIGINS")?.extract::<Vec<String>>()
+        })().unwrap_or_else(|_| vec![]); // Default empty (secure)
+
+        (debug, max_header_size, cors_allowed_origins)
     });
 
     let app_state = Arc::new(AppState {
         dispatch: dispatch.into(),
         debug,
+        max_header_size,
+        cors_allowed_origins,
     });
 
     // Note: compression_config is provided but not used yet in Rust

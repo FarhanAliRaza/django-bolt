@@ -8,20 +8,46 @@ use actix_web::HttpResponse;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-pub fn handle_preflight(config: &HashMap<String, Py<PyAny>>, py: Python) -> HttpResponse {
-    let mut builder = HttpResponse::build(StatusCode::NO_CONTENT);
-    
-    // Get allowed origins
-    let origins = config
+/// Get allowed origins from route config only (no per-request Django settings lookup)
+/// The Python middleware compiler should have already merged Django settings into route config
+fn get_allowed_origins(config: &HashMap<String, Py<PyAny>>, py: Python) -> Vec<String> {
+    config
         .get("origins")
         .and_then(|o| o.extract::<Vec<String>>(py).ok())
-        .unwrap_or_else(|| vec!["*".to_string()]);
-    
+        .unwrap_or_else(|| vec![])
+}
+
+pub fn handle_preflight(config: &HashMap<String, Py<PyAny>>, py: Python) -> HttpResponse {
+    let mut builder = HttpResponse::build(StatusCode::NO_CONTENT);
+
+    // Get allowed origins - try Django settings first, then config
+    let origins = get_allowed_origins(config, py);
+
+    // SECURITY: If no origins configured, reject
+    if origins.is_empty() {
+        return HttpResponse::Forbidden()
+            .content_type("text/plain; charset=utf-8")
+            .body("CORS not configured for this endpoint");
+    }
+
+    // Get credentials flag
+    let allow_credentials = config
+        .get("credentials")
+        .and_then(|c| c.extract::<bool>(py).ok())
+        .unwrap_or(false);
+
+    // SECURITY: Validate that wildcard is not combined with credentials
+    let is_wildcard = origins.contains(&"*".to_string());
+    if is_wildcard && allow_credentials {
+        return HttpResponse::InternalServerError()
+            .content_type("text/plain; charset=utf-8")
+            .body("CORS misconfiguration: Cannot use wildcard '*' with credentials=true");
+    }
+
     // For simplicity, use first origin or *
     let origin = origins.first().unwrap_or(&"*".to_string()).clone();
-    let is_wildcard = origin == "*";
     builder.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, origin));
-    
+
     // Get allowed methods
     let methods = config
         .get("methods")
@@ -35,21 +61,19 @@ pub fn handle_preflight(config: &HashMap<String, Py<PyAny>>, py: Python) -> Http
             "OPTIONS".to_string(),
         ]);
     builder.insert_header((ACCESS_CONTROL_ALLOW_METHODS, methods.join(", ")));
-    
+
     // Get allowed headers
     let headers = config
         .get("headers")
         .and_then(|h| h.extract::<Vec<String>>(py).ok())
         .unwrap_or_else(|| vec!["Content-Type".to_string(), "Authorization".to_string()]);
     builder.insert_header((ACCESS_CONTROL_ALLOW_HEADERS, headers.join(", ")));
-    
-    // Check credentials
-    if let Some(creds) = config.get("credentials") {
-        if let Ok(true) = creds.extract::<bool>(py) {
-            builder.insert_header((ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
-        }
+
+    // Add credentials header if enabled (already validated above)
+    if allow_credentials {
+        builder.insert_header((ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
     }
-    
+
     // Max age
     let max_age = config
         .get("max_age")
@@ -71,14 +95,29 @@ pub fn add_cors_headers_to_response(
     config: &HashMap<String, Py<PyAny>>,
     py: Python,
 ) {
-    // Get allowed origins
-    let origins = config
-        .get("origins")
-        .and_then(|o| o.extract::<Vec<String>>(py).ok())
-        .unwrap_or_else(|| vec!["*".to_string()]);
-    
+    // Get allowed origins - try Django settings first, then config
+    let origins = get_allowed_origins(config, py);
+
+    // SECURITY: If no origins configured, don't add CORS headers
+    if origins.is_empty() {
+        return;
+    }
+
+    // Get credentials flag
+    let allow_credentials = config
+        .get("credentials")
+        .and_then(|c| c.extract::<bool>(py).ok())
+        .unwrap_or(false);
+
+    // SECURITY: Validate wildcard + credentials (skip adding headers if misconfigured)
+    let is_wildcard = origins.contains(&"*".to_string());
+    if is_wildcard && allow_credentials {
+        // Don't add headers - invalid configuration
+        return;
+    }
+
     // Check if request origin is allowed
-    let origin_to_use = if origins.contains(&"*".to_string()) {
+    let origin_to_use = if is_wildcard {
         "*".to_string()
     } else if let Some(req_origin) = request_origin {
         if origins.iter().any(|o| o == req_origin) {
@@ -89,7 +128,7 @@ pub fn add_cors_headers_to_response(
     } else {
         origins.first().unwrap_or(&"*".to_string()).clone()
     };
-    
+
     response.headers_mut().insert(
         ACCESS_CONTROL_ALLOW_ORIGIN,
         origin_to_use.parse().unwrap(),
@@ -103,14 +142,12 @@ pub fn add_cors_headers_to_response(
         );
     }
 
-    // Add credentials header if enabled
-    if let Some(creds) = config.get("credentials") {
-        if let Ok(true) = creds.extract::<bool>(py) {
-            response.headers_mut().insert(
-                ACCESS_CONTROL_ALLOW_CREDENTIALS,
-                "true".parse().unwrap(),
-            );
-        }
+    // Add credentials header if enabled (already validated above)
+    if allow_credentials {
+        response.headers_mut().insert(
+            ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            "true".parse().unwrap(),
+        );
     }
 
     // Add exposed headers if specified

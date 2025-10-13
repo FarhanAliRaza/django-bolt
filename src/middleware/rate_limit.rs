@@ -8,6 +8,7 @@ use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 type Limiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
@@ -16,6 +17,15 @@ static RATE_LIMITERS: Lazy<DashMap<usize, Arc<Limiter>>> = Lazy::new(DashMap::ne
 
 // Store per-key limiters (IP-based)
 static IP_LIMITERS: Lazy<DashMap<(usize, String), Arc<Limiter>>> = Lazy::new(DashMap::new);
+
+// Track total limiter count for cleanup
+static LIMITER_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+// SECURITY: Maximum number of rate limiters to prevent memory exhaustion
+const MAX_LIMITERS: usize = 100_000;
+
+// SECURITY: Maximum key length to prevent memory attacks
+const MAX_KEY_LENGTH: usize = 256;
 
 pub fn check_rate_limit(
     handler_id: usize,
@@ -41,7 +51,7 @@ pub fn check_rate_limit(
         .unwrap_or_else(|| "ip".to_string());
 
     // Determine the rate limit key
-    let key = match key_type.as_str() {
+    let mut key = match key_type.as_str() {
         "ip" => {
             // Try to get client IP from headers (X-Forwarded-For, X-Real-IP, etc.)
             headers.get("x-forwarded-for")
@@ -62,10 +72,30 @@ pub fn check_rate_limit(
                 .unwrap_or_else(|| "unknown".to_string())
         }
     };
-    
+
+    // SECURITY: Validate key length to prevent memory attacks
+    if key.len() > MAX_KEY_LENGTH {
+        // Truncate or reject long keys
+        return Some(
+            HttpResponse::BadRequest()
+                .content_type("application/json")
+                .body(r#"{"detail":"Rate limit key too long"}"#)
+        );
+    }
+
+    // SECURITY: Check if we've exceeded max limiters (prevent memory exhaustion)
+    let current_count = LIMITER_COUNT.load(Ordering::Relaxed);
+    if current_count >= MAX_LIMITERS {
+        // Trigger cleanup of old limiters (simple LRU-style)
+        cleanup_old_limiters();
+    }
+
     // Get or create rate limiter for this handler + key combination
     let limiter_key = (handler_id, key.clone());
     let limiter = IP_LIMITERS.entry(limiter_key.clone()).or_insert_with(|| {
+        // Increment counter
+        LIMITER_COUNT.fetch_add(1, Ordering::Relaxed);
+
         // Use NonZero constructors properly
         let rps_nonzero = std::num::NonZeroU32::new(rps.max(1)).unwrap();
         let burst_nonzero = std::num::NonZeroU32::new(burst.max(1)).unwrap();
@@ -81,7 +111,7 @@ pub fn check_rate_limit(
             // Calculate retry after in seconds
             let wait_time = not_until.wait_time_from(DefaultClock::default().now());
             let retry_after = wait_time.as_secs().max(1);
-            
+
             Some(
                 HttpResponse::TooManyRequests()
                     .insert_header(("Retry-After", retry_after.to_string()))
@@ -95,4 +125,22 @@ pub fn check_rate_limit(
             )
         }
     }
+}
+
+/// Cleanup old rate limiters when limit is reached
+/// Simple strategy: remove 20% of limiters to make room for new ones
+fn cleanup_old_limiters() {
+    let to_remove = (MAX_LIMITERS as f64 * 0.2) as usize;
+    let mut removed = 0;
+
+    // Remove first N entries (simple cleanup, not LRU)
+    IP_LIMITERS.retain(|_, _| {
+        if removed < to_remove {
+            removed += 1;
+            LIMITER_COUNT.fetch_sub(1, Ordering::Relaxed);
+            false // Remove this entry
+        } else {
+            true // Keep this entry
+        }
+    });
 }

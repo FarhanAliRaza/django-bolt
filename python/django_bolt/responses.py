@@ -1,5 +1,38 @@
 import msgspec
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
+from pathlib import Path
+
+# Cache for BOLT_ALLOWED_FILE_PATHS - loaded once at server startup
+_ALLOWED_FILE_PATHS_CACHE: Optional[List[Path]] = None
+_ALLOWED_FILE_PATHS_INITIALIZED = False
+
+
+def initialize_file_response_settings():
+    """
+    Initialize FileResponse settings cache at server startup.
+    This should be called once when the server starts to cache BOLT_ALLOWED_FILE_PATHS.
+    """
+    global _ALLOWED_FILE_PATHS_CACHE, _ALLOWED_FILE_PATHS_INITIALIZED
+
+    if _ALLOWED_FILE_PATHS_INITIALIZED:
+        return
+
+    try:
+        from django.conf import settings
+        if hasattr(settings, 'BOLT_ALLOWED_FILE_PATHS'):
+            allowed_paths = settings.BOLT_ALLOWED_FILE_PATHS
+            if allowed_paths:
+                # Resolve all paths once at startup
+                _ALLOWED_FILE_PATHS_CACHE = [Path(p).resolve() for p in allowed_paths]
+            else:
+                _ALLOWED_FILE_PATHS_CACHE = None
+        else:
+            _ALLOWED_FILE_PATHS_CACHE = None
+    except ImportError:
+        # Django not configured, allow any path (development mode)
+        _ALLOWED_FILE_PATHS_CACHE = None
+
+    _ALLOWED_FILE_PATHS_INITIALIZED = True
 
 
 class JSON:
@@ -76,7 +109,42 @@ class FileResponse:
         status_code: int = 200,
         headers: Optional[Dict[str, str]] = None,
     ):
-        self.path = path
+        # SECURITY: Validate and canonicalize path to prevent traversal
+
+        # Convert to absolute path and resolve any .. or symlinks
+        try:
+            resolved_path = Path(path).resolve()
+        except (OSError, RuntimeError) as e:
+            raise ValueError(f"Invalid file path: {e}")
+
+        # Check if the file exists and is a regular file (not a directory or special file)
+        if not resolved_path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+
+        if not resolved_path.is_file():
+            raise ValueError(f"Path is not a regular file: {path}")
+
+        # Check against allowed directories if configured (using cached value)
+        if _ALLOWED_FILE_PATHS_CACHE is not None:
+            # Ensure the resolved path is within one of the allowed directories
+            is_allowed = False
+            for allowed_path in _ALLOWED_FILE_PATHS_CACHE:
+                try:
+                    # Check if resolved_path is relative to allowed_path
+                    resolved_path.relative_to(allowed_path)
+                    is_allowed = True
+                    break
+                except ValueError:
+                    # Not a subpath, continue checking
+                    continue
+
+            if not is_allowed:
+                raise PermissionError(
+                    f"File path '{path}' is not within allowed directories. "
+                    f"Configure BOLT_ALLOWED_FILE_PATHS in Django settings."
+                )
+
+        self.path = str(resolved_path)
         self.media_type = media_type
         self.filename = filename
         self.status_code = status_code

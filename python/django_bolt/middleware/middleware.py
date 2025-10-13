@@ -119,20 +119,40 @@ def cors(
 ):
     """
     CORS configuration decorator.
-    
+
     Args:
-        origins: Allowed origins (["*"] for all)
+        origins: Allowed origins. Use Django setting BOLT_CORS_ALLOWED_ORIGINS for global config.
+                 Default is empty list (no origins allowed) for security.
         methods: Allowed methods
         headers: Allowed headers
-        credentials: Allow credentials
+        credentials: Allow credentials (cannot be combined with wildcard "*")
         max_age: Preflight cache duration
+
+    Security Notes:
+        - Default changed from ["*"] to [] (empty) for better security
+        - Wildcard "*" with credentials=True is not allowed (violates CORS spec)
+        - Configure BOLT_CORS_ALLOWED_ORIGINS in Django settings for global origins
     """
     def decorator(func):
         if not hasattr(func, '__bolt_middleware__'):
             func.__bolt_middleware__ = []
+
+        # Parse origins
+        origin_list = origins if isinstance(origins, list) else [origins] if origins else []
+
+        # SECURITY: Validate wildcard + credentials
+        if "*" in origin_list and credentials:
+            import warnings
+            warnings.warn(
+                "CORS misconfiguration: Cannot use wildcard '*' with credentials=True. "
+                "This violates the CORS specification. Please specify explicit origins.",
+                RuntimeWarning,
+                stacklevel=2
+            )
+
         func.__bolt_middleware__.append({
             'type': 'cors',
-            'origins': origins if isinstance(origins, list) else [origins] if origins else ["*"],
+            'origins': origin_list,
             'methods': methods or ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
             'headers': headers,
             'credentials': credentials,

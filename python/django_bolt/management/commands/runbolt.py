@@ -209,6 +209,10 @@ class Command(BaseCommand):
         from django_bolt.logging.config import setup_django_logging
         setup_django_logging()
 
+        # Initialize FileResponse settings cache once at server startup
+        from django_bolt.responses import initialize_file_response_settings
+        initialize_file_response_settings()
+
         if process_id is not None:
             self.stdout.write(f"[django-bolt] Process {process_id}: Starting autodiscovery...")
         else:

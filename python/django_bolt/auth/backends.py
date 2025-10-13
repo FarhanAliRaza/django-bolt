@@ -94,9 +94,27 @@ class JWTAuthentication(BaseAuthentication):
         if self.secret is None:
             try:
                 from django.conf import settings
+                from django.core.exceptions import ImproperlyConfigured
+
+                if not hasattr(settings, 'SECRET_KEY'):
+                    raise ImproperlyConfigured(
+                        "JWTAuthentication requires a 'secret' parameter or Django's SECRET_KEY setting. "
+                        "Neither was provided."
+                    )
+
                 self.secret = settings.SECRET_KEY
-            except (ImportError, AttributeError):
-                pass  # Will be handled at runtime
+
+                if not self.secret or self.secret == '':
+                    raise ImproperlyConfigured(
+                        "JWTAuthentication secret cannot be empty. "
+                        "Please provide a non-empty 'secret' parameter or set Django's SECRET_KEY."
+                    )
+            except ImportError:
+                from django.core.exceptions import ImproperlyConfigured
+                raise ImproperlyConfigured(
+                    "JWTAuthentication requires Django to be installed and configured, "
+                    "or a 'secret' parameter must be explicitly provided."
+                )
 
         # Revocation support (OPTIONAL - only checked if provided)
         self.revoked_token_handler = revoked_token_handler

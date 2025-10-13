@@ -383,7 +383,7 @@ class TestErrorHandlers:
         assert "Test with request" in html_content
 
     def test_handle_exception_respects_django_debug_setting(self):
-        """Test that handle_exception uses Django DEBUG setting when debug param is False."""
+        """Test that handle_exception uses Django DEBUG setting when debug param is not provided."""
         from django.conf import settings
 
         # Store original DEBUG setting
@@ -395,13 +395,13 @@ class TestErrorHandlers:
         try:
             exc = ValueError("Should use Django DEBUG")
 
-            # Call with debug=False (should check Django settings)
-            status, headers, _ = handle_exception(exc, debug=False)
+            # Call without debug parameter (should check Django settings)
+            status, headers, _ = handle_exception(exc)
 
             # Since Django DEBUG=True, should return HTML
             headers_dict = dict(headers)
             assert headers_dict.get("content-type") == "text/html; charset=utf-8", \
-                "Should use Django DEBUG=True setting when debug param is False"
+                "Should use Django DEBUG=True setting when debug param is not provided"
             assert status == 500
         finally:
             # Restore original setting

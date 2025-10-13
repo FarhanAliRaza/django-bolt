@@ -20,6 +20,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 def pytest_configure(config):
     """Configure Django settings for pytest-django."""
+    import django
     from django.conf import settings
 
     # Skip configuration if DJANGO_SETTINGS_MODULE is already set
@@ -81,6 +82,21 @@ def pytest_configure(config):
             STATIC_URL='/static/',
             DEFAULT_AUTO_FIELD='django.db.models.BigAutoField',
         )
+        # Setup Django apps so ExceptionReporter works
+        django.setup()
+
+
+@pytest.fixture(scope='session')
+def django_db_setup(django_db_setup, django_db_blocker):
+    """
+    Ensure database migrations are run before any tests that use the database.
+    This creates the auth_user table and other Django core tables.
+    """
+    from django.core.management import call_command
+
+    with django_db_blocker.unblock():
+        # Run migrations to create all necessary tables
+        call_command('migrate', '--run-syncdb', verbosity=0)
 
 
 def spawn_process(command):

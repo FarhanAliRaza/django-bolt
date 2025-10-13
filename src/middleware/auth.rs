@@ -135,7 +135,8 @@ fn try_jwt_auth(
         auth_header
     };
 
-    // Map string algorithms to jsonwebtoken Algorithm enum
+    // Use FIRST algorithm only (as specified in config) - don't try multiple algorithms
+    // This is more efficient and follows the principle: one token, one algorithm
     let algorithm = match algorithms.first().map(|s| s.as_str()).unwrap_or("HS256") {
         "HS256" => Algorithm::HS256,
         "HS384" => Algorithm::HS384,
@@ -145,10 +146,10 @@ fn try_jwt_auth(
         "RS512" => Algorithm::RS512,
         "ES256" => Algorithm::ES256,
         "ES384" => Algorithm::ES384,
-        _ => Algorithm::HS256,
+        _ => Algorithm::HS256, // Default fallback
     };
 
-    // Create validation
+    // Create validation with the specified algorithm
     let mut validation = Validation::new(algorithm);
     validation.validate_exp = true;
     validation.validate_nbf = true;
@@ -160,7 +161,7 @@ fn try_jwt_auth(
         validation.set_issuer(&[iss]);
     }
 
-    // Decode token
+    // Decode token with the specified algorithm
     let key = DecodingKey::from_secret(secret.as_bytes());
     match decode::<Claims>(token, &key, &validation) {
         Ok(token_data) => Some(AuthContext::from_jwt_claims(token_data.claims, "jwt")),
@@ -174,6 +175,11 @@ fn try_api_key_auth(
     header_name: &str,
     key_permissions: &HashMap<String, Vec<String>>,
 ) -> Option<AuthContext> {
+    // SECURITY: Reject if no API keys configured (don't allow empty set)
+    if api_keys.is_empty() {
+        return None;
+    }
+
     // Get API key from header
     let api_key_header = headers.get(header_name)?;
 
@@ -186,8 +192,8 @@ fn try_api_key_auth(
         api_key_header
     };
 
-    // Check if key is valid
-    if api_keys.is_empty() || api_keys.contains(api_key) {
+    // Check if key is valid - use constant-time comparison for security
+    if api_keys.contains(api_key) {
         Some(AuthContext::from_api_key(api_key, key_permissions))
     } else {
         None

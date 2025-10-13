@@ -245,27 +245,31 @@ def generic_exception_handler(
 
 def handle_exception(
     exc: Exception,
-    debug: bool = False,
+    debug: Optional[bool] = None,
     request: Optional[Any] = None,
 ) -> Tuple[int, List[Tuple[str, str]], bytes]:
     """Main exception handler that routes to specific handlers.
 
     Args:
         exc: Exception instance
-        debug: Whether to include debug information (will check Django DEBUG if not specified)
+        debug: Whether to include debug information. If None, will check Django DEBUG setting.
+              If explicitly False, will not show debug info even if Django DEBUG=True.
         request: Optional request object for Django ExceptionReporter
 
     Returns:
         Tuple of (status_code, headers, body)
     """
-    # Check Django's DEBUG setting dynamically if debug not explicitly set
-    if not debug:
+    # Check Django's DEBUG setting dynamically only if debug is not explicitly set
+    if debug is None:
         try:
             from django.conf import settings
             if settings.configured:
                 debug = settings.DEBUG
+            else:
+                debug = False
         except (ImportError, AttributeError):
-            pass
+            debug = False
+
     if isinstance(exc, HTTPException):
         return http_exception_handler(exc)
     elif isinstance(exc, RequestValidationError):
@@ -283,6 +287,18 @@ def handle_exception(
         return format_error_response(
             status_code=422,
             detail=errors,
+        )
+    elif isinstance(exc, FileNotFoundError):
+        # FileNotFoundError from FileResponse - return 404
+        return format_error_response(
+            status_code=404,
+            detail=str(exc) or "File not found",
+        )
+    elif isinstance(exc, PermissionError):
+        # PermissionError from FileResponse path validation - return 403
+        return format_error_response(
+            status_code=403,
+            detail=str(exc) or "Permission denied",
         )
     else:
         # Generic exception

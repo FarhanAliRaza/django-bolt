@@ -93,8 +93,29 @@ pub async fn handle_request(
 
     // Extract headers early for middleware processing - pre-allocate with typical size
     let mut headers: AHashMap<String, String> = AHashMap::with_capacity(16);
+
+    // SECURITY: Use limits from AppState (configured once at startup)
+    const MAX_HEADERS: usize = 100;
+    let max_header_size = state.max_header_size;
+    let mut header_count = 0;
+
     for (name, value) in req.headers().iter() {
+        // Check header count limit
+        header_count += 1;
+        if header_count > MAX_HEADERS {
+            return HttpResponse::BadRequest()
+                .content_type("text/plain; charset=utf-8")
+                .body("Too many headers");
+        }
+
         if let Ok(v) = value.to_str() {
+            // SECURITY: Validate header value size
+            if v.len() > max_header_size {
+                return HttpResponse::BadRequest()
+                    .content_type("text/plain; charset=utf-8")
+                    .body(format!("Header value too large (max {} bytes)", max_header_size));
+            }
+
             headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
         }
     }

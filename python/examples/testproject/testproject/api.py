@@ -165,6 +165,9 @@ THIS_FILE = os.path.abspath(__file__)
 async def file_static():
     return FileResponse(THIS_FILE, filename="api.py")
 
+@api.get("/file-static-nonexistent")
+async def file_static():
+    return FileResponse("/path/to/nonexistent/file.txt", filename="asdfasd.py")
 
 # ==== Streaming endpoints for benchmarks ====
 @api.get("/stream")

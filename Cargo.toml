@@ -14,7 +14,7 @@ pyo3-async-runtimes = { version = "0.26", features = ["tokio-runtime"] }
 actix-web = { version = "4", features = ["compress-gzip", "compress-brotli", "compress-zstd"] }
 actix-http = "3"
 actix-cors = "0.7"
-actix-files = "0.6"
+actix-files = { version = "0.6", features = ["experimental-io-uring"] }
 actix-multipart = "0.6"
 tokio = { version = "1", features = ["full"] }
 socket2 = { version = "0.5", features = ["all"] }

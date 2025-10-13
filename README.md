@@ -1,6 +1,8 @@
-# Django-Bolt ⚡
+<div align="center">
+  <img src="docs/logo.png" alt="Django-Bolt Logo" width="400"/>
 
-[![Seeking Remote Work](https://img.shields.io/badge/🌍-Actively%20Seeking%20Remote%20Work-success?style=for-the-badge)](mailto:farhanalirazaazeemi@gmail.com)
+  [![Seeking Remote Work](https://img.shields.io/badge/🌍-Actively%20Seeking%20Remote%20Work-success?style=for-the-badge)](mailto:farhanalirazaazeemi@gmail.com)
+</div>
 
 **High-Performance Fully Typed API Framework for Django**
 
@@ -167,32 +169,36 @@ python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 4 --workers 1
 
 ---
 
-## ⚠️ Partially Complete / In Progress
-
-- [ ] JWT Auth (Almost done)
-- [ ] API key (only in memory api keys)
-
----
-
 ## 📋 TODO / Roadmap
 
-### High Priority 🔥
+### Must Have (Blockers) 🚨
 
-- [ ] **Request Validation** - More advanced validation (custom validators, nested models)
-- [ ] **OpenAPI/Swagger** - Auto-generated API documentation from route definitions
-- [ ] **Response Compression** - gzip/brotli compression in Rust
-- [ ] **Request Logging** - Structured logging (configurable)
-- [ ] **Pagination** - Built-in pagination helpers
-- [ ] **Static File Serving** - Efficient static file serving from Rust
+- ✅ **Core API functionality** - DONE
+- ✅ **Authentication** - DONE (JWT complete)
+- ✅ **Tests passing** - DONE (142 passed)
+- ✅ **Better error messages** - DONE (Enhanced exception system with structured errors)
+- ✅ **Health check endpoints** - DONE (`/health`, `/ready` with custom checks)
+- ✅ **Request/Response logging** - DONE (Integrates with Django's logging)
+- ❌ **PyPI package** - Missing (currently manual install)
 
-### Medium Priority 🎯
+### Should Have (Important) 🎯
 
-- [ ] **Testing Utilities** - Test client and fixtures
-- [ ] **Admin Interface** - Django admin integration
-- [ ] **Health Checks** - `/health` and `/ready` endpoints
+- ✅ **Error handling with Django DEBUG integration** - DONE
+- ✅ **Structured error responses** (FastAPI-compatible) - DONE
+- ✅ **Response compression** - DONE (gzip/brotli/zstd)
+- ✅ **OpenAPI/Swagger docs** - DONE (some parts remaining like grouping)
+- ✅ **Django admin integration** - DONE
+- ⚠️ **API Key auth** - Partial (only in-memory)
+- ⚠️ **Testing utilities** - Partial
 
-### Low Priority 📝
+### Known Limitations
 
+- ❌ **HEAD and OPTIONS methods** - Not implemented yet
+
+### Nice to Have (Can defer) 📝
+
+- [ ] **Static file serving** - Efficient static file serving from Rust
+- [ ] **Pagination helpers** - Built-in pagination utilities
 - [ ] **OAuth2/OpenID** - OAuth2 and OpenID Connect support
 - [ ] **API Versioning** - URL/header-based versioning
 - [ ] **Content Negotiation** - Accept header-based content negotiation

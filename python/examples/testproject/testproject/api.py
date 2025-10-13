@@ -18,20 +18,14 @@ from django_bolt.health import register_health_checks, add_health_check
 from django_bolt.middleware import no_compress
 
 
+# OpenAPI is enabled by default at /docs with Swagger UI
+# You can customize it by passing openapi_config:
 api = BoltAPI(
-    openapi_config=OpenAPIConfig(
-        title="Django Bolt Test API",
-        version="1.0.0",
-        description="High-performance API framework for Django with 60k+ RPS",
-        render_plugins=[
-            SwaggerRenderPlugin(),
-            RedocRenderPlugin(),
-        ]
-    )
+   
 )
 
-# Or for default logging (recommended for most use cases):
-# api = BoltAPI()  # Automatically logs all requests/responses with sensible defaults
+# Or use defaults (Swagger UI at /docs, excludes /admin and /static):
+# api = BoltAPI()
 
 # Register health check endpoints (/health and /ready)
 register_health_checks(api)

@@ -43,14 +43,18 @@ class OpenAPIRouteRegistrar:
         @self.api.get(f"{self.api.openapi_config.path}/openapi.json")
         async def openapi_json_handler(request):
             """Serve OpenAPI schema as JSON."""
-            schema = self._get_schema()
-            rendered = json_plugin.render(schema, "")
-            # Return with proper OpenAPI JSON content-type
-            return JSON(
-                rendered,
-                status_code=200,
-                headers={"content-type": json_plugin.media_type}
-            )
+            try:
+                schema = self._get_schema()
+                rendered = json_plugin.render(schema, "")
+                # Return with proper OpenAPI JSON content-type
+                return JSON(
+                    rendered,
+                    status_code=200,
+                    headers={"content-type": json_plugin.media_type}
+                )
+            except Exception as e:
+                # Re-raise with more context for debugging
+                raise Exception(f"Failed to generate OpenAPI JSON schema: {type(e).__name__}: {str(e)}") from e
 
         # Always register YAML endpoints
         yaml_plugin = YamlRenderPlugin()

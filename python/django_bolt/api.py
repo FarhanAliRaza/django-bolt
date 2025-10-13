@@ -184,8 +184,34 @@ class BoltAPI:
             # Custom config provided
             self.compression = compression
 
-        # OpenAPI configuration
-        self.openapi_config = openapi_config
+        # OpenAPI configuration - enabled by default with sensible defaults
+        if openapi_config is None:
+            # Create default OpenAPI config
+            from .openapi import OpenAPIConfig, SwaggerRenderPlugin, RedocRenderPlugin, ScalarRenderPlugin, RapidocRenderPlugin, StoplightRenderPlugin, JsonRenderPlugin, YamlRenderPlugin
+            try:
+                # Try to get Django project name from settings
+                from django.conf import settings
+                title = getattr(settings, 'PROJECT_NAME', None) or getattr(settings, 'SITE_NAME', None) or "API"
+            except:
+                title = "API"
+
+            self.openapi_config = OpenAPIConfig(
+                title=title,
+                version="1.0.0",
+                path="/docs",
+                render_plugins=[
+                    SwaggerRenderPlugin(path="/"),
+                    RedocRenderPlugin(path="/redoc"),
+                    ScalarRenderPlugin(path="/scalar"),
+                    RapidocRenderPlugin(path="/rapidoc"),
+                    StoplightRenderPlugin(path="/stoplight"),
+                    JsonRenderPlugin(path="/json"),
+                    YamlRenderPlugin(path="/yaml"),
+                ]
+            )
+        else:
+            self.openapi_config = openapi_config
+
         self._openapi_schema: Optional[Dict[str, Any]] = None
         self._openapi_routes_registered = False
 

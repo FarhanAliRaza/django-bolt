@@ -13,14 +13,17 @@ Should Have (Important):
 ✅ Response compression
 ✅ OpenAPI/Swagger docs - implemented (Some parts remaining like grouping and stuff)
 ✅ Django admin integration
+✅ Static file serving
 
 ⚠️ API Key auth - Partial (only in-memory)
 ⚠️ Testing utilities - (Partially there)
 
-HEAD AND OPTIONS METHOD NOT IMPLEMENTED
+❌ HEAD AND OPTIONS METHOD NOT IMPLEMENTED
+
+Class based views
+guards should be funcional and should have a way to implement in python
 
 Nice to Have (Can defer):
-Static file serving
 Pagination helpers
 
 ## Recent Improvements (Error Handling & Logging)

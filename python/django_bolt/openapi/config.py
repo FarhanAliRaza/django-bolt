@@ -96,6 +96,31 @@ class OpenAPIConfig:
     If empty, ScalarRenderPlugin will be used by default.
     """
 
+    exclude_paths: List[str] = field(default_factory=lambda: ["/admin", "/static"])
+    """Path prefixes to exclude from OpenAPI schema generation.
+
+    By default excludes Django admin (/admin) and static files (/static).
+    The OpenAPI docs path (self.path) is always excluded automatically.
+    Set to empty list [] to include all routes, or customize as needed.
+
+    Example:
+        ```python
+        # Exclude additional paths
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            exclude_paths=["/admin", "/static", "/internal"]
+        )
+
+        # Include everything except docs
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            exclude_paths=[]
+        )
+        ```
+    """
+
     def __post_init__(self) -> None:
         """Initialize default render plugin if none provided."""
         if not self.render_plugins:

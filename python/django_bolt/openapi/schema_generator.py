@@ -51,6 +51,20 @@ class SchemaGenerator:
         # Generate path items from routes
         paths: Dict[str, PathItem] = {}
         for method, path, handler_id, handler in self.api._routes:
+            # Skip OpenAPI docs routes (always excluded)
+            if path.startswith(self.config.path):
+                continue
+
+            # Skip paths based on exclude_paths configuration
+            should_exclude = False
+            for exclude_prefix in self.config.exclude_paths:
+                if path.startswith(exclude_prefix):
+                    should_exclude = True
+                    break
+
+            if should_exclude:
+                continue
+
             if path not in paths:
                 paths[path] = PathItem()
 

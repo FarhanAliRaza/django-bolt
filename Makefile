@@ -4,7 +4,7 @@ HOST ?= 127.0.0.1
 PORT ?= 8000
 C ?= 100
 N ?= 10000
-P ?= 4
+P ?= 8
 WORKERS ?= 1
 
 .PHONY: build test-server test-server-bg kill bench clean orm-test setup-test-data seed-data orm-smoke compare-frameworks save-baseline test-py

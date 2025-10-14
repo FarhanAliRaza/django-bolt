@@ -232,38 +232,25 @@ pub fn handle_test_request_for(
             route = r.handler.clone_ref(py);
             path_params = params;
             handler_id = id;
-        } else if method == "OPTIONS" {
-            // OPTIONS preflight handling
-            for try_method in &["GET", "POST", "PUT", "PATCH", "DELETE"] {
-                if let Some((_r, _params, id)) = app.router.find(try_method, &path) {
-                    if app.middleware_metadata.get(&id).is_some() {
-                        return Ok((
-                            200,
-                            vec![
-                                (
-                                    "access-control-allow-methods".to_string(),
-                                    "GET, POST, PUT, PATCH, DELETE, OPTIONS".to_string(),
-                                ),
-                                (
-                                    "access-control-allow-headers".to_string(),
-                                    "content-type, authorization".to_string(),
-                                ),
-                                ("access-control-max-age".to_string(), "86400".to_string()),
-                            ],
-                            vec![],
-                        ));
-                    }
+        } else {
+            // Automatic OPTIONS handling: if no explicit OPTIONS handler exists,
+            // check if other methods are registered for this path and return Allow header
+            if method == "OPTIONS" {
+                let available_methods = app.router.find_all_methods(&path);
+                if !available_methods.is_empty() {
+                    // Return 200 OK with Allow header listing available methods
+                    let allow_header = available_methods.join(", ");
+                    return Ok((
+                        200,
+                        vec![
+                            ("content-type".to_string(), "application/json".to_string()),
+                            ("allow".to_string(), allow_header),
+                        ],
+                        b"{}".to_vec(),
+                    ));
                 }
             }
-            return Ok((
-                404,
-                vec![(
-                    "content-type".to_string(),
-                    "text/plain; charset=utf-8".to_string(),
-                )],
-                b"Not Found".to_vec(),
-            ));
-        } else {
+
             return Ok((
                 404,
                 vec![(
@@ -433,13 +420,17 @@ pub fn handle_test_request_for(
             .into_iter()
             .filter(|(k, _)| !k.eq_ignore_ascii_case("x-bolt-file-path"))
             .collect();
+
+        // HEAD requests must have empty body per RFC 7231
+        let response_body = if method == "HEAD" { Vec::new() } else { body_bytes };
+
     test_debug!(
             "[test_state] returning tuple status={} headers_len={} body_len={}",
             status_code,
             headers.len(),
-            body_bytes.len()
+            response_body.len()
         );
-        return Ok((status_code, headers, body_bytes));
+        return Ok((status_code, headers, response_body));
     }
 
     // Streaming: collect best-effort
@@ -574,7 +565,10 @@ async def consume_agen(agen):
                 }
             }
         }
-        return Ok((status_code, resp_headers, collected_body));
+
+        // HEAD requests must have empty body per RFC 7231
+        let response_body = if method == "HEAD" { Vec::new() } else { collected_body };
+        return Ok((status_code, resp_headers, response_body));
     }
 
     Err(pyo3::exceptions::PyTypeError::new_err(

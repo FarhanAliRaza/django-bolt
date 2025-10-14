@@ -67,6 +67,15 @@ def api():
     async def delete_m():
         return {"m": "delete"}
 
+    @api.head("/m")
+    async def head_m():
+        return {"m": "head"}
+
+    # Test HEAD with query params (should work like GET)
+    @api.head("/items/{item_id}")
+    async def head_item(item_id: int, q: str | None = None):
+        return {"item_id": item_id, "q": q}
+
     # Response coercion from objects to msgspec.Struct
     class Mini(msgspec.Struct):
         id: int
@@ -527,3 +536,91 @@ def test_form_and_file(client):
     )
     data = response.json()
     assert response.status_code == 200 and data["count"] == 2 and set(data["names"]) == {"a.txt", "b.txt"}
+
+
+def test_head_method(client):
+    """Test HEAD method works correctly"""
+    response = client.head("/m")
+    assert response.status_code == 200
+    # HEAD should return headers but empty body
+    assert len(response.content) == 0 
+
+
+def test_head_with_params(client):
+    """Test HEAD method with path and query params"""
+    response = client.head("/items/42?q=test")
+    assert response.status_code == 200
+
+
+def test_options_method_automatic(client):
+    """Test automatic OPTIONS handling - returns Allow header with available methods"""
+    response = client.options("/m")
+    assert response.status_code == 200
+    # Check Allow header is present and contains the methods
+    assert "allow" in response.headers or "Allow" in response.headers
+    allow_header = response.headers.get("allow") or response.headers.get("Allow")
+    assert allow_header is not None
+    # Should include all methods registered for /m (POST, PATCH, DELETE, HEAD)
+    methods = [m.strip() for m in allow_header.split(",")]
+    assert "POST" in methods
+    assert "PATCH" in methods
+    assert "DELETE" in methods
+    assert "HEAD" in methods
+    assert "OPTIONS" in methods  # Always included for automatic OPTIONS
+    # Body should be empty JSON object
+    assert response.json() == {}
+
+
+def test_options_on_nonexistent_route(client):
+    """Test OPTIONS on non-existent route returns 404"""
+    response = client.options("/does-not-exist")
+    assert response.status_code == 404
+
+
+def test_explicit_options_handler():
+    """Test that explicit OPTIONS handler overrides automatic behavior"""
+    from django_bolt import Response
+
+    api = BoltAPI()
+
+    @api.get("/custom-options")
+    async def get_custom():
+        return {"result": "data"}
+
+    @api.options("/custom-options")
+    async def options_custom():
+        return Response(
+            {"custom": "options", "info": "This is a custom OPTIONS handler"},
+            headers={"Allow": "GET, OPTIONS", "X-Custom": "header"}
+        )
+
+    from django_bolt.testing import TestClient
+    with TestClient(api) as client:
+        response = client.options("/custom-options")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["custom"] == "options"
+        assert data["info"] == "This is a custom OPTIONS handler"
+        # Check custom headers
+        assert "allow" in response.headers or "Allow" in response.headers
+        assert "x-custom" in response.headers or "X-Custom" in response.headers
+
+
+def test_method_validation():
+    """Test that HEAD and OPTIONS don't accept body parameters"""
+    api = BoltAPI()
+
+    class Body(msgspec.Struct):
+        value: str
+
+    # HEAD should not accept body
+    with pytest.raises(TypeError, match="HEAD.*cannot have body parameters"):
+        @api.head("/test-head")
+        async def head_with_body(body: Body):
+            return {"ok": True}
+
+    # OPTIONS should not accept body
+    with pytest.raises(TypeError, match="OPTIONS.*cannot have body parameters"):
+        @api.options("/test-options")
+        async def options_with_body(body: Body):
+            return {"ok": True}

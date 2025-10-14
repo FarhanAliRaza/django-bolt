@@ -191,10 +191,6 @@ python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 4 --workers 1
 - ⚠️ **API Key auth** - Partial (only in-memory)
 - ⚠️ **Testing utilities** - Partial
 
-### Known Limitations
-
-- ❌ **HEAD and OPTIONS methods** - Not implemented yet
-
 ### Nice to Have (Can defer) 📝
 
 - [ ] **Static file serving** - Efficient static file serving from Rust

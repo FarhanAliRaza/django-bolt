@@ -35,6 +35,50 @@ def initialize_file_response_settings():
     _ALLOWED_FILE_PATHS_INITIALIZED = True
 
 
+class Response:
+    """
+    Generic HTTP response with custom headers.
+
+    Use this when you need to return a response with custom headers (like Allow for OPTIONS).
+
+    Examples:
+        # OPTIONS handler with Allow header
+        @api.options("/items")
+        async def options_items():
+            return Response({}, headers={"Allow": "GET, POST, PUT, DELETE"})
+
+        # Custom response with additional headers
+        @api.get("/data")
+        async def get_data():
+            return Response(
+                {"result": "data"},
+                status_code=200,
+                headers={"X-Custom-Header": "value"}
+            )
+    """
+    def __init__(
+        self,
+        content: Any = None,
+        status_code: int = 200,
+        headers: Optional[Dict[str, str]] = None,
+        media_type: str = "application/json"
+    ):
+        self.content = content if content is not None else {}
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.media_type = media_type
+
+    def to_bytes(self) -> bytes:
+        if self.media_type == "application/json":
+            return msgspec.json.encode(self.content)
+        elif isinstance(self.content, str):
+            return self.content.encode()
+        elif isinstance(self.content, bytes):
+            return self.content
+        else:
+            return str(self.content).encode()
+
+
 class JSON:
     def __init__(self, data: Any, status_code: int = 200, headers: Optional[Dict[str, str]] = None):
         self.data = data

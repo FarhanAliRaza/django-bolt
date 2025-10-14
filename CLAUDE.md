@@ -97,7 +97,7 @@ python manage.py makemigrations [app_name]
    - `metadata.rs` - Route metadata structures
 
 2. **Python Framework (`python/django_bolt/`)**
-   - `api.py` - BoltAPI class with decorator-based routing (`@api.get/post/put/patch/delete`)
+   - `api.py` - BoltAPI class with decorator-based routing (`@api.get/post/put/patch/delete/head/options`)
    - `binding.py` - Parameter extraction and type coercion
    - `responses.py` - Response types (PlainText, HTML, Redirect, File, FileResponse, StreamingResponse)
    - `exceptions.py` - HTTPException and error handling
@@ -199,7 +199,20 @@ class Item(msgspec.Struct):
 async def create_item(item: Item) -> Item:
     # item is already validated
     return item
+
+# HEAD and OPTIONS methods
+@api.head("/items/{item_id}")
+async def head_item(item_id: int):
+    # Returns headers only (same as GET but no body)
+    return {"item_id": item_id}
+
+@api.options("/items")
+async def options_items():
+    # Custom OPTIONS handler
+    return {"methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]}
 ```
+
+**Note**: HEAD and OPTIONS methods cannot have body parameters (like GET/DELETE). They're designed for metadata and preflight requests.
 
 ### Authentication & Guards
 

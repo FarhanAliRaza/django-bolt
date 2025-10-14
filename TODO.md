@@ -18,11 +18,14 @@ Should Have (Important):
 ⚠️ API Key auth - Partial (only in-memory)
 ⚠️ Testing utilities - (Partially there)
 
-❌ HEAD AND OPTIONS METHOD NOT IMPLEMENTED
+✅ HEAD AND OPTIONS methods - DONE
+  - HEAD requests properly strip response body (RFC 7231 compliant)
+  - OPTIONS requests with automatic method discovery and Allow header
+  - Support for custom OPTIONS handlers via Response class
+  - CORS preflight compatible
 
-Class based views
+❌ Class based views - Not implemented
 guards should be funcional and should have a way to implement in python
-
 Nice to Have (Can defer):
 Pagination helpers
 

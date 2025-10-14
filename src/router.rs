@@ -63,6 +63,8 @@ pub struct Router {
     put: MatchRouter<Route>,
     patch: MatchRouter<Route>,
     delete: MatchRouter<Route>,
+    head: MatchRouter<Route>,
+    options: MatchRouter<Route>,
 }
 
 impl Router {
@@ -73,6 +75,8 @@ impl Router {
             put: MatchRouter::new(),
             patch: MatchRouter::new(),
             delete: MatchRouter::new(),
+            head: MatchRouter::new(),
+            options: MatchRouter::new(),
         }
     }
 
@@ -97,6 +101,8 @@ impl Router {
             "PUT" => &mut self.put,
             "PATCH" => &mut self.patch,
             "DELETE" => &mut self.delete,
+            "HEAD" => &mut self.head,
+            "OPTIONS" => &mut self.options,
             _ => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "Unsupported method: {}",
@@ -119,6 +125,8 @@ impl Router {
             "PUT" => &self.put,
             "PATCH" => &self.patch,
             "DELETE" => &self.delete,
+            "HEAD" => &self.head,
+            "OPTIONS" => &self.options,
             _ => return None,
         };
 
@@ -132,6 +140,40 @@ impl Router {
             }
             Err(_) => None,
         }
+    }
+
+    /// Find all HTTP methods that have handlers registered for the given path.
+    /// Used for automatic OPTIONS handling to return the Allow header.
+    ///
+    /// Returns a vector of method names (e.g., ["GET", "POST", "PUT"]).
+    /// Always includes "OPTIONS" if any methods are found (for automatic OPTIONS support).
+    pub fn find_all_methods(&self, path: &str) -> Vec<String> {
+        let mut methods = Vec::new();
+
+        // Check each method router to see if it has a handler for this path
+        let method_routers = [
+            ("GET", &self.get),
+            ("POST", &self.post),
+            ("PUT", &self.put),
+            ("PATCH", &self.patch),
+            ("DELETE", &self.delete),
+            ("HEAD", &self.head),
+            ("OPTIONS", &self.options),
+        ];
+
+        for (method_name, router) in method_routers.iter() {
+            if router.at(path).is_ok() {
+                methods.push(method_name.to_string());
+            }
+        }
+
+        // If we found any methods and OPTIONS is not explicitly registered, add it
+        // (automatic OPTIONS support for all routes)
+        if !methods.is_empty() && !methods.contains(&"OPTIONS".to_string()) {
+            methods.push("OPTIONS".to_string());
+        }
+
+        methods
     }
 }
 

@@ -236,6 +236,12 @@ class BoltAPI:
     def delete(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
         return self._route_decorator("DELETE", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
 
+    def head(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
+        return self._route_decorator("HEAD", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
+
+    def options(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
+        return self._route_decorator("OPTIONS", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
+
     def _route_decorator(self, method: str, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
         def decorator(fn: Callable):
             # Enforce async handlers
@@ -348,9 +354,9 @@ class BoltAPI:
 
             field_definitions.append(field)
 
-        # HTTP Method Validation: Ensure GET/HEAD/DELETE don't have body params
+        # HTTP Method Validation: Ensure GET/HEAD/DELETE/OPTIONS don't have body params
         body_fields = [f for f in field_definitions if f.source == "body"]
-        if http_method in ("GET", "HEAD", "DELETE") and body_fields:
+        if http_method in ("GET", "HEAD", "DELETE", "OPTIONS") and body_fields:
             param_names = [f.name for f in body_fields]
             raise TypeError(
                 f"Handler {fn.__name__} for {http_method} {path} cannot have body parameters.\n"

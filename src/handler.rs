@@ -33,52 +33,29 @@ pub async fn handle_request(
 
     let router = GLOBAL_ROUTER.get().expect("Router not initialized");
 
-    // For OPTIONS requests, try to find a matching route with any method
-    // to check if CORS middleware is configured
+    // Find the route for the requested method and path
     let (route_handler, path_params, handler_id) = {
-        // First try exact method match
         if let Some((route, path_params, handler_id)) = router.find(&method, &path) {
             (
                 Python::attach(|py| route.handler.clone_ref(py)),
                 path_params,
                 handler_id,
             )
-        } else if method == "OPTIONS" {
-            // For OPTIONS, check if ANY method has this path
-            for try_method in &["GET", "POST", "PUT", "PATCH", "DELETE"] {
-                if let Some((_route, _path_params, handler_id)) = router.find(try_method, &path) {
-                    // Found a route, use it for middleware metadata
-                    return {
-                        // Check if this route has CORS middleware
-                        if let Some(meta_map) = MIDDLEWARE_METADATA.get() {
-                            if let Some(metadata) = meta_map.get(&handler_id) {
-                                // Process CORS preflight
-                                if let Some(response) = middleware::process_middleware(
-                                    "OPTIONS",
-                                    &path,
-                                    &AHashMap::new(),
-                                    None,
-                                    handler_id,
-                                    metadata,
-                                )
-                                .await
-                                {
-                                    return response;
-                                }
-                            }
-                        }
-                        // No CORS middleware, return 404
-                        HttpResponse::NotFound()
-                            .content_type("text/plain; charset=utf-8")
-                            .body("Not Found")
-                    };
+        } else {
+            // Automatic OPTIONS handling: if no explicit OPTIONS handler exists,
+            // check if other methods are registered for this path and return Allow header
+            if method == "OPTIONS" {
+                let available_methods = router.find_all_methods(&path);
+                if !available_methods.is_empty() {
+                    // Return 200 OK with Allow header listing available methods
+                    let allow_header = available_methods.join(", ");
+                    return HttpResponse::Ok()
+                        .insert_header(("Allow", allow_header))
+                        .content_type("application/json")
+                        .body(b"{}".to_vec());
                 }
             }
-            // No route found at all
-            return HttpResponse::NotFound()
-                .content_type("text/plain; charset=utf-8")
-                .body("Not Found");
-        } else {
+
             return HttpResponse::NotFound()
                 .content_type("text/plain; charset=utf-8")
                 .body("Not Found");
@@ -203,6 +180,9 @@ pub async fn handle_request(
         }
     }
 
+    // Check if this is a HEAD request (needed for body stripping after Python handler)
+    let is_head_request = method == "HEAD";
+
     // Single GIL acquisition for all Python operations
     let fut = match Python::attach(|py| -> PyResult<_> {
         // Clone Python objects
@@ -319,7 +299,24 @@ pub async fn handle_request(
                                     }
                                 }
                             } else {
-                                // For large files, use streaming
+                                // For large files, use streaming (or empty body for HEAD)
+                                let mut builder = HttpResponse::build(status);
+                                for (k, v) in headers {
+                                    if let Ok(name) = HeaderName::try_from(k) {
+                                        if let Ok(val) = HeaderValue::try_from(v) {
+                                            builder.append_header((name, val));
+                                        }
+                                    }
+                                }
+                                if skip_compression {
+                                    builder.append_header(("content-encoding", "identity"));
+                                }
+
+                                // HEAD requests must have empty body per RFC 7231
+                                if is_head_request {
+                                    return builder.body(Vec::<u8>::new());
+                                }
+
                                 // Create streaming response with 64KB chunks
                                 let stream = stream::unfold(file, |mut file| async move {
                                     let mut buffer = vec![0u8; 64 * 1024];
@@ -332,18 +329,6 @@ pub async fn handle_request(
                                         Err(e) => Some((Err(e), file)),
                                     }
                                 });
-
-                                let mut builder = HttpResponse::build(status);
-                                for (k, v) in headers {
-                                    if let Ok(name) = HeaderName::try_from(k) {
-                                        if let Ok(val) = HeaderValue::try_from(v) {
-                                            builder.append_header((name, val));
-                                        }
-                                    }
-                                }
-                                if skip_compression {
-                                    builder.append_header(("content-encoding", "identity"));
-                                }
                                 return builder.streaming(stream);
                             };
 
@@ -363,7 +348,9 @@ pub async fn handle_request(
                                 builder.append_header(("content-encoding", "identity"));
                             }
 
-                            builder.body(file_bytes)
+                            // HEAD requests must have empty body per RFC 7231
+                            let response_body = if is_head_request { Vec::new() } else { file_bytes };
+                            builder.body(response_body)
                         }
                         Err(e) => {
                             // Return appropriate HTTP status based on error kind
@@ -389,7 +376,9 @@ pub async fn handle_request(
                     if skip_compression {
                         builder.append_header(("Content-Encoding", "identity"));
                     }
-                    let mut response = builder.body(body_bytes);
+                    // HEAD requests must have empty body per RFC 7231
+                    let response_body = if is_head_request { Vec::new() } else { body_bytes };
+                    let mut response = builder.body(response_body);
 
                     // Add CORS headers if middleware is configured
                     if let Some(ref meta) = middleware_meta {
@@ -451,6 +440,22 @@ pub async fn handle_request(
                         builder.append_header((k, v));
                     }
                     if media_type == "text/event-stream" {
+                        // HEAD requests must have empty body per RFC 7231
+                        if is_head_request {
+                            builder.content_type("text/event-stream");
+                            builder.append_header(("X-Accel-Buffering", "no"));
+                            builder.append_header((
+                                "Cache-Control",
+                                "no-cache, no-store, must-revalidate",
+                            ));
+                            builder.append_header(("Pragma", "no-cache"));
+                            builder.append_header(("Expires", "0"));
+                            if skip_compression {
+                                builder.append_header(("Content-Encoding", "identity"));
+                            }
+                            return builder.body(Vec::<u8>::new());
+                        }
+
                         let mut final_content_obj = content_obj;
                         // Combine async check and wrapping into single GIL acquisition
                         let (is_async_sse, wrapped_content) = Python::attach(|py| {
@@ -518,6 +523,14 @@ pub async fn handle_request(
                             }
                         }
                     } else {
+                        // HEAD requests must have empty body per RFC 7231
+                        if is_head_request {
+                            if skip_compression {
+                                builder.append_header(("Content-Encoding", "identity"));
+                            }
+                            return builder.body(Vec::<u8>::new());
+                        }
+
                         let mut final_content = content_obj;
                         // Combine async check and wrapping into single GIL acquisition
                         let (needs_async_stream, wrapped_content) = Python::attach(|py| {

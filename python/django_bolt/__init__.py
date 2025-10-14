@@ -1,5 +1,5 @@
 from .api import BoltAPI
-from .responses import JSON, StreamingResponse
+from .responses import Response, JSON, StreamingResponse
 from .compression import CompressionConfig
 
 # Auth module
@@ -53,6 +53,7 @@ from .openapi import (
 
 __all__ = [
     "BoltAPI",
+    "Response",
     "JSON",
     "StreamingResponse",
     "CompressionConfig",

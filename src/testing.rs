@@ -36,48 +36,6 @@ pub fn handle_test_request(
     let (route, path_params, handler_id) = {
         if let Some((route, params, id)) = router.find(&method, &path) {
             (route.handler.clone_ref(py), params, id)
-        } else if method == "OPTIONS" {
-            // OPTIONS preflight handling
-            for try_method in &["GET", "POST", "PUT", "PATCH", "DELETE"] {
-                if let Some((_route, _params, handler_id)) = router.find(try_method, &path) {
-                    // Check CORS middleware
-                    if let Some(meta_map) = MIDDLEWARE_METADATA.get() {
-                        if let Some(_metadata) = meta_map.get(&handler_id) {
-                            let _header_map: AHashMap<String, String> = headers
-                                .iter()
-                                .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
-                                .collect();
-
-                            // Note: process_middleware is async, but for CORS preflight
-                            // we can return a simple response
-                            // For now, return basic CORS response
-                            return Ok((
-                                200,
-                                vec![
-                                    (
-                                        "access-control-allow-methods".to_string(),
-                                        "GET, POST, PUT, PATCH, DELETE, OPTIONS".to_string(),
-                                    ),
-                                    (
-                                        "access-control-allow-headers".to_string(),
-                                        "content-type, authorization".to_string(),
-                                    ),
-                                    ("access-control-max-age".to_string(), "86400".to_string()),
-                                ],
-                                vec![],
-                            ));
-                        }
-                    }
-                }
-            }
-            return Ok((
-                404,
-                vec![(
-                    "content-type".to_string(),
-                    "text/plain; charset=utf-8".to_string(),
-                )],
-                b"Not Found".to_vec(),
-            ));
         } else {
             return Ok((
                 404,

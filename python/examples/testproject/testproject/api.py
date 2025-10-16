@@ -4,6 +4,7 @@ import asyncio
 import time
 import json
 from django_bolt import BoltAPI, JSON, OpenAPIConfig, SwaggerRenderPlugin, RedocRenderPlugin
+from django_bolt.views import APIView, ViewSet
 from django_bolt.param_functions import Header, Cookie, Form, File
 from django_bolt.responses import PlainText, HTML, Redirect, FileResponse, StreamingResponse
 from django_bolt.exceptions import (
@@ -614,6 +615,305 @@ async def compression_test():
     }
 
     return large_data
+
+
+# ============================================================================
+# Class-Based Views (APIView)
+# ============================================================================
+
+class SimpleAPIView(APIView):
+    """Simple APIView for benchmarking."""
+
+    async def get(self, request):
+        """Simple GET endpoint."""
+        return {"message": "Hello from APIView"}
+
+    async def post(self, request, data: Item):
+        """POST with validation."""
+        return {"name": data.name, "price": data.price, "cbv": True}
+
+
+api.view("/cbv-simple", SimpleAPIView, methods=["GET", "POST"])
+
+
+class ItemAPIView(APIView):
+    """APIView for item operations."""
+
+    async def get(self, request, item_id: int, q: Optional[str] = None):
+        """Get item with optional query param."""
+        return {"item_id": item_id, "q": q, "cbv": True}
+
+    async def put(self, request, item_id: int, item: Item):
+        """Update item."""
+        return {"item_name": item.name, "item_id": item_id, "cbv": True}
+
+
+api.view("/cbv-items/{item_id}", ItemAPIView, methods=["GET", "PUT"])
+
+
+# ============================================================================
+# Class-Based Views (ViewSet)
+# ============================================================================
+
+class ItemViewSet(ViewSet):
+    """ViewSet for comprehensive item operations."""
+
+    async def get(self, request, item_id: int):
+        """Retrieve single item."""
+        return {"item_id": item_id, "name": f"Item {item_id}", "cbv_viewset": True}
+
+    async def post(self, request, data: Item):
+        """Create new item."""
+        return {
+            "id": 123,
+            "name": data.name,
+            "price": data.price,
+            "created": True,
+            "cbv_viewset": True
+        }
+
+    async def put(self, request, item_id: int, data: Item):
+        """Update item (full)."""
+        return {
+            "item_id": item_id,
+            "name": data.name,
+            "price": data.price,
+            "updated": True,
+            "cbv_viewset": True
+        }
+
+    async def patch(self, request, item_id: int, data: Item):
+        """Partially update item."""
+        return {
+            "item_id": item_id,
+            "name": data.name,
+            "price": data.price,
+            "patched": True,
+            "cbv_viewset": True
+        }
+
+    async def delete(self, request, item_id: int):
+        """Delete item."""
+        return {"item_id": item_id, "deleted": True, "cbv_viewset": True}
+
+    async def head(self, request, item_id: int):
+        """HEAD request for item."""
+        return {"item_id": item_id}
+
+    async def options(self, request):
+        """OPTIONS request."""
+        return {"methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]}
+
+    # Custom actions
+    @api.post("/cbv-items-vs/{item_id}/publish")
+    async def publish(self, request, item_id: int):
+        """Custom action: publish item."""
+        return {
+            "item_id": item_id,
+            "published": True,
+            "status": "live",
+            "cbv_action": True
+        }
+
+    @api.post("/cbv-items-vs/{item_id}/archive")
+    async def archive(self, request, item_id: int):
+        """Custom action: archive item."""
+        return {
+            "item_id": item_id,
+            "archived": True,
+            "status": "archived",
+            "cbv_action": True
+        }
+
+    @api.get("/cbv-items-vs/search")
+    async def search(self, request, query: str):
+        """Custom action: search items."""
+        return {
+            "query": query,
+            "results": [f"item-{i}" for i in range(5)],
+            "cbv_action": True
+        }
+
+
+api.view("/cbv-items-vs/{item_id}", ItemViewSet, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+
+
+# ============================================================================
+# Benchmark ViewSets
+# ============================================================================
+
+class Items100ViewSet(ViewSet):
+    """ViewSet that returns 100 items (for benchmarking)."""
+
+    async def get(self, request):
+        """Return 100 items."""
+        return [
+            {"name": f"item{i}", "price": float(i), "is_offer": (i % 2 == 0)}
+            for i in range(100)
+        ]
+
+
+api.view("/cbv-items100", Items100ViewSet, methods=["GET"])
+
+
+class BenchParseViewSet(ViewSet):
+    """ViewSet for JSON parsing benchmark."""
+
+    async def post(self, request, payload: BenchPayload):
+        """Parse and validate JSON payload."""
+        return {"ok": True, "n": len(payload.items), "count": payload.count, "cbv": True}
+
+
+api.view("/cbv-bench-parse", BenchParseViewSet, methods=["POST"])
+
+
+class BenchSlowViewSet(ViewSet):
+    """ViewSet for slow async operation benchmark."""
+
+    async def get(self, request, ms: Optional[int] = 100):
+        """Simulate slow I/O operation."""
+        delay = max(0, (ms or 0)) / 1000.0
+        await asyncio.sleep(delay)
+        return {"ok": True, "ms": ms, "cbv": True}
+
+
+api.view("/cbv-bench-slow", BenchSlowViewSet, methods=["GET"])
+
+
+# ============================================================================
+# Response Type ViewSets
+# ============================================================================
+
+class ResponseTypeViewSet(ViewSet):
+    """ViewSet demonstrating different response types."""
+
+    async def get(self, request, response_type: str = "json"):
+        """Return different response types based on parameter."""
+        if response_type == "plain":
+            return PlainText("Hello from ViewSet")
+        elif response_type == "html":
+            return HTML("<h1>Hello from ViewSet</h1>")
+        elif response_type == "redirect":
+            return Redirect("/", status_code=302)
+        else:
+            return {"type": "json", "message": "Hello from ViewSet"}
+
+
+api.view("/cbv-response", ResponseTypeViewSet, methods=["GET"])
+
+
+class HeaderCookieViewSet(ViewSet):
+    """ViewSet for header and cookie extraction."""
+
+    async def get(self, request, x: Annotated[str, Header(alias="x-test")]):
+        """Extract custom header."""
+        return PlainText(f"Header: {x}")
+
+    async def post(self, request, val: Annotated[str, Cookie(alias="session")]):
+        """Extract cookie."""
+        return PlainText(f"Cookie: {val}")
+
+
+api.view("/cbv-header", HeaderCookieViewSet, methods=["GET"])
+api.view("/cbv-cookie", HeaderCookieViewSet, methods=["POST"])
+
+
+# ============================================================================
+# Streaming ViewSet
+# ============================================================================
+
+class StreamViewSet(ViewSet):
+    """ViewSet for streaming responses."""
+
+    @no_compress
+    async def get(self, request):
+        """Stream plain text."""
+        def gen():
+            for i in range(100):
+                yield "x"
+        return StreamingResponse(gen, media_type="text/plain")
+
+
+api.view("/cbv-stream", StreamViewSet, methods=["GET"])
+
+
+class SSEViewSet(ViewSet):
+    """ViewSet for Server-Sent Events."""
+
+    @no_compress
+    async def get(self, request):
+        """Stream SSE events."""
+        def gen():
+            for i in range(3):
+                yield f"data: {i}\n\n"
+        return StreamingResponse(gen, media_type="text/event-stream")
+
+
+api.view("/cbv-sse", SSEViewSet, methods=["GET"])
+
+
+class ChatCompletionsViewSet(ViewSet):
+    """ViewSet for OpenAI-style chat completions."""
+
+    @no_compress
+    async def post(self, request, payload: ChatCompletionRequest):
+        """Handle chat completions with streaming support."""
+        created = int(time.time())
+        model = payload.model or "gpt-4o-mini"
+        chat_id = "chatcmpl-bolt-cbv"
+
+        if payload.stream:
+            async def agen():
+                delay = max(0, payload.delay_ms or 0) / 1000.0
+                for i in range(max(1, payload.n_chunks)):
+                    chunk = ChatCompletionChunk(
+                        id=chat_id,
+                        created=created,
+                        model=model,
+                        choices=[ChatCompletionChunkChoice(
+                            index=0,
+                            delta=ChatCompletionChunkDelta(content=payload.token),
+                            finish_reason=None
+                        )]
+                    )
+                    chunk_json = msgspec.json.encode(chunk)
+                    yield b"data: " + chunk_json + b"\n\n"
+
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+
+                # Final chunk
+                final_chunk = ChatCompletionChunk(
+                    id=chat_id,
+                    created=created,
+                    model=model,
+                    choices=[ChatCompletionChunkChoice(
+                        index=0,
+                        delta=ChatCompletionChunkDelta(),
+                        finish_reason="stop"
+                    )]
+                )
+                final_json = msgspec.json.encode(final_chunk)
+                yield b"data: " + final_json + b"\n\n"
+                yield b"data: [DONE]\n\n"
+
+            return StreamingResponse(agen(), media_type="text/event-stream")
+
+        # Non-streaming
+        text = (payload.token * max(1, payload.n_chunks)).strip()
+        response = {
+            "id": chat_id,
+            "object": "chat.completion",
+            "created": created,
+            "model": model,
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}
+            ],
+        }
+        return response
+
+
+api.view("/cbv-chat-completions", ChatCompletionsViewSet, methods=["POST"])
 
 
 

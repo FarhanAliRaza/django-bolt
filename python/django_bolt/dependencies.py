@@ -15,15 +15,39 @@ async def resolve_dependency(
     headers_map: Dict[str, str],
     cookies_map: Dict[str, str],
     handler_meta: Dict[Callable, Dict[str, Any]],
-    compile_binder: Callable
+    compile_binder: Callable,
+    http_method: str,
+    path: str
 ) -> Any:
-    """Resolve a dependency injection."""
+    """
+    Resolve a dependency injection.
+
+    Args:
+        dep_fn: Dependency function to resolve
+        depends_marker: Depends marker with cache settings
+        request: Request dict
+        dep_cache: Cache for resolved dependencies
+        params_map: Path parameters
+        query_map: Query parameters
+        headers_map: Request headers
+        cookies_map: Request cookies
+        handler_meta: Metadata cache for handlers
+        compile_binder: Function to compile parameter binding metadata
+        http_method: HTTP method of the handler using this dependency
+        path: Path of the handler using this dependency
+
+    Returns:
+        Resolved dependency value
+    """
     if depends_marker.use_cache and dep_fn in dep_cache:
         return dep_cache[dep_fn]
 
     dep_meta = handler_meta.get(dep_fn)
     if dep_meta is None:
-        dep_meta = compile_binder(dep_fn)
+        # Compile dependency metadata with the actual HTTP method and path
+        # Dependencies MUST be validated against HTTP method constraints
+        # e.g., a dependency with Body() can't be used in GET handlers
+        dep_meta = compile_binder(dep_fn, http_method, path)
         handler_meta[dep_fn] = dep_meta
 
     if dep_meta.get("mode") == "request_only":

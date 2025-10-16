@@ -19,64 +19,33 @@ Should Have (Important):
 ⚠️ Testing utilities - (Partially there)
 
 ✅ HEAD AND OPTIONS methods - DONE
-  - HEAD requests properly strip response body (RFC 7231 compliant)
-  - OPTIONS requests with automatic method discovery and Allow header
-  - Support for custom OPTIONS handlers via Response class
-  - CORS preflight compatible
+
+- HEAD requests properly strip response body (RFC 7231 compliant)
+- OPTIONS requests with automatic method discovery and Allow header
+- Support for custom OPTIONS handlers via Response class
+- CORS preflight compatible
 
 ❌ Class based views - Not implemented
 guards should be funcional and should have a way to implement in python
 Nice to Have (Can defer):
 Pagination helpers
 
-## Recent Improvements (Error Handling & Logging)
+## Known Limitations (BOTH Function & Class-Based)
 
-### Error Handling System ✅
+These are NOT class-based view limitations - they affect both approaches:
+We need to implement this. No now but someday
+Query/Path Constraint Validation
 
-- **Enhanced exception hierarchy** (`exceptions.py`)
+Query(ge=1, le=100) and Path(min_length=3) constraints are NOT enforced at runtime
 
-  - `BoltException` base with specialized HTTP exceptions
-  - 4xx errors: BadRequest, Unauthorized, Forbidden, NotFound, etc.
-  - 5xx errors: InternalServerError, ServiceUnavailable, etc.
-  - Validation errors: RequestValidationError, ResponseValidationError
+Constraints are only used for OpenAPI schema generation
 
-- **Error handlers** (`error_handlers.py`)
+Reason: Performance - avoids hot path overhead
 
-  - FastAPI-compatible validation error format (422 with field locations)
-  - Structured JSON error responses
-  - Debug mode with tracebacks (respects Django's DEBUG setting)
+Workaround: Manual validation or dependency injection validators
 
-- **Rust error module** (`src/error.rs`)
-  - Proper exception handling in Rust
-  - Structured error response building
-  - Exception type detection and routing
-
-### Logging System ✅
-
-- **Logging configuration** (`logging/config.py`)
-
-  - Integrates with Django's logging system
-  - Uses Django's DEBUG setting for log levels
-  - Configurable request/response field logging
-  - Header/cookie obfuscation for security
-
-- **Logging middleware** (`logging/middleware.py`)
-  - Request/response logging with timing
-  - Exception logging with tracebacks
-  - Skip logging for health checks
-  - Status code-based log levels
-
-### Health Checks ✅
-
-- **Health endpoints** (`health.py`)
-  - `/health` - Simple liveness check
-  - `/ready` - Readiness check with database connectivity
-  - Custom health check support
-  - Extensible for Redis, cache, etc.
-
-### Django Integration ✅
-
-- **Reuses Django settings**:
-  - DEBUG mode for error verbosity
-  - Logging configuration
-  - Database connections for health checks
+Header/Cookie Syntax
+Must use Header(alias="X-API-Key") not Header("X-API-Key")
+Same for Cookie(alias="session_id")
+Reason: Parameter naming convention
+Future: Could add FastAPI-style auto-conversion

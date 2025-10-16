@@ -2,6 +2,20 @@ from .api import BoltAPI
 from .responses import Response, JSON, StreamingResponse
 from .compression import CompressionConfig
 
+# Views module
+from .views import (
+    APIView,
+    ViewSet,
+    ModelViewSet,
+    ReadOnlyModelViewSet,
+    ListMixin,
+    RetrieveMixin,
+    CreateMixin,
+    UpdateMixin,
+    PartialUpdateMixin,
+    DestroyMixin,
+)
+
 # Auth module
 from .auth import (
     # Authentication backends
@@ -57,6 +71,18 @@ __all__ = [
     "JSON",
     "StreamingResponse",
     "CompressionConfig",
+    # Views
+    "APIView",
+    "ViewSet",
+    "ModelViewSet",
+    "ReadOnlyModelViewSet",
+    "ListMixin",
+    "RetrieveMixin",
+    "CreateMixin",
+    "UpdateMixin",
+    "PartialUpdateMixin",
+    "DestroyMixin",
+
     # Auth - Authentication
     "JWTAuthentication",
     "APIKeyAuthentication",

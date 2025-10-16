@@ -91,12 +91,19 @@ def django_db_setup(django_db_setup, django_db_blocker):
     """
     Ensure database migrations are run before any tests that use the database.
     This creates the auth_user table and other Django core tables.
+    Also creates test model tables (Article, etc.).
     """
     from django.core.management import call_command
+    from django.db import connection
 
     with django_db_blocker.unblock():
         # Run migrations to create all necessary tables
         call_command('migrate', '--run-syncdb', verbosity=0)
+
+        # Create test model tables manually since they're not in migrations
+        with connection.schema_editor() as schema_editor:
+            from django_bolt.tests.test_models import Article
+            schema_editor.create_model(Article)
 
 
 def spawn_process(command):

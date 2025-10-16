@@ -385,25 +385,30 @@ class TestTypeCoercionEdgeCases:
     def test_number_coercion_errors(self):
         """Test that invalid number strings raise errors."""
         from django_bolt.binding import convert_primitive
+        from django_bolt.exceptions import HTTPException
 
-        # Invalid int
-        with pytest.raises(ValueError):
+        # Invalid int - now raises HTTPException(422) instead of ValueError
+        with pytest.raises(HTTPException) as exc_info:
             convert_primitive("not_a_number", int)
+        assert exc_info.value.status_code == 422
 
-        # Invalid float
-        with pytest.raises(ValueError):
+        # Invalid float - now raises HTTPException(422) instead of ValueError
+        with pytest.raises(HTTPException) as exc_info:
             convert_primitive("not_a_float", float)
+        assert exc_info.value.status_code == 422
 
     def test_empty_string_coercion(self):
         """Test coercion of empty strings."""
         from django_bolt.binding import convert_primitive
+        from django_bolt.exceptions import HTTPException
 
         # Empty string for string type should be empty string
         assert convert_primitive("", str) == ""
 
-        # Empty string for int should fail
-        with pytest.raises(ValueError):
+        # Empty string for int should fail - now raises HTTPException(422)
+        with pytest.raises(HTTPException) as exc_info:
             convert_primitive("", int)
+        assert exc_info.value.status_code == 422
 
     def test_optional_fields_with_none(self):
         """Test that optional fields handle None correctly."""

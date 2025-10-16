@@ -72,7 +72,7 @@ impl PyRequest {
                 }
                 d.into_any().unbind()
             }
-            "context" => match &self.context {
+            "auth" | "context" => match &self.context {
                 Some(ctx) => ctx.clone_ref(py).into_any(),
                 None => py.None()
             }

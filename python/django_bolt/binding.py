@@ -47,10 +47,18 @@ def convert_primitive(value: str, annotation: Any) -> Any:
         return value
 
     if tp is int:
-        return int(value)
+        try:
+            return int(value)
+        except ValueError:
+            from .exceptions import HTTPException
+            raise HTTPException(422, detail=f"Invalid integer value: '{value}'")
 
     if tp is float:
-        return float(value)
+        try:
+            return float(value)
+        except ValueError:
+            from .exceptions import HTTPException
+            raise HTTPException(422, detail=f"Invalid float value: '{value}'")
 
     if tp is bool:
         v = value.lower()

@@ -1,5 +1,6 @@
 from typing import Any, Dict, Optional, List, Sequence
 from http import HTTPStatus
+import re
 
 
 class BoltException(Exception):
@@ -225,5 +226,69 @@ class ServiceUnavailable(ServerException):
 class GatewayTimeout(ServerException):
     """504 Gateway Timeout - Upstream server timeout."""
     status_code = 504
+
+
+# Helper functions for better error messages
+
+def parse_msgspec_decode_error(error: Exception, body_bytes: bytes) -> Dict[str, Any]:
+    """Parse msgspec.DecodeError to extract line/column information.
+
+    Args:
+        error: The msgspec.DecodeError exception
+        body_bytes: The JSON bytes that failed to parse
+
+    Returns:
+        Dict with error details including line/column information
+    """
+    error_msg = str(error)
+
+    # Try to extract byte position from error message
+    # Format: "JSON is malformed: invalid character (byte 78)"
+    match = re.search(r'byte (\d+)', error_msg)
+
+    if match:
+        byte_pos = int(match.group(1))
+
+        # Calculate line and column from byte position
+        lines = body_bytes.split(b'\n')
+        current_pos = 0
+        line_num = 1
+        col_num = 0
+        error_line_content = ""
+
+        for i, line in enumerate(lines, 1):
+            line_len = len(line) + 1  # +1 for newline
+            if current_pos + line_len > byte_pos:
+                line_num = i
+                col_num = byte_pos - current_pos + 1  # +1 for human-readable column (1-indexed)
+                error_line_content = line.decode('utf-8', errors='replace')
+                break
+            current_pos += line_len
+
+        # Build descriptive error message
+        msg = f"Invalid JSON at line {line_num}, column {col_num}: {error_msg}"
+        if error_line_content:
+            msg += f"\n  {error_line_content}\n  {' ' * (col_num - 1)}^"
+
+        return {
+            "type": "json_invalid",
+            "loc": ("body", line_num, col_num),
+            "msg": msg,
+            "input": body_bytes.decode("utf-8", errors="replace")[:200] if body_bytes else "",
+            "ctx": {
+                "line": line_num,
+                "column": col_num,
+                "byte_position": byte_pos,
+                "error": error_msg,
+            }
+        }
+
+    # Fallback if we can't parse the byte position
+    return {
+        "type": "json_invalid",
+        "loc": ("body",),
+        "msg": error_msg,
+        "input": body_bytes.decode("utf-8", errors="replace")[:100] if body_bytes else "",
+    }
 
 

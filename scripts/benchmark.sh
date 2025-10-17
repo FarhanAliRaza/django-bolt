@@ -146,6 +146,101 @@ kill -TERM -$SERVER_PID 2>/dev/null || true
 pkill -TERM -f "manage.py runbolt --host $HOST --port $PORT" 2>/dev/null || true
 
 echo ""
+echo "## Class-Based Views (CBV) Performance"
+
+DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
+SERVER_PID=$!
+sleep 2
+
+echo "### Simple APIView GET (/cbv-simple)"
+ab -k -c $C -n $N http://$HOST:$PORT/cbv-simple 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
+echo "### Simple APIView POST (/cbv-simple)"
+BODY_FILE=$(mktemp)
+echo '{"name":"bench","price":1.23,"is_offer":true}' > "$BODY_FILE"
+ab -k -c $C -n $N -p "$BODY_FILE" -T 'application/json' http://$HOST:$PORT/cbv-simple 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+rm -f "$BODY_FILE"
+
+echo "### Items100 ViewSet GET (/cbv-items100)"
+ab -k -c $C -n $N http://$HOST:$PORT/cbv-items100 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
+echo ""
+echo "## CBV Items - Basic Operations"
+
+echo "### CBV Items GET (Retrieve) (/cbv-items/1)"
+GCODE=$(curl -s -o /dev/null -w '%{http_code}' "http://$HOST:$PORT/cbv-items/1?q=test")
+if [ "$GCODE" = "200" ]; then
+  ab -k -c $C -n $N "http://$HOST:$PORT/cbv-items/1?q=test" 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+else
+  echo "Skipped: CBV Items GET returned $GCODE" >&2
+fi
+
+echo "### CBV Items PUT (Update) (/cbv-items/1)"
+BODY_FILE=$(mktemp)
+echo '{"name":"updated-item","price":79.99,"is_offer":true}' > "$BODY_FILE"
+PCODE=$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary @"$BODY_FILE" http://$HOST:$PORT/cbv-items/1)
+if [ "$PCODE" = "200" ]; then
+  ab -k -c $C -n $N -u "$BODY_FILE" -T 'application/json' http://$HOST:$PORT/cbv-items/1 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+else
+  echo "Skipped: CBV Items PUT returned $PCODE" >&2
+fi
+rm -f "$BODY_FILE"
+
+echo ""
+echo "## CBV Additional Benchmarks"
+
+echo "### CBV Bench Parse (POST /cbv-bench-parse)"
+BODY_FILE=$(mktemp)
+cat > "$BODY_FILE" << 'JSON'
+{
+  "title": "bench",
+  "count": 100,
+  "items": [
+    {"name": "a", "price": 1.0, "is_offer": true}
+  ]
+}
+JSON
+ab -k -c $C -n $N -p "$BODY_FILE" -T 'application/json' http://$HOST:$PORT/cbv-bench-parse 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+rm -f "$BODY_FILE"
+
+echo "### CBV Response Types (/cbv-response)"
+ab -k -c $C -n $N http://$HOST:$PORT/cbv-response 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
+# Streaming and SSE tests for CBV
+if [ -n "$HEY_BIN" ]; then
+    echo "### CBV Streaming Plain Text (/cbv-stream)"
+    timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C http://$HOST:$PORT/cbv-stream 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(cbv-stream timed out after ${HEY_TIMEOUT}s)"
+
+    echo "### CBV Server-Sent Events (/cbv-sse)"
+    timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Accept: text/event-stream" http://$HOST:$PORT/cbv-sse 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(cbv-sse timed out after ${HEY_TIMEOUT}s)"
+
+    echo "### CBV Chat Completions (stream) (/cbv-chat-completions)"
+    BODY_STREAM='{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}],"stream":true,"n_chunks":50,"token":" hi","delay_ms":0}'
+    echo "$BODY_STREAM" > /tmp/bolt_cbv_chat_stream.json
+    timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Content-Type: application/json" -m POST -D /tmp/bolt_cbv_chat_stream.json http://$HOST:$PORT/cbv-chat-completions 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Bytes In|Bytes Out|Status code distribution:)" | head -15 || echo "(cbv-chat stream timed out after ${HEY_TIMEOUT}s)"
+    rm -f /tmp/bolt_cbv_chat_stream.json
+fi
+
+# ORM endpoints with CBV
+echo ""
+echo "## ORM Performance with CBV"
+
+# Sanity check
+UCODE=$(curl -s -o /dev/null -w '%{http_code}' http://$HOST:$PORT/users/cbv-mini10)
+if [ "$UCODE" != "200" ]; then
+  echo "Expected 200 from /users/cbv-mini10 but got $UCODE; skipping CBV ORM benchmark." >&2
+else
+  echo "### Users CBV Mini10 (List) (/users/cbv-mini10)"
+  ab -k -c $C -n $N http://$HOST:$PORT/users/cbv-mini10 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+fi
+
+
+echo ""
+
+kill -TERM -$SERVER_PID 2>/dev/null || true
+pkill -TERM -f "manage.py runbolt --host $HOST --port $PORT" 2>/dev/null || true
+
+echo ""
 echo "## Form and File Upload Performance"
 
 # Start server for form/file tests

@@ -4,6 +4,7 @@ import asyncio
 import time
 import json
 from django_bolt import BoltAPI, JSON, OpenAPIConfig, SwaggerRenderPlugin, RedocRenderPlugin
+from django_bolt.views import APIView, ViewSet
 from django_bolt.param_functions import Header, Cookie, Form, File
 from django_bolt.responses import PlainText, HTML, Redirect, FileResponse, StreamingResponse
 from django_bolt.exceptions import (
@@ -20,14 +21,9 @@ from django_bolt.middleware import no_compress
 
 # OpenAPI is enabled by default at /docs with Swagger UI
 # You can customize it by passing openapi_config:
-api = BoltAPI(
-   
-)
+api = BoltAPI()
 
-# Or use defaults (Swagger UI at /docs, excludes /admin and /static):
-# api = BoltAPI()
 
-# Register health check endpoints (/health and /ready)
 register_health_checks(api)
 
 
@@ -614,6 +610,201 @@ async def compression_test():
     }
 
     return large_data
+
+
+# ============================================================================
+# Class-Based Views (APIView) - Using Decorator Syntax
+# ============================================================================
+
+@api.view("/cbv-simple")
+class SimpleAPIView(APIView):
+    """Simple APIView for benchmarking."""
+
+    async def get(self, request):
+        """GET /cbv-simple - Simple GET endpoint."""
+        return {"message": "Hello from APIView"}
+
+    async def post(self, request, data: Item):
+        """POST /cbv-simple - POST with validation."""
+        return {"name": data.name, "price": data.price, "cbv": True}
+
+
+@api.view("/cbv-items/{item_id}")
+class ItemAPIView(APIView):
+    """APIView for item operations."""
+
+    async def get(self, request, item_id: int, q: Optional[str] = None):
+        """GET /cbv-items/{item_id} - Get item with optional query param."""
+        return {"item_id": item_id, "q": q, "cbv": True}
+
+    async def put(self, request, item_id: int, item: Item):
+        """PUT /cbv-items/{item_id} - Update item."""
+        return {"item_name": item.name, "item_id": item_id, "cbv": True}
+
+
+# ============================================================================
+# Class-Based Views (ViewSet) - Using Unified ViewSet Pattern with @action
+# ============================================================================
+
+from django_bolt import action
+
+
+
+# ============================================================================
+# Benchmark ViewSets - Using Decorator Syntax
+# ============================================================================
+
+@api.view("/cbv-items100")
+class Items100ViewSet(ViewSet):
+    """ViewSet that returns 100 items (for benchmarking)."""
+
+    async def get(self, request):
+        """GET /cbv-items100 - Return 100 items."""
+        return [
+            {"name": f"item{i}", "price": float(i), "is_offer": (i % 2 == 0)}
+            for i in range(100)
+        ]
+
+
+@api.view("/cbv-bench-parse")
+class BenchParseViewSet(ViewSet):
+    """ViewSet for JSON parsing benchmark."""
+
+    async def post(self, request, payload: BenchPayload):
+        """POST /cbv-bench-parse - Parse and validate JSON payload."""
+        return {"ok": True, "n": len(payload.items), "count": payload.count, "cbv": True}
+
+
+
+
+# ============================================================================
+# Response Type ViewSets - Using Decorator Syntax
+# ============================================================================
+
+@api.view("/cbv-response")
+class ResponseTypeViewSet(ViewSet):
+    """ViewSet demonstrating different response types."""
+
+    async def get(self, request, response_type: str = "json"):
+        """GET /cbv-response - Return different response types based on parameter."""
+        if response_type == "plain":
+            return PlainText("Hello from ViewSet")
+        elif response_type == "html":
+            return HTML("<h1>Hello from ViewSet</h1>")
+        elif response_type == "redirect":
+            return Redirect("/", status_code=302)
+        else:
+            return {"type": "json", "message": "Hello from ViewSet"}
+
+
+@api.view("/cbv-header")
+class HeaderViewSet(ViewSet):
+    """ViewSet for header extraction."""
+
+    async def get(self, request, x: Annotated[str, Header(alias="x-test")]):
+        """GET /cbv-header - Extract custom header."""
+        return PlainText(f"Header: {x}")
+
+
+@api.view("/cbv-cookie")
+class CookieViewSet(ViewSet):
+    """ViewSet for cookie extraction."""
+
+    async def post(self, request, val: Annotated[str, Cookie(alias="session")]):
+        """POST /cbv-cookie - Extract cookie."""
+        return PlainText(f"Cookie: {val}")
+
+
+# ============================================================================
+# Streaming ViewSets - Using Decorator Syntax
+# ============================================================================
+
+@api.view("/cbv-stream")
+class StreamViewSet(ViewSet):
+    """ViewSet for streaming responses."""
+
+    @no_compress
+    async def get(self, request):
+        """GET /cbv-stream - Stream plain text."""
+        def gen():
+            for i in range(100):
+                yield "x"
+        return StreamingResponse(gen, media_type="text/plain")
+
+
+@api.view("/cbv-sse")
+class SSEViewSet(ViewSet):
+    """ViewSet for Server-Sent Events."""
+
+    @no_compress
+    async def get(self, request):
+        """GET /cbv-sse - Stream SSE events."""
+        def gen():
+            for i in range(3):
+                yield f"data: {i}\n\n"
+        return StreamingResponse(gen, media_type="text/event-stream")
+
+
+@api.view("/cbv-chat-completions")
+class ChatCompletionsViewSet(ViewSet):
+    """ViewSet for OpenAI-style chat completions."""
+
+    @no_compress
+    async def post(self, request, payload: ChatCompletionRequest):
+        """POST /cbv-chat-completions - Handle chat completions with streaming support."""
+        created = int(time.time())
+        model = payload.model or "gpt-4o-mini"
+        chat_id = "chatcmpl-bolt-cbv"
+
+        if payload.stream:
+            async def agen():
+                delay = max(0, payload.delay_ms or 0) / 1000.0
+                for i in range(max(1, payload.n_chunks)):
+                    chunk = ChatCompletionChunk(
+                        id=chat_id,
+                        created=created,
+                        model=model,
+                        choices=[ChatCompletionChunkChoice(
+                            index=0,
+                            delta=ChatCompletionChunkDelta(content=payload.token),
+                            finish_reason=None
+                        )]
+                    )
+                    chunk_json = msgspec.json.encode(chunk)
+                    yield b"data: " + chunk_json + b"\n\n"
+
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+
+                # Final chunk
+                final_chunk = ChatCompletionChunk(
+                    id=chat_id,
+                    created=created,
+                    model=model,
+                    choices=[ChatCompletionChunkChoice(
+                        index=0,
+                        delta=ChatCompletionChunkDelta(),
+                        finish_reason="stop"
+                    )]
+                )
+                final_json = msgspec.json.encode(final_chunk)
+                yield b"data: " + final_json + b"\n\n"
+                yield b"data: [DONE]\n\n"
+
+            return StreamingResponse(agen(), media_type="text/event-stream")
+
+        # Non-streaming
+        text = (payload.token * max(1, payload.n_chunks)).strip()
+        response = {
+            "id": chat_id,
+            "object": "chat.completion",
+            "created": created,
+            "model": model,
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}
+            ],
+        }
+        return response
 
 
 

@@ -47,10 +47,18 @@ def convert_primitive(value: str, annotation: Any) -> Any:
         return value
 
     if tp is int:
-        return int(value)
+        try:
+            return int(value)
+        except ValueError:
+            from .exceptions import HTTPException
+            raise HTTPException(422, detail=f"Invalid integer value: '{value}'")
 
     if tp is float:
-        return float(value)
+        try:
+            return float(value)
+        except ValueError:
+            from .exceptions import HTTPException
+            raise HTTPException(422, detail=f"Invalid float value: '{value}'")
 
     if tp is bool:
         v = value.lower()
@@ -206,7 +214,7 @@ def create_body_extractor(name: str, annotation: Any) -> Callable:
     Uses cached msgspec decoder for maximum performance.
     Converts msgspec.DecodeError (JSON parsing errors) to RequestValidationError for proper 422 responses.
     """
-    from .exceptions import RequestValidationError
+    from .exceptions import RequestValidationError, parse_msgspec_decode_error
 
     if is_msgspec_struct(annotation):
         decoder = get_msgspec_decoder(annotation)
@@ -218,16 +226,10 @@ def create_body_extractor(name: str, annotation: Any) -> Callable:
                 # IMPORTANT: Must catch ValidationError BEFORE DecodeError since ValidationError subclasses DecodeError
                 raise
             except msgspec.DecodeError as e:
-                # JSON parsing error (malformed JSON) - return 422 with error details
+                # JSON parsing error (malformed JSON) - return 422 with error details including line/column
+                error_detail = parse_msgspec_decode_error(e, body_bytes)
                 raise RequestValidationError(
-                    errors=[
-                        {
-                            "type": "json_invalid",
-                            "loc": ["body"],
-                            "msg": str(e),
-                            "input": body_bytes.decode("utf-8", errors="replace")[:100] if body_bytes else "",
-                        }
-                    ],
+                    errors=[error_detail],
                     body=body_bytes,
                 ) from e
     else:
@@ -240,16 +242,10 @@ def create_body_extractor(name: str, annotation: Any) -> Callable:
                 # IMPORTANT: Must catch ValidationError BEFORE DecodeError since ValidationError subclasses DecodeError
                 raise
             except msgspec.DecodeError as e:
-                # JSON parsing error (malformed JSON) - return 422 with error details
+                # JSON parsing error (malformed JSON) - return 422 with error details including line/column
+                error_detail = parse_msgspec_decode_error(e, body_bytes)
                 raise RequestValidationError(
-                    errors=[
-                        {
-                            "type": "json_invalid",
-                            "loc": ["body"],
-                            "msg": str(e),
-                            "input": body_bytes.decode("utf-8", errors="replace")[:100] if body_bytes else "",
-                        }
-                    ],
+                    errors=[error_detail],
                     body=body_bytes,
                 ) from e
 

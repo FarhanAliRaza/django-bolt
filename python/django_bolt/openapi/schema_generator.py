@@ -354,6 +354,10 @@ class SchemaGenerator:
             if len(module_parts) > 0:
                 # Use last part of module name (e.g., "users" from "myapp.api.users")
                 tag = module_parts[-1]
+                if tag == "api" and len(module_parts) > 1:
+                    # If last part is "api", use the second-to-last part
+                    # e.g., "users.api" -> "users"
+                    tag = module_parts[-2]
                 if tag != "api":  # Skip generic "api" tag
                     return [tag.capitalize()]
 

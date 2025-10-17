@@ -25,10 +25,16 @@ Should Have (Important):
 - Support for custom OPTIONS handlers via Response class
 - CORS preflight compatible
 
-❌ Class based views - Not implemented
+✅ Class based views - Not implemented
 guards should be funcional and should have a way to implement in python
 Nice to Have (Can defer):
 Pagination helpers
+
+✅ Reloading is slow (fixed)
+
+⚠️ openai only show successfull http reponse
+
+⚠️ content negotiation
 
 ## Known Limitations (BOTH Function & Class-Based)
 

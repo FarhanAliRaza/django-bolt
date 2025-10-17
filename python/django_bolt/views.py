@@ -126,6 +126,13 @@ class APIView:
         # Create pure functional handler that calls bound method directly
         async def view_handler(*args, **kwargs):
             """Auto-generated view handler that calls bound method directly."""
+            # Inject request object into view instance for pagination/filtering
+            # Request is typically the first positional arg or named 'request'
+            if args and isinstance(args[0], dict) and 'method' in args[0]:
+                view_instance.request = args[0]
+            elif 'request' in kwargs:
+                view_instance.request = kwargs['request']
+
             return await bound_method(*args, **kwargs)
 
         # Attach the signature (for parameter extraction)
@@ -189,6 +196,7 @@ class ViewSet(APIView):
             queryset = User.objects.all()
             serializer_class = UserSchema
             list_serializer_class = UserMiniSchema  # Optional: different serializer for lists
+            pagination_class = PageNumberPagination  # Optional: enable pagination
 
             async def list(self, request):
                 users = await self.get_queryset()
@@ -204,9 +212,13 @@ class ViewSet(APIView):
     serializer_class: Optional[Type] = None
     list_serializer_class: Optional[Type] = None  # Optional: override serializer for list operations
     lookup_field: str = 'pk'  # Field to use for object lookup (default: 'pk')
+    pagination_class: Optional[Any] = None  # Optional: pagination class to use
 
     # Action name for current request (set automatically)
     action: Optional[str] = None
+
+    # Request object (set automatically during dispatch)
+    request: Optional[Dict[str, Any]] = None
 
     def __init_subclass__(cls, **kwargs):
         """
@@ -318,8 +330,10 @@ class ViewSet(APIView):
         """
         Given a queryset, filter it with whichever filter backends are enabled.
 
-        This method provides a hook for filtering, searching, ordering, and pagination.
+        This method provides a hook for filtering, searching, and ordering.
         Override this method to implement custom filtering logic.
+
+        Note: Pagination is handled separately via paginate_queryset().
 
         Example:
             async def filter_queryset(self, queryset):
@@ -349,6 +363,47 @@ class ViewSet(APIView):
         # Default implementation: return queryset unchanged
         # Subclasses should override this method to add filtering logic
         return queryset
+
+    async def paginate_queryset(self, queryset):
+        """
+        Paginate a queryset if pagination is enabled.
+
+        This method checks if self.pagination_class is set and applies
+        pagination if available. If no pagination is configured, returns
+        the queryset unchanged.
+
+        Args:
+            queryset: The queryset to paginate
+
+        Returns:
+            PaginatedResponse if pagination enabled, otherwise queryset
+        """
+        if self.pagination_class is None:
+            return queryset
+
+        if self.request is None:
+            raise ValueError(
+                f"Cannot paginate in {self.__class__.__name__}: request object not available. "
+                f"Ensure request parameter is passed to the handler."
+            )
+
+        # Create paginator instance
+        paginator = self.pagination_class()
+
+        # Apply pagination
+        return await paginator.paginate_queryset(queryset, self.request)
+
+    def get_pagination_class(self):
+        """
+        Get the pagination class for this viewset.
+
+        Override this method to dynamically select pagination class
+        based on action or other criteria.
+
+        Returns:
+            Pagination class or None
+        """
+        return self.pagination_class
 
     async def get_object(self, pk: Any = None, **lookup_kwargs):
         """

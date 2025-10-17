@@ -831,7 +831,7 @@ def test_custom_action_decorator_in_viewset(api):
         assert "articles" in response.json()
 
         response = client.post("/articles", json={"title": "Test"})
-        assert response.status_code == 200
+        assert response.status_code == 201  # HTTP 201 Created for viewset create action
         assert response.json()["created"] is True
 
         # Custom actions (registered automatically from decorators)

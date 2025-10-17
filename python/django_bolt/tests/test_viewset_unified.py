@@ -140,7 +140,7 @@ def test_unified_viewset_basic_crud(api):
             "/articles",
             json={"title": "Test Article", "content": "Test Content", "author": "Test Author"},
         )
-        assert response.status_code == 200
+        assert response.status_code == 201  # HTTP 201 Created
         data = response.json()
         assert data["title"] == "Test Article"
         assert data["content"] == "Test Content"
@@ -180,7 +180,7 @@ def test_unified_viewset_basic_crud(api):
 
         # Delete
         response = client.delete(f"/articles/{article_id}")
-        assert response.status_code == 200
+        assert response.status_code == 204  # HTTP 204 No Content
         assert response.json()["deleted"] is True
 
         # Verify deletion

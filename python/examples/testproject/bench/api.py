@@ -97,14 +97,17 @@ class BenchItemViewSet(ViewSet):
         except BenchItem.DoesNotExist:
             raise NotFound(detail=f"BenchItem {id} not found")
 
-    async def create(self, request, item: BenchItemCreate) -> BenchItemSchema:
+    async def create(self, item: BenchItemCreate) -> BenchItemSchema:
         """POST /bench/items - Create a new item."""
+        print("create", item)
         item = await BenchItem.objects.acreate(
             name=item.name,
             value=item.value,
             description=item.description,
             is_active=item.is_active
         )
+        
+        
 
         return BenchItemSchema(
             id=item.id,

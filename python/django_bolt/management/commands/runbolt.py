@@ -62,96 +62,26 @@ class Command(BaseCommand):
                 self.start_single_process(options)
 
     def run_with_autoreload(self, options):
-        """Run server with auto-reload using watchfiles"""
-        import sys
-        import os
-        import signal
-        import subprocess
-        from pathlib import Path
-
+        """Run server with auto-reload using Django's autoreload system"""
         try:
-            from watchfiles import watch
+            from django.utils import autoreload
         except ImportError:
             self.stdout.write(
                 self.style.ERROR(
-                    "[django-bolt] Error: watchfiles not installed. "
-                    "Install it with: pip install watchfiles"
+                    "[django-bolt] Error: Django autoreload not available. "
+                    "Upgrade Django or use --no-dev mode."
                 )
             )
+            import sys
             sys.exit(1)
 
-        # Watch paths - Django project base directory
-        watch_path = Path(settings.BASE_DIR)
+        # Use Django's autoreload system which is optimized
+        # It only restarts the Python interpreter when necessary
+        # and reuses the same process for faster reloads
+        def run_server():
+            self.start_single_process(options)
 
-        self.stdout.write(f"[django-bolt] Watching for changes in: {watch_path}")
-        self.stdout.write("[django-bolt] Press Ctrl+C to quit\n")
-
-        # Keep track of server process
-        server_process = None
-
-        def start_server_subprocess():
-            """Start server in subprocess"""
-            nonlocal server_process
-
-            # Build command to restart ourselves without --dev
-            cmd = [
-                sys.executable,
-                "manage.py",
-                "runbolt",
-                "--host", options['host'],
-                "--port", str(options['port']),
-                "--workers", str(options['workers']),
-            ]
-
-            # Pass through --no-admin flag if present
-            if options.get('no_admin', False):
-                cmd.append('--no-admin')
-
-            server_process = subprocess.Popen(
-                cmd,
-                cwd=settings.BASE_DIR,
-                env=os.environ.copy(),
-            )
-            return server_process
-
-        def stop_server():
-            """Stop server subprocess"""
-            nonlocal server_process
-            if server_process and server_process.poll() is None:
-                server_process.terminate()
-                try:
-                    server_process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    server_process.kill()
-                    server_process.wait()
-
-        # Handle Ctrl+C
-        def signal_handler(signum, frame):
-            stop_server()
-            self.stdout.write("\n[django-bolt] Shutting down...")
-            sys.exit(0)
-
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-
-        # Start initial server
-        start_server_subprocess()
-
-        # Watch for changes
-        try:
-            for changes in watch(watch_path, watch_filter=lambda change, path: path.endswith('.py'), debounce=300):
-                if changes:
-                    # Get first changed file for display
-                    change_type, changed_file = list(changes)[0]
-                    rel_path = Path(changed_file).relative_to(watch_path)
-                    self.stdout.write(f"[django-bolt] 🔄 File changed: {rel_path} - Reloading...")
-
-                    # Stop and restart server
-                    stop_server()
-                    start_server_subprocess()
-        except KeyboardInterrupt:
-            stop_server()
-            self.stdout.write("\n[django-bolt] Shutting down...")
+        autoreload.run_with_reloader(run_server)
 
     def start_multiprocess(self, options):
         """Start multiple processes with SO_REUSEPORT"""

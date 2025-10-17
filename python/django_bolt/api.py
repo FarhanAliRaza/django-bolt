@@ -404,24 +404,25 @@ class BoltAPI:
                     return user
 
         This method auto-generates routes for standard DRF-style actions:
-        - list: GET /path
-        - create: POST /path
-        - retrieve: GET /path/{pk}
-        - update: PUT /path/{pk}
-        - partial_update: PATCH /path/{pk}
-        - destroy: DELETE /path/{pk}
+        - list: GET /path (200 OK)
+        - create: POST /path (201 Created)
+        - retrieve: GET /path/{pk} (200 OK)
+        - update: PUT /path/{pk} (200 OK)
+        - partial_update: PATCH /path/{pk} (200 OK)
+        - destroy: DELETE /path/{pk} (204 No Content)
 
         Args:
             path: Base URL path (e.g., "/users")
             guards: Optional guards to apply to all routes
             auth: Optional auth backends to apply to all routes
-            status_code: Optional default status code
+            status_code: Optional default status code (overrides action-specific defaults)
             lookup_field: Field name for object lookup (default: "pk")
 
         Returns:
             Decorator function that registers the viewset
         """
         from .views import ViewSet
+        from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
 
         def decorator(viewset_cls: type) -> type:
             # Validate that viewset_cls is a ViewSet subclass
@@ -435,21 +436,22 @@ class BoltAPI:
             if actual_lookup_field == "pk" and hasattr(viewset_cls, 'lookup_field'):
                 actual_lookup_field = viewset_cls.lookup_field
 
-            # Define standard action mappings
+            # Define standard action mappings with HTTP-compliant status codes
+            # Format: action_name: (method, path, action_override, default_status_code)
             action_routes = {
                 # Collection routes (no pk)
-                'list': ('GET', path, None),
-                'create': ('POST', path, None),
+                'list': ('GET', path, None, None),
+                'create': ('POST', path, None, HTTP_201_CREATED),
 
                 # Detail routes (with pk)
-                'retrieve': ('GET', f"{path}/{{{actual_lookup_field}}}", 'retrieve'),
-                'update': ('PUT', f"{path}/{{{actual_lookup_field}}}", 'update'),
-                'partial_update': ('PATCH', f"{path}/{{{actual_lookup_field}}}", 'partial_update'),
-                'destroy': ('DELETE', f"{path}/{{{actual_lookup_field}}}", 'destroy'),
+                'retrieve': ('GET', f"{path}/{{{actual_lookup_field}}}", 'retrieve', None),
+                'update': ('PUT', f"{path}/{{{actual_lookup_field}}}", 'update', None),
+                'partial_update': ('PATCH', f"{path}/{{{actual_lookup_field}}}", 'partial_update', None),
+                'destroy': ('DELETE', f"{path}/{{{actual_lookup_field}}}", 'destroy', HTTP_204_NO_CONTENT),
             }
 
             # Register routes for each implemented action
-            for action_name, (http_method, route_path, action_override) in action_routes.items():
+            for action_name, (http_method, route_path, action_override, action_status_code) in action_routes.items():
                 # Check if the viewset implements this action
                 if not hasattr(viewset_cls, action_name):
                     continue
@@ -470,9 +472,12 @@ class BoltAPI:
                 if merged_auth is None and hasattr(handler, '__bolt_auth__'):
                     merged_auth = handler.__bolt_auth__
 
+                # Status code priority: explicit status_code param > handler attribute > action default
                 merged_status_code = status_code
                 if merged_status_code is None and hasattr(handler, '__bolt_status_code__'):
                     merged_status_code = handler.__bolt_status_code__
+                if merged_status_code is None:
+                    merged_status_code = action_status_code
 
                 # Register the route
                 route_decorator = self._route_decorator(

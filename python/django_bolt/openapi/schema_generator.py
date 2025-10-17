@@ -288,6 +288,7 @@ class SchemaGenerator:
         response_type = meta.get("response_type")
         default_status = meta.get("default_status_code", 200)
 
+        # Add successful response
         if response_type and response_type != inspect._empty:
             schema = self._type_to_schema(response_type, register_component=True)
 
@@ -305,6 +306,43 @@ class SchemaGenerator:
                     "application/json": OpenAPIMediaType(
                         schema=Schema(type="object")
                     ),
+                },
+            )
+
+        # Add common error responses if enabled in config
+        if self.config.include_error_responses:
+            error_schema = self._get_error_response_schema()
+
+            # Check if request body is present (for 422 validation errors)
+            has_request_body = meta.get("body_struct_param") or any(
+                f.get("source") in ("body", "form", "file")
+                for f in meta.get("fields", [])
+            )
+
+            if has_request_body:
+                # 422 Unprocessable Entity - validation errors
+                responses["422"] = OpenAPIResponse(
+                    description="Validation Error - Request data failed validation",
+                    content={
+                        "application/json": OpenAPIMediaType(
+                            schema=self._get_validation_error_schema()
+                        ),
+                    },
+                )
+
+            # 400 Bad Request - malformed request
+            responses["400"] = OpenAPIResponse(
+                description="Bad Request - Invalid request data",
+                content={
+                    "application/json": OpenAPIMediaType(schema=error_schema),
+                },
+            )
+
+            # 500 Internal Server Error - server errors
+            responses["500"] = OpenAPIResponse(
+                description="Internal Server Error - Unexpected server error",
+                content={
+                    "application/json": OpenAPIMediaType(schema=error_schema),
                 },
             )
 

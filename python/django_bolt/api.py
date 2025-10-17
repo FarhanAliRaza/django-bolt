@@ -117,10 +117,36 @@ def extract_parameter_value(
                 body_bytes: bytes = request["body"]
                 if is_msgspec_struct(meta["body_struct_type"]):
                     from .binding import get_msgspec_decoder
+                    from .exceptions import RequestValidationError, parse_msgspec_decode_error
                     decoder = get_msgspec_decoder(meta["body_struct_type"])
-                    value = decoder.decode(body_bytes)
+                    try:
+                        value = decoder.decode(body_bytes)
+                    except msgspec.ValidationError:
+                        # Re-raise ValidationError as-is (field validation errors handled by error_handlers.py)
+                        # IMPORTANT: Must catch ValidationError BEFORE DecodeError since ValidationError subclasses DecodeError
+                        raise
+                    except msgspec.DecodeError as e:
+                        # JSON parsing error (malformed JSON) - return 422 with error details including line/column
+                        error_detail = parse_msgspec_decode_error(e, body_bytes)
+                        raise RequestValidationError(
+                            errors=[error_detail],
+                            body=body_bytes,
+                        ) from e
                 else:
-                    value = msgspec.json.decode(body_bytes, type=meta["body_struct_type"])
+                    from .exceptions import RequestValidationError, parse_msgspec_decode_error
+                    try:
+                        value = msgspec.json.decode(body_bytes, type=meta["body_struct_type"])
+                    except msgspec.ValidationError:
+                        # Re-raise ValidationError as-is (field validation errors handled by error_handlers.py)
+                        # IMPORTANT: Must catch ValidationError BEFORE DecodeError since ValidationError subclasses DecodeError
+                        raise
+                    except msgspec.DecodeError as e:
+                        # JSON parsing error (malformed JSON) - return 422 with error details including line/column
+                        error_detail = parse_msgspec_decode_error(e, body_bytes)
+                        raise RequestValidationError(
+                            errors=[error_detail],
+                            body=body_bytes,
+                        ) from e
                 return value, value, True
             else:
                 return body_obj, body_obj, body_loaded

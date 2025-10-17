@@ -62,47 +62,9 @@ async def list_mini_10() -> List[UserMini]:
 
 
 
-
 # ============================================================================
 # Unified ViewSet (DRF-style with api.viewset())
 # ============================================================================
-@api.viewset("/users")
-class UnifiedUserViewSet(ModelViewSet):
-    """
-    Unified ViewSet demonstrating the new pattern inspired by Litestar/DRF.
-
-    Single ViewSet handles both list and detail views with:
-    - DRF-style action methods (list, retrieve, create, update, partial_update, destroy)
-    - Automatic route generation with api.viewset()
-    - Different serializers for list vs detail (list_serializer_class)
-    - Type-driven serialization
-    """
-
-    queryset = User.objects.all()
-    serializer_class = UserFull  # Used for detail views
-    list_serializer_class = UserMini  # Used for list views
-    lookup_field = 'id'
-
-    # Custom actions using @action decorator
-    @action(methods=["POST"], detail=True)
-    async def activate(self, request, id: int):
-        """Custom action: Activate a user. POST /users/unified-users/{id}/activate"""
-        try:
-            user = await User.objects.aget(id=id)
-            user.is_active = True
-            await user.asave()
-            return {"user_id": id, "activated": True, "is_active": True}
-        except User.DoesNotExist:
-            raise NotFound(detail=f"User {id} not found")
-
-    @action(methods=["GET"], detail=False)
-    async def search(self, request, query: str):
-        """Custom action: Search users by username. GET /users/unified-users/search"""
-        users = []
-        async for user in User.objects.filter(username__icontains=query)[:10]:
-            users.append(UserMini(id=user.id, username=user.username))
-        return {"query": query, "results": users}
-
 
 
 @api.view("/cbv-mini10")
@@ -117,3 +79,13 @@ class UserBenchViewSet(APIView):
         return users
 
 
+@api.view("/cbv-full10")
+class UserFull10ViewSet(APIView):
+    """List first 10 users (CBV version for benchmarking)."""
+
+    async def get(self, request):
+        """List first 10 users (CBV version for benchmarking)."""
+        users = []
+        async for user in User.objects.only("id", "username", "email", "first_name", "last_name", "is_active")[:10]:
+            users.append(UserFull(id=user.id, username=user.username, email=user.email, first_name=user.first_name, last_name=user.last_name, is_active=user.is_active))
+        return users

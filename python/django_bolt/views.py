@@ -208,26 +208,146 @@ class ViewSet(APIView):
     # Action name for current request (set automatically)
     action: Optional[str] = None
 
+    def __init_subclass__(cls, **kwargs):
+        """
+        Hook called when a subclass is created.
+
+        Converts class-level queryset to instance-level _base_queryset
+        to enable proper cloning on each access (Litestar pattern).
+        """
+        super().__init_subclass__(**kwargs)
+
+        # If subclass defines queryset as class attribute, store it separately
+        if 'queryset' in cls.__dict__ and cls.__dict__['queryset'] is not None:
+            # Store the base queryset for cloning
+            cls._base_queryset = cls.__dict__['queryset']
+            # Remove the class attribute so property works
+            delattr(cls, 'queryset')
+
+    def _get_base_queryset(self):
+        """
+        Get the base queryset defined on the class.
+
+        Returns None if no queryset is defined.
+        """
+        # Check instance attribute first (for dynamic assignment)
+        if hasattr(self, '_instance_queryset'):
+            return self._instance_queryset
+
+        # Check class attribute (set via __init_subclass__)
+        if hasattr(self.__class__, '_base_queryset'):
+            return self.__class__._base_queryset
+
+        # Check if there's a class attribute 'queryset' (shouldn't happen after __init_subclass__)
+        return getattr(self.__class__, 'queryset', None)
+
+    def _clone_queryset(self, queryset):
+        """
+        Clone a queryset to ensure isolation between requests.
+
+        Args:
+            queryset: The queryset to clone
+
+        Returns:
+            Fresh QuerySet clone
+        """
+        if queryset is None:
+            return None
+
+        # Always return a fresh clone to prevent state leakage
+        # Django QuerySets are lazy, so .all() creates a new QuerySet instance
+        if hasattr(queryset, '_clone'):
+            # Use Django's internal _clone() for true deep copy
+            return queryset._clone()
+        elif hasattr(queryset, 'all'):
+            # Fallback to .all() which also creates a new QuerySet
+            return queryset.all()
+
+        # Not a QuerySet, return as-is
+        return queryset
+
+    @property
+    def queryset(self):
+        """
+        Property that returns a fresh queryset clone on each access.
+
+        This ensures queryset isolation between requests while maintaining
+        single-instance performance (Litestar pattern).
+
+        Returns:
+            Fresh QuerySet clone or None if not set
+        """
+        base_qs = self._get_base_queryset()
+        return self._clone_queryset(base_qs)
+
+    @queryset.setter
+    def queryset(self, value):
+        """
+        Setter for queryset attribute.
+
+        Stores the base queryset that will be cloned on each access.
+
+        Args:
+            value: Base queryset to store
+        """
+        self._instance_queryset = value
+
     async def get_queryset(self):
         """
         Get the queryset for this viewset.
 
-        This method ensures queryset is re-evaluated on each request (like DRF).
+        This method returns a fresh queryset clone on each call, ensuring
+        no state leakage between requests (following Litestar's pattern).
         Override to customize queryset filtering.
 
         Returns:
             Django QuerySet
         """
-        if self.queryset is None:
+        base_qs = self._get_base_queryset()
+
+        if base_qs is None:
             raise ValueError(
                 f"'{self.__class__.__name__}' should either include a `queryset` attribute, "
                 f"or override the `get_queryset()` method."
             )
 
-        queryset = self.queryset
-        # If it's a QuerySet, ensure it's re-evaluated on each request (like DRF does)
-        if hasattr(queryset, 'all'):
-            queryset = queryset.all()
+        # Return a fresh clone
+        return self._clone_queryset(base_qs)
+
+    async def filter_queryset(self, queryset):
+        """
+        Given a queryset, filter it with whichever filter backends are enabled.
+
+        This method provides a hook for filtering, searching, ordering, and pagination.
+        Override this method to implement custom filtering logic.
+
+        Example:
+            async def filter_queryset(self, queryset):
+                # Apply filters from query params
+                status = self.request.get('query', {}).get('status')
+                if status:
+                    queryset = queryset.filter(status=status)
+
+                # Apply ordering
+                ordering = self.request.get('query', {}).get('ordering')
+                if ordering:
+                    queryset = queryset.order_by(ordering)
+
+                # Apply search
+                search = self.request.get('query', {}).get('search')
+                if search:
+                    queryset = queryset.filter(name__icontains=search)
+
+                return queryset
+
+        Args:
+            queryset: The base queryset to filter
+
+        Returns:
+            Filtered queryset (still lazy, not evaluated)
+        """
+        # Default implementation: return queryset unchanged
+        # Subclasses should override this method to add filtering logic
         return queryset
 
     async def get_object(self, pk: Any = None, **lookup_kwargs):
@@ -345,10 +465,19 @@ class ListMixin:
     """
 
     async def get(self, request):
-        """List all objects in the queryset."""
+        """
+        List all objects in the queryset.
+
+        Note: This evaluates the entire queryset. For large datasets,
+        consider implementing pagination or filtering via filter_queryset().
+        """
         queryset = await self.get_queryset()
 
-        # Convert queryset to list
+        # Optional: Apply filtering if filter_queryset is available
+        if hasattr(self, 'filter_queryset'):
+            queryset = await self.filter_queryset(queryset)
+
+        # Convert queryset to list (evaluates database query here)
         results = []
         async for obj in queryset:
             # If serializer_class is defined, use it
@@ -424,9 +553,13 @@ class CreateMixin:
 
     async def post(self, request, data):
         """Create a new object."""
-        # Get the model from queryset
-        queryset = await self.get_queryset()
-        model = queryset.model
+        # Get the model class without evaluating queryset
+        base_qs = self._get_base_queryset()
+        if base_qs is None:
+            raise ValueError(
+                f"'{self.__class__.__name__}' should include a `queryset` attribute."
+            )
+        model = base_qs.model
 
         # Extract data from msgspec.Struct to dict
         if hasattr(data, "__struct_fields__"):
@@ -715,10 +848,13 @@ class ModelViewSet(ViewSet):
         List all objects in the queryset.
 
         Uses list_serializer_class if defined, otherwise serializer_class.
+        Applies filter_queryset() for filtering, searching, ordering.
         """
         qs = await self.get_queryset()
+        qs = await self.filter_queryset(qs)  # Apply filtering (still lazy)
         serializer_class = self.get_serializer_class(action='list')
 
+        # Queryset is evaluated here during iteration
         results = []
         async for obj in qs:
             if hasattr(serializer_class, 'from_model'):
@@ -761,8 +897,13 @@ class ModelViewSet(ViewSet):
         The `data` parameter should be a msgspec.Struct with the fields to create.
         Uses create_serializer_class if defined, otherwise serializer_class.
         """
-        qs = await self.get_queryset()
-        model = qs.model
+        # Get the model class without evaluating queryset
+        base_qs = self._get_base_queryset()
+        if base_qs is None:
+            raise ValueError(
+                f"'{self.__class__.__name__}' should include a `queryset` attribute."
+            )
+        model = base_qs.model
 
         # Extract data from msgspec.Struct
         if hasattr(data, '__struct_fields__'):

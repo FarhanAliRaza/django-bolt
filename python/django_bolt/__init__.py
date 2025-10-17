@@ -16,6 +16,9 @@ from .views import (
     DestroyMixin,
 )
 
+# Decorators module
+from .decorators import action
+
 # Auth module
 from .auth import (
     # Authentication backends
@@ -82,7 +85,8 @@ __all__ = [
     "UpdateMixin",
     "PartialUpdateMixin",
     "DestroyMixin",
-
+    # Decorators
+    "action",
     # Auth - Authentication
     "JWTAuthentication",
     "APIKeyAuthentication",

@@ -135,6 +135,7 @@ class APIView:
         # Preserve docstring and name
         view_handler.__name__ = f"{cls.__name__}.{action_name}"
         view_handler.__doc__ = method_handler.__doc__
+        view_handler.__module__ = cls.__module__
 
         # Attach class-level metadata for middleware compilation
         # These will be picked up by BoltAPI._route_decorator
@@ -709,5 +710,210 @@ class ModelViewSet(ViewSet):
     The difference is that Django-Bolt requires explicit type annotations for
     parameter binding and validation.
     """
-    pass
+
+    # Optional: separate serializer for create/update operations
+    create_serializer_class: Optional[Type] = None
+    update_serializer_class: Optional[Type] = None
+
+    async def list(self, request):
+        """
+        List all objects in the queryset.
+
+        Uses list_serializer_class if defined, otherwise serializer_class.
+        """
+        qs = await self.get_queryset()
+        serializer_class = self.get_serializer_class(action='list')
+
+        results = []
+        async for obj in qs:
+            if hasattr(serializer_class, 'from_model'):
+                results.append(serializer_class.from_model(obj))
+            else:
+                # Fallback: manual conversion
+                import msgspec
+                fields = getattr(serializer_class, '__annotations__', {})
+                mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+                results.append(msgspec.convert(mapped, serializer_class))
+
+        return results
+
+    async def retrieve(self, request, **kwargs):
+        """
+        Retrieve a single object by lookup field.
+
+        The lookup field value is passed as a keyword argument (e.g., pk=1, id=1).
+        """
+        # Extract lookup value from kwargs
+        lookup_value = kwargs.get(self.lookup_field)
+        if lookup_value is None:
+            raise HTTPException(status_code=400, detail=f"Missing lookup field: {self.lookup_field}")
+
+        obj = await self.get_object(**{self.lookup_field: lookup_value})
+        serializer_class = self.get_serializer_class(action='retrieve')
+
+        if hasattr(serializer_class, 'from_model'):
+            return serializer_class.from_model(obj)
+        else:
+            import msgspec
+            fields = getattr(serializer_class, '__annotations__', {})
+            mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+            return msgspec.convert(mapped, serializer_class)
+
+    async def create(self, request, data):
+        """
+        Create a new object.
+
+        The `data` parameter should be a msgspec.Struct with the fields to create.
+        Uses create_serializer_class if defined, otherwise serializer_class.
+        """
+        qs = await self.get_queryset()
+        model = qs.model
+
+        # Extract data from msgspec.Struct
+        if hasattr(data, '__struct_fields__'):
+            fields = data.__struct_fields__
+            data_dict = {field: getattr(data, field) for field in fields}
+        elif isinstance(data, dict):
+            data_dict = data
+        else:
+            raise ValueError(f"Cannot extract data from {type(data)}")
+
+        # Create object
+        obj = await model.objects.acreate(**data_dict)
+
+        # Serialize response
+        serializer_class = self.get_serializer_class(action='create')
+        if hasattr(serializer_class, 'from_model'):
+            return serializer_class.from_model(obj)
+        else:
+            import msgspec
+            fields = getattr(serializer_class, '__annotations__', {})
+            mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+            return msgspec.convert(mapped, serializer_class)
+
+    async def update(self, request, data, **kwargs):
+        """
+        Update an object (full update).
+
+        The lookup field value is passed as a keyword argument.
+        Uses update_serializer_class if defined, otherwise create_serializer_class or serializer_class.
+        """
+        lookup_value = kwargs.get(self.lookup_field)
+        if lookup_value is None:
+            raise HTTPException(status_code=400, detail=f"Missing lookup field: {self.lookup_field}")
+
+        obj = await self.get_object(**{self.lookup_field: lookup_value})
+
+        # Extract data
+        if hasattr(data, '__struct_fields__'):
+            fields = data.__struct_fields__
+            data_dict = {field: getattr(data, field) for field in fields}
+        elif isinstance(data, dict):
+            data_dict = data
+        else:
+            raise ValueError(f"Cannot extract data from {type(data)}")
+
+        # Update all fields
+        for key, value in data_dict.items():
+            setattr(obj, key, value)
+
+        await obj.asave()
+
+        # Serialize response
+        serializer_class = self.get_serializer_class(action='update')
+        if hasattr(serializer_class, 'from_model'):
+            return serializer_class.from_model(obj)
+        else:
+            import msgspec
+            fields = getattr(serializer_class, '__annotations__', {})
+            mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+            return msgspec.convert(mapped, serializer_class)
+
+    async def partial_update(self, request, data, **kwargs):
+        """
+        Partially update an object.
+
+        Only updates fields that are not None in the data.
+        """
+        lookup_value = kwargs.get(self.lookup_field)
+        if lookup_value is None:
+            raise HTTPException(status_code=400, detail=f"Missing lookup field: {self.lookup_field}")
+
+        obj = await self.get_object(**{self.lookup_field: lookup_value})
+
+        # Extract data
+        if hasattr(data, '__struct_fields__'):
+            fields = data.__struct_fields__
+            data_dict = {field: getattr(data, field) for field in fields}
+        elif isinstance(data, dict):
+            data_dict = data
+        else:
+            raise ValueError(f"Cannot extract data from {type(data)}")
+
+        # Update only non-None fields
+        for key, value in data_dict.items():
+            if value is not None:
+                setattr(obj, key, value)
+
+        await obj.asave()
+
+        # Serialize response
+        serializer_class = self.get_serializer_class(action='partial_update')
+        if hasattr(serializer_class, 'from_model'):
+            return serializer_class.from_model(obj)
+        else:
+            import msgspec
+            fields = getattr(serializer_class, '__annotations__', {})
+            mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+            return msgspec.convert(mapped, serializer_class)
+
+    async def destroy(self, request, **kwargs):
+        """
+        Delete an object.
+        """
+        lookup_value = kwargs.get(self.lookup_field)
+        if lookup_value is None:
+            raise HTTPException(status_code=400, detail=f"Missing lookup field: {self.lookup_field}")
+
+        obj = await self.get_object(**{self.lookup_field: lookup_value})
+        await obj.adelete()
+
+        return {"deleted": True}
+
+    def get_serializer_class(self, action: Optional[str] = None):
+        """
+        Get the serializer class for this viewset.
+
+        Supports action-specific serializer classes:
+        - list: list_serializer_class or serializer_class
+        - create: create_serializer_class or serializer_class
+        - update/partial_update: update_serializer_class or create_serializer_class or serializer_class
+        - retrieve/destroy: serializer_class
+
+        Args:
+            action: The action being performed ('list', 'retrieve', 'create', etc.)
+
+        Returns:
+            Serializer class
+        """
+        if action is None:
+            action = self.action
+
+        # Action-specific serializer classes
+        if action == 'list' and self.list_serializer_class is not None:
+            return self.list_serializer_class
+        elif action == 'create' and self.create_serializer_class is not None:
+            return self.create_serializer_class
+        elif action in ('update', 'partial_update'):
+            if self.update_serializer_class is not None:
+                return self.update_serializer_class
+            elif self.create_serializer_class is not None:
+                return self.create_serializer_class
+
+        if self.serializer_class is None:
+            raise ValueError(
+                f"'{self.__class__.__name__}' should either include a `serializer_class` attribute, "
+                f"or override the `get_serializer_class()` method."
+            )
+        return self.serializer_class
 

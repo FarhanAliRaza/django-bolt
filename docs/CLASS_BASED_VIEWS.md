@@ -22,38 +22,51 @@ Django-Bolt provides a powerful class-based view system inspired by Django REST 
 ## Quick Start
 
 ```python
-from django_bolt import BoltAPI
+from django_bolt import BoltAPI, action
 from django_bolt.views import APIView, ViewSet
 
 api = BoltAPI()
 
-# Simple APIView
+# Simple APIView with decorator (recommended)
+@api.view("/hello")
 class HelloView(APIView):
     async def get(self, request):
         return {"message": "Hello, World!"}
 
-api.view("/hello", HelloView, methods=["GET"])
-
-# ViewSet for CRUD operations
+# ViewSet for CRUD operations with decorator (recommended)
+@api.viewset("/articles")
 class ArticleViewSet(ViewSet):
-    async def get(self, request, article_id: int):
-        """Retrieve a single article."""
+    lookup_field = 'article_id'  # Use 'article_id' instead of default 'pk'
+
+    async def list(self, request):
+        """GET /articles - List all articles"""
+        return [{"id": 1, "title": "Article 1"}]
+
+    async def retrieve(self, request, article_id: int):
+        """GET /articles/{article_id} - Retrieve a single article"""
         return {"id": article_id, "title": "My Article"}
 
-    async def post(self, request):
-        """Create a new article."""
-        # Request body automatically validated if using msgspec.Struct
+    async def create(self, request, data: dict):
+        """POST /articles - Create a new article"""
         return {"id": 1, "created": True}
 
-    async def put(self, request, article_id: int):
-        """Update an article."""
+    async def update(self, request, article_id: int, data: dict):
+        """PUT /articles/{article_id} - Update an article"""
         return {"id": article_id, "updated": True}
 
-    async def delete(self, request, article_id: int):
-        """Delete an article."""
+    async def destroy(self, request, article_id: int):
+        """DELETE /articles/{article_id} - Delete an article"""
         return {"id": article_id, "deleted": True}
 
-api.view("/articles/{article_id}", ArticleViewSet, methods=["GET", "POST", "PUT", "DELETE"])
+    # Custom action
+    @action(methods=["POST"], detail=True)
+    async def publish(self, request, article_id: int):
+        """POST /articles/{article_id}/publish - Publish an article"""
+        return {"id": article_id, "published": True}
+
+# Alternative: Function call style (backward compatible)
+# api.view("/hello", HelloView)
+# api.viewset("/articles", ArticleViewSet)
 ```
 
 ## Unified ViewSet Pattern (Recommended)
@@ -752,48 +765,79 @@ api.view("/articles/{id}", ArticleViewSet, methods=["GET"])
 
 ## Custom Actions
 
-Custom actions let you add non-CRUD endpoints to your ViewSet using decorators. This is one of the most powerful features of class-based views.
+Custom actions let you add non-CRUD endpoints to your ViewSet using the `@action` decorator. This is one of the most powerful features of class-based views, inspired by Django REST Framework.
+
+**IMPORTANT**: Custom actions with `@action` decorator only work with `api.viewset()` registration. They do not work with `api.view()`.
+
+### The @action Decorator
+
+The `@action` decorator provides automatic path generation for custom actions based on the ViewSet's base path:
+
+```python
+from django_bolt import action
+
+@action(methods=["POST"], detail=True)
+async def activate(self, request, id: int):
+    """Automatically generates: POST /users/{id}/activate"""
+    pass
+
+@action(methods=["GET"], detail=False)
+async def active(self, request):
+    """Automatically generates: GET /users/active"""
+    pass
+```
+
+#### Parameters
+
+- **methods** (required): List of HTTP methods (`["GET"]`, `["POST"]`, `["GET", "POST"]`, etc.)
+- **detail** (required): `True` for instance-level actions (`/resource/{pk}/action`), `False` for collection-level (`/resource/action`)
+- **path** (optional): Custom action name (defaults to function name)
+- **auth** (optional): Override class-level authentication
+- **guards** (optional): Override class-level guards
+- **response_model** (optional): Response serialization model
+- **status_code** (optional): HTTP status code
 
 ### Basic Custom Actions
 
 ```python
-class ArticleViewSet(ViewSet):
-    async def get(self, request, article_id: int):
-        """Standard retrieve."""
-        return {"id": article_id, "title": "My Article"}
+from django_bolt import BoltAPI, ViewSet, action
 
-    # Custom action: publish article
-    @api.post("/articles/{article_id}/publish")
-    async def publish(self, request, article_id: int):
-        """Publish an article."""
-        # Custom business logic
-        return {
-            "id": article_id,
-            "published": True,
-            "status": "live"
-        }
+api = BoltAPI()
 
-    # Custom action: archive article
-    @api.post("/articles/{article_id}/archive")
-    async def archive(self, request, article_id: int):
-        """Archive an article."""
-        return {
-            "id": article_id,
-            "archived": True,
-            "status": "archived"
-        }
+class UserViewSet(ViewSet):
+    queryset = User.objects.all()
+    serializer_class = UserFull
 
-    # Custom action: search
-    @api.get("/articles/search")
-    async def search(self, request, query: str):
-        """Search articles."""
-        return {
-            "query": query,
-            "results": ["article1", "article2"]
-        }
+    async def list(self, request) -> list[UserMini]:
+        """GET /users"""
+        return User.objects.all()[:100]
 
-# Register ViewSet - automatically discovers and registers custom actions
-api.view("/articles/{article_id}", ArticleViewSet, methods=["GET"])
+    async def retrieve(self, request, id: int) -> UserFull:
+        """GET /users/{id}"""
+        return await User.objects.aget(id=id)
+
+    # Instance-level action: POST /users/{id}/activate
+    @action(methods=["POST"], detail=True)
+    async def activate(self, request, id: int):
+        """Activate a user account."""
+        user = await User.objects.aget(id=id)
+        user.is_active = True
+        await user.asave()
+        return {"user_id": id, "activated": True}
+
+    # Collection-level action: GET /users/active
+    @action(methods=["GET"], detail=False)
+    async def active(self, request) -> list[UserMini]:
+        """Get all active users."""
+        return User.objects.filter(is_active=True)[:100]
+
+    # Custom path: GET /users/search
+    @action(methods=["GET"], detail=False, path="search")
+    async def search_users(self, request, query: str):
+        """Search users by username."""
+        return User.objects.filter(username__icontains=query)[:10]
+
+api.viewset("/users", UserViewSet)
 ```
 
 ### Real-World Examples
@@ -801,169 +845,213 @@ api.view("/articles/{article_id}", ArticleViewSet, methods=["GET"])
 #### User Account Management
 
 ```python
+from django_bolt import action
+
 class UserViewSet(ViewSet):
-    async def get(self, request, user_id: int):
-        """Get user details."""
-        return {"id": user_id, "username": "johndoe"}
+    queryset = User.objects.all()
+    serializer_class = UserSchema
 
-    @api.post("/users/{user_id}/activate")
-    async def activate(self, request, user_id: int):
-        """Activate user account."""
-        # Send activation email, update database, etc.
-        return {
-            "id": user_id,
-            "activated": True,
-            "email_sent": True
-        }
+    async def list(self, request):
+        return User.objects.all()[:100]
 
-    @api.post("/users/{user_id}/deactivate")
-    async def deactivate(self, request, user_id: int):
-        """Deactivate user account."""
-        return {
-            "id": user_id,
-            "deactivated": True,
-            "status": "inactive"
-        }
+    async def retrieve(self, request, id: int):
+        return await User.objects.aget(id=id)
 
-    @api.post("/users/{user_id}/reset-password")
-    async def reset_password(self, request, user_id: int):
-        """Send password reset email."""
-        return {
-            "id": user_id,
-            "reset_email_sent": True
-        }
+    @action(methods=["POST"], detail=True)
+    async def activate(self, request, id: int):
+        """POST /users/{id}/activate - Activate user account"""
+        user = await User.objects.aget(id=id)
+        user.is_active = True
+        await user.asave()
+        # Send activation email, etc.
+        return {"id": id, "activated": True, "email_sent": True}
 
-    @api.get("/users/{user_id}/permissions")
-    async def get_permissions(self, request, user_id: int):
-        """Get user permissions."""
-        return {
-            "id": user_id,
-            "permissions": ["read", "write", "delete"]
-        }
+    @action(methods=["POST"], detail=True)
+    async def deactivate(self, request, id: int):
+        """POST /users/{id}/deactivate - Deactivate user account"""
+        user = await User.objects.aget(id=id)
+        user.is_active = False
+        await user.asave()
+        return {"id": id, "deactivated": True, "status": "inactive"}
 
-    @api.put("/users/{user_id}/permissions")
-    async def update_permissions(self, request, user_id: int, permissions: list):
-        """Update user permissions."""
-        return {
-            "id": user_id,
-            "permissions": permissions,
-            "updated": True
-        }
+    @action(methods=["POST"], detail=True, path="reset-password")
+    async def reset_password(self, request, id: int):
+        """POST /users/{id}/reset-password - Send password reset email"""
+        user = await User.objects.aget(id=id)
+        # Send reset email logic
+        return {"id": id, "reset_email_sent": True}
 
-api.view("/users/{user_id}", UserViewSet, methods=["GET"])
+    @action(methods=["GET"], detail=True, path="permissions")
+    async def get_permissions(self, request, id: int):
+        """GET /users/{id}/permissions - Get user permissions"""
+        user = await User.objects.aget(id=id)
+        permissions = list(user.user_permissions.values_list('codename', flat=True))
+        return {"id": id, "permissions": permissions}
+
+    @action(methods=["PUT"], detail=True, path="permissions")
+    async def update_permissions(self, request, id: int, data: PermissionUpdate):
+        """PUT /users/{id}/permissions - Update user permissions"""
+        user = await User.objects.aget(id=id)
+        # Update permissions logic
+        return {"id": id, "permissions": data.permissions, "updated": True}
+
+api.viewset("/users", UserViewSet)
 ```
 
 #### Document Workflow
 
 ```python
 class DocumentViewSet(ViewSet):
-    async def get(self, request, doc_id: int):
-        """Retrieve document."""
-        return {"id": doc_id, "title": "Document", "status": "draft"}
+    queryset = Document.objects.all()
+    serializer_class = DocumentSchema
 
-    @api.post("/documents/{doc_id}/submit")
-    async def submit(self, request, doc_id: int):
-        """Submit document for review."""
-        return {"id": doc_id, "status": "submitted"}
+    async def list(self, request):
+        return Document.objects.all()[:100]
 
-    @api.post("/documents/{doc_id}/approve")
-    async def approve(self, request, doc_id: int):
-        """Approve document."""
-        return {"id": doc_id, "status": "approved"}
+    async def retrieve(self, request, id: int):
+        return await Document.objects.aget(id=id)
 
-    @api.post("/documents/{doc_id}/reject")
-    async def reject(self, request, doc_id: int, reason: str):
-        """Reject document with reason."""
-        return {
-            "id": doc_id,
-            "status": "rejected",
-            "reason": reason
-        }
+    @action(methods=["POST"], detail=True)
+    async def submit(self, request, id: int):
+        """POST /documents/{id}/submit - Submit document for review"""
+        doc = await Document.objects.aget(id=id)
+        doc.status = "submitted"
+        await doc.asave()
+        return {"id": id, "status": "submitted"}
 
-    @api.post("/documents/{doc_id}/lock")
-    async def lock(self, request, doc_id: int):
-        """Lock document for editing."""
-        return {"id": doc_id, "locked": True}
+    @action(methods=["POST"], detail=True)
+    async def approve(self, request, id: int):
+        """POST /documents/{id}/approve - Approve document"""
+        doc = await Document.objects.aget(id=id)
+        doc.status = "approved"
+        await doc.asave()
+        return {"id": id, "status": "approved"}
 
-    @api.post("/documents/{doc_id}/unlock")
-    async def unlock(self, request, doc_id: int):
-        """Unlock document."""
-        return {"id": doc_id, "locked": False}
+    @action(methods=["POST"], detail=True)
+    async def reject(self, request, id: int, data: RejectRequest):
+        """POST /documents/{id}/reject - Reject document with reason"""
+        doc = await Document.objects.aget(id=id)
+        doc.status = "rejected"
+        doc.rejection_reason = data.reason
+        await doc.asave()
+        return {"id": id, "status": "rejected", "reason": data.reason}
 
-api.view("/documents/{doc_id}", DocumentViewSet, methods=["GET", "POST", "PUT"])
+    @action(methods=["POST"], detail=True)
+    async def lock(self, request, id: int):
+        """POST /documents/{id}/lock - Lock document for editing"""
+        doc = await Document.objects.aget(id=id)
+        doc.locked = True
+        await doc.asave()
+        return {"id": id, "locked": True}
+
+    @action(methods=["POST"], detail=True)
+    async def unlock(self, request, id: int):
+        """POST /documents/{id}/unlock - Unlock document"""
+        doc = await Document.objects.aget(id=id)
+        doc.locked = False
+        await doc.asave()
+        return {"id": id, "locked": False}
+
+api.viewset("/documents", DocumentViewSet)
 ```
 
-#### Comment Moderation (Nested Resources)
+### Multiple HTTP Methods
+
+You can register multiple methods for the same action path:
 
 ```python
-class CommentViewSet(ViewSet):
-    async def get(self, request, post_id: int, comment_id: int):
-        """Get comment on a post."""
-        return {
-            "post_id": post_id,
-            "comment_id": comment_id,
-            "text": "Great post!",
-            "status": "pending"
-        }
+class ArticleViewSet(ViewSet):
+    queryset = Article.objects.all()
+    serializer_class = ArticleSchema
 
-    @api.post("/posts/{post_id}/comments/{comment_id}/approve")
-    async def approve(self, request, post_id: int, comment_id: int):
-        """Approve comment."""
-        return {
-            "post_id": post_id,
-            "comment_id": comment_id,
-            "status": "approved"
-        }
+    async def list(self, request):
+        return Article.objects.all()[:100]
 
-    @api.post("/posts/{post_id}/comments/{comment_id}/reject")
-    async def reject(self, request, post_id: int, comment_id: int, reason: str = "spam"):
-        """Reject comment."""
-        return {
-            "post_id": post_id,
-            "comment_id": comment_id,
-            "status": "rejected",
-            "reason": reason
-        }
+    # GET /articles/{id}/status
+    @action(methods=["GET"], detail=True, path="status")
+    async def get_status(self, request, id: int):
+        """Get article publication status."""
+        article = await Article.objects.aget(id=id)
+        return {"is_published": article.is_published}
 
-    @api.post("/posts/{post_id}/comments/{comment_id}/flag")
-    async def flag(self, request, post_id: int, comment_id: int):
-        """Flag comment for review."""
-        return {
-            "post_id": post_id,
-            "comment_id": comment_id,
-            "flagged": True
-        }
+    # POST /articles/{id}/status
+    @action(methods=["POST"], detail=True, path="status")
+    async def update_status(self, request, id: int, data: StatusUpdate):
+        """Update article publication status."""
+        article = await Article.objects.aget(id=id)
+        article.is_published = data.is_published
+        await article.asave()
+        return {"updated": True, "is_published": article.is_published}
 
-api.view("/posts/{post_id}/comments/{comment_id}", CommentViewSet, methods=["GET"])
+api.viewset("/articles", ArticleViewSet)
 ```
 
 ### Custom Action Features
 
-- **Automatic Discovery**: Custom actions are automatically discovered and registered when you call `api.view()`
+- **Automatic Path Generation**: Paths are auto-generated based on ViewSet base path and action name
 - **Full Parameter Support**: Path params, query params, headers, cookies, body validation
-- **Auth Inheritance**: Custom actions inherit class-level `auth` and `guards`
-- **All HTTP Methods**: Use `@api.get()`, `@api.post()`, `@api.put()`, `@api.patch()`, `@api.delete()`, `@api.head()`, `@api.options()`
-- **Response Models**: Support `response_model` and `status_code` parameters
+- **Auth Inheritance**: Custom actions inherit class-level `auth` and `guards` unless overridden
+- **Type Safety**: Full type hint support with automatic validation
+- **Flexible Methods**: Support single or multiple HTTP methods per action
 
 ### Custom Action with Validation
 
 ```python
 import msgspec
+from django_bolt import action
 
 class PublishRequest(msgspec.Struct):
     scheduled_time: str | None = None
     notify_subscribers: bool = True
 
 class ArticleViewSet(ViewSet):
-    @api.post("/articles/{article_id}/publish")
-    async def publish(self, request, article_id: int, data: PublishRequest):
-        """Publish article with options."""
+    queryset = Article.objects.all()
+
+    async def list(self, request):
+        return Article.objects.all()[:100]
+
+    @action(methods=["POST"], detail=True)
+    async def publish(self, request, id: int, data: PublishRequest):
+        """POST /articles/{id}/publish - Publish article with options"""
+        article = await Article.objects.aget(id=id)
+        article.is_published = True
+        article.scheduled_time = data.scheduled_time
+        await article.asave()
+
+        if data.notify_subscribers:
+            # Send notifications
+            pass
+
         return {
-            "id": article_id,
+            "id": id,
             "published": True,
             "scheduled": data.scheduled_time,
             "notifications_sent": data.notify_subscribers
         }
+
+api.viewset("/articles", ArticleViewSet)
+```
+
+### Comparison: Old vs New Pattern
+
+**Old Pattern** (No longer supported for ViewSets):
+```python
+# ❌ Manual path specification - repetitive and error-prone
+class UserViewSet(ViewSet):
+    @api.post("/users/{id}/activate")
+    async def activate(self, request, id: int):
+        pass
+```
+
+**New Pattern** (Recommended):
+```python
+# ✅ Automatic path generation - clean and maintainable
+class UserViewSet(ViewSet):
+    @action(methods=["POST"], detail=True)
+    async def activate(self, request, id: int):
+        pass
+
+api.viewset("/users", UserViewSet)  # Required for @action
 ```
 
 ## Authentication & Guards

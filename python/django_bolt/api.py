@@ -31,45 +31,6 @@ Response = Tuple[int, List[Tuple[str, str]], bytes]
 _BOLT_API_REGISTRY = []
 
 
-class RouteHandler:
-    """
-    Wrapper for route handler functions used in custom actions.
-
-    When @api.get, @api.post, etc. decorators are used inside a ViewSet class,
-    they return a RouteHandler instance instead of immediately registering.
-    This allows api.view() to discover and register custom actions.
-
-    Similar to Litestar's HTTPRouteHandler approach.
-    """
-
-    __slots__ = ('fn', 'method', 'path', 'response_model', 'status_code', 'guards', 'auth')
-
-    def __init__(
-        self,
-        fn: Callable,
-        method: str,
-        path: str,
-        response_model: Optional[Any] = None,
-        status_code: Optional[int] = None,
-        guards: Optional[List[Any]] = None,
-        auth: Optional[List[Any]] = None
-    ):
-        self.fn = fn
-        self.method = method
-        self.path = path
-        self.response_model = response_model
-        self.status_code = status_code
-        self.guards = guards
-        self.auth = auth
-
-    def __call__(self, *args, **kwargs):
-        """Make the handler callable (delegates to wrapped function)."""
-        return self.fn(*args, **kwargs)
-
-    def __repr__(self):
-        return f"RouteHandler({self.method} {self.path}, fn={self.fn.__name__})"
-
-
 def _extract_path_params(path: str) -> set[str]:
     """
     Extract path parameter names from a route pattern.
@@ -284,7 +245,7 @@ class BoltAPI:
     def view(
         self,
         path: str,
-        view_cls: type,
+        view_cls: type = None,
         *,
         methods: Optional[List[str]] = None,
         guards: Optional[List[Any]] = None,
@@ -294,33 +255,44 @@ class BoltAPI:
         """
         Register a class-based view.
 
+        Can be used as a decorator or function call:
+
+        Decorator style (recommended):
+            @api.view("/users")
+            class UserView(APIView):
+                async def get(self) -> list[User]:
+                    return User.objects.all()[:10]
+
+        Function call style (backward compatible):
+            api.view("/users", UserView)
+
         This method discovers available HTTP method handlers from the view class
         and registers them with the router. It supports the same parameter extraction,
         dependency injection, guards, and authentication as function-based handlers.
 
         Args:
             path: URL path pattern (e.g., "/users/{user_id}")
-            view_cls: View class (must inherit from BoltAPIView)
+            view_cls: View class (must inherit from APIView). If None, returns a decorator.
             methods: Optional list of HTTP methods to register (defaults to all implemented methods)
             guards: Optional per-route guard overrides (merged with class-level guards)
             auth: Optional per-route auth overrides (merged with class-level auth)
             status_code: Optional per-route status code override
 
-        Example:
-            api = BoltAPI()
-
-            class HelloView(BoltAPIView):
-                guards = [IsAuthenticated()]
-
-                async def get(self, request) -> dict:
-                    return {"message": "Hello"}
-
-            api.view("/hello", HelloView)
+        Returns:
+            If view_cls is None: Returns a decorator function
+            If view_cls is provided: Returns None (registers immediately)
 
         Raises:
             ValueError: If view class doesn't implement any requested methods
         """
         from .views import APIView
+
+        # If view_cls is None, return a decorator
+        if view_cls is None:
+            def decorator(cls: type) -> type:
+                self.view(path, cls, methods=methods, guards=guards, auth=auth, status_code=status_code)
+                return cls
+            return decorator
 
         # Validate that view_cls is an APIView subclass
         if not issubclass(view_cls, APIView):
@@ -382,13 +354,15 @@ class BoltAPI:
             # Apply decorator to register the handler
             decorator(handler)
 
-        # Scan for custom action methods (methods decorated with @api.get, @api.post, etc.)
-        self._register_custom_actions(view_cls)
+        # Scan for custom action methods (methods decorated with @action)
+        # Note: api.view() doesn't have base path context for @action decorator
+        # Custom actions with @action should use api.viewset() instead
+        self._register_custom_actions(view_cls, base_path=None, lookup_field=None)
 
     def viewset(
         self,
         path: str,
-        viewset_cls: type,
+        viewset_cls: type = None,
         *,
         guards: Optional[List[Any]] = None,
         auth: Optional[List[Any]] = None,
@@ -398,6 +372,27 @@ class BoltAPI:
         """
         Register a ViewSet with automatic CRUD route generation.
 
+        Can be used as a decorator or function call:
+
+        Decorator style (recommended):
+            @api.viewset("/users")
+            class UserViewSet(ViewSet):
+                async def list(self) -> list[User]:
+                    return User.objects.all()[:100]
+
+                async def retrieve(self, id: int) -> User:
+                    return await User.objects.aget(id=id)
+
+                @action(methods=["POST"], detail=True)
+                async def activate(self, id: int):
+                    user = await User.objects.aget(id=id)
+                    user.is_active = True
+                    await user.asave()
+                    return user
+
+        Function call style (backward compatible):
+            api.viewset("/users", UserViewSet)
+
         This method auto-generates routes for standard DRF-style actions:
         - list: GET /path
         - create: POST /path
@@ -406,37 +401,26 @@ class BoltAPI:
         - partial_update: PATCH /path/{pk}
         - destroy: DELETE /path/{pk}
 
-        Example:
-            api = BoltAPI()
-
-            class UserViewSet(ViewSet):
-                queryset = User.objects.all()
-                serializer_class = UserSerializer
-
-                async def list(self, request) -> list[User]:
-                    return await User.objects.all()[:100]
-
-                async def retrieve(self, request, pk: int) -> User:
-                    return await User.objects.aget(pk=pk)
-
-            api.viewset("/users", UserViewSet)
-            # Auto-generates:
-            # GET    /users       -> list()
-            # POST   /users       -> create()
-            # GET    /users/{pk}  -> retrieve()
-            # PUT    /users/{pk}  -> update()
-            # PATCH  /users/{pk}  -> partial_update()
-            # DELETE /users/{pk}  -> destroy()
-
         Args:
             path: Base URL path (e.g., "/users")
-            viewset_cls: ViewSet class (must inherit from ViewSet)
+            viewset_cls: ViewSet class (must inherit from ViewSet). If None, returns a decorator.
             guards: Optional guards to apply to all routes
             auth: Optional auth backends to apply to all routes
             status_code: Optional default status code
             lookup_field: Field name for object lookup (default: "pk")
+
+        Returns:
+            If viewset_cls is None: Returns a decorator function
+            If viewset_cls is provided: Returns None (registers immediately)
         """
         from .views import ViewSet
+
+        # If viewset_cls is None, return a decorator
+        if viewset_cls is None:
+            def decorator(cls: type) -> type:
+                self.viewset(path, cls, guards=guards, auth=auth, status_code=status_code, lookup_field=lookup_field)
+                return cls
+            return decorator
 
         # Validate that viewset_cls is a ViewSet subclass
         if not issubclass(viewset_cls, ViewSet):
@@ -498,92 +482,106 @@ class BoltAPI:
             )
             decorator(handler)
 
-        # Scan for custom actions (@api.get, @api.post, etc.)
-        self._register_custom_actions(viewset_cls)
+        # Scan for custom actions (@action decorator)
+        self._register_custom_actions(viewset_cls, base_path=path, lookup_field=lookup_field)
 
-    def _register_custom_actions(self, view_cls: type):
+    def _register_custom_actions(self, view_cls: type, base_path: Optional[str], lookup_field: Optional[str]):
         """
         Scan a ViewSet class for custom action methods and register them.
 
-        Custom actions are methods decorated with @api.get, @api.post, etc.
-        Uses Litestar's approach: scan for RouteHandler instances.
+        Custom actions are methods decorated with @action decorator.
 
         Args:
             view_cls: The ViewSet class to scan
+            base_path: Base path for the ViewSet (e.g., "/users")
+            lookup_field: Lookup field name for detail actions (e.g., "id", "pk")
         """
         import inspect
         import types
+        from .decorators import ActionHandler
 
         # Get class-level auth and guards (if any)
         class_auth = getattr(view_cls, 'auth', None)
         class_guards = getattr(view_cls, 'guards', None)
 
-        # Scan all attributes in the class (similar to Litestar's Controller.get_route_handlers)
+        # Scan all attributes in the class
         for name in dir(view_cls):
-            # Skip private attributes and standard HTTP methods
-            if name.startswith('_') or name.lower() in ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']:
+            # Skip private attributes and standard action methods
+            if name.startswith('_') or name.lower() in [
+                'get', 'post', 'put', 'patch', 'delete', 'head', 'options',
+                'list', 'retrieve', 'create', 'update', 'partial_update', 'destroy'
+            ]:
                 continue
 
             attr = getattr(view_cls, name)
 
-            # Check if it's a RouteHandler instance (Litestar approach)
-            if isinstance(attr, RouteHandler):
-                # Extract the unbound function from the RouteHandler
+            # Check if it's an ActionHandler instance (decorated with @action)
+            if isinstance(attr, ActionHandler):
+                # Validate that we have base_path for auto-generation
+                if base_path is None:
+                    raise ValueError(
+                        f"Custom action {view_cls.__name__}.{name} uses @action decorator, "
+                        f"but ViewSet was registered with api.view() instead of api.viewset(). "
+                        f"Use api.viewset() for automatic action path generation."
+                    )
+
+                # Extract the unbound function from the ActionHandler
                 unbound_fn = attr.fn
 
-                # Create a wrapper that calls the method as an instance method
-                async def custom_action_handler(*args, __unbound_fn=unbound_fn, __view_cls=view_cls, **kwargs):
-                    """Wrapper for custom action method."""
-                    view = __view_cls()
-                    # Bind the unbound method to the view instance
-                    bound_method = types.MethodType(__unbound_fn, view)
-                    return await bound_method(*args, **kwargs)
+                # Auto-generate route path based on detail flag
+                if attr.detail:
+                    # Instance-level action: /base_path/{lookup_field}/action_name
+                    # Example: /users/{id}/activate
+                    action_path = f"{base_path}/{{{lookup_field}}}/{attr.path}"
+                else:
+                    # Collection-level action: /base_path/action_name
+                    # Example: /users/active
+                    action_path = f"{base_path}/{attr.path}"
 
-                # Preserve signature and annotations from original method
-                sig = inspect.signature(unbound_fn)
-                params = list(sig.parameters.values())[1:]  # Skip 'self'
-                custom_action_handler.__signature__ = sig.replace(parameters=params)
-                custom_action_handler.__annotations__ = {
-                    k: v for k, v in unbound_fn.__annotations__.items() if k != 'self'
-                }
-                custom_action_handler.__name__ = f"{view_cls.__name__}.{name}"
-                custom_action_handler.__doc__ = unbound_fn.__doc__
+                # Register route for each HTTP method
+                for http_method in attr.methods:
+                    # Create a wrapper that calls the method as an instance method
+                    async def custom_action_handler(
+                        *args,
+                        __unbound_fn=unbound_fn,
+                        __view_cls=view_cls,
+                        **kwargs
+                    ):
+                        """Wrapper for custom action method."""
+                        view = __view_cls()
+                        # Bind the unbound method to the view instance
+                        bound_method = types.MethodType(__unbound_fn, view)
+                        return await bound_method(*args, **kwargs)
 
-                # Merge class-level auth/guards with route-specific auth/guards
-                # Route-specific takes precedence if explicitly set
-                final_auth = attr.auth if attr.auth is not None else class_auth
-                final_guards = attr.guards if attr.guards is not None else class_guards
+                    # Preserve signature and annotations from original method
+                    sig = inspect.signature(unbound_fn)
+                    params = list(sig.parameters.values())[1:]  # Skip 'self'
+                    custom_action_handler.__signature__ = sig.replace(parameters=params)
+                    custom_action_handler.__annotations__ = {
+                        k: v for k, v in unbound_fn.__annotations__.items() if k != 'self'
+                    }
+                    custom_action_handler.__name__ = f"{view_cls.__name__}.{name}"
+                    custom_action_handler.__doc__ = unbound_fn.__doc__
+                    custom_action_handler.__module__ = unbound_fn.__module__
 
-                # Register the custom action using metadata from RouteHandler
-                decorator = self._route_decorator(
-                    attr.method,
-                    attr.path,
-                    response_model=attr.response_model,
-                    status_code=attr.status_code,
-                    guards=final_guards,
-                    auth=final_auth
-                )
-                decorator(custom_action_handler)
+                    # Merge class-level auth/guards with action-specific auth/guards
+                    # Action-specific takes precedence if explicitly set
+                    final_auth = attr.auth if attr.auth is not None else class_auth
+                    final_guards = attr.guards if attr.guards is not None else class_guards
+
+                    # Register the custom action
+                    decorator = self._route_decorator(
+                        http_method,
+                        action_path,
+                        response_model=attr.response_model,
+                        status_code=attr.status_code,
+                        guards=final_guards,
+                        auth=final_auth
+                    )
+                    decorator(custom_action_handler)
 
     def _route_decorator(self, method: str, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
         def decorator(fn: Callable):
-            # Check if first parameter is 'self' - indicates this is a class method
-            # If so, return RouteHandler wrapper (Litestar approach) - api.view() will discover it
-            sig = inspect.signature(fn)
-            params = list(sig.parameters.keys())
-            if params and params[0] == 'self':
-                # This is a method inside a class - return RouteHandler wrapper
-                return RouteHandler(
-                    fn=fn,
-                    method=method,
-                    path=path,
-                    response_model=response_model,
-                    status_code=status_code,
-                    guards=guards,
-                    auth=auth
-                )
-
-            # Not a class method - proceed with immediate registration
             # Enforce async handlers
             if not inspect.iscoroutinefunction(fn):
                 raise TypeError(f"Handler {fn.__name__} must be async. Use 'async def' instead of 'def'")

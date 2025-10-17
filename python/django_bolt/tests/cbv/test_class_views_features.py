@@ -795,37 +795,39 @@ def test_multiple_middleware_decorators_with_class_view(api):
 # ============================================================================
 
 def test_custom_action_decorator_in_viewset(api):
-    """Test @api.post style custom actions INSIDE a ViewSet class."""
+    """Test @action decorator custom actions INSIDE a ViewSet class."""
+    from django_bolt import action
 
     class ArticleViewSet(ViewSet):
         queryset = []
+        lookup_field = 'article_id'  # Set lookup field to match parameter names
 
-        async def get(self, request):
+        async def list(self, request):
             """Standard list action."""
             return {"articles": []}
 
-        async def post(self, request):
+        async def create(self, request):
             """Standard create action."""
             return {"id": 1, "created": True}
 
-        # Custom actions defined INSIDE the ViewSet
-        @api.post("/articles/{article_id}/publish")
+        # Custom actions defined INSIDE the ViewSet using @action decorator
+        @action(methods=["POST"], detail=True, path="publish")
         async def publish(self, request, article_id: int):
-            """Custom action: publish article."""
+            """Custom action: publish article. POST /articles/{article_id}/publish"""
             return {"article_id": article_id, "published": True}
 
-        @api.post("/articles/{article_id}/archive")
+        @action(methods=["POST"], detail=True, path="archive")
         async def archive(self, request, article_id: int):
-            """Custom action: archive article."""
+            """Custom action: archive article. POST /articles/{article_id}/archive"""
             return {"article_id": article_id, "archived": True}
 
-        @api.get("/articles/search")
+        @action(methods=["GET"], detail=False, path="search")
         async def search(self, request, query: str):
-            """Custom action: search articles."""
+            """Custom action: search articles. GET /articles/search"""
             return {"query": query, "results": ["article1", "article2"]}
 
     # Register the ViewSet - this should register both standard methods AND custom actions
-    api.view("/articles", ArticleViewSet, methods=["GET", "POST"])
+    api.viewset("/articles", ArticleViewSet)
 
     with TestClient(api) as client:
         # Standard CRUD endpoints
@@ -859,41 +861,44 @@ def test_custom_action_decorator_in_viewset(api):
 
 def test_viewset_with_multiple_custom_actions(api):
     """Test ViewSet with many custom action methods defined INSIDE the class."""
+    from django_bolt import action
 
     class UserViewSet(ViewSet):
-        async def get(self, request, user_id: int):
+        lookup_field = 'user_id'  # Set lookup field to match parameter names
+
+        async def retrieve(self, request, user_id: int):
             """Standard retrieve action."""
             return {"id": user_id, "username": "testuser"}
 
-        # Custom actions defined INSIDE the ViewSet (real-world use cases)
-        @api.post("/users/{user_id}/activate")
+        # Custom actions defined INSIDE the ViewSet (real-world use cases) using @action
+        @action(methods=["POST"], detail=True, path="activate")
         async def activate(self, request, user_id: int):
-            """Custom action: activate user account."""
+            """Custom action: activate user account. POST /users/{user_id}/activate"""
             return {"id": user_id, "activated": True, "status": "active"}
 
-        @api.post("/users/{user_id}/deactivate")
+        @action(methods=["POST"], detail=True, path="deactivate")
         async def deactivate(self, request, user_id: int):
-            """Custom action: deactivate user account."""
+            """Custom action: deactivate user account. POST /users/{user_id}/deactivate"""
             return {"id": user_id, "deactivated": True, "status": "inactive"}
 
-        @api.post("/users/{user_id}/reset-password")
+        @action(methods=["POST"], detail=True, path="reset-password")
         async def reset_password(self, request, user_id: int):
-            """Custom action: send password reset email."""
+            """Custom action: send password reset email. POST /users/{user_id}/reset-password"""
             return {"id": user_id, "password_reset": True, "email_sent": True}
 
-        @api.get("/users/{user_id}/permissions")
+        @action(methods=["GET"], detail=True, path="permissions")
         async def get_permissions(self, request, user_id: int):
-            """Custom action: get user permissions."""
+            """Custom action: get user permissions. GET /users/{user_id}/permissions"""
             return {"id": user_id, "permissions": ["read", "write"]}
 
-        @api.put("/users/{user_id}/permissions")
+        @action(methods=["PUT"], detail=True, path="permissions")
         async def update_permissions(self, request, user_id: int):
-            """Custom action: update user permissions."""
+            """Custom action: update user permissions. PUT /users/{user_id}/permissions"""
             # In real app, would extract permissions from request body
             return {"id": user_id, "permissions": ["admin"], "updated": True}
 
     # Register the ViewSet - automatically registers both standard method AND all custom actions
-    api.view("/users/{user_id}", UserViewSet, methods=["GET"])
+    api.viewset("/users", UserViewSet)
 
     with TestClient(api) as client:
         # Standard retrieve
@@ -938,13 +943,15 @@ def test_viewset_with_multiple_custom_actions(api):
 def test_custom_action_with_auth_and_guards(api):
     """Test custom action methods INSIDE ViewSet with authentication and guards."""
     from django_bolt.auth import APIKeyAuthentication, IsAuthenticated
+    from django_bolt import action
 
     class DocumentViewSet(ViewSet):
         # Class-level auth applies to all methods
         auth = [APIKeyAuthentication(api_keys={"admin-key": "admin1", "user-key": "user1"})]
         guards = [IsAuthenticated()]
+        lookup_field = 'doc_id'  # Set lookup field to match parameter names
 
-        async def get(self, request, doc_id: int):
+        async def retrieve(self, request, doc_id: int):
             """Standard retrieve - requires auth."""
             auth_context = request.get("auth", {})
             return {
@@ -953,10 +960,10 @@ def test_custom_action_with_auth_and_guards(api):
                 "accessed_by": auth_context.get("user_id", "unknown")
             }
 
-        # Custom actions INSIDE ViewSet - inherit class-level auth/guards
-        @api.post("/documents/{doc_id}/approve")
+        # Custom actions INSIDE ViewSet - inherit class-level auth/guards using @action
+        @action(methods=["POST"], detail=True, path="approve")
         async def approve(self, request, doc_id: int):
-            """Custom action: approve document (requires auth)."""
+            """Custom action: approve document (requires auth). POST /documents/{doc_id}/approve"""
             auth_context = request.get("auth", {})
             return {
                 "doc_id": doc_id,
@@ -964,9 +971,9 @@ def test_custom_action_with_auth_and_guards(api):
                 "approved_by": auth_context.get("user_id", "unknown")
             }
 
-        @api.post("/documents/{doc_id}/reject")
+        @action(methods=["POST"], detail=True, path="reject")
         async def reject(self, request, doc_id: int):
-            """Custom action: reject document (requires auth)."""
+            """Custom action: reject document (requires auth). POST /documents/{doc_id}/reject"""
             auth_context = request.get("auth", {})
             return {
                 "doc_id": doc_id,
@@ -974,9 +981,9 @@ def test_custom_action_with_auth_and_guards(api):
                 "rejected_by": auth_context.get("user_id", "unknown")
             }
 
-        @api.post("/documents/{doc_id}/lock")
+        @action(methods=["POST"], detail=True, path="lock")
         async def lock(self, request, doc_id: int):
-            """Custom action: lock document for editing (requires auth)."""
+            """Custom action: lock document for editing (requires auth). POST /documents/{doc_id}/lock"""
             auth_context = request.get("auth", {})
             return {
                 "doc_id": doc_id,
@@ -984,7 +991,7 @@ def test_custom_action_with_auth_and_guards(api):
                 "locked_by": auth_context.get("user_id", "unknown")
             }
 
-    api.view("/documents/{doc_id}", DocumentViewSet, methods=["GET"])
+    api.viewset("/documents", DocumentViewSet)
 
     with TestClient(api) as client:
         # Standard retrieve without auth - should fail
@@ -1028,10 +1035,11 @@ def test_custom_action_with_auth_and_guards(api):
 
 
 def test_nested_resource_actions_with_class_views(api):
-    """Test nested resource custom actions INSIDE ViewSet (e.g., comment moderation)."""
+    """Test nested resource ViewSet (e.g., comment moderation)."""
+    from django_bolt import action
 
     class CommentViewSet(ViewSet):
-        async def get(self, request, post_id: int, comment_id: int):
+        async def retrieve(self, request, post_id: int, comment_id: int):
             """Standard retrieve nested resource."""
             return {
                 "post_id": post_id,
@@ -1040,10 +1048,10 @@ def test_nested_resource_actions_with_class_views(api):
                 "status": "pending"
             }
 
-        # Custom actions for nested resources - defined INSIDE ViewSet
-        @api.post("/posts/{post_id}/comments/{comment_id}/approve")
-        async def approve(self, request, post_id: int, comment_id: int):
-            """Custom action: approve comment on a post."""
+        # Custom actions for nested resources using @action decorator
+        @action(methods=["POST"], detail=True, path="approve")
+        async def approve(self, request, comment_id: int, post_id: int):
+            """Custom action: approve comment. POST /posts/{post_id}/comments/{comment_id}/approve"""
             return {
                 "post_id": post_id,
                 "comment_id": comment_id,
@@ -1051,9 +1059,9 @@ def test_nested_resource_actions_with_class_views(api):
                 "status": "approved"
             }
 
-        @api.post("/posts/{post_id}/comments/{comment_id}/reject")
-        async def reject(self, request, post_id: int, comment_id: int, reason: str = "spam"):
-            """Custom action: reject comment with reason."""
+        @action(methods=["POST"], detail=True, path="reject")
+        async def reject(self, request, comment_id: int, post_id: int, reason: str = "spam"):
+            """Custom action: reject comment. POST /posts/{post_id}/comments/{comment_id}/reject"""
             return {
                 "post_id": post_id,
                 "comment_id": comment_id,
@@ -1062,9 +1070,9 @@ def test_nested_resource_actions_with_class_views(api):
                 "status": "rejected"
             }
 
-        @api.post("/posts/{post_id}/comments/{comment_id}/flag")
-        async def flag(self, request, post_id: int, comment_id: int):
-            """Custom action: flag comment for review."""
+        @action(methods=["POST"], detail=True, path="flag")
+        async def flag(self, request, comment_id: int, post_id: int):
+            """Custom action: flag comment. POST /posts/{post_id}/comments/{comment_id}/flag"""
             return {
                 "post_id": post_id,
                 "comment_id": comment_id,
@@ -1072,8 +1080,9 @@ def test_nested_resource_actions_with_class_views(api):
                 "status": "flagged_for_review"
             }
 
-    # Register ViewSet - automatically registers standard method AND nested custom actions
-    api.view("/posts/{post_id}/comments/{comment_id}", CommentViewSet, methods=["GET"])
+    # Register ViewSet with nested path pattern
+    # Note: ViewSet lookup_field will be 'comment_id', and post_id is an additional path param
+    api.viewset("/posts/{post_id}/comments", CommentViewSet, lookup_field="comment_id")
 
     with TestClient(api) as client:
         # Standard nested resource retrieve

@@ -10,7 +10,7 @@ This test suite verifies that the new unified ViewSet pattern works correctly:
 """
 import pytest
 import msgspec
-from django_bolt import BoltAPI, ViewSet
+from django_bolt import BoltAPI, ViewSet, action
 from django_bolt.testing import TestClient
 from .test_models import Article
 
@@ -253,19 +253,19 @@ def test_unified_viewset_with_custom_actions(api):
                 articles.append(ArticleMiniSchema.from_model(article))
             return articles
 
-        # Custom action: search
-        @api.get("/articles/search")
+        # Custom action: search (using @action decorator)
+        @action(methods=["GET"], detail=False)
         async def search(self, request, query: str):
-            """Search articles by title."""
+            """Search articles by title. GET /articles/search"""
             results = []
             async for article in Article.objects.filter(title__icontains=query):
                 results.append(ArticleMiniSchema.from_model(article))
             return {"query": query, "results": results}
 
-        # Custom action: published only
-        @api.get("/articles/published")
+        # Custom action: published only (using @action decorator)
+        @action(methods=["GET"], detail=False)
         async def published(self, request):
-            """Get published articles only."""
+            """Get published articles only. GET /articles/published"""
             articles = []
             async for article in Article.objects.filter(is_published=True):
                 articles.append(ArticleMiniSchema.from_model(article))

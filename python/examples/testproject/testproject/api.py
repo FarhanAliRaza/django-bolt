@@ -21,14 +21,9 @@ from django_bolt.middleware import no_compress
 
 # OpenAPI is enabled by default at /docs with Swagger UI
 # You can customize it by passing openapi_config:
-api = BoltAPI(
-   
-)
+api = BoltAPI()
 
-# Or use defaults (Swagger UI at /docs, excludes /admin and /static):
-# api = BoltAPI()
 
-# Register health check endpoints (/health and /ready)
 register_health_checks(api)
 
 
@@ -618,177 +613,80 @@ async def compression_test():
 
 
 # ============================================================================
-# Class-Based Views (APIView)
+# Class-Based Views (APIView) - Using Decorator Syntax
 # ============================================================================
 
+@api.view("/cbv-simple")
 class SimpleAPIView(APIView):
     """Simple APIView for benchmarking."""
 
     async def get(self, request):
-        """Simple GET endpoint."""
+        """GET /cbv-simple - Simple GET endpoint."""
         return {"message": "Hello from APIView"}
 
     async def post(self, request, data: Item):
-        """POST with validation."""
+        """POST /cbv-simple - POST with validation."""
         return {"name": data.name, "price": data.price, "cbv": True}
 
 
-api.view("/cbv-simple", SimpleAPIView, methods=["GET", "POST"])
-
-
+@api.view("/cbv-items/{item_id}")
 class ItemAPIView(APIView):
     """APIView for item operations."""
 
     async def get(self, request, item_id: int, q: Optional[str] = None):
-        """Get item with optional query param."""
+        """GET /cbv-items/{item_id} - Get item with optional query param."""
         return {"item_id": item_id, "q": q, "cbv": True}
 
     async def put(self, request, item_id: int, item: Item):
-        """Update item."""
+        """PUT /cbv-items/{item_id} - Update item."""
         return {"item_name": item.name, "item_id": item_id, "cbv": True}
 
 
-api.view("/cbv-items/{item_id}", ItemAPIView, methods=["GET", "PUT"])
+# ============================================================================
+# Class-Based Views (ViewSet) - Using Unified ViewSet Pattern with @action
+# ============================================================================
+
+from django_bolt import action
+
 
 
 # ============================================================================
-# Class-Based Views (ViewSet)
+# Benchmark ViewSets - Using Decorator Syntax
 # ============================================================================
 
-class ItemViewSet(ViewSet):
-    """ViewSet for comprehensive item operations."""
-
-    async def get(self, request, item_id: int):
-        """Retrieve single item."""
-        return {"item_id": item_id, "name": f"Item {item_id}", "cbv_viewset": True}
-
-    async def post(self, request, data: Item):
-        """Create new item."""
-        return {
-            "id": 123,
-            "name": data.name,
-            "price": data.price,
-            "created": True,
-            "cbv_viewset": True
-        }
-
-    async def put(self, request, item_id: int, data: Item):
-        """Update item (full)."""
-        return {
-            "item_id": item_id,
-            "name": data.name,
-            "price": data.price,
-            "updated": True,
-            "cbv_viewset": True
-        }
-
-    async def patch(self, request, item_id: int, data: Item):
-        """Partially update item."""
-        return {
-            "item_id": item_id,
-            "name": data.name,
-            "price": data.price,
-            "patched": True,
-            "cbv_viewset": True
-        }
-
-    async def delete(self, request, item_id: int):
-        """Delete item."""
-        return {"item_id": item_id, "deleted": True, "cbv_viewset": True}
-
-    async def head(self, request, item_id: int):
-        """HEAD request for item."""
-        return {"item_id": item_id}
-
-    async def options(self, request):
-        """OPTIONS request."""
-        return {"methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]}
-
-    # Custom actions
-    @api.post("/cbv-items-vs/{item_id}/publish")
-    async def publish(self, request, item_id: int):
-        """Custom action: publish item."""
-        return {
-            "item_id": item_id,
-            "published": True,
-            "status": "live",
-            "cbv_action": True
-        }
-
-    @api.post("/cbv-items-vs/{item_id}/archive")
-    async def archive(self, request, item_id: int):
-        """Custom action: archive item."""
-        return {
-            "item_id": item_id,
-            "archived": True,
-            "status": "archived",
-            "cbv_action": True
-        }
-
-    @api.get("/cbv-items-vs/search")
-    async def search(self, request, query: str):
-        """Custom action: search items."""
-        return {
-            "query": query,
-            "results": [f"item-{i}" for i in range(5)],
-            "cbv_action": True
-        }
-
-
-api.view("/cbv-items-vs/{item_id}", ItemViewSet, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
-
-
-# ============================================================================
-# Benchmark ViewSets
-# ============================================================================
-
+@api.view("/cbv-items100")
 class Items100ViewSet(ViewSet):
     """ViewSet that returns 100 items (for benchmarking)."""
 
     async def get(self, request):
-        """Return 100 items."""
+        """GET /cbv-items100 - Return 100 items."""
         return [
             {"name": f"item{i}", "price": float(i), "is_offer": (i % 2 == 0)}
             for i in range(100)
         ]
 
 
-api.view("/cbv-items100", Items100ViewSet, methods=["GET"])
-
-
+@api.view("/cbv-bench-parse")
 class BenchParseViewSet(ViewSet):
     """ViewSet for JSON parsing benchmark."""
 
     async def post(self, request, payload: BenchPayload):
-        """Parse and validate JSON payload."""
+        """POST /cbv-bench-parse - Parse and validate JSON payload."""
         return {"ok": True, "n": len(payload.items), "count": payload.count, "cbv": True}
 
 
-api.view("/cbv-bench-parse", BenchParseViewSet, methods=["POST"])
-
-
-class BenchSlowViewSet(ViewSet):
-    """ViewSet for slow async operation benchmark."""
-
-    async def get(self, request, ms: Optional[int] = 100):
-        """Simulate slow I/O operation."""
-        delay = max(0, (ms or 0)) / 1000.0
-        await asyncio.sleep(delay)
-        return {"ok": True, "ms": ms, "cbv": True}
-
-
-api.view("/cbv-bench-slow", BenchSlowViewSet, methods=["GET"])
 
 
 # ============================================================================
-# Response Type ViewSets
+# Response Type ViewSets - Using Decorator Syntax
 # ============================================================================
 
+@api.view("/cbv-response")
 class ResponseTypeViewSet(ViewSet):
     """ViewSet demonstrating different response types."""
 
     async def get(self, request, response_type: str = "json"):
-        """Return different response types based on parameter."""
+        """GET /cbv-response - Return different response types based on parameter."""
         if response_type == "plain":
             return PlainText("Hello from ViewSet")
         elif response_type == "html":
@@ -799,65 +697,61 @@ class ResponseTypeViewSet(ViewSet):
             return {"type": "json", "message": "Hello from ViewSet"}
 
 
-api.view("/cbv-response", ResponseTypeViewSet, methods=["GET"])
-
-
-class HeaderCookieViewSet(ViewSet):
-    """ViewSet for header and cookie extraction."""
+@api.view("/cbv-header")
+class HeaderViewSet(ViewSet):
+    """ViewSet for header extraction."""
 
     async def get(self, request, x: Annotated[str, Header(alias="x-test")]):
-        """Extract custom header."""
+        """GET /cbv-header - Extract custom header."""
         return PlainText(f"Header: {x}")
 
+
+@api.view("/cbv-cookie")
+class CookieViewSet(ViewSet):
+    """ViewSet for cookie extraction."""
+
     async def post(self, request, val: Annotated[str, Cookie(alias="session")]):
-        """Extract cookie."""
+        """POST /cbv-cookie - Extract cookie."""
         return PlainText(f"Cookie: {val}")
 
 
-api.view("/cbv-header", HeaderCookieViewSet, methods=["GET"])
-api.view("/cbv-cookie", HeaderCookieViewSet, methods=["POST"])
-
-
 # ============================================================================
-# Streaming ViewSet
+# Streaming ViewSets - Using Decorator Syntax
 # ============================================================================
 
+@api.view("/cbv-stream")
 class StreamViewSet(ViewSet):
     """ViewSet for streaming responses."""
 
     @no_compress
     async def get(self, request):
-        """Stream plain text."""
+        """GET /cbv-stream - Stream plain text."""
         def gen():
             for i in range(100):
                 yield "x"
         return StreamingResponse(gen, media_type="text/plain")
 
 
-api.view("/cbv-stream", StreamViewSet, methods=["GET"])
-
-
+@api.view("/cbv-sse")
 class SSEViewSet(ViewSet):
     """ViewSet for Server-Sent Events."""
 
     @no_compress
     async def get(self, request):
-        """Stream SSE events."""
+        """GET /cbv-sse - Stream SSE events."""
         def gen():
             for i in range(3):
                 yield f"data: {i}\n\n"
         return StreamingResponse(gen, media_type="text/event-stream")
 
 
-api.view("/cbv-sse", SSEViewSet, methods=["GET"])
-
-
+@api.view("/cbv-chat-completions")
 class ChatCompletionsViewSet(ViewSet):
     """ViewSet for OpenAI-style chat completions."""
 
     @no_compress
     async def post(self, request, payload: ChatCompletionRequest):
-        """Handle chat completions with streaming support."""
+        """POST /cbv-chat-completions - Handle chat completions with streaming support."""
         created = int(time.time())
         model = payload.model or "gpt-4o-mini"
         chat_id = "chatcmpl-bolt-cbv"
@@ -911,9 +805,6 @@ class ChatCompletionsViewSet(ViewSet):
             ],
         }
         return response
-
-
-api.view("/cbv-chat-completions", ChatCompletionsViewSet, methods=["POST"])
 
 
 

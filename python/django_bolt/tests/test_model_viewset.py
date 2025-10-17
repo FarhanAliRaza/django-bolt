@@ -58,6 +58,7 @@ def test_readonly_model_viewset(api):
         author="Author 2",
     )
 
+    @api.view("/articles", methods=["GET"])
     class ArticleListViewSet(ReadOnlyModelViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
@@ -69,6 +70,7 @@ def test_readonly_model_viewset(api):
                 articles.append(ArticleSchema.from_model(article))
             return articles
 
+    @api.view("/articles/{pk}", methods=["GET"])
     class ArticleDetailViewSet(ReadOnlyModelViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
@@ -77,10 +79,6 @@ def test_readonly_model_viewset(api):
             """Retrieve a single article."""
             article = await self.get_object(pk)
             return ArticleSchema.from_model(article)
-
-    # Register routes - only GET methods
-    api.view("/articles", ArticleListViewSet, methods=["GET"])
-    api.view("/articles/{pk}", ArticleDetailViewSet, methods=["GET"])
 
     with TestClient(api) as client:
         # List
@@ -102,6 +100,7 @@ def test_readonly_model_viewset(api):
 def test_model_viewset_with_custom_methods(api):
     """Test ModelViewSet with full CRUD implementation."""
 
+    @api.view("/articles", methods=["GET", "POST"])
     class ArticleListViewSet(ModelViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
@@ -122,6 +121,7 @@ def test_model_viewset_with_custom_methods(api):
             )
             return ArticleSchema.from_model(article)
 
+    @api.view("/articles/{pk}", methods=["GET", "PUT", "PATCH", "DELETE"])
     class ArticleDetailViewSet(ModelViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
@@ -157,10 +157,6 @@ def test_model_viewset_with_custom_methods(api):
             article = await self.get_object(pk)
             await article.adelete()
             return {"detail": "Object deleted successfully"}
-
-    # Register routes
-    api.view("/articles", ArticleListViewSet, methods=["GET", "POST"])
-    api.view("/articles/{pk}", ArticleDetailViewSet, methods=["GET", "PUT", "PATCH", "DELETE"])
 
     with TestClient(api) as client:
         # List
@@ -211,6 +207,7 @@ def test_model_viewset_queryset_reevaluation(api):
     """Test that queryset is re-evaluated on each request (like DRF)."""
     from asgiref.sync import async_to_sync
 
+    @api.view("/articles", methods=["GET"])
     class ArticleViewSet(ReadOnlyModelViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
@@ -221,8 +218,6 @@ def test_model_viewset_queryset_reevaluation(api):
             async for article in await self.get_queryset():
                 articles.append(ArticleSchema.from_model(article))
             return articles
-
-    api.view("/articles", ArticleViewSet, methods=["GET"])
 
     with TestClient(api) as client:
         # First request - empty
@@ -262,6 +257,7 @@ def test_model_viewset_custom_queryset(api):
         is_published=False,
     )
 
+    @api.view("/articles/published", methods=["GET"])
     class PublishedArticleViewSet(ReadOnlyModelViewSet):
         queryset = Article.objects.all()  # Base queryset
         serializer_class = ArticleSchema
@@ -277,8 +273,6 @@ def test_model_viewset_custom_queryset(api):
             async for article in await self.get_queryset():
                 articles.append(ArticleSchema.from_model(article))
             return articles
-
-    api.view("/articles/published", PublishedArticleViewSet, methods=["GET"])
 
     with TestClient(api) as client:
         response = client.get("/articles/published")
@@ -302,6 +296,8 @@ def test_model_viewset_lookup_field(api):
         author="test-author",
     )
 
+    # Use {pk} in URL pattern (will be matched to author field)
+    @api.view("/articles/by-author/{pk}", methods=["GET"])
     class ArticleViewSet(ReadOnlyModelViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
@@ -311,9 +307,6 @@ def test_model_viewset_lookup_field(api):
             """Retrieve article by author."""
             article = await self.get_object(pk)
             return ArticleSchema.from_model(article)
-
-    # Use {pk} in URL pattern (will be matched to author field)
-    api.view("/articles/by-author/{pk}", ArticleViewSet, methods=["GET"])
 
     with TestClient(api) as client:
         # Lookup by author

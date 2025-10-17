@@ -56,11 +56,10 @@ def test_bolt_api_view_basic():
     """Test basic APIView with GET handler."""
     api = BoltAPI()
 
+    @api.view("/hello")
     class HelloView(APIView):
         async def get(self, request) -> dict:
             return {"message": "Hello"}
-
-    api.view("/hello", HelloView)
 
     with TestClient(api) as client:
         response = client.get("/hello")
@@ -72,6 +71,7 @@ def test_bolt_api_view_multiple_methods():
     """Test view with multiple HTTP methods."""
     api = BoltAPI()
 
+    @api.view("/multi")
     class MultiMethodView(APIView):
         async def get(self, request) -> dict:
             return {"method": "GET"}
@@ -81,8 +81,6 @@ def test_bolt_api_view_multiple_methods():
 
         async def put(self, request) -> dict:
             return {"method": "PUT"}
-
-    api.view("/multi", MultiMethodView)
 
     with TestClient(api) as client:
         response = client.get("/multi")
@@ -99,11 +97,10 @@ def test_bolt_api_view_path_params():
     """Test path parameter extraction in class-based views."""
     api = BoltAPI()
 
+    @api.view("/users/{user_id}")
     class UserView(APIView):
         async def get(self, request, user_id: int) -> dict:
             return {"user_id": user_id, "type": type(user_id).__name__}
-
-    api.view("/users/{user_id}", UserView)
 
     with TestClient(api) as client:
         response = client.get("/users/123")
@@ -117,11 +114,10 @@ def test_bolt_api_view_query_params():
     """Test query parameter extraction in class-based views."""
     api = BoltAPI()
 
+    @api.view("/search")
     class SearchView(APIView):
         async def get(self, request, q: str, limit: int = 10) -> dict:
             return {"query": q, "limit": limit}
-
-    api.view("/search", SearchView)
 
     with TestClient(api) as client:
         # Test with both params
@@ -143,11 +139,10 @@ def test_bolt_api_view_request_body():
         username: str
         email: str
 
+    @api.view("/users")
     class UserCreateView(APIView):
         async def post(self, request, data: CreateUserRequest) -> dict:
             return {"username": data.username, "email": data.email}
-
-    api.view("/users", UserCreateView)
 
     with TestClient(api) as client:
         response = client.post(
@@ -168,11 +163,10 @@ def test_bolt_api_view_return_annotation():
         message: str
         count: int
 
+    @api.view("/annotated")
     class AnnotatedView(APIView):
         async def get(self, request) -> ResponseSchema:
             return ResponseSchema(message="test", count=42)
-
-    api.view("/annotated", AnnotatedView)
 
     with TestClient(api) as client:
         response = client.get("/annotated")
@@ -191,11 +185,10 @@ def test_bolt_api_view_dependency_injection():
     async def get_mock_user(request) -> dict:
         return {"id": 1, "username": "testuser"}
 
+    @api.view("/profile")
     class ProfileView(APIView):
         async def get(self, request, current_user=Depends(get_mock_user)) -> dict:
             return {"user": current_user}
-
-    api.view("/profile", ProfileView)
 
     with TestClient(api) as client:
         response = client.get("/profile")
@@ -210,6 +203,7 @@ def test_bolt_api_view_class_level_guards():
     """Test class-level guards are applied."""
     api = BoltAPI()
 
+    @api.view("/protected")
     class ProtectedView(APIView):
         auth = [JWTAuthentication(secret="test-secret")]  # Correct parameter is 'secret'
         guards = [IsAuthenticated()]
@@ -217,8 +211,6 @@ def test_bolt_api_view_class_level_guards():
         async def get(self, request) -> dict:
             auth = request.get("auth", {})
             return {"user_id": auth.get("user_id")}
-
-    api.view("/protected", ProtectedView)
 
     with TestClient(api) as client:
         # Without auth - should fail
@@ -242,6 +234,8 @@ def test_bolt_api_view_route_level_guard_override():
     """Test route-level guards override class-level guards."""
     api = BoltAPI()
 
+    # Override with admin-only guards
+    @api.view("/admin", guards=[IsAdminUser()])
     class ViewWithClassGuards(APIView):
         auth = [JWTAuthentication(secret="test-secret")]  # Correct parameter is 'secret'
         guards = [IsAuthenticated()]
@@ -249,9 +243,6 @@ def test_bolt_api_view_route_level_guard_override():
         async def get(self, request) -> dict:
             auth = request.get("auth", {})
             return {"data": "test", "user_id": auth.get("user_id")}
-
-    # Override with admin-only guards
-    api.view("/admin", ViewWithClassGuards, guards=[IsAdminUser()])
 
     with TestClient(api) as client:
         # Regular user token - should fail (needs admin)
@@ -279,13 +270,12 @@ def test_bolt_api_view_status_code_override():
     """Test class-level and route-level status code overrides."""
     api = BoltAPI()
 
+    @api.view("/items")
     class CreatedView(APIView):
         status_code = 201
 
         async def post(self, request) -> dict:
             return {"created": True}
-
-    api.view("/items", CreatedView)
 
     with TestClient(api) as client:
         response = client.post("/items", json={})
@@ -312,6 +302,7 @@ def test_list_mixin():
                 raise StopAsyncIteration
             return self.items.pop(0)
 
+    @api.view("/items")
     class ItemListView(ListMixin, APIView):
         async def get_queryset(self):
             return MockQuerySet([
@@ -319,8 +310,6 @@ def test_list_mixin():
                 {"id": 2, "name": "Item 2"},
                 {"id": 3, "name": "Item 3"}
             ])
-
-    api.view("/items", ItemListView)
 
     with TestClient(api) as client:
         response = client.get("/items")
@@ -334,14 +323,13 @@ def test_retrieve_mixin():
     """Test RetrieveMixin provides get() with pk parameter."""
     api = BoltAPI()
 
+    @api.view("/items/{pk}")
     class ItemRetrieveView(RetrieveMixin, APIView):
         async def get_object(self, pk: int):
             if pk == 999:
                 raise HTTPException(status_code=404, detail="Not found")
             # Return a dict instead of custom object (msgspec can serialize dicts)
             return {"id": pk, "name": f"Item {pk}"}
-
-    api.view("/items/{pk}", ItemRetrieveView)
 
     with TestClient(api) as client:
         # Existing item
@@ -364,14 +352,13 @@ def test_create_mixin():
         name: str
         price: float
 
+    @api.view("/items")
     class ItemCreateView(APIView):
         """Override to skip the complex mixin setup."""
 
         async def post(self, request, data: ItemSchema) -> dict:
             # Simplified version - just return the created object
             return {"id": 1, "name": data.name, "price": data.price}
-
-    api.view("/items", ItemCreateView)
 
     with TestClient(api) as client:
         response = client.post(
@@ -410,6 +397,7 @@ def test_bolt_viewset_get_object_not_found():
         async def aget(self, pk):
             raise Exception("DoesNotExist")
 
+    @api.view("/items/{pk}")
     class ItemViewSet(ViewSet):
         async def get_queryset(self):
             return MockQuerySet()
@@ -418,8 +406,6 @@ def test_bolt_viewset_get_object_not_found():
             # This will raise HTTPException
             await self.get_object(pk)
             return {"id": pk}
-
-    api.view("/items/{pk}", ItemViewSet)
 
     with TestClient(api) as client:
         response = client.get("/items/999")
@@ -432,12 +418,11 @@ def test_bolt_api_view_non_async_handler_raises():
     """Test that non-async handlers raise TypeError."""
     api = BoltAPI()
 
-    class BadView(APIView):
-        def get(self, request):  # NOT async
-            return {"bad": True}
-
     with pytest.raises(TypeError) as exc_info:
-        api.view("/bad", BadView)
+        @api.view("/bad")
+        class BadView(APIView):
+            def get(self, request):  # NOT async
+                return {"bad": True}
 
     assert "must be async" in str(exc_info.value)
 
@@ -446,12 +431,11 @@ def test_bolt_api_view_non_subclass_raises():
     """Test that non-APIView classes raise TypeError."""
     api = BoltAPI()
 
-    class NotAView:
-        async def get(self, request):
-            return {}
-
     with pytest.raises(TypeError) as exc_info:
-        api.view("/bad", NotAView)
+        @api.view("/bad")
+        class NotAView:
+            async def get(self, request):
+                return {}
 
     assert "must inherit from APIView" in str(exc_info.value)
 
@@ -460,11 +444,10 @@ def test_bolt_api_view_no_methods_raises():
     """Test that view with no methods raises ValueError."""
     api = BoltAPI()
 
-    class EmptyView(APIView):
-        http_method_names = []
-
     with pytest.raises(ValueError) as exc_info:
-        api.view("/empty", EmptyView)
+        @api.view("/empty")
+        class EmptyView(APIView):
+            http_method_names = []
 
     assert "does not implement any HTTP methods" in str(exc_info.value)
 
@@ -473,6 +456,8 @@ def test_bolt_api_view_selective_method_registration():
     """Test registering only specific methods from a view."""
     api = BoltAPI()
 
+    # Only register GET and POST
+    @api.view("/items", methods=["GET", "POST"])
     class MultiMethodView(APIView):
         async def get(self, request) -> dict:
             return {"method": "GET"}
@@ -482,9 +467,6 @@ def test_bolt_api_view_selective_method_registration():
 
         async def delete(self, request) -> dict:
             return {"method": "DELETE"}
-
-    # Only register GET and POST
-    api.view("/items", MultiMethodView, methods=["GET", "POST"])
 
     with TestClient(api) as client:
         # GET and POST should work
@@ -503,12 +485,11 @@ def test_bolt_api_view_unimplemented_method_raises():
     """Test requesting unimplemented method raises ValueError."""
     api = BoltAPI()
 
-    class GetOnlyView(APIView):
-        async def get(self, request) -> dict:
-            return {"method": "GET"}
-
     with pytest.raises(ValueError) as exc_info:
-        api.view("/items", GetOnlyView, methods=["POST"])
+        @api.view("/items", methods=["POST"])
+        class GetOnlyView(APIView):
+            async def get(self, request) -> dict:
+                return {"method": "GET"}
 
     assert "does not implement method 'post'" in str(exc_info.value)
 
@@ -535,10 +516,24 @@ def test_complete_crud_operations():
         name: str
         price: float
 
+    @api.view("/items")
     class ItemListView(APIView):
         async def get(self, request) -> list:
             return list(items_db.values())
 
+    @api.view("/items/create")
+    class ItemCreateView(APIView):
+        async def post(self, request, data: ItemCreateSchema) -> dict:
+            item_id = next_id[0]
+            next_id[0] += 1
+            items_db[item_id] = {
+                "id": item_id,
+                "name": data.name,
+                "price": data.price,
+            }
+            return items_db[item_id]
+
+    @api.view("/items/{item_id}")
     class ItemDetailView(APIView):
         async def get(self, request, item_id: int) -> dict:
             if item_id not in items_db:
@@ -560,21 +555,6 @@ def test_complete_crud_operations():
                 raise HTTPException(status_code=404, detail="Item not found")
             del items_db[item_id]
             return {"detail": "Item deleted"}
-
-    class ItemCreateView(APIView):
-        async def post(self, request, data: ItemCreateSchema) -> dict:
-            item_id = next_id[0]
-            next_id[0] += 1
-            items_db[item_id] = {
-                "id": item_id,
-                "name": data.name,
-                "price": data.price,
-            }
-            return items_db[item_id]
-
-    api.view("/items", ItemListView)
-    api.view("/items/create", ItemCreateView)
-    api.view("/items/{item_id}", ItemDetailView)
 
     with TestClient(api) as client:
         # List items
@@ -618,6 +598,7 @@ def test_bolt_api_view_method_names_customization():
     """Test customizing http_method_names."""
     api = BoltAPI()
 
+    @api.view("/limited")
     class GetOnlyView(APIView):
         http_method_names = ["get"]
 
@@ -626,8 +607,6 @@ def test_bolt_api_view_method_names_customization():
 
         async def post(self, request) -> dict:
             return {"method": "POST"}
-
-    api.view("/limited", GetOnlyView)
 
     # Verify only GET was registered
     assert len(api._routes) == 1

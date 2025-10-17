@@ -271,7 +271,6 @@ class BoltAPI:
     def view(
         self,
         path: str,
-        view_cls: type = None,
         *,
         methods: Optional[List[str]] = None,
         guards: Optional[List[Any]] = None,
@@ -279,18 +278,13 @@ class BoltAPI:
         status_code: Optional[int] = None
     ):
         """
-        Register a class-based view.
+        Register a class-based view as a decorator.
 
-        Can be used as a decorator or function call:
-
-        Decorator style (recommended):
+        Usage:
             @api.view("/users")
             class UserView(APIView):
                 async def get(self) -> list[User]:
                     return User.objects.all()[:10]
-
-        Function call style (backward compatible):
-            api.view("/users", UserView)
 
         This method discovers available HTTP method handlers from the view class
         and registers them with the router. It supports the same parameter extraction,
@@ -298,97 +292,92 @@ class BoltAPI:
 
         Args:
             path: URL path pattern (e.g., "/users/{user_id}")
-            view_cls: View class (must inherit from APIView). If None, returns a decorator.
             methods: Optional list of HTTP methods to register (defaults to all implemented methods)
             guards: Optional per-route guard overrides (merged with class-level guards)
             auth: Optional per-route auth overrides (merged with class-level auth)
             status_code: Optional per-route status code override
 
         Returns:
-            If view_cls is None: Returns a decorator function
-            If view_cls is provided: Returns None (registers immediately)
+            Decorator function that registers the view class
 
         Raises:
             ValueError: If view class doesn't implement any requested methods
         """
         from .views import APIView
 
-        # If view_cls is None, return a decorator
-        if view_cls is None:
-            def decorator(cls: type) -> type:
-                self.view(path, cls, methods=methods, guards=guards, auth=auth, status_code=status_code)
-                return cls
-            return decorator
-
-        # Validate that view_cls is an APIView subclass
-        if not issubclass(view_cls, APIView):
-            raise TypeError(
-                f"View class {view_cls.__name__} must inherit from APIView"
-            )
-
-        # Determine which methods to register
-        if methods is None:
-            # Auto-discover all implemented methods
-            available_methods = view_cls.get_allowed_methods()
-            if not available_methods:
-                raise ValueError(
-                    f"View class {view_cls.__name__} does not implement any HTTP methods"
+        def decorator(view_cls: type) -> type:
+            # Validate that view_cls is an APIView subclass
+            if not issubclass(view_cls, APIView):
+                raise TypeError(
+                    f"View class {view_cls.__name__} must inherit from APIView"
                 )
-            methods = [m.lower() for m in available_methods]
-        else:
-            # Validate requested methods are implemented
-            methods = [m.lower() for m in methods]
-            available_methods = {m.lower() for m in view_cls.get_allowed_methods()}
-            for method in methods:
-                if method not in available_methods:
+
+            # Determine which methods to register
+            if methods is None:
+                # Auto-discover all implemented methods
+                available_methods = view_cls.get_allowed_methods()
+                if not available_methods:
                     raise ValueError(
-                        f"View class {view_cls.__name__} does not implement method '{method}'"
+                        f"View class {view_cls.__name__} does not implement any HTTP methods"
                     )
+                methods_to_register = [m.lower() for m in available_methods]
+            else:
+                # Validate requested methods are implemented
+                methods_to_register = [m.lower() for m in methods]
+                available_methods = {m.lower() for m in view_cls.get_allowed_methods()}
+                for method in methods_to_register:
+                    if method not in available_methods:
+                        raise ValueError(
+                            f"View class {view_cls.__name__} does not implement method '{method}'"
+                        )
 
-        # Register each method
-        for method in methods:
-            method_upper = method.upper()
+            # Register each method
+            for method in methods_to_register:
+                method_upper = method.upper()
 
-            # Create handler using as_view()
-            handler = view_cls.as_view(method)
+                # Create handler using as_view()
+                handler = view_cls.as_view(method)
 
-            # Merge guards: route-level overrides class-level
-            merged_guards = guards
-            if merged_guards is None and hasattr(handler, '__bolt_guards__'):
-                merged_guards = handler.__bolt_guards__
+                # Merge guards: route-level overrides class-level
+                merged_guards = guards
+                if merged_guards is None and hasattr(handler, '__bolt_guards__'):
+                    merged_guards = handler.__bolt_guards__
 
-            # Merge auth: route-level overrides class-level
-            merged_auth = auth
-            if merged_auth is None and hasattr(handler, '__bolt_auth__'):
-                merged_auth = handler.__bolt_auth__
+                # Merge auth: route-level overrides class-level
+                merged_auth = auth
+                if merged_auth is None and hasattr(handler, '__bolt_auth__'):
+                    merged_auth = handler.__bolt_auth__
 
-            # Merge status_code: route-level overrides class-level
-            merged_status_code = status_code
-            if merged_status_code is None and hasattr(handler, '__bolt_status_code__'):
-                merged_status_code = handler.__bolt_status_code__
+                # Merge status_code: route-level overrides class-level
+                merged_status_code = status_code
+                if merged_status_code is None and hasattr(handler, '__bolt_status_code__'):
+                    merged_status_code = handler.__bolt_status_code__
 
-            # Register using existing route decorator
-            decorator = self._route_decorator(
-                method_upper,
-                path,
-                response_model=None,  # Use method's return annotation
-                status_code=merged_status_code,
-                guards=merged_guards,
-                auth=merged_auth
-            )
+                # Register using existing route decorator
+                route_decorator = self._route_decorator(
+                    method_upper,
+                    path,
+                    response_model=None,  # Use method's return annotation
+                    status_code=merged_status_code,
+                    guards=merged_guards,
+                    auth=merged_auth
+                )
 
-            # Apply decorator to register the handler
-            decorator(handler)
+                # Apply decorator to register the handler
+                route_decorator(handler)
 
-        # Scan for custom action methods (methods decorated with @action)
-        # Note: api.view() doesn't have base path context for @action decorator
-        # Custom actions with @action should use api.viewset() instead
-        self._register_custom_actions(view_cls, base_path=None, lookup_field=None)
+            # Scan for custom action methods (methods decorated with @action)
+            # Note: api.view() doesn't have base path context for @action decorator
+            # Custom actions with @action should use api.viewset() instead
+            self._register_custom_actions(view_cls, base_path=None, lookup_field=None)
+
+            return view_cls
+
+        return decorator
 
     def viewset(
         self,
         path: str,
-        viewset_cls: type = None,
         *,
         guards: Optional[List[Any]] = None,
         auth: Optional[List[Any]] = None,
@@ -396,11 +385,9 @@ class BoltAPI:
         lookup_field: str = "pk"
     ):
         """
-        Register a ViewSet with automatic CRUD route generation.
+        Register a ViewSet with automatic CRUD route generation as a decorator.
 
-        Can be used as a decorator or function call:
-
-        Decorator style (recommended):
+        Usage:
             @api.viewset("/users")
             class UserViewSet(ViewSet):
                 async def list(self) -> list[User]:
@@ -416,9 +403,6 @@ class BoltAPI:
                     await user.asave()
                     return user
 
-        Function call style (backward compatible):
-            api.viewset("/users", UserViewSet)
-
         This method auto-generates routes for standard DRF-style actions:
         - list: GET /path
         - create: POST /path
@@ -429,87 +413,84 @@ class BoltAPI:
 
         Args:
             path: Base URL path (e.g., "/users")
-            viewset_cls: ViewSet class (must inherit from ViewSet). If None, returns a decorator.
             guards: Optional guards to apply to all routes
             auth: Optional auth backends to apply to all routes
             status_code: Optional default status code
             lookup_field: Field name for object lookup (default: "pk")
 
         Returns:
-            If viewset_cls is None: Returns a decorator function
-            If viewset_cls is provided: Returns None (registers immediately)
+            Decorator function that registers the viewset
         """
         from .views import ViewSet
 
-        # If viewset_cls is None, return a decorator
-        if viewset_cls is None:
-            def decorator(cls: type) -> type:
-                self.viewset(path, cls, guards=guards, auth=auth, status_code=status_code, lookup_field=lookup_field)
-                return cls
-            return decorator
+        def decorator(viewset_cls: type) -> type:
+            # Validate that viewset_cls is a ViewSet subclass
+            if not issubclass(viewset_cls, ViewSet):
+                raise TypeError(
+                    f"ViewSet class {viewset_cls.__name__} must inherit from ViewSet"
+                )
 
-        # Validate that viewset_cls is a ViewSet subclass
-        if not issubclass(viewset_cls, ViewSet):
-            raise TypeError(
-                f"ViewSet class {viewset_cls.__name__} must inherit from ViewSet"
-            )
+            # Use lookup_field from ViewSet class if not provided
+            actual_lookup_field = lookup_field
+            if actual_lookup_field == "pk" and hasattr(viewset_cls, 'lookup_field'):
+                actual_lookup_field = viewset_cls.lookup_field
 
-        # Use lookup_field from ViewSet class if not provided
-        if lookup_field == "pk" and hasattr(viewset_cls, 'lookup_field'):
-            lookup_field = viewset_cls.lookup_field
+            # Define standard action mappings
+            action_routes = {
+                # Collection routes (no pk)
+                'list': ('GET', path, None),
+                'create': ('POST', path, None),
 
-        # Define standard action mappings
-        action_routes = {
-            # Collection routes (no pk)
-            'list': ('GET', path, None),
-            'create': ('POST', path, None),
+                # Detail routes (with pk)
+                'retrieve': ('GET', f"{path}/{{{actual_lookup_field}}}", 'retrieve'),
+                'update': ('PUT', f"{path}/{{{actual_lookup_field}}}", 'update'),
+                'partial_update': ('PATCH', f"{path}/{{{actual_lookup_field}}}", 'partial_update'),
+                'destroy': ('DELETE', f"{path}/{{{actual_lookup_field}}}", 'destroy'),
+            }
 
-            # Detail routes (with pk)
-            'retrieve': ('GET', f"{path}/{{{lookup_field}}}", 'retrieve'),
-            'update': ('PUT', f"{path}/{{{lookup_field}}}", 'update'),
-            'partial_update': ('PATCH', f"{path}/{{{lookup_field}}}", 'partial_update'),
-            'destroy': ('DELETE', f"{path}/{{{lookup_field}}}", 'destroy'),
-        }
+            # Register routes for each implemented action
+            for action_name, (http_method, route_path, action_override) in action_routes.items():
+                # Check if the viewset implements this action
+                if not hasattr(viewset_cls, action_name):
+                    continue
 
-        # Register routes for each implemented action
-        for action_name, (http_method, route_path, action_override) in action_routes.items():
-            # Check if the viewset implements this action
-            if not hasattr(viewset_cls, action_name):
-                continue
+                action_method = getattr(viewset_cls, action_name)
+                if not inspect.iscoroutinefunction(action_method):
+                    continue
 
-            action_method = getattr(viewset_cls, action_name)
-            if not inspect.iscoroutinefunction(action_method):
-                continue
+                # Use action name (e.g., "list") not HTTP method name (e.g., "get")
+                handler = viewset_cls.as_view(http_method.lower(), action=action_override or action_name)
 
-            # Use action name (e.g., "list") not HTTP method name (e.g., "get")
-            handler = viewset_cls.as_view(http_method.lower(), action=action_override or action_name)
+                # Merge guards and auth
+                merged_guards = guards
+                if merged_guards is None and hasattr(handler, '__bolt_guards__'):
+                    merged_guards = handler.__bolt_guards__
 
-            # Merge guards and auth
-            merged_guards = guards
-            if merged_guards is None and hasattr(handler, '__bolt_guards__'):
-                merged_guards = handler.__bolt_guards__
+                merged_auth = auth
+                if merged_auth is None and hasattr(handler, '__bolt_auth__'):
+                    merged_auth = handler.__bolt_auth__
 
-            merged_auth = auth
-            if merged_auth is None and hasattr(handler, '__bolt_auth__'):
-                merged_auth = handler.__bolt_auth__
+                merged_status_code = status_code
+                if merged_status_code is None and hasattr(handler, '__bolt_status_code__'):
+                    merged_status_code = handler.__bolt_status_code__
 
-            merged_status_code = status_code
-            if merged_status_code is None and hasattr(handler, '__bolt_status_code__'):
-                merged_status_code = handler.__bolt_status_code__
+                # Register the route
+                route_decorator = self._route_decorator(
+                    http_method,
+                    route_path,
+                    response_model=None,
+                    status_code=merged_status_code,
+                    guards=merged_guards,
+                    auth=merged_auth
+                )
+                route_decorator(handler)
 
-            # Register the route
-            decorator = self._route_decorator(
-                http_method,
-                route_path,
-                response_model=None,
-                status_code=merged_status_code,
-                guards=merged_guards,
-                auth=merged_auth
-            )
-            decorator(handler)
+            # Scan for custom actions (@action decorator)
+            self._register_custom_actions(viewset_cls, base_path=path, lookup_field=actual_lookup_field)
 
-        # Scan for custom actions (@action decorator)
-        self._register_custom_actions(viewset_cls, base_path=path, lookup_field=lookup_field)
+            return viewset_cls
+
+        return decorator
 
     def _register_custom_actions(self, view_cls: type, base_path: Optional[str], lookup_field: Optional[str]):
         """

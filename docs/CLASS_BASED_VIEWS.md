@@ -64,9 +64,6 @@ class ArticleViewSet(ViewSet):
         """POST /articles/{article_id}/publish - Publish an article"""
         return {"id": article_id, "published": True}
 
-# Alternative: Function call style (backward compatible)
-# api.view("/hello", HelloView)
-# api.viewset("/articles", ArticleViewSet)
 ```
 
 ## Unified ViewSet Pattern (Recommended)
@@ -82,9 +79,13 @@ class UserListViewSet(ViewSet):
     async def get(self, request, limit: int = 100):
         return await User.objects.all()[:limit]
 
-api.view("/users", UserListViewSet, methods=["GET"])
+@api.view("/users")
+class UserListViewSet(ViewSet):
+    async def get(self, request, limit: int = 100):
+        return await User.objects.all()[:limit]
 
 # Separate ViewSet for detail operations
+@api.view("/users/{user_id}")
 class UserDetailViewSet(ViewSet):
     async def get(self, request, user_id: int):
         return await User.objects.aget(id=user_id)
@@ -92,8 +93,6 @@ class UserDetailViewSet(ViewSet):
     async def put(self, request, user_id: int, data: UserUpdate):
         # ... update logic
         pass
-
-api.view("/users/{user_id}", UserDetailViewSet, methods=["GET", "PUT", "PATCH", "DELETE"])
 ```
 
 **After** (New Pattern - Single ViewSet):
@@ -134,7 +133,9 @@ class UserViewSet(ViewSet):
         return {"deleted": True}
 
 # One line - automatic route generation!
-api.viewset("/users", UserViewSet)
+@api.viewset("/users")
+class UserViewSet(ViewSet):
+    ...
 # Auto-generates:
 # GET    /users       -> list()
 # POST   /users       -> create()
@@ -207,6 +208,7 @@ class UserUpdate(msgspec.Struct):
     is_active: bool | None = None
 
 # Unified ViewSet
+@api.viewset("/users")
 class UserViewSet(ViewSet):
     queryset = User.objects.all()
     serializer_class = UserFull          # Used for detail views
@@ -309,8 +311,6 @@ class UserViewSet(ViewSet):
             users.append(UserMini(id=user.id, username=user.username))
         return {"query": query, "results": users}
 
-# Register the ViewSet - one line!
-api.viewset("/users", UserViewSet)
 ```
 
 ### Customizing Serializers Per Action
@@ -347,7 +347,6 @@ class ArticleViewSet(ViewSet):
         article = await self.get_object(slug=slug)
         return ArticleSchema.from_model(article)
 
-api.viewset("/articles", ArticleViewSet)
 # Generates: GET /articles/{slug}
 ```
 
@@ -374,8 +373,6 @@ class ReadOnlyArticleViewSet(ViewSet):
         return ArticleSchema.from_model(article)
 
     # No create, update, destroy - those routes won't be registered
-
-api.viewset("/articles", ReadOnlyArticleViewSet)
 # Only generates:
 # GET /articles       -> list()
 # GET /articles/{pk}  -> retrieve()
@@ -410,7 +407,7 @@ class PersonViewSet(ViewSet):
     async def retrieve(self, request, id: int) -> Person:
         return person
 
-api.viewset("/persons", PersonViewSet)  # Automatic route generation
+# Automatic route generation
 ```
 
 Both patterns:
@@ -443,8 +440,6 @@ class UserProfileView(APIView):
         # Access request body via msgspec.Struct validation
         return {"id": user_id, "updated": True}
 
-# Register with specific methods
-api.view("/users/{user_id}/profile", UserProfileView, methods=["GET", "PUT"])
 ```
 
 ### Class-Level Configuration
@@ -486,8 +481,6 @@ class MixedSecurityView(APIView):
         """Requires admin."""
         return {"created": True}
 
-# Override guards per method
-api.view("/resource", MixedSecurityView, methods=["GET", "POST"])
 ```
 
 ## ViewSet
@@ -566,8 +559,6 @@ class ArticleViewSet(ViewSet):
         # In real app, delete from database
         return {"id": article_id, "deleted": True}
 
-# Register all methods
-api.view("/articles/{article_id}", ArticleViewSet, methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 ```
 
 ### Path Parameters
@@ -584,7 +575,6 @@ class CommentViewSet(ViewSet):
             "text": "Great post!"
         }
 
-api.view("/posts/{post_id}/comments/{comment_id}", CommentViewSet, methods=["GET"])
 ```
 
 ### Query Parameters
@@ -601,7 +591,6 @@ class SearchViewSet(ViewSet):
             "results": []
         }
 
-api.view("/search", SearchViewSet, methods=["GET"])
 ```
 
 ## Mixins
@@ -646,7 +635,6 @@ class ArticleViewSet(ViewSet, ListMixin, RetrieveMixin, CreateMixin):
         return {"id": 123, **data}
 
 # Mixins provide default implementations for get/post
-api.view("/articles/{article_id}", ArticleViewSet, methods=["GET", "POST"])
 ```
 
 ### Mixin Method Mapping
@@ -700,7 +688,6 @@ class ArticleViewSet(ModelViewSet):
     lookup_field = 'id'  # Default: 'id'
 
 # Automatically provides: list, retrieve, create, update, partial_update, destroy
-api.view("/articles/{id}", ArticleViewSet, methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 ```
 
 ### Custom QuerySet
@@ -721,7 +708,6 @@ class ArticleViewSet(ModelViewSet):
     model = Article
     lookup_field = 'slug'  # Use slug instead of id
 
-api.view("/articles/{slug}", ArticleViewSet, methods=["GET", "PUT", "DELETE"])
 ```
 
 ### Async ORM Operations
@@ -760,7 +746,6 @@ class ArticleViewSet(ReadOnlyModelViewSet):
     model = Article
 
 # Only provides: list (GET without params) and retrieve (GET with params)
-api.view("/articles/{id}", ArticleViewSet, methods=["GET"])
 ```
 
 ## Custom Actions
@@ -837,7 +822,6 @@ class UserViewSet(ViewSet):
         """Search users by username."""
         return User.objects.filter(username__icontains=query)[:10]
 
-api.viewset("/users", UserViewSet)
 ```
 
 ### Real-World Examples
@@ -895,7 +879,6 @@ class UserViewSet(ViewSet):
         # Update permissions logic
         return {"id": id, "permissions": data.permissions, "updated": True}
 
-api.viewset("/users", UserViewSet)
 ```
 
 #### Document Workflow
@@ -952,7 +935,6 @@ class DocumentViewSet(ViewSet):
         await doc.asave()
         return {"id": id, "locked": False}
 
-api.viewset("/documents", DocumentViewSet)
 ```
 
 ### Multiple HTTP Methods
@@ -983,7 +965,6 @@ class ArticleViewSet(ViewSet):
         await article.asave()
         return {"updated": True, "is_published": article.is_published}
 
-api.viewset("/articles", ArticleViewSet)
 ```
 
 ### Custom Action Features
@@ -1029,7 +1010,6 @@ class ArticleViewSet(ViewSet):
             "notifications_sent": data.notify_subscribers
         }
 
-api.viewset("/articles", ArticleViewSet)
 ```
 
 ### Comparison: Old vs New Pattern
@@ -1051,7 +1031,9 @@ class UserViewSet(ViewSet):
     async def activate(self, request, id: int):
         pass
 
-api.viewset("/users", UserViewSet)  # Required for @action
+@api.viewset("/users")  # Required for @action to work
+class UserViewSet(ViewSet):
+    ...
 ```
 
 ## Authentication & Guards
@@ -1085,7 +1067,6 @@ class SecureViewSet(ViewSet):
             "deleted_by": auth.get("user_id")
         }
 
-api.view("/resources/{resource_id}", SecureViewSet, methods=["GET"])
 ```
 
 ### Custom Action with Different Auth
@@ -1484,7 +1465,6 @@ class ArticleViewSet(ViewSet):
             headers={"Content-Disposition": f"attachment; filename=article-{article_id}.md"}
         )
 
-api.view("/articles/{article_id}", ArticleViewSet, methods=["GET", "POST", "PUT", "DELETE"])
 ```
 
 ## Best Practices

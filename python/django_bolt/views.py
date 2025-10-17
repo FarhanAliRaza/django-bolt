@@ -7,13 +7,12 @@ Bolt's routing, dependency injection, guards, and authentication.
 Example:
     api = BoltAPI()
 
+    @api.view("/hello")
     class HelloView(APIView):
         guards = [IsAuthenticated()]
 
         async def get(self, request, current_user=Depends(get_current_user)) -> dict:
             return {"user": current_user.id}
-
-    api.view("/hello", HelloView)
 """
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Set, Type
@@ -185,6 +184,7 @@ class ViewSet(APIView):
     Subclasses can implement standard methods: list, retrieve, create, update, partial_update, destroy.
 
     Example:
+        @api.viewset("/users")
         class UserViewSet(ViewSet):
             queryset = User.objects.all()
             serializer_class = UserSchema
@@ -598,6 +598,7 @@ class ReadOnlyModelViewSet(ViewSet):
     You implement the HTTP method handlers with proper type annotations.
 
     Example:
+        @api.view("/articles")
         class ArticleListViewSet(ReadOnlyModelViewSet):
             queryset = Article.objects.all()
             serializer_class = ArticleSchema
@@ -609,6 +610,7 @@ class ReadOnlyModelViewSet(ViewSet):
                     articles.append(ArticleSchema.from_model(article))
                 return articles
 
+        @api.view("/articles/{pk}")
         class ArticleDetailViewSet(ReadOnlyModelViewSet):
             queryset = Article.objects.all()
             serializer_class = ArticleSchema
@@ -617,10 +619,6 @@ class ReadOnlyModelViewSet(ViewSet):
                 \"\"\"Retrieve a single article.\"\"\"
                 article = await self.get_object(pk)
                 return ArticleSchema.from_model(article)
-
-        # Register routes
-        api.view("/articles", ArticleListViewSet, methods=["GET"])
-        api.view("/articles/{pk}", ArticleDetailViewSet, methods=["GET"])
     """
     pass
 
@@ -631,7 +629,7 @@ class ModelViewSet(ViewSet):
 
     Similar to Django REST Framework's ModelViewSet, but adapted for Django-Bolt's
     type-based parameter binding. You set `queryset` and `serializer_class`, then
-    implement HTTP method handlers with proper type annotations.
+    implement DRF-style action methods (list, retrieve, create, update, etc.).
 
     Example:
         from django_bolt import BoltAPI, ModelViewSet
@@ -653,45 +651,42 @@ class ModelViewSet(ViewSet):
             title: str
             content: str
 
-        class ArticleListViewSet(ModelViewSet):
+        @api.viewset("/articles")
+        class ArticleViewSet(ModelViewSet):
             queryset = Article.objects.all()
             serializer_class = ArticleSchema
 
-            async def get(self, request):
-                \"\"\"List all articles.\"\"\"
+            async def list(self, request):
+                \"\"\"GET /articles - List all articles.\"\"\"
                 articles = []
                 async for article in await self.get_queryset():
                     articles.append(ArticleSchema.from_model(article))
                 return articles
 
-            async def post(self, request, data: ArticleCreateSchema):
-                \"\"\"Create a new article.\"\"\"
+            async def retrieve(self, request, pk: int):
+                \"\"\"GET /articles/{pk} - Retrieve a single article.\"\"\"
+                article = await self.get_object(pk=pk)
+                return ArticleSchema.from_model(article)
+
+            async def create(self, request, data: ArticleCreateSchema):
+                \"\"\"POST /articles - Create a new article.\"\"\"
                 article = await Article.objects.acreate(
                     title=data.title,
                     content=data.content
                 )
                 return ArticleSchema.from_model(article)
 
-        class ArticleDetailViewSet(ModelViewSet):
-            queryset = Article.objects.all()
-            serializer_class = ArticleSchema
-
-            async def get(self, request, pk: int):
-                \"\"\"Retrieve a single article.\"\"\"
-                article = await self.get_object(pk)
-                return ArticleSchema.from_model(article)
-
-            async def put(self, request, pk: int, data: ArticleCreateSchema):
-                \"\"\"Update an article.\"\"\"
-                article = await self.get_object(pk)
+            async def update(self, request, pk: int, data: ArticleCreateSchema):
+                \"\"\"PUT /articles/{pk} - Update an article.\"\"\"
+                article = await self.get_object(pk=pk)
                 article.title = data.title
                 article.content = data.content
                 await article.asave()
                 return ArticleSchema.from_model(article)
 
-            async def patch(self, request, pk: int, data: ArticleCreateSchema):
-                \"\"\"Partially update an article.\"\"\"
-                article = await self.get_object(pk)
+            async def partial_update(self, request, pk: int, data: ArticleCreateSchema):
+                \"\"\"PATCH /articles/{pk} - Partially update an article.\"\"\"
+                article = await self.get_object(pk=pk)
                 if data.title:
                     article.title = data.title
                 if data.content:
@@ -699,19 +694,16 @@ class ModelViewSet(ViewSet):
                 await article.asave()
                 return ArticleSchema.from_model(article)
 
-            async def delete(self, request, pk: int):
-                \"\"\"Delete an article.\"\"\"
-                article = await self.get_object(pk)
+            async def destroy(self, request, pk: int):
+                \"\"\"DELETE /articles/{pk} - Delete an article.\"\"\"
+                article = await self.get_object(pk=pk)
                 await article.adelete()
-                return {"detail": "Object deleted successfully"}
-
-        # Register routes
-        api.view("/articles", ArticleListViewSet, methods=["GET", "POST"])
-        api.view("/articles/{pk}", ArticleDetailViewSet, methods=["GET", "PUT", "PATCH", "DELETE"])
+                return {"deleted": True}
 
     This provides full CRUD operations with Django ORM integration, just like DRF.
     The difference is that Django-Bolt requires explicit type annotations for
-    parameter binding and validation.
+    parameter binding and validation. Routes are automatically generated based on
+    implemented action methods.
     """
 
     # Optional: separate serializer for create/update operations

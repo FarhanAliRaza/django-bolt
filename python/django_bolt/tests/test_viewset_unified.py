@@ -125,7 +125,9 @@ def test_unified_viewset_basic_crud(api):
             return {"deleted": True, "id": pk}
 
     # Register with api.viewset() - automatic route generation
-    api.viewset("/articles", ArticleViewSet)
+    @api.viewset("/articles")
+    class ArticleViewSetRegistered(ArticleViewSet):
+        pass
 
     with TestClient(api) as client:
         # List (empty)
@@ -210,7 +212,9 @@ def test_unified_viewset_custom_lookup_field(api):
             return ArticleFullSchema.from_model(article)
 
     # Register with api.viewset() - uses lookup_field from class
-    api.viewset("/articles", ArticleViewSet)
+    @api.viewset("/articles")
+    class ArticleViewSetRegistered(ArticleViewSet):
+        pass
 
     with TestClient(api) as client:
         # Lookup by author (using custom lookup_field)
@@ -272,7 +276,9 @@ def test_unified_viewset_with_custom_actions(api):
             return articles
 
     # Register with api.viewset() - automatically discovers custom actions
-    api.viewset("/articles", ArticleViewSet)
+    @api.viewset("/articles")
+    class ArticleViewSetRegistered(ArticleViewSet):
+        pass
 
     with TestClient(api) as client:
         # List all articles
@@ -320,7 +326,9 @@ def test_unified_viewset_partial_implementation(api):
         # Note: create, update, partial_update, destroy not implemented
 
     # Register with api.viewset() - only generates routes for implemented actions
-    api.viewset("/articles", ReadOnlyArticleViewSet)
+    @api.viewset("/articles")
+    class ReadOnlyArticleViewSetRegistered(ReadOnlyArticleViewSet):
+        pass
 
     with TestClient(api) as client:
         # List works

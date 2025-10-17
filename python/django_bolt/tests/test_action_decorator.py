@@ -45,6 +45,7 @@ class ArticleCreateSchema(msgspec.Struct):
 def test_action_decorator_detail_true(api):
     """Test @action with detail=True (instance-level action)."""
 
+    @api.viewset("/articles")
     class ArticleViewSet(ViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
@@ -77,8 +78,6 @@ def test_action_decorator_detail_true(api):
             await article.asave()
             return {"published": True, "article_id": pk}
 
-    api.viewset("/articles", ArticleViewSet)
-
     # Create test article
     article = Article.objects.create(
         title="Test Article",
@@ -105,6 +104,7 @@ def test_action_decorator_detail_true(api):
 def test_action_decorator_detail_false(api):
     """Test @action with detail=False (collection-level action)."""
 
+    @api.viewset("/articles")
     class ArticleViewSet(ViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
@@ -131,8 +131,6 @@ def test_action_decorator_detail_false(api):
                     content=article.content
                 ))
             return articles
-
-    api.viewset("/articles", ArticleViewSet)
 
     # Create test articles
     Article.objects.create(
@@ -172,6 +170,7 @@ def test_action_decorator_multiple_methods(api):
         """Schema for status update."""
         is_published: bool
 
+    @api.viewset("/articles")
     class ArticleViewSet(ViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
@@ -193,8 +192,6 @@ def test_action_decorator_multiple_methods(api):
             article.is_published = data.is_published
             await article.asave()
             return {"updated": True, "is_published": article.is_published}
-
-    api.viewset("/articles", ArticleViewSet)
 
     # Create test article
     article = Article.objects.create(
@@ -224,6 +221,7 @@ def test_action_decorator_multiple_methods(api):
 def test_action_decorator_custom_path(api):
     """Test @action with custom path parameter."""
 
+    @api.viewset("/articles")
     class ArticleViewSet(ViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
@@ -236,8 +234,6 @@ def test_action_decorator_custom_path(api):
         async def some_method_name(self, request, pk: int):
             """POST /articles/{pk}/custom-action-name"""
             return {"action": "custom-action-name", "article_id": pk}
-
-    api.viewset("/articles", ArticleViewSet)
 
     client = TestClient(api)
 
@@ -260,23 +256,23 @@ def test_action_decorator_custom_path(api):
 def test_action_decorator_with_api_view_raises_error(api):
     """Test that @action raises error when used with api.view() instead of api.viewset()."""
 
-    class ArticleViewSet(ViewSet):
-        async def get(self, request):
-            return []
-
-        @action(methods=["POST"], detail=False)
-        async def custom_action(self, request):
-            return {"ok": True}
-
     # This should raise an error because api.view() doesn't support @action
     with pytest.raises(ValueError, match="uses @action decorator.*api.viewset"):
-        api.view("/articles", ArticleViewSet, methods=["GET"])
+        @api.view("/articles", methods=["GET"])
+        class ArticleViewSet(ViewSet):
+            async def get(self, request):
+                return []
+
+            @action(methods=["POST"], detail=False)
+            async def custom_action(self, request):
+                return {"ok": True}
 
 
 @pytest.mark.django_db(transaction=True)
 def test_action_decorator_defaults_to_function_name(api):
     """Test that @action uses function name as default path."""
 
+    @api.viewset("/articles")
     class ArticleViewSet(ViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
@@ -289,8 +285,6 @@ def test_action_decorator_defaults_to_function_name(api):
         async def archive(self, request, pk: int):
             """POST /articles/{pk}/archive"""
             return {"archived": True, "article_id": pk}
-
-    api.viewset("/articles", ArticleViewSet)
 
     client = TestClient(api)
 
@@ -313,6 +307,7 @@ def test_action_decorator_defaults_to_function_name(api):
 def test_action_decorator_with_query_params(api):
     """Test @action with query parameters."""
 
+    @api.viewset("/articles")
     class ArticleViewSet(ViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
@@ -332,8 +327,6 @@ def test_action_decorator_with_query_params(api):
                     content=article.content
                 ))
             return {"query": query, "limit": limit, "results": articles}
-
-    api.viewset("/articles", ArticleViewSet)
 
     # Create test articles
     Article.objects.create(title="Python Guide", content="Content", author="Author")
@@ -365,6 +358,7 @@ def test_action_decorator_invalid_method(api):
 def test_action_decorator_with_different_lookup_fields(api):
     """Test @action respects custom lookup_field."""
 
+    @api.viewset("/articles")
     class ArticleViewSet(ViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
@@ -387,8 +381,6 @@ def test_action_decorator_with_different_lookup_fields(api):
         async def feature(self, request, id: int):
             """POST /articles/{id}/feature"""
             return {"featured": True, "article_id": id}
-
-    api.viewset("/articles", ArticleViewSet)
 
     client = TestClient(api)
 

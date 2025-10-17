@@ -109,6 +109,7 @@ class ArticlePartialUpdateSchema(msgspec.Struct):
 def test_simple_list_without_mixin(api, sample_articles):
     """Test simple list without mixin to debug."""
 
+    @api.view("/articles/simple")
     class ArticleListView(APIView):
         async def get(self, request) -> list:
             articles = []
@@ -121,8 +122,6 @@ def test_simple_list_without_mixin(api, sample_articles):
                     "is_published": article.is_published,
                 })
             return articles
-
-    api.view("/articles/simple", ArticleListView)
 
     with TestClient(api) as client:
         response = client.get("/articles/simple")
@@ -137,13 +136,12 @@ def test_simple_list_without_mixin(api, sample_articles):
 def test_list_mixin_with_real_django_orm(api, sample_articles):
     """Test ListMixin with real Django ORM queryset."""
 
+    @api.view("/articles")
     class ArticleListView(ListMixin, APIView):
         serializer_class = ArticleSchema
 
         async def get_queryset(self):
             return Article.objects.all()
-
-    api.view("/articles", ArticleListView)
 
     with TestClient(api) as client:
         response = client.get("/articles")
@@ -169,13 +167,12 @@ def test_list_mixin_with_real_django_orm(api, sample_articles):
 def test_list_mixin_filtered_queryset(api, sample_articles):
     """Test ListMixin with filtered Django queryset."""
 
+    @api.view("/articles/published")
     class PublishedArticleListView(ListMixin, APIView):
         serializer_class = ArticleSchema
 
         async def get_queryset(self):
             return Article.objects.filter(is_published=True)
-
-    api.view("/articles/published", PublishedArticleListView)
 
     with TestClient(api) as client:
         response = client.get("/articles/published")
@@ -194,13 +191,12 @@ def test_list_mixin_filtered_queryset(api, sample_articles):
 def test_retrieve_mixin_with_real_django_orm(api, sample_articles):
     """Test RetrieveMixin with real Django ORM aget()."""
 
+    @api.view("/articles/{pk}")
     class ArticleDetailView(RetrieveMixin, ViewSet):
         serializer_class = ArticleSchema
 
         async def get_queryset(self):
             return Article.objects.all()
-
-    api.view("/articles/{pk}", ArticleDetailView)
 
     article_id = sample_articles[0].id
 
@@ -220,13 +216,12 @@ def test_retrieve_mixin_with_real_django_orm(api, sample_articles):
 def test_retrieve_mixin_not_found(api):
     """Test RetrieveMixin returns 404 when object doesn't exist."""
 
+    @api.view("/articles/{pk}")
     class ArticleDetailView(RetrieveMixin, ViewSet):
         serializer_class = ArticleSchema
 
         async def get_queryset(self):
             return Article.objects.all()
-
-    api.view("/articles/{pk}", ArticleDetailView)
 
     with TestClient(api) as client:
         response = client.get("/articles/99999")
@@ -239,6 +234,7 @@ def test_retrieve_mixin_not_found(api):
 def test_create_mixin_with_real_django_orm(api):
     """Test CreateMixin with real Django ORM acreate()."""
 
+    @api.view("/articles")
     class ArticleCreateView(ViewSet):
         serializer_class = ArticleSchema
 
@@ -253,8 +249,6 @@ def test_create_mixin_with_real_django_orm(api):
                 author=data.author,
             )
             return ArticleSchema.from_model(article)
-
-    api.view("/articles", ArticleCreateView)
 
     with TestClient(api) as client:
         response = client.post(
@@ -288,6 +282,7 @@ def test_create_mixin_with_real_django_orm(api):
 def test_update_mixin_with_real_django_orm(api, sample_articles):
     """Test UpdateMixin with real Django ORM asave()."""
 
+    @api.view("/articles/{pk}")
     class ArticleUpdateView(ViewSet):
         serializer_class = ArticleSchema
 
@@ -303,8 +298,6 @@ def test_update_mixin_with_real_django_orm(api, sample_articles):
             article.is_published = data.is_published
             await article.asave()
             return ArticleSchema.from_model(article)
-
-    api.view("/articles/{pk}", ArticleUpdateView)
 
     article_id = sample_articles[0].id
 
@@ -341,6 +334,7 @@ def test_update_mixin_with_real_django_orm(api, sample_articles):
 def test_partial_update_mixin_with_real_django_orm(api, sample_articles):
     """Test PartialUpdateMixin with real Django ORM asave()."""
 
+    @api.view("/articles/{pk}")
     class ArticlePartialUpdateView(ViewSet):
         serializer_class = ArticleSchema
 
@@ -360,8 +354,6 @@ def test_partial_update_mixin_with_real_django_orm(api, sample_articles):
                 article.is_published = data.is_published
             await article.asave()
             return ArticleSchema.from_model(article)
-
-    api.view("/articles/{pk}", ArticlePartialUpdateView)
 
     article_id = sample_articles[0].id
     original_content = sample_articles[0].content
@@ -391,11 +383,10 @@ def test_partial_update_mixin_with_real_django_orm(api, sample_articles):
 def test_destroy_mixin_with_real_django_orm(api, sample_articles):
     """Test DestroyMixin with real Django ORM adelete()."""
 
+    @api.view("/articles/{pk}")
     class ArticleDestroyView(DestroyMixin, ViewSet):
         async def get_queryset(self):
             return Article.objects.all()
-
-    api.view("/articles/{pk}", ArticleDestroyView)
 
     article_id = sample_articles[0].id
 
@@ -487,9 +478,14 @@ def test_full_crud_viewset_with_django_orm(api):
             await article.adelete()
             return {"detail": "Object deleted successfully"}
 
-    # Register routes
-    api.view("/articles", ArticleViewSet, methods=["GET", "POST"])
-    api.view("/articles/{pk}", ArticleDetailViewSet, methods=["GET", "PUT", "PATCH", "DELETE"])
+    # Register routes with decorator syntax
+    @api.view("/articles", methods=["GET", "POST"])
+    class ArticleViewSetRegistered(ArticleViewSet):
+        pass
+
+    @api.view("/articles/{pk}", methods=["GET", "PUT", "PATCH", "DELETE"])
+    class ArticleDetailViewSetRegistered(ArticleDetailViewSet):
+        pass
 
     with TestClient(api) as client:
         # 1. List (should be empty initially)
@@ -576,6 +572,7 @@ def test_full_crud_viewset_with_django_orm(api):
 def test_custom_viewset_method_with_django_orm(api, sample_articles):
     """Test custom ViewSet method with Django ORM operations."""
 
+    @api.view("/articles/{pk}")
     class ArticleViewSet(ViewSet):
         async def get_queryset(self):
             return Article.objects.all()
@@ -594,8 +591,6 @@ def test_custom_viewset_method_with_django_orm(api, sample_articles):
                 "author": article.author,
                 "author_article_count": author_count,
             }
-
-    api.view("/articles/{pk}", ArticleViewSet)
 
     article_id = sample_articles[0].id
 
@@ -616,14 +611,13 @@ def test_custom_viewset_method_with_django_orm(api, sample_articles):
 def test_viewset_with_filtered_queryset(api, sample_articles):
     """Test ViewSet with custom queryset filtering."""
 
+    @api.view("/articles/published")
     class PublishedArticleViewSet(ListMixin, ViewSet):
         serializer_class = ArticleSchema
 
         async def get_queryset(self):
             # Override to only return published articles
             return Article.objects.filter(is_published=True).order_by("-created_at")
-
-    api.view("/articles/published", PublishedArticleViewSet)
 
     with TestClient(api) as client:
         response = client.get("/articles/published")
@@ -641,6 +635,7 @@ def test_viewset_with_filtered_queryset(api, sample_articles):
 def test_update_nonexistent_article(api):
     """Test updating a non-existent article returns 404."""
 
+    @api.view("/articles/{pk}")
     class ArticleUpdateView(ViewSet):
         serializer_class = ArticleSchema
 
@@ -656,8 +651,6 @@ def test_update_nonexistent_article(api):
             article.is_published = data.is_published
             await article.asave()
             return ArticleSchema.from_model(article)
-
-    api.view("/articles/{pk}", ArticleUpdateView)
 
     with TestClient(api) as client:
         response = client.put(
@@ -676,11 +669,10 @@ def test_update_nonexistent_article(api):
 def test_delete_nonexistent_article(api):
     """Test deleting a non-existent article returns 404."""
 
+    @api.view("/articles/{pk}")
     class ArticleDestroyView(DestroyMixin, ViewSet):
         async def get_queryset(self):
             return Article.objects.all()
-
-    api.view("/articles/{pk}", ArticleDestroyView)
 
     with TestClient(api) as client:
         response = client.delete("/articles/99999")
@@ -691,6 +683,7 @@ def test_delete_nonexistent_article(api):
 def test_async_queryset_iteration(api, sample_articles):
     """Test that async queryset iteration works correctly."""
 
+    @api.view("/articles")
     class ArticleListView(APIView):
         async def get(self, request) -> list:
             articles = []
@@ -701,8 +694,6 @@ def test_async_queryset_iteration(api, sample_articles):
                     "title": article.title,
                 })
             return articles
-
-    api.view("/articles", ArticleListView)
 
     with TestClient(api) as client:
         response = client.get("/articles")

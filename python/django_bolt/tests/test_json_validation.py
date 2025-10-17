@@ -61,7 +61,8 @@ class TestInvalidJSONParsing:
         errors = exc_info.value.errors()
         assert len(errors) == 1
         assert errors[0]["type"] == "json_invalid"
-        assert errors[0]["loc"] == ["body"]
+        # loc is a tuple: ("body", line_num, col_num) when byte position is available
+        assert errors[0]["loc"][0] == "body"
         assert "malformed" in errors[0]["msg"].lower() or "keys must be strings" in errors[0]["msg"].lower()
 
     def test_empty_json_body_returns_422(self):
@@ -77,7 +78,8 @@ class TestInvalidJSONParsing:
         errors = exc_info.value.errors()
         assert len(errors) == 1
         assert errors[0]["type"] == "json_invalid"
-        assert errors[0]["loc"] == ["body"]
+        # loc is a tuple: ("body",) when no byte position is available
+        assert errors[0]["loc"] == ("body",)
         assert "truncated" in errors[0]["msg"].lower()
 
     def test_non_json_content_returns_422(self):
@@ -94,7 +96,8 @@ class TestInvalidJSONParsing:
         errors = exc_info.value.errors()
         assert len(errors) == 1
         assert errors[0]["type"] == "json_invalid"
-        assert errors[0]["loc"] == ["body"]
+        # loc is a tuple: ("body", line_num, col_num) when byte position is available
+        assert errors[0]["loc"][0] == "body"
         assert "malformed" in errors[0]["msg"].lower() or "invalid" in errors[0]["msg"].lower()
 
     def test_invalid_json_object_type(self):

@@ -64,11 +64,10 @@ class ErrorResponse(msgspec.Struct):
 def test_request_body_validation_error(api):
     """Test that invalid request body returns proper validation error."""
 
+    @api.view("/users", methods=["POST"])
     class ArticleView(APIView):
         async def post(self, request, data: UserCreateSchema):
             return {"ok": True}
-
-    api.view("/users", ArticleView, methods=["POST"])
 
     with TestClient(api) as client:
         # Missing required field
@@ -97,14 +96,13 @@ def test_query_parameter_validation(api):
     enforced by Django-Bolt. This test just verifies basic query param extraction.
     """
 
+    @api.view("/search", methods=["GET"])
     class SearchView(APIView):
         async def get(self,
                      request,
                      page: Annotated[int, Query(ge=1)] = 1,
                      limit: Annotated[int, Query(ge=1, le=100)] = 10):
             return {"page": page, "limit": limit}
-
-    api.view("/search", SearchView, methods=["GET"])
 
     with TestClient(api) as client:
         # Valid params
@@ -126,11 +124,10 @@ def test_query_parameter_validation(api):
 def test_path_parameter_validation(api):
     """Test path parameter validation."""
 
+    @api.view("/users/{user_id}", methods=["GET"])
     class UserView(APIView):
         async def get(self, request, user_id: Annotated[int, Path(ge=1)]):
             return {"user_id": user_id}
-
-    api.view("/users/{user_id}", UserView, methods=["GET"])
 
     with TestClient(api) as client:
         # Valid
@@ -146,14 +143,13 @@ def test_path_parameter_validation(api):
 def test_header_parameter_extraction(api):
     """Test extracting parameters from HTTP headers."""
 
+    @api.view("/protected", methods=["GET"])
     class APIView_WithHeader(APIView):
         async def get(self,
                      request,
                      api_key: Annotated[str, Header(alias="X-API-Key")],
                      user_agent: Annotated[str, Header(alias="User-Agent")] = "unknown"):
             return {"api_key": api_key, "user_agent": user_agent}
-
-    api.view("/protected", APIView_WithHeader, methods=["GET"])
 
     with TestClient(api) as client:
         # With headers
@@ -173,14 +169,13 @@ def test_header_parameter_extraction(api):
 def test_cookie_parameter_extraction(api):
     """Test extracting parameters from cookies."""
 
+    @api.view("/session", methods=["GET"])
     class SessionView(APIView):
         async def get(self,
                      request,
                      session_id: Annotated[str, Cookie(alias="session")],
                      theme: Annotated[str, Cookie(alias="theme")] = "light"):
             return {"session_id": session_id, "theme": theme}
-
-    api.view("/session", SessionView, methods=["GET"])
 
     with TestClient(api) as client:
         # With cookies
@@ -200,6 +195,7 @@ def test_cookie_parameter_extraction(api):
 def test_mixed_parameter_sources(api):
     """Test mixing parameters from different sources."""
 
+    @api.view("/users/{user_id}/update", methods=["POST"])
     class ComplexView(APIView):
         async def post(self,
                       request,
@@ -216,8 +212,6 @@ def test_mixed_parameter_sources(api):
                     "email": data.email
                 }
             }
-
-    api.view("/users/{user_id}/update", ComplexView, methods=["POST"])
 
     with TestClient(api) as client:
         response = client.post(
@@ -240,6 +234,7 @@ def test_mixed_parameter_sources(api):
 def test_response_model_validation(api):
     """Test that response is validated against response_model."""
 
+    @api.view("/user", methods=["GET"])
     class UserView(APIView):
         async def get(self, request) -> UserSchema:
             # Return dict, should be validated
@@ -248,8 +243,6 @@ def test_response_model_validation(api):
                 "username": "john",
                 "email": "john@example.com"
             }
-
-    api.view("/user", UserView, methods=["GET"])
 
     with TestClient(api) as client:
         response = client.get("/user")
@@ -263,14 +256,13 @@ def test_response_model_validation(api):
 def test_response_list_validation(api):
     """Test that list responses are validated."""
 
+    @api.view("/users", methods=["GET"])
     class UsersView(APIView):
         async def get(self, request) -> list[UserSchema]:
             return [
                 {"id": 1, "username": "john", "email": "john@example.com"},
                 {"id": 2, "username": "jane", "email": "jane@example.com"}
             ]
-
-    api.view("/users", UsersView, methods=["GET"])
 
     with TestClient(api) as client:
         response = client.get("/users")
@@ -299,6 +291,7 @@ def test_jwt_authentication_with_class_view(api):
     user = User.objects.create(username="testuser", email="test@example.com")
     token = create_jwt_for_user(user, secret="test-secret")
 
+    @api.view("/protected", methods=["GET"])
     class ProtectedView(APIView):
         auth = [JWTAuthentication(secret="test-secret")]
         guards = [IsAuthenticated()]
@@ -306,8 +299,6 @@ def test_jwt_authentication_with_class_view(api):
         async def get(self, request):
             auth_context = request.get("auth", {})
             return {"user_id": auth_context.get("user_id")}
-
-    api.view("/protected", ProtectedView, methods=["GET"])
 
     with TestClient(api, use_http_layer=True) as client:
         # Without token - should fail
@@ -326,14 +317,13 @@ def test_jwt_authentication_with_class_view(api):
 def test_api_key_authentication_with_class_view(api):
     """Test API key authentication with class-based views."""
 
+    @api.view("/protected", methods=["GET"])
     class ProtectedView(APIView):
         auth = [APIKeyAuthentication(api_keys=["secret-key-123"])]
         guards = [IsAuthenticated()]
 
         async def get(self, request):
             return {"authenticated": True}
-
-    api.view("/protected", ProtectedView, methods=["GET"])
 
     with TestClient(api, use_http_layer=True) as client:
         # Without API key - should fail
@@ -367,14 +357,13 @@ def test_is_authenticated_guard_with_class_view(api):
     user = User.objects.create(username="testuser")
     token = create_jwt_for_user(user, secret="test-secret")
 
+    @api.view("/protected", methods=["GET"])
     class ProtectedView(APIView):
         auth = [JWTAuthentication(secret="test-secret")]
         guards = [IsAuthenticated()]
 
         async def get(self, request):
             return {"ok": True}
-
-    api.view("/protected", ProtectedView, methods=["GET"])
 
     with TestClient(api, use_http_layer=True) as client:
         # Not authenticated
@@ -402,14 +391,13 @@ def test_is_admin_guard_with_class_view(api):
     admin = User.objects.create(username="admin", is_staff=True, is_superuser=True)
     admin_token = create_jwt_for_user(admin, secret="test-secret")
 
+    @api.view("/admin", methods=["GET"])
     class AdminView(APIView):
         auth = [JWTAuthentication(secret="test-secret")]
         guards = [IsAdminUser()]
 
         async def get(self, request):
             return {"ok": True}
-
-    api.view("/admin", AdminView, methods=["GET"])
 
     with TestClient(api, use_http_layer=True) as client:
         # Regular user - should fail
@@ -454,14 +442,13 @@ def test_has_permission_guard_with_class_view(api):
         extra_claims={"permissions": ["auth.can_delete_user"]}
     )
 
+    @api.view("/users/{user_id}", methods=["DELETE"])
     class ProtectedView(APIView):
         auth = [JWTAuthentication(secret="test-secret")]
         guards = [HasPermission("auth.can_delete_user")]
 
         async def delete(self, request, user_id: int):
             return {"deleted": True}
-
-    api.view("/users/{user_id}", ProtectedView, methods=["DELETE"])
 
     with TestClient(api, use_http_layer=True) as client:
         # User without permission - should fail
@@ -494,6 +481,7 @@ def test_depends_with_class_view(api):
     user = User.objects.create(username="testuser", email="test@example.com")
     token = create_jwt_for_user(user, secret="test-secret")
 
+    @api.view("/profile", methods=["GET"])
     class ProfileView(APIView):
         auth = [JWTAuthentication(secret="test-secret")]
         guards = [IsAuthenticated()]
@@ -505,8 +493,6 @@ def test_depends_with_class_view(api):
                 "username": current_user.username,
                 "email": current_user.email
             }
-
-    api.view("/profile", ProfileView, methods=["GET"])
 
     with TestClient(api, use_http_layer=True) as client:
         response = client.get("/profile", headers={
@@ -525,13 +511,12 @@ def test_dependency_injection(api):
         """Mock database connection dependency."""
         return {"connected": True, "db": "test_db"}
 
+    @api.view("/data", methods=["GET"])
     class DataView(APIView):
         async def get(self,
                      request,
                      db: Annotated[dict, Depends(get_db_connection)]):
             return {"db_status": db}
-
-    api.view("/data", DataView, methods=["GET"])
 
     with TestClient(api) as client:
         response = client.get("/data")
@@ -548,6 +533,7 @@ def test_dependency_injection(api):
 def test_http_exception_handling(api):
     """Test HTTPException handling in class-based views."""
 
+    @api.view("/users/{user_id}", methods=["GET"])
     class UserView(APIView):
         async def get(self, request, user_id: int):
             if user_id == 404:
@@ -555,8 +541,6 @@ def test_http_exception_handling(api):
             if user_id == 403:
                 raise HTTPException(status_code=403, detail="Access denied")
             return {"user_id": user_id}
-
-    api.view("/users/{user_id}", UserView, methods=["GET"])
 
     with TestClient(api) as client:
         # Not found
@@ -577,11 +561,10 @@ def test_http_exception_handling(api):
 def test_unhandled_exception_in_class_view(api):
     """Test that unhandled exceptions return 500."""
 
+    @api.view("/buggy", methods=["GET"])
     class BuggyView(APIView):
         async def get(self, request):
             raise ValueError("Something went wrong!")
-
-    api.view("/buggy", BuggyView, methods=["GET"])
 
     with TestClient(api) as client:
         response = client.get("/buggy")
@@ -596,6 +579,7 @@ def test_unhandled_exception_in_class_view(api):
 def test_streaming_response_with_class_view(api):
     """Test streaming responses with class-based views."""
 
+    @api.view("/stream", methods=["GET"])
     class StreamView(APIView):
         async def get(self, request):
             async def generate():
@@ -606,8 +590,6 @@ def test_streaming_response_with_class_view(api):
                 generate(),
                 media_type="text/event-stream"
             )
-
-    api.view("/stream", StreamView, methods=["GET"])
 
     with TestClient(api) as client:
         response = client.get("/stream")
@@ -626,6 +608,7 @@ def test_viewset_with_all_features(api):
     from django_bolt.auth import JWTAuthentication
     from django_bolt.auth.guards import IsAuthenticated
 
+    @api.view("/articles")
     class ArticleViewSet(ViewSet):
         auth = [JWTAuthentication(secret="test-secret")]
         guards = [IsAuthenticated()]
@@ -646,8 +629,6 @@ def test_viewset_with_all_features(api):
                 "username": data.username,
                 "email": data.email
             }
-
-    api.view("/articles", ArticleViewSet, methods=["GET", "POST"])
 
     with TestClient(api) as client:
         # Without auth - should fail
@@ -678,7 +659,11 @@ def test_model_viewset_integration(api):
                 "api_key": api_key
             }
 
-    api.view("/articles/{pk}", ArticleViewSet, methods=["GET"])
+    # This test needs fixing - viewset should use api.viewset() not api.view()
+    # For now, register with decorator
+    @api.view("/articles/{pk}", methods=["GET"])
+    class ArticleViewSetWrapper(ArticleViewSet):
+        pass
 
     with TestClient(api) as client:
         response = client.get(
@@ -709,7 +694,9 @@ def test_cors_middleware_with_class_view(api):
         async def post(self, request):
             return {"message": "No CORS"}
 
-    api.view("/api/data", APIView_WithCORS, methods=["GET", "POST"])
+    @api.view("/api/data", methods=["GET", "POST"])
+    class APIView_WithCORSRegistered(APIView_WithCORS):
+        pass
 
     with TestClient(api) as client:
         # GET should have CORS metadata attached
@@ -735,7 +722,9 @@ def test_rate_limit_middleware_with_class_view(api):
         async def post(self, request):
             return {"message": "no rate limit"}
 
-    api.view("/api/limited", APIView_WithRateLimit, methods=["GET", "POST"])
+    @api.view("/api/limited", methods=["GET", "POST"])
+    class APIView_WithRateLimitRegistered(APIView_WithRateLimit):
+        pass
 
     with TestClient(api) as client:
         # Should work (rate limiting metadata attached)
@@ -760,7 +749,9 @@ def test_skip_middleware_with_class_view(api):
         async def post(self, request):
             return {"message": "normal middleware"}
 
-    api.view("/api/skip", APIView_SkipMiddleware, methods=["GET", "POST"])
+    @api.view("/api/skip", methods=["GET", "POST"])
+    class APIView_SkipMiddlewareRegistered(APIView_SkipMiddleware):
+        pass
 
     with TestClient(api) as client:
         response = client.get("/api/skip")
@@ -782,7 +773,9 @@ def test_multiple_middleware_decorators_with_class_view(api):
         async def get(self, request):
             return {"message": "multi middleware"}
 
-    api.view("/api/multi", APIView_MultiMiddleware, methods=["GET"])
+    @api.view("/api/multi", methods=["GET"])
+    class APIView_MultiMiddlewareRegistered(APIView_MultiMiddleware):
+        pass
 
     with TestClient(api) as client:
         response = client.get("/api/multi")
@@ -827,7 +820,9 @@ def test_custom_action_decorator_in_viewset(api):
             return {"query": query, "results": ["article1", "article2"]}
 
     # Register the ViewSet - this should register both standard methods AND custom actions
-    api.viewset("/articles", ArticleViewSet)
+    @api.viewset("/articles")
+    class ArticleViewSetRegistered(ArticleViewSet):
+        pass
 
     with TestClient(api) as client:
         # Standard CRUD endpoints
@@ -898,7 +893,9 @@ def test_viewset_with_multiple_custom_actions(api):
             return {"id": user_id, "permissions": ["admin"], "updated": True}
 
     # Register the ViewSet - automatically registers both standard method AND all custom actions
-    api.viewset("/users", UserViewSet)
+    @api.viewset("/users")
+    class UserViewSetRegistered(UserViewSet):
+        pass
 
     with TestClient(api) as client:
         # Standard retrieve
@@ -991,7 +988,9 @@ def test_custom_action_with_auth_and_guards(api):
                 "locked_by": auth_context.get("user_id", "unknown")
             }
 
-    api.viewset("/documents", DocumentViewSet)
+    @api.viewset("/documents")
+    class DocumentViewSetRegistered(DocumentViewSet):
+        pass
 
     with TestClient(api) as client:
         # Standard retrieve without auth - should fail
@@ -1082,7 +1081,9 @@ def test_nested_resource_actions_with_class_views(api):
 
     # Register ViewSet with nested path pattern
     # Note: ViewSet lookup_field will be 'comment_id', and post_id is an additional path param
-    api.viewset("/posts/{post_id}/comments", CommentViewSet, lookup_field="comment_id")
+    @api.viewset("/posts/{post_id}/comments", lookup_field="comment_id")
+    class CommentViewSetRegistered(CommentViewSet):
+        pass
 
     with TestClient(api) as client:
         # Standard nested resource retrieve

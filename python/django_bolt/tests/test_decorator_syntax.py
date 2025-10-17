@@ -157,33 +157,3 @@ def test_viewset_decorator_with_custom_actions(api):
     assert len(data) == 2  # Both should be published now
 
 
-def test_backward_compatibility_function_call(api):
-    """Test that old function call syntax still works."""
-
-    class HealthView(APIView):
-        async def get(self, request):
-            return {"status": "healthy"}
-
-    # Old style - function call
-    api.view("/health", HealthView)
-
-    client = TestClient(api)
-    response = client.get("/health")
-    assert response.status_code == 200
-    assert response.json()["status"] == "healthy"
-
-
-@pytest.mark.django_db(transaction=True)
-def test_backward_compatibility_viewset_function_call(api):
-    """Test that old viewset function call syntax still works."""
-
-    class ArticleViewSet(ViewSet):
-        async def list(self, request):
-            return []
-
-    # Old style - function call
-    api.viewset("/articles", ArticleViewSet)
-
-    client = TestClient(api)
-    response = client.get("/articles")
-    assert response.status_code == 200

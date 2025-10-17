@@ -33,11 +33,16 @@ Pagination helpers
 ✅ Reloading is slow (fixed)
 
 ✅ OpenAPI error responses - DONE (422 validation errors documented)
+
 - Automatically includes 422 validation error responses for endpoints with request bodies
 - Includes detailed error schema with field-level validation messages
 - Standard HTTP errors (400, 401, 403, 500) are NOT documented (well-understood)
 - Configurable via `include_error_responses` in OpenAPIConfig (default: True)
 
+⚠️ Request type maybe self.request
+
+⚠️ Docs
+⚠️ Openapi tags summary detail
 ⚠️ content negotiation
 
 ## Known Limitations (BOTH Function & Class-Based)

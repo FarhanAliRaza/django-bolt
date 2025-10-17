@@ -1,0 +1,257 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Run tests across Python versions
+  test:
+    name: Test Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: |
+          pip install -U pip uv
+          uv pip install --system -e ".[dev]"
+
+      - name: Build extension
+        run: uv run maturin develop --release
+
+      - name: Run tests
+        run: uv run --with pytest pytest python/django_bolt/tests -s -vv
+
+  # Build wheels for Linux
+  linux:
+    name: Build wheels on Linux ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
+          sccache: 'true'
+          manylinux: auto
+          before-script-linux: |
+            # Install zig for cross-compilation if needed
+            pip install -U ziglang
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}
+          path: dist
+
+  # Build wheels for Linux (musllinux)
+  linux-musl:
+    name: Build wheels on Linux (musl) ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
+          sccache: 'true'
+          manylinux: musllinux_1_2
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-musllinux-${{ matrix.target }}
+          path: dist
+
+  # Build wheels for macOS
+  macos:
+    name: Build wheels on macOS ${{ matrix.target }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
+          sccache: 'true'
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.target }}
+          path: dist
+
+  # Build universal2 wheel for macOS
+  macos-universal:
+    name: Build universal2 wheel for macOS
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
+          target: universal2-apple-darwin
+          sccache: 'true'
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-universal
+          path: dist
+
+  # Build wheels for Windows
+  windows:
+    name: Build wheels on Windows ${{ matrix.target }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x64, aarch64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
+          sccache: 'true'
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.target }}
+          path: dist
+
+  # Build source distribution
+  sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist
+
+  # Validate all wheels
+  validate:
+    name: Validate wheels
+    runs-on: ubuntu-latest
+    needs: [linux, linux-musl, macos, macos-universal, windows, sdist]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: Install twine
+        run: pip install twine
+
+      - name: Check wheels with twine
+        run: twine check --strict dist/*
+
+      - name: List all wheels
+        run: ls -lh dist/
+
+  # Release to PyPI
+  release:
+    name: Release to PyPI
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [test, validate]
+    environment:
+      name: pypi
+      url: https://pypi.org/project/django-bolt/
+    permissions:
+      id-token: write  # Required for trusted publishing
+      contents: write  # Required for GitHub release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh dist/
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Publish to PyPI
+        run: uv publish --trusted-publishing always
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}

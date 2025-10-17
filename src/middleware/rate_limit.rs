@@ -12,9 +12,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 type Limiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
-// Store rate limiters per handler_id
-static RATE_LIMITERS: Lazy<DashMap<usize, Arc<Limiter>>> = Lazy::new(DashMap::new);
-
 // Store per-key limiters (IP-based)
 static IP_LIMITERS: Lazy<DashMap<(usize, String), Arc<Limiter>>> = Lazy::new(DashMap::new);
 
@@ -51,7 +48,7 @@ pub fn check_rate_limit(
         .unwrap_or_else(|| "ip".to_string());
 
     // Determine the rate limit key
-    let mut key = match key_type.as_str() {
+    let key = match key_type.as_str() {
         "ip" => {
             // Try to get client IP from headers (X-Forwarded-For, X-Real-IP, etc.)
             headers.get("x-forwarded-for")

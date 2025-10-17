@@ -15,6 +15,7 @@ pub async fn process_middleware(
     peer_addr: Option<&str>,
     handler_id: usize,
     metadata: &Py<PyAny>,
+    global_cors_origins: Option<&[String]>,
 ) -> Option<HttpResponse> {
     // Check for OPTIONS preflight
     if method == "OPTIONS" {
@@ -27,7 +28,7 @@ pub async fn process_middleware(
                             if let Some(mw_type) = mw.get("type") {
                                 if let Ok(type_str) = mw_type.extract::<String>(py) {
                                     if type_str == "cors" {
-                                        return Some(cors::handle_preflight(&mw, py));
+                                        return Some(cors::handle_preflight(&mw, global_cors_origins, py));
                                     }
                                 }
                             }
@@ -70,6 +71,7 @@ pub fn add_cors_headers(
     response: &mut HttpResponse,
     origin: Option<&str>,
     metadata: &Py<PyAny>,
+    global_cors_origins: Option<&[String]>,
 ) {
     Python::attach(|py| {
         if let Ok(meta) = metadata.extract::<HashMap<String, Py<PyAny>>>(py) {
@@ -79,7 +81,7 @@ pub fn add_cors_headers(
                         if let Some(mw_type) = mw.get("type") {
                             if let Ok(type_str) = mw_type.extract::<String>(py) {
                                 if type_str == "cors" {
-                                    cors::add_cors_headers_to_response(response, origin, &mw, py);
+                                    cors::add_cors_headers_to_response(response, origin, &mw, global_cors_origins, py);
                                     break;
                                 }
                             }

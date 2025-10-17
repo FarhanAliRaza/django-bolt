@@ -9,7 +9,7 @@ name = "django_bolt"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.26", features = ["extension-module", "abi3-py312"] }
+pyo3 = { version = "0.26", features = ["extension-module", "abi3-py310"] }
 pyo3-async-runtimes = { version = "0.26", features = ["tokio-runtime"] }
 actix-web = { version = "4", features = ["compress-gzip", "compress-brotli", "compress-zstd"] }
 actix-http = "3"

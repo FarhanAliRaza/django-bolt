@@ -135,6 +135,7 @@ class TestClient(httpx.Client):
         base_url: str = "http://testserver.local",
         raise_server_exceptions: bool = True,
         use_http_layer: bool = False,
+        cors_allowed_origins: list[str] | None = None,
         **kwargs: Any,
     ):
         """Initialize test client.
@@ -145,12 +146,13 @@ class TestClient(httpx.Client):
             raise_server_exceptions: If True, raise exceptions from handlers
             use_http_layer: If True, route through Actix HTTP layer (enables testing
                            CORS, rate limiting, compression). Default False for fast tests.
+            cors_allowed_origins: Global CORS allowed origins for testing
             **kwargs: Additional arguments passed to httpx.Client
         """
         from django_bolt import _core
 
         # Create test app instance
-        self.app_id = _core.create_test_app(api._dispatch, False)
+        self.app_id = _core.create_test_app(api._dispatch, False, cors_allowed_origins)
 
         # Register routes
         rust_routes = [
@@ -204,6 +206,7 @@ class AsyncTestClient(httpx.AsyncClient):
         base_url: str = "http://testserver.local",
         raise_server_exceptions: bool = True,
         use_http_layer: bool = False,
+        cors_allowed_origins: list[str] | None = None,
         **kwargs: Any,
     ):
         """Initialize async test client.
@@ -214,12 +217,13 @@ class AsyncTestClient(httpx.AsyncClient):
             raise_server_exceptions: If True, raise exceptions from handlers
             use_http_layer: If True, route through Actix HTTP layer (enables testing
                            CORS, rate limiting, compression). Default False for fast tests.
+            cors_allowed_origins: Global CORS allowed origins for testing
             **kwargs: Additional arguments passed to httpx.AsyncClient
         """
         from django_bolt import _core
 
         # Create test app instance
-        self.app_id = _core.create_test_app(api._dispatch, False)
+        self.app_id = _core.create_test_app(api._dispatch, False, cors_allowed_origins)
 
         # Register routes
         rust_routes = [

@@ -1,9 +1,9 @@
 use actix_web::{HttpResponse, http::StatusCode};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::PyDict;
 
 /// Extract error information from a Python HTTPException
-pub fn extract_http_exception(_py: Python, exc: &Bound<PyAny>) -> Option<(u16, String, Vec<(String, String)>, Option<PyObject>)> {
+pub fn extract_http_exception(_py: Python, exc: &Bound<PyAny>) -> Option<(u16, String, Vec<(String, String)>, Option<Py<PyAny>>)> {
     // Try to extract HTTPException fields
     let status_code: u16 = exc.getattr("status_code")
         .ok()
@@ -32,7 +32,7 @@ pub fn extract_http_exception(_py: Python, exc: &Bound<PyAny>) -> Option<(u16, S
         })
         .unwrap_or_else(|| Vec::new());
 
-    let extra: Option<PyObject> = exc.getattr("extra")
+    let extra: Option<Py<PyAny>> = exc.getattr("extra")
         .ok()
         .and_then(|e| if e.is_none() { None } else { Some(e.unbind()) });
 
@@ -75,7 +75,7 @@ pub fn build_error_response(
     status_code: u16,
     detail: String,
     headers: Vec<(String, String)>,
-    extra: Option<PyObject>,
+    extra: Option<Py<PyAny>>,
     _debug: bool,
 ) -> HttpResponse {
     let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);

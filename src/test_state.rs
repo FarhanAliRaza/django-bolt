@@ -5,9 +5,8 @@ use parking_lot::RwLock;
 use pyo3::ffi::c_str;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use pyo3_async_runtimes::TaskLocals;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 
 use crate::metadata::RouteMetadata;
 use crate::middleware::auth::{authenticate, populate_auth_context};
@@ -75,38 +74,31 @@ pub struct TestApp {
     pub middleware_metadata: AHashMap<usize, Py<PyAny>>, // raw Python metadata for compatibility
     pub route_metadata: AHashMap<usize, RouteMetadata>,  // parsed Rust metadata
     pub dispatch: Py<PyAny>,
-    pub debug: bool,
     pub event_loop: Option<Py<PyAny>>, // store loop; create TaskLocals per call
+    pub cors_allowed_origins: Vec<String>, // global CORS origins for testing
 }
 
 static TEST_REGISTRY: OnceCell<DashMap<u64, Arc<RwLock<TestApp>>>> = OnceCell::new();
 static TEST_ID_GEN: AtomicU64 = AtomicU64::new(1);
-static TOKIO_INIT: Once = Once::new();
-
-fn ensure_tokio_runtime() {
-    TOKIO_INIT.call_once(|| {
-        let builder = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to build tokio runtime");
-        // Note: pyo3_async_runtimes::tokio::init expects a Builder, but we need a Runtime
-        // For testing, we'll create runtime on-demand per request instead
-    });
-}
 
 fn registry() -> &'static DashMap<u64, Arc<RwLock<TestApp>>> {
     TEST_REGISTRY.get_or_init(|| DashMap::new())
 }
 
 #[pyfunction]
-pub fn create_test_app(py: Python<'_>, dispatch: Py<PyAny>, debug: bool) -> PyResult<u64> {
+pub fn create_test_app(
+    py: Python<'_>,
+    dispatch: Py<PyAny>,
+    _debug: bool,
+    cors_allowed_origins: Option<Vec<String>>,
+) -> PyResult<u64> {
     let app = TestApp {
         router: Router::new(),
         middleware_metadata: AHashMap::new(),
         route_metadata: AHashMap::new(),
         dispatch: dispatch.clone_ref(py),
-        debug,
         event_loop: None,
+        cors_allowed_origins: cors_allowed_origins.unwrap_or_default(),
     };
     let id = TEST_ID_GEN.fetch_add(1, Ordering::Relaxed);
     registry().insert(id, Arc::new(RwLock::new(app)));
@@ -190,7 +182,6 @@ pub fn ensure_test_runtime(py: Python<'_>, app_id: u64) -> PyResult<()> {
         let ev = asyncio.call_method0("new_event_loop")?;
         app.event_loop = Some(ev.unbind().into());
     }
-    // Note: Tokio runtime is created on-demand per request, not stored globally
     Ok(())
 }
 
@@ -515,7 +506,7 @@ pub fn handle_test_request_for(
         if has_aiter {
             // For async generators, we need to consume them with the event loop
             // Create a list from the async generator
-            let asyncio = py.import("asyncio")?;
+            let _asyncio = py.import("asyncio")?;
             let list_from_agen = |agen: &Bound<PyAny>, loop_obj: &Bound<PyAny>| -> PyResult<Vec<Vec<u8>>> {
                 let loop_ref = loop_obj.clone();
 
@@ -578,7 +569,7 @@ async def consume_agen(agen):
 
 #[pyfunction]
 pub fn handle_actix_http_request(
-    py: Python<'_>,
+    _py: Python<'_>,
     app_id: u64,
     method: String,
     path: String,
@@ -631,12 +622,15 @@ pub fn handle_actix_http_request(
                     && request_origin.is_some()
                     && req.headers().contains_key("access-control-request-method");
 
-                // Get middleware config from route metadata
-                let (cors_config, rate_limit_config, handler_id_opt, should_skip_cors) = Python::with_gil(|py| -> (Option<std::collections::HashMap<String, Py<PyAny>>>, Option<std::collections::HashMap<String, Py<PyAny>>>, Option<usize>, bool) {
+                // Get middleware config from route metadata and global CORS origins
+                let (cors_config, rate_limit_config, handler_id_opt, should_skip_cors, global_cors_origins) = Python::attach(|py| -> (Option<std::collections::HashMap<String, Py<PyAny>>>, Option<std::collections::HashMap<String, Py<PyAny>>>, Option<usize>, bool, Vec<String>) {
                     let Some(entry) = registry().get(&app_id) else {
-                        return (None, None, None, false);
+                        return (None, None, None, false, vec![]);
                     };
                     let app = entry.read();
+
+                    // Capture global CORS origins
+                    let global_origins = app.cors_allowed_origins.clone();
 
                     // For preflight, we need to check the actual route method, not OPTIONS
                     let lookup_method = if is_preflight {
@@ -684,18 +678,23 @@ pub fn handle_actix_http_request(
                                     _ => {}
                                 }
                             }
-                            return (cors_cfg, rate_cfg, Some(handler_id), skip_cors);
+                            return (cors_cfg, rate_cfg, Some(handler_id), skip_cors, global_origins);
                         }
                     }
-                    (None, None, None, false)
+                    (None, None, None, false, global_origins)
                 });
 
                 // Handle CORS preflight
                 if is_preflight && !should_skip_cors {
                     if let Some(config) = cors_config {
-                        return Python::with_gil(|py| {
+                        return Python::attach(|py| {
                             use crate::middleware::cors::handle_preflight;
-                            let response = handle_preflight(&config, py);
+                            let origins_slice = if global_cors_origins.is_empty() {
+                                None
+                            } else {
+                                Some(global_cors_origins.as_slice())
+                            };
+                            let response = handle_preflight(&config, origins_slice, py);
                             Ok::<_, actix_web::Error>(response)
                         });
                     }
@@ -703,7 +702,7 @@ pub fn handle_actix_http_request(
 
                 // Check rate limiting
                 if let (Some(handler_id), Some(rate_cfg)) = (handler_id_opt, rate_limit_config.as_ref()) {
-                    let rate_limit_response = Python::with_gil(|py| {
+                    let rate_limit_response = Python::attach(|py| {
                         use crate::middleware::rate_limit::check_rate_limit;
                         // Convert headers to AHashMap
                         let header_map: ahash::AHashMap<String, String> = headers.iter()
@@ -718,7 +717,7 @@ pub fn handle_actix_http_request(
                 }
 
                 // Call handle_test_request_for which does all the routing/auth/guards
-                let result = Python::with_gil(|py| {
+                let result = Python::attach(|py| {
                     handle_test_request_for(
                         py,
                         app_id,
@@ -745,12 +744,18 @@ pub fn handle_actix_http_request(
                         // Add CORS headers to response if not skipped
                         if !should_skip_cors {
                             if let Some(config) = cors_config {
-                                Python::with_gil(|py| {
+                                Python::attach(|py| {
                                     use crate::middleware::cors::add_cors_headers_to_response;
+                                    let origins_slice = if global_cors_origins.is_empty() {
+                                        None
+                                    } else {
+                                        Some(global_cors_origins.as_slice())
+                                    };
                                     add_cors_headers_to_response(
                                         &mut http_response,
                                         request_origin.as_deref(),
                                         &config,
+                                        origins_slice,
                                         py,
                                     );
                                 });

@@ -8,20 +8,37 @@ use actix_web::HttpResponse;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-/// Get allowed origins from route config only (no per-request Django settings lookup)
-/// The Python middleware compiler should have already merged Django settings into route config
-fn get_allowed_origins(config: &HashMap<String, Py<PyAny>>, py: Python) -> Vec<String> {
-    config
+/// Get allowed origins from route config, falling back to global settings
+fn get_allowed_origins(
+    config: &HashMap<String, Py<PyAny>>,
+    global_origins: Option<&[String]>,
+    py: Python
+) -> Vec<String> {
+    // First try route-specific config
+    if let Some(origins) = config
         .get("origins")
         .and_then(|o| o.extract::<Vec<String>>(py).ok())
+    {
+        if !origins.is_empty() {
+            return origins;
+        }
+    }
+
+    // Fall back to global Django settings
+    global_origins
+        .map(|o| o.to_vec())
         .unwrap_or_else(|| vec![])
 }
 
-pub fn handle_preflight(config: &HashMap<String, Py<PyAny>>, py: Python) -> HttpResponse {
+pub fn handle_preflight(
+    config: &HashMap<String, Py<PyAny>>,
+    global_origins: Option<&[String]>,
+    py: Python
+) -> HttpResponse {
     let mut builder = HttpResponse::build(StatusCode::NO_CONTENT);
 
-    // Get allowed origins - try Django settings first, then config
-    let origins = get_allowed_origins(config, py);
+    // Get allowed origins - try route config first, then fall back to global
+    let origins = get_allowed_origins(config, global_origins, py);
 
     // SECURITY: If no origins configured, reject
     if origins.is_empty() {
@@ -93,10 +110,11 @@ pub fn add_cors_headers_to_response(
     response: &mut HttpResponse,
     request_origin: Option<&str>,
     config: &HashMap<String, Py<PyAny>>,
+    global_origins: Option<&[String]>,
     py: Python,
 ) {
-    // Get allowed origins - try Django settings first, then config
-    let origins = get_allowed_origins(config, py);
+    // Get allowed origins - try route config first, then fall back to global
+    let origins = get_allowed_origins(config, global_origins, py);
 
     // SECURITY: If no origins configured, don't add CORS headers
     if origins.is_empty() {

@@ -6,7 +6,7 @@ use pyo3::types::PyDict;
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
-use futures_util::stream::{self, StreamExt};
+use futures_util::stream;
 use bytes::Bytes;
 
 use crate::direct_stream;
@@ -126,6 +126,7 @@ pub async fn handle_request(
             peer_addr.as_deref(),
             handler_id,
             meta,
+            Some(&state.cors_allowed_origins),
         )
         .await
         {
@@ -383,7 +384,7 @@ pub async fn handle_request(
                     // Add CORS headers if middleware is configured
                     if let Some(ref meta) = middleware_meta {
                         let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-                        middleware::add_cors_headers(&mut response, origin, meta);
+                        middleware::add_cors_headers(&mut response, origin, meta, Some(&state.cors_allowed_origins));
                     }
 
                     return response;
@@ -580,7 +581,7 @@ pub async fn handle_request(
                         }
                     }
                 } else {
-                    return Python::with_gil(|py| {
+                    return Python::attach(|py| {
                         error::build_error_response(
                             py,
                             500,

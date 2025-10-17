@@ -307,10 +307,10 @@ class Command(BaseCommand):
                 self.stdout.write(f"[django-bolt] Registered middleware for {len(middleware_data)} handlers")
         
         if process_id is not None:
-            self.stdout.write(f"[django-bolt] Process {process_id}: Starting server on http://{options['host']}:{options['port']}")
+            self.stdout.write(self.style.SUCCESS(f"[django-bolt] Process {process_id}: Starting server on http://{options['host']}:{options['port']}"))
             self.stdout.write(f"[django-bolt] Process {process_id}: Workers: {options['workers']}")
         else:
-            self.stdout.write(f"[django-bolt] Starting server on http://{options['host']}:{options['port']}")
+            self.stdout.write(self.style.SUCCESS(f"[django-bolt] Starting server on http://{options['host']}:{options['port']}"))
             self.stdout.write(f"[django-bolt] Workers: {options['workers']}, Processes: {options['processes']}")
             self.stdout.write(self.style.SUCCESS(f"[django-bolt] OpenAPI docs enabled at http://{options['host']}:{options['port']}/docs/"))
         # Set environment variable for Rust to read worker count

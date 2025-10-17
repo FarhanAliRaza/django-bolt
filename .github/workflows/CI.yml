@@ -45,14 +45,10 @@ jobs:
       - name: Run tests
         run: uv run --with pytest pytest python/django_bolt/tests -s -vv
 
-  # Build wheels for Linux
+  # Build wheels for Linux x86_64 (covers most Linux users including Arch)
   linux:
-    name: Build wheels on Linux ${{ matrix.target }}
+    name: Build wheels on Linux
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [x86_64, aarch64]
 
     steps:
       - uses: actions/checkout@v4
@@ -60,74 +56,20 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.target }}
+          target: x86_64
           args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
           sccache: 'true'
           manylinux: auto
-          before-script-linux: |
-            # Install zig for cross-compilation if needed
-            pip install -U ziglang
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-${{ matrix.target }}
-          path: dist
-
-  # Build wheels for Linux (musllinux)
-  linux-musl:
-    name: Build wheels on Linux (musl) ${{ matrix.target }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [x86_64, aarch64]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
-          sccache: 'true'
-          manylinux: musllinux_1_2
-
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-musllinux-${{ matrix.target }}
+          name: wheels-linux-x86_64
           path: dist
 
   # Build wheels for macOS
   macos:
-    name: Build wheels on macOS ${{ matrix.target }}
-    runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [x86_64, aarch64]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
-          sccache: 'true'
-
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-macos-${{ matrix.target }}
-          path: dist
-
-  # Build universal2 wheel for macOS
-  macos-universal:
-    name: Build universal2 wheel for macOS
+    name: Build wheels on macOS
     runs-on: macos-latest
 
     steps:
@@ -136,24 +78,20 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
           target: universal2-apple-darwin
+          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
           sccache: 'true'
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos-universal
+          name: wheels-macos-universal2
           path: dist
 
   # Build wheels for Windows
   windows:
-    name: Build wheels on Windows ${{ matrix.target }}
+    name: Build wheels on Windows
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [x64, aarch64]
 
     steps:
       - uses: actions/checkout@v4
@@ -161,14 +99,14 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.target }}
+          target: x64
           args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
           sccache: 'true'
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-windows-${{ matrix.target }}
+          name: wheels-windows-x64
           path: dist
 
   # Build source distribution
@@ -195,7 +133,7 @@ jobs:
   validate:
     name: Validate wheels
     runs-on: ubuntu-latest
-    needs: [linux, linux-musl, macos, macos-universal, windows, sdist]
+    needs: [linux, macos, windows, sdist]
 
     steps:
       - uses: actions/checkout@v4

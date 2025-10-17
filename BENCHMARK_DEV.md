@@ -125,3 +125,72 @@ Requests per second:    40408.94 [#/sec] (mean)
 Time per request:       2.475 [ms] (mean)
 Time per request:       0.025 [ms] (mean, across all concurrent requests)
 ### CBV Items PUT (Update) (/cbv-items/1)
+Failed requests:        0
+Requests per second:    39077.15 [#/sec] (mean)
+Time per request:       2.559 [ms] (mean)
+Time per request:       0.026 [ms] (mean, across all concurrent requests)
+
+## CBV Additional Benchmarks
+### CBV Bench Parse (POST /cbv-bench-parse)
+Failed requests:        0
+Requests per second:    39930.20 [#/sec] (mean)
+Time per request:       2.504 [ms] (mean)
+Time per request:       0.025 [ms] (mean, across all concurrent requests)
+### CBV Response Types (/cbv-response)
+Failed requests:        0
+Requests per second:    43763.68 [#/sec] (mean)
+Time per request:       2.285 [ms] (mean)
+Time per request:       0.023 [ms] (mean, across all concurrent requests)
+### CBV Streaming Plain Text (/cbv-stream)
+  Total:	0.4161 secs
+  Slowest:	0.0167 secs
+  Fastest:	0.0002 secs
+  Average:	0.0040 secs
+  Requests/sec:	24033.7428
+Status code distribution:
+### CBV Server-Sent Events (/cbv-sse)
+  Total:	0.3840 secs
+  Slowest:	0.0165 secs
+  Fastest:	0.0002 secs
+  Average:	0.0037 secs
+  Requests/sec:	26042.4787
+Status code distribution:
+### CBV Chat Completions (stream) (/cbv-chat-completions)
+  Total:	1.5248 secs
+  Slowest:	0.0342 secs
+  Fastest:	0.0005 secs
+  Average:	0.0148 secs
+  Requests/sec:	6558.3997
+Status code distribution:
+
+## ORM Performance with CBV
+### Users CBV Mini10 (List) (/users/cbv-mini10)
+Failed requests:        0
+Requests per second:    8269.70 [#/sec] (mean)
+Time per request:       12.092 [ms] (mean)
+Time per request:       0.121 [ms] (mean, across all concurrent requests)
+
+
+## Form and File Upload Performance
+### Form Data (POST /form)
+Failed requests:        0
+Requests per second:    34718.36 [#/sec] (mean)
+Time per request:       2.880 [ms] (mean)
+Time per request:       0.029 [ms] (mean, across all concurrent requests)
+### File Upload (POST /upload)
+Failed requests:        0
+Requests per second:    7285.73 [#/sec] (mean)
+Time per request:       13.725 [ms] (mean)
+Time per request:       0.137 [ms] (mean, across all concurrent requests)
+### Mixed Form with Files (POST /mixed-form)
+Failed requests:        0
+Requests per second:    7305.53 [#/sec] (mean)
+Time per request:       13.688 [ms] (mean)
+Time per request:       0.137 [ms] (mean, across all concurrent requests)
+
+## Django Ninja-style Benchmarks
+### JSON Parse/Validate (POST /bench/parse)
+Failed requests:        0
+Requests per second:    40937.97 [#/sec] (mean)
+Time per request:       2.443 [ms] (mean)
+Time per request:       0.024 [ms] (mean, across all concurrent requests)

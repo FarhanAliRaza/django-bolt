@@ -121,6 +121,35 @@ class OpenAPIConfig:
         ```
     """
 
+    include_error_responses: bool = field(default=True)
+    """Include 422 validation error responses in OpenAPI schema.
+
+    When enabled, the schema will automatically document 422 Unprocessable Entity
+    responses for endpoints that accept request bodies (JSON, form data, file uploads).
+
+    The 422 response includes detailed validation error information with field-level
+    error messages, making it easier for API consumers to understand what went wrong.
+
+    Set to False to only document successful responses.
+
+    Example:
+        ```python
+        # Include 422 validation errors (default)
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            include_error_responses=True
+        )
+
+        # Only show successful responses
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            include_error_responses=False
+        )
+        ```
+    """
+
     def __post_init__(self) -> None:
         """Initialize default render plugin if none provided."""
         if not self.render_plugins:

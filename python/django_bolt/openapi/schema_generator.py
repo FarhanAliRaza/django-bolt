@@ -128,8 +128,8 @@ class SchemaGenerator:
         # Extract request body
         request_body = self._extract_request_body(meta)
 
-        # Extract responses
-        responses = self._extract_responses(meta)
+        # Extract responses (pass handler_id for auth error responses)
+        responses = self._extract_responses(meta, handler_id)
 
         # Extract security requirements
         security = self._extract_security(handler_id)
@@ -273,11 +273,14 @@ class SchemaGenerator:
             required=True,
         )
 
-    def _extract_responses(self, meta: Dict[str, Any]) -> Dict[str, OpenAPIResponse]:
+    def _extract_responses(
+        self, meta: Dict[str, Any], handler_id: int
+    ) -> Dict[str, OpenAPIResponse]:
         """Extract OpenAPI responses from handler metadata.
 
         Args:
             meta: Handler metadata.
+            handler_id: Handler ID for checking authentication requirements.
 
         Returns:
             Dictionary mapping status codes to Response objects.
@@ -311,8 +314,6 @@ class SchemaGenerator:
 
         # Add common error responses if enabled in config
         if self.config.include_error_responses:
-            error_schema = self._get_error_response_schema()
-
             # Check if request body is present (for 422 validation errors)
             has_request_body = meta.get("body_struct_param") or any(
                 f.get("source") in ("body", "form", "file")
@@ -330,23 +331,56 @@ class SchemaGenerator:
                     },
                 )
 
-            # 400 Bad Request - malformed request
-            responses["400"] = OpenAPIResponse(
-                description="Bad Request - Invalid request data",
-                content={
-                    "application/json": OpenAPIMediaType(schema=error_schema),
-                },
-            )
-
-            # 500 Internal Server Error - server errors
-            responses["500"] = OpenAPIResponse(
-                description="Internal Server Error - Unexpected server error",
-                content={
-                    "application/json": OpenAPIMediaType(schema=error_schema),
-                },
-            )
-
         return responses
+
+    def _get_validation_error_schema(self) -> Schema:
+        """Get schema for 422 validation error responses.
+
+        FastAPI-compatible format: {"detail": [array of validation errors]}
+
+        Returns:
+            Schema for validation errors matching FastAPI format.
+        """
+        return Schema(
+            type="object",
+            properties={
+                "detail": Schema(
+                    type="array",
+                    description="List of validation errors",
+                    items=Schema(
+                        type="object",
+                        properties={
+                            "type": Schema(
+                                type="string",
+                                description="Error type",
+                                example="validation_error",
+                            ),
+                            "loc": Schema(
+                                type="array",
+                                description="Location of the error (field path)",
+                                items=Schema(
+                                    one_of=[
+                                        Schema(type="string"),
+                                        Schema(type="integer"),
+                                    ]
+                                ),
+                                example=["body", "is_active"],
+                            ),
+                            "msg": Schema(
+                                type="string",
+                                description="Error message",
+                                example="Expected `bool`, got `int`",
+                            ),
+                            "input": Schema(
+                                description="The input value that caused the error (optional)",
+                            ),
+                        },
+                        required=["type", "loc", "msg"],
+                    ),
+                ),
+            },
+            required=["detail"],
+        )
 
     def _extract_security(self, handler_id: int) -> Optional[List[SecurityReq]]:
         """Extract security requirements from handler middleware.

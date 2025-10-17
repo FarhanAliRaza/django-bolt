@@ -32,7 +32,11 @@ Pagination helpers
 
 ✅ Reloading is slow (fixed)
 
-⚠️ openai only show successfull http reponse
+✅ OpenAPI error responses - DONE (422 validation errors documented)
+- Automatically includes 422 validation error responses for endpoints with request bodies
+- Includes detailed error schema with field-level validation messages
+- Standard HTTP errors (400, 401, 403, 500) are NOT documented (well-understood)
+- Configurable via `include_error_responses` in OpenAPIConfig (default: True)
 
 ⚠️ content negotiation
 

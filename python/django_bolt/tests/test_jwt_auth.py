@@ -176,14 +176,14 @@ def test_django_user_dependency_injection():
     # Verify handler metadata
     assert handler_fn in api._handler_meta
     meta = api._handler_meta[handler_fn]
-    assert "params" in meta
+    assert "fields" in meta
 
     # Check that the dependency parameter was detected
-    params = meta["params"]
-    user_param = next((p for p in params if p["name"] == "user"), None)
-    assert user_param is not None
-    assert user_param["source"] == "dependency"
-    assert user_param["dependency"] is not None
+    fields = meta["fields"]
+    user_field = next((f for f in fields if f.name == "user"), None)
+    assert user_field is not None
+    assert user_field.source == "dependency"
+    assert user_field.dependency is not None
 
     print("✓ Django User dependency injection metadata correct")
 

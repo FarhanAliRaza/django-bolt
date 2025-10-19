@@ -828,7 +828,7 @@ class BoltAPI:
         """Handle generic exception using error_handlers module."""
         from . import error_handlers
         # Use the error handler which respects Django DEBUG setting
-        return error_handlers.handle_exception(e, debug=False, request=request)  # debug will be checked dynamically
+        return error_handlers.handle_exception(e, debug=None, request=request)  # debug will be checked dynamically
 
     async def _dispatch(self, handler: Callable, request: Dict[str, Any], handler_id: int = None) -> Response:
         """Async dispatch that calls the handler and returns response tuple.

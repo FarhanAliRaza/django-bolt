@@ -18,6 +18,27 @@ mod testing;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+/// Send response from Python event loop worker back to waiting Rust handler
+/// Called by Python to complete a request
+#[pyfunction]
+fn send_response(
+    request_id: u64,
+    status_code: u16,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+) -> PyResult<()> {
+    use crate::state::RESPONSE_CHANNELS;
+
+    if let Some(channels) = RESPONSE_CHANNELS.get() {
+        if let Some(tx) = channels.lock().unwrap().remove(&request_id) {
+            // Send response to waiting handler
+            let _ = tx.send((status_code, headers, body));
+        }
+    }
+
+    Ok(())
+}
+
 #[pymodule]
 fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     use crate::server::{register_middleware_metadata, register_routes, start_server_async};
@@ -30,6 +51,7 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(register_routes, m)?)?;
     m.add_function(wrap_pyfunction!(register_middleware_metadata, m)?)?;
     m.add_function(wrap_pyfunction!(start_server_async, m)?)?;
+    m.add_function(wrap_pyfunction!(send_response, m)?)?; // Phase 3: Python event loop
     m.add_function(wrap_pyfunction!(handle_test_request, m)?)?;
     // Test-only instance APIs
     m.add_function(wrap_pyfunction!(create_test_app, m)?)?;

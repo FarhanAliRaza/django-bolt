@@ -186,7 +186,7 @@ python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 4 --workers 1
 - ✅ **Error handling with Django DEBUG integration** - DONE
 - ✅ **Structured error responses** (FastAPI-compatible) - DONE
 - ✅ **Response compression** - DONE (gzip/brotli/zstd)
-- ✅ **OpenAPI/Swagger docs** - DONE (some parts remaining like grouping)
+- ✅ **OpenAPI/Swagger docs** - DONE (full support for tags, summary, description)
 - ✅ **Django admin integration** - DONE
 - ⚠️ **API Key auth** - Partial (only in-memory)
 - ⚠️ **Testing utilities** - Partial

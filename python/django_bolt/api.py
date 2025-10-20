@@ -247,26 +247,103 @@ class BoltAPI:
         # Register this instance globally for autodiscovery
         _BOLT_API_REGISTRY.append(self)
 
-    def get(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
-        return self._route_decorator("GET", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
+    def get(
+        self,
+        path: str,
+        *,
+        response_model: Optional[Any] = None,
+        status_code: Optional[int] = None,
+        guards: Optional[List[Any]] = None,
+        auth: Optional[List[Any]] = None,
+        tags: Optional[List[str]] = None,
+        summary: Optional[str] = None,
+        description: Optional[str] = None,
+    ):
+        return self._route_decorator("GET", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
-    def post(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
-        return self._route_decorator("POST", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
+    def post(
+        self,
+        path: str,
+        *,
+        response_model: Optional[Any] = None,
+        status_code: Optional[int] = None,
+        guards: Optional[List[Any]] = None,
+        auth: Optional[List[Any]] = None,
+        tags: Optional[List[str]] = None,
+        summary: Optional[str] = None,
+        description: Optional[str] = None,
+    ):
+        return self._route_decorator("POST", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
-    def put(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
-        return self._route_decorator("PUT", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
+    def put(
+        self,
+        path: str,
+        *,
+        response_model: Optional[Any] = None,
+        status_code: Optional[int] = None,
+        guards: Optional[List[Any]] = None,
+        auth: Optional[List[Any]] = None,
+        tags: Optional[List[str]] = None,
+        summary: Optional[str] = None,
+        description: Optional[str] = None,
+    ):
+        return self._route_decorator("PUT", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
-    def patch(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
-        return self._route_decorator("PATCH", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
+    def patch(
+        self,
+        path: str,
+        *,
+        response_model: Optional[Any] = None,
+        status_code: Optional[int] = None,
+        guards: Optional[List[Any]] = None,
+        auth: Optional[List[Any]] = None,
+        tags: Optional[List[str]] = None,
+        summary: Optional[str] = None,
+        description: Optional[str] = None,
+    ):
+        return self._route_decorator("PATCH", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
-    def delete(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
-        return self._route_decorator("DELETE", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
+    def delete(
+        self,
+        path: str,
+        *,
+        response_model: Optional[Any] = None,
+        status_code: Optional[int] = None,
+        guards: Optional[List[Any]] = None,
+        auth: Optional[List[Any]] = None,
+        tags: Optional[List[str]] = None,
+        summary: Optional[str] = None,
+        description: Optional[str] = None,
+    ):
+        return self._route_decorator("DELETE", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
-    def head(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
-        return self._route_decorator("HEAD", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
+    def head(
+        self,
+        path: str,
+        *,
+        response_model: Optional[Any] = None,
+        status_code: Optional[int] = None,
+        guards: Optional[List[Any]] = None,
+        auth: Optional[List[Any]] = None,
+        tags: Optional[List[str]] = None,
+        summary: Optional[str] = None,
+        description: Optional[str] = None,
+    ):
+        return self._route_decorator("HEAD", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
-    def options(self, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
-        return self._route_decorator("OPTIONS", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth)
+    def options(
+        self,
+        path: str,
+        *,
+        response_model: Optional[Any] = None,
+        status_code: Optional[int] = None,
+        guards: Optional[List[Any]] = None,
+        auth: Optional[List[Any]] = None,
+        tags: Optional[List[str]] = None,
+        summary: Optional[str] = None,
+        description: Optional[str] = None,
+    ):
+        return self._route_decorator("OPTIONS", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
     def view(
         self,
@@ -588,11 +665,26 @@ class BoltAPI:
                         response_model=attr.response_model,
                         status_code=attr.status_code,
                         guards=final_guards,
-                        auth=final_auth
+                        auth=final_auth,
+                        tags=attr.tags,
+                        summary=attr.summary,
+                        description=attr.description,
                     )
                     decorator(custom_action_handler)
 
-    def _route_decorator(self, method: str, path: str, *, response_model: Optional[Any] = None, status_code: Optional[int] = None, guards: Optional[List[Any]] = None, auth: Optional[List[Any]] = None):
+    def _route_decorator(
+        self,
+        method: str,
+        path: str,
+        *,
+        response_model: Optional[Any] = None,
+        status_code: Optional[int] = None,
+        guards: Optional[List[Any]] = None,
+        auth: Optional[List[Any]] = None,
+        tags: Optional[List[str]] = None,
+        summary: Optional[str] = None,
+        description: Optional[str] = None,
+    ):
         def decorator(fn: Callable):
             # Enforce async handlers
             if not inspect.iscoroutinefunction(fn):
@@ -614,6 +706,13 @@ class BoltAPI:
                 meta["response_type"] = response_model
             if status_code is not None:
                 meta["default_status_code"] = int(status_code)
+            # Store OpenAPI metadata
+            if tags is not None:
+                meta["openapi_tags"] = tags
+            if summary is not None:
+                meta["openapi_summary"] = summary
+            if description is not None:
+                meta["openapi_description"] = description
             self._handler_meta[fn] = meta
 
             # Compile middleware metadata for this handler (including guards and auth)

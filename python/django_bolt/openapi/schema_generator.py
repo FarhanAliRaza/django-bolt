@@ -17,6 +17,7 @@ from .spec import (
     Schema,
     Reference,
     SecurityRequirement,
+    Tag,
 )
 
 if TYPE_CHECKING:
@@ -48,8 +49,10 @@ class SchemaGenerator:
         """
         openapi = self.config.to_openapi_schema()
 
-        # Generate path items from routes
+        # Generate path items from routes and collect tags
         paths: Dict[str, PathItem] = {}
+        collected_tags: set[str] = set()
+
         for method, path, handler_id, handler in self.api._routes:
             # Skip OpenAPI docs routes (always excluded)
             if path.startswith(self.config.path):
@@ -80,6 +83,10 @@ class SchemaGenerator:
                 handler_id=handler_id,
             )
 
+            # Collect tags from operation
+            if operation.tags:
+                collected_tags.update(operation.tags)
+
             # Add operation to path item
             method_lower = method.lower()
             setattr(paths[path], method_lower, operation)
@@ -89,6 +96,9 @@ class SchemaGenerator:
         # Add component schemas
         if self.schemas:
             openapi.components.schemas = self.schemas
+
+        # Collect and merge tags
+        openapi.tags = self._collect_tags(collected_tags)
 
         return openapi
 
@@ -112,14 +122,17 @@ class SchemaGenerator:
         Returns:
             Operation object.
         """
-        # Get description from docstring
-        description = None
-        summary = None
-        if self.config.use_handler_docstrings and handler.__doc__:
+        # Prefer explicit metadata over docstring extraction
+        summary = meta.get("openapi_summary")
+        description = meta.get("openapi_description")
+
+        # Fallback to docstring if not explicitly set
+        if (summary is None or description is None) and self.config.use_handler_docstrings and handler.__doc__:
             doc = inspect.cleandoc(handler.__doc__)
             lines = doc.split("\n", 1)
-            summary = lines[0]
-            if len(lines) > 1:
+            if summary is None:
+                summary = lines[0]
+            if description is None and len(lines) > 1:
                 description = lines[1].strip()
 
         # Extract parameters
@@ -134,8 +147,11 @@ class SchemaGenerator:
         # Extract security requirements
         security = self._extract_security(handler_id)
 
-        # Extract tags (use handler module or class name)
-        tags = self._extract_tags(handler)
+        # Prefer explicit tags over auto-extracted tags
+        tags = meta.get("openapi_tags")
+        if tags is None:
+            # Fallback to auto-extraction from handler module or class name
+            tags = self._extract_tags(handler)
 
         operation = Operation(
             summary=summary,
@@ -434,6 +450,33 @@ class SchemaGenerator:
                     return [tag.capitalize()]
 
         return None
+
+    def _collect_tags(self, collected_tag_names: set[str]) -> Optional[List[Tag]]:
+        """Collect and merge tags from operations with config tags.
+
+        Args:
+            collected_tag_names: Set of tag names collected from operations.
+
+        Returns:
+            List of Tag objects or None if no tags.
+        """
+        if not collected_tag_names and not self.config.tags:
+            return None
+
+        # Start with existing tags from config
+        tag_objects: Dict[str, Tag] = {}
+        if self.config.tags:
+            for tag in self.config.tags:
+                tag_objects[tag.name] = tag
+
+        # Add tags from operations (if not already defined in config)
+        for tag_name in sorted(collected_tag_names):
+            if tag_name not in tag_objects:
+                # Create Tag object with just the name (no description)
+                tag_objects[tag_name] = Tag(name=tag_name)
+
+        # Return sorted list of Tag objects
+        return list(tag_objects.values()) if tag_objects else None
 
     def _type_to_schema(
         self, type_annotation: Any, register_component: bool = False

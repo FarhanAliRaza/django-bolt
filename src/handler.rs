@@ -11,6 +11,7 @@ use bytes::Bytes;
 
 use crate::direct_stream;
 use crate::error;
+use crate::metadata::CorsConfig;
 use crate::middleware;
 use crate::middleware::auth::{authenticate, populate_auth_context};
 use crate::permissions::{evaluate_guards, GuardResult};
@@ -18,6 +19,85 @@ use crate::request::PyRequest;
 use crate::router::parse_query_string;
 use crate::state::{AppState, GLOBAL_ROUTER, MIDDLEWARE_METADATA, ROUTE_METADATA, TASK_LOCALS};
 use crate::streaming::create_python_stream;
+
+/// Add CORS headers to response using Rust-native config (NO GIL required)
+/// This replaces the Python-based CORS header addition
+fn add_cors_headers_rust(
+    response: &mut HttpResponse,
+    request_origin: Option<&str>,
+    cors_config: &CorsConfig,
+    global_origins: &[String],
+) {
+    // Merge route-specific origins with global origins
+    let origins = if !cors_config.origins.is_empty() {
+        &cors_config.origins
+    } else if !global_origins.is_empty() {
+        global_origins
+    } else {
+        // No CORS configured
+        return;
+    };
+
+    // SECURITY: Validate wildcard + credentials
+    let is_wildcard = origins.iter().any(|o| o == "*");
+    if is_wildcard && cors_config.credentials {
+        // Invalid configuration - skip adding headers
+        return;
+    }
+
+    // Determine origin to use
+    let origin_to_use = if is_wildcard {
+        "*"
+    } else if let Some(req_origin) = request_origin {
+        // Check if request origin is allowed
+        if origins.iter().any(|o| o == req_origin) {
+            req_origin
+        } else {
+            return; // Origin not allowed
+        }
+    } else {
+        origins.first().map(|s| s.as_str()).unwrap_or("*")
+    };
+
+    // Add Access-Control-Allow-Origin
+    if let Ok(val) = HeaderValue::from_str(origin_to_use) {
+        response.headers_mut().insert(
+            actix_web::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            val,
+        );
+    }
+
+    // Add Vary: Origin when not using wildcard
+    if origin_to_use != "*" {
+        if let Ok(val) = HeaderValue::from_static("Origin") {
+            response.headers_mut().insert(
+                actix_web::http::header::VARY,
+                val,
+            );
+        }
+    }
+
+    // Add credentials header if enabled
+    if cors_config.credentials {
+        if let Ok(val) = HeaderValue::from_static("true") {
+            response.headers_mut().insert(
+                actix_web::http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                val,
+            );
+        }
+    }
+
+    // Add exposed headers if specified
+    if !cors_config.expose_headers.is_empty() {
+        let expose_str = cors_config.expose_headers.join(", ");
+        if let Ok(val) = HeaderValue::from_str(&expose_str) {
+            response.headers_mut().insert(
+                actix_web::http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
+                val,
+            );
+        }
+    }
+}
 
 pub async fn handle_request(
     req: HttpRequest,
@@ -377,10 +457,12 @@ pub async fn handle_request(
                     let response_body = if is_head_request { Vec::new() } else { body_bytes };
                     let mut response = builder.body(response_body);
 
-                    // Add CORS headers if middleware is configured
-                    if let Some(ref meta) = middleware_meta {
-                        let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-                        middleware::add_cors_headers(&mut response, origin, meta, Some(&state.cors_allowed_origins));
+                    // Add CORS headers if configured (NO GIL - uses Rust-native config)
+                    if let Some(ref route_meta) = route_metadata {
+                        if let Some(ref cors_cfg) = route_meta.cors_config {
+                            let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+                            add_cors_headers_rust(&mut response, origin, cors_cfg, &state.cors_allowed_origins);
+                        }
                     }
 
                     return response;

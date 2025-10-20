@@ -9,6 +9,37 @@ use std::collections::{HashMap, HashSet};
 use crate::middleware::auth::AuthBackend;
 use crate::permissions::Guard;
 
+/// CORS configuration parsed at startup
+#[derive(Debug, Clone)]
+pub struct CorsConfig {
+    pub origins: Vec<String>,
+    pub credentials: bool,
+    pub methods: Vec<String>,
+    pub headers: Vec<String>,
+    pub expose_headers: Vec<String>,
+    pub max_age: u32,
+}
+
+impl Default for CorsConfig {
+    fn default() -> Self {
+        CorsConfig {
+            origins: vec![],
+            credentials: false,
+            methods: vec![
+                "GET".to_string(),
+                "POST".to_string(),
+                "PUT".to_string(),
+                "PATCH".to_string(),
+                "DELETE".to_string(),
+                "OPTIONS".to_string(),
+            ],
+            headers: vec!["Content-Type".to_string(), "Authorization".to_string()],
+            expose_headers: vec![],
+            max_age: 3600,
+        }
+    }
+}
+
 /// Complete route metadata including middleware, auth, and guards
 #[derive(Debug, Clone)]
 pub struct RouteMetadata {
@@ -16,6 +47,7 @@ pub struct RouteMetadata {
     pub auth_backends: Vec<AuthBackend>,
     pub guards: Vec<Guard>,
     pub skip: HashSet<String>,
+    pub cors_config: Option<CorsConfig>,
 }
 
 /// Parsed middleware configuration
@@ -33,12 +65,19 @@ impl RouteMetadata {
         let mut guards = Vec::new();
         let mut skip: HashSet<String> = HashSet::new();
 
-        // Parse middleware list
+        // Parse middleware list and extract CORS config if present
+        let mut cors_config: Option<CorsConfig> = None;
+
         if let Ok(Some(mw_list)) = py_meta.get_item("middleware") {
             if let Ok(py_list) = mw_list.extract::<Vec<HashMap<String, Py<PyAny>>>>() {
                 for mw_dict in py_list {
                     if let Some(mw_type) = mw_dict.get("type") {
                         if let Ok(type_str) = mw_type.extract::<String>(py) {
+                            // Parse CORS config separately for fast access
+                            if type_str == "cors" && cors_config.is_none() {
+                                cors_config = parse_cors_config(&mw_dict, py);
+                            }
+
                             // Convert config to JSON-compatible format
                             let mut config = HashMap::new();
                             for (key, value) in &mw_dict {
@@ -94,8 +133,58 @@ impl RouteMetadata {
             auth_backends,
             guards,
             skip,
+            cors_config,
         })
     }
+}
+
+/// Parse CORS configuration from middleware dict
+fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<CorsConfig> {
+    let mut config = CorsConfig::default();
+
+    // Parse origins (required for CORS to be active)
+    if let Some(origins_py) = dict.get("origins") {
+        if let Ok(origins) = origins_py.extract::<Vec<String>>(py) {
+            config.origins = origins;
+        }
+    }
+
+    // Parse credentials
+    if let Some(cred_py) = dict.get("credentials") {
+        if let Ok(cred) = cred_py.extract::<bool>(py) {
+            config.credentials = cred;
+        }
+    }
+
+    // Parse methods (optional, has defaults)
+    if let Some(methods_py) = dict.get("methods") {
+        if let Ok(methods) = methods_py.extract::<Vec<String>>(py) {
+            config.methods = methods;
+        }
+    }
+
+    // Parse headers (optional, has defaults)
+    if let Some(headers_py) = dict.get("headers") {
+        if let Ok(headers) = headers_py.extract::<Vec<String>>(py) {
+            config.headers = headers;
+        }
+    }
+
+    // Parse expose_headers (optional)
+    if let Some(expose_py) = dict.get("expose_headers") {
+        if let Ok(expose) = expose_py.extract::<Vec<String>>(py) {
+            config.expose_headers = expose;
+        }
+    }
+
+    // Parse max_age (optional)
+    if let Some(age_py) = dict.get("max_age") {
+        if let Ok(age) = age_py.extract::<u32>(py) {
+            config.max_age = age;
+        }
+    }
+
+    Some(config)
 }
 
 /// Parse a single auth backend from Python dict

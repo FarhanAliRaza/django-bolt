@@ -10,20 +10,30 @@ use std::sync::Arc;
 use crate::handler::handle_request;
 use crate::metadata::RouteMetadata;
 use crate::router::Router;
-use crate::state::{AppState, GLOBAL_ROUTER, MIDDLEWARE_METADATA, ROUTE_METADATA, TASK_LOCALS};
+use crate::state::{AppState, GLOBAL_ROUTER, MIDDLEWARE_METADATA, ROUTE_METADATA, TASK_LOCALS, RESPONSE_CHANNELS, HANDLER_MAP, ResponseChannels};
 
 #[pyfunction]
 pub fn register_routes(
-    _py: Python<'_>,
+    py: Python<'_>,
     routes: Vec<(String, String, usize, Py<PyAny>)>,
 ) -> PyResult<()> {
     let mut router = Router::new();
+    let mut handler_map = AHashMap::new();
+
     for (method, path, handler_id, handler) in routes {
-        router.register(&method, &path, handler_id, handler.into())?;
+        router.register(&method, &path, handler_id, handler.clone_ref(py))?;
+        // Build handler map for Python event loop worker
+        handler_map.insert(handler_id, handler);
     }
+
     GLOBAL_ROUTER
         .set(Arc::new(router))
         .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Router already initialized"))?;
+
+    HANDLER_MAP
+        .set(Arc::new(handler_map))
+        .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Handler map already initialized"))?;
+
     Ok(())
 }
 
@@ -116,11 +126,59 @@ pub fn start_server_async(
         (debug, max_header_size, cors_allowed_origins)
     });
 
+    // Initialize response channels for Phase 3
+    let response_channels: ResponseChannels = Arc::new(std::sync::Mutex::new(AHashMap::new()));
+    RESPONSE_CHANNELS
+        .set(response_channels.clone())
+        .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Response channels already initialized"))?;
+
+    // Create Python asyncio.Queue for event loop worker
+    let (python_queue, send_response_fn) = Python::attach(|py| -> PyResult<_> {
+        let asyncio = py.import("asyncio")?;
+        let queue = asyncio.call_method0("Queue")?;
+
+        // Get send_response function from _core module
+        let core_module = py.import("django_bolt._core")?;
+        let send_response = core_module.getattr("send_response")?;
+
+        Ok((queue.unbind(), send_response.unbind()))
+    })?;
+
+    // Start Python event loop worker thread
+    let queue_clone = python_queue.clone_ref(&Python::attach(|py| py));
+    let dispatch_clone = dispatch.clone_ref(&Python::attach(|py| py));
+    let handler_map = HANDLER_MAP.get().expect("Handler map not initialized").clone();
+
+    std::thread::spawn(move || {
+        Python::attach(|py| {
+            let worker_module = py.import("django_bolt.event_loop_worker")
+                .expect("Failed to import event_loop_worker");
+
+            let start_fn = worker_module.getattr("start_event_loop_worker")
+                .expect("Failed to get start_event_loop_worker");
+
+            // Convert handler_map to Python dict
+            let py_handler_map = pyo3::types::PyDict::new(py);
+            for (handler_id, handler) in handler_map.as_ref() {
+                let _ = py_handler_map.set_item(*handler_id, handler.bind(py));
+            }
+
+            // Start worker (blocks in this thread)
+            let _ = start_fn.call1((
+                queue_clone.bind(py),
+                send_response_fn.bind(py),
+                py_handler_map,
+                dispatch_clone.bind(py),
+            ));
+        });
+    });
+
     let app_state = Arc::new(AppState {
         dispatch: dispatch.into(),
         debug,
         max_header_size,
         cors_allowed_origins,
+        python_queue: Some(python_queue),
     });
 
     // Note: compression_config is provided but not used yet in Rust

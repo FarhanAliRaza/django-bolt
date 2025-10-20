@@ -34,13 +34,10 @@ pub async fn handle_request(
     let router = GLOBAL_ROUTER.get().expect("Router not initialized");
 
     // Find the route for the requested method and path
-    let (route_handler, path_params, handler_id) = {
+    // Keep route reference instead of cloning handler (defer GIL acquisition)
+    let (route_ref, path_params, handler_id) = {
         if let Some((route, path_params, handler_id)) = router.find(&method, &path) {
-            (
-                Python::attach(|py| route.handler.clone_ref(py)),
-                path_params,
-                handler_id,
-            )
+            (route, path_params, handler_id)
         } else {
             // Automatic OPTIONS handling: if no explicit OPTIONS handler exists,
             // check if other methods are registered for this path and return Allow header
@@ -100,11 +97,9 @@ pub async fn handle_request(
     // Get peer address for rate limiting fallback
     let peer_addr = req.peer_addr().map(|addr| addr.ip().to_string());
 
-    // Check for middleware metadata (Python-based, for backward compatibility)
-    let middleware_meta = MIDDLEWARE_METADATA.get().and_then(|meta_map| {
-        meta_map
-            .get(&handler_id)
-            .map(|m| Python::attach(|py| m.clone_ref(py)))
+    // Get middleware metadata reference (defer cloning to reduce GIL acquisitions)
+    let middleware_meta_ref = MIDDLEWARE_METADATA.get().and_then(|meta_map| {
+        meta_map.get(&handler_id)
     });
 
     // Get parsed route metadata (Rust-native)
@@ -118,14 +113,14 @@ pub async fn handle_request(
         .unwrap_or(false);
 
     // Process old-style middleware (CORS preflight, rate limiting, auth)
-    if let Some(ref meta) = middleware_meta {
+    if let Some(meta_ref) = middleware_meta_ref {
         if let Some(early_response) = middleware::process_middleware(
             &method,
             &path,
             &headers,
             peer_addr.as_deref(),
             handler_id,
-            meta,
+            meta_ref,
             Some(&state.cors_allowed_origins),
         )
         .await
@@ -184,14 +179,14 @@ pub async fn handle_request(
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
 
-    // Single GIL acquisition for all Python operations
+    // ===== GIL ACQUISITION #1: Create coroutine (batched with handler/dispatch cloning) =====
     let fut = match Python::attach(|py| -> PyResult<_> {
-        // Clone Python objects
+        // Clone Python objects in single GIL acquisition
         let dispatch = state.dispatch.clone_ref(py);
-        let handler = route_handler.clone_ref(py);
+        let handler = route_ref.handler.clone_ref(py);
 
         // Create context dict if middleware or auth is present
-        let context = if middleware_meta.is_some() || auth_ctx.is_some() {
+        let context = if middleware_meta_ref.is_some() || auth_ctx.is_some() {
             let ctx_dict = PyDict::new(py);
             let ctx_py = ctx_dict.unbind();
             // Populate with auth context if present
@@ -256,6 +251,7 @@ pub async fn handle_request(
         }
     };
 
+    // ===== GIL ACQUISITION #2: Extract response (will handle CORS separately for now) =====
     match fut.await {
         Ok(result_obj) => {
             let tuple_result: Result<(u16, Vec<(String, String)>, Vec<u8>), _> =

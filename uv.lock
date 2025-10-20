@@ -143,6 +143,7 @@ dependencies = [
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0b/9f/a65090624ecf468cdca03533906e7c69ed7588582240cfe7cc9e770b50eb/exceptiongroup-1.3.0.tar.gz", hash = "sha256:b241f5885f560bc56a59ee63ca4c6a8bfa46ae4ad651af316d4e81817bb9fd88", size = 29749, upload-time = "2025-05-10T17:42:51.123Z" }
 wheels = [
+<<<<<<< HEAD
     { url = "https://files.pythonhosted.org/packages/de/15/545e2b6cf2e3be84bc1ed85613edd75b8aea69807a71c26f4ca6a9258e82/email_validator-2.3.0-py3-none-any.whl", hash = "sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4", size = 35604, upload-time = "2025-08-26T13:09:05.858Z" },
 ]
 
@@ -239,6 +240,9 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/92/2e/ea25914b1ebfde93b6fc4ff46d6864564fba59024e928bdc7de475affc25/greenlet-3.2.4-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:061dc4cf2c34852b052a8620d40f36324554bc192be474b9e9770e8c042fd735", size = 695355, upload-time = "2025-08-07T13:18:34.517Z" },
     { url = "https://files.pythonhosted.org/packages/72/60/fc56c62046ec17f6b0d3060564562c64c862948c9d4bc8aa807cf5bd74f4/greenlet-3.2.4-cp314-cp314-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:44358b9bf66c8576a9f57a590d5f5d6e72fa4228b763d0e43fee6d3b06d3a337", size = 657512, upload-time = "2025-08-07T13:18:33.969Z" },
     { url = "https://files.pythonhosted.org/packages/e3/a5/6ddab2b4c112be95601c13428db1d8b6608a8b6039816f2ba09c346c08fc/greenlet-3.2.4-cp314-cp314-win_amd64.whl", hash = "sha256:e37ab26028f12dbb0ff65f29a8d3d44a765c61e729647bf2ddfbbed621726f01", size = 303425, upload-time = "2025-08-07T13:32:27.59Z" },
+=======
+    { url = "https://files.pythonhosted.org/packages/36/f4/c6e662dade71f56cd2f3735141b265c3c79293c109549c1e6933b0651ffc/exceptiongroup-1.3.0-py3-none-any.whl", hash = "sha256:4d111e6e0c13d0644cad6ddaa7ed0261a0b36971f6d23e7ec9b4b9097da78a10", size = 16674, upload-time = "2025-05-10T17:42:49.33Z" },
+>>>>>>> 8dfdba8 (Implement OpenAPI tags, summary, and description metadata)
 ]
 
 [[package]]
@@ -288,6 +292,7 @@ wheels = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "ignore"
 version = "0.1.0"
 source = { virtual = "ignore" }
@@ -309,6 +314,8 @@ requires-dist = [
 ]
 
 [[package]]
+=======
+>>>>>>> 8dfdba8 (Implement OpenAPI tags, summary, and description metadata)
 name = "iniconfig"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -318,6 +325,7 @@ wheels = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "inquirerpy"
 version = "0.3.4"
 source = { registry = "https://pypi.org/simple" }
@@ -393,6 +401,8 @@ wheels = [
 ]
 
 [[package]]
+=======
+>>>>>>> 8dfdba8 (Implement OpenAPI tags, summary, and description metadata)
 name = "maturin"
 version = "1.9.4"
 source = { registry = "https://pypi.org/simple" }
@@ -552,6 +562,7 @@ wheels = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "multipart"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -561,6 +572,8 @@ wheels = [
 ]
 
 [[package]]
+=======
+>>>>>>> 8dfdba8 (Implement OpenAPI tags, summary, and description metadata)
 name = "packaging"
 version = "25.0"
 source = { registry = "https://pypi.org/simple" }
@@ -579,6 +592,7 @@ wheels = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "prompt-toolkit"
 version = "3.0.52"
 source = { registry = "https://pypi.org/simple" }
@@ -591,6 +605,8 @@ wheels = [
 ]
 
 [[package]]
+=======
+>>>>>>> 8dfdba8 (Implement OpenAPI tags, summary, and description metadata)
 name = "pydantic"
 version = "2.11.9"
 source = { registry = "https://pypi.org/simple" }
@@ -799,6 +815,7 @@ wheels = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "rich"
 version = "14.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -937,6 +954,8 @@ wheels = [
 ]
 
 [[package]]
+=======
+>>>>>>> 8dfdba8 (Implement OpenAPI tags, summary, and description metadata)
 name = "sniffio"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }

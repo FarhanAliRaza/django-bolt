@@ -145,8 +145,8 @@ pub fn start_server_async(
     })?;
 
     // Start Python event loop worker thread
-    let queue_clone = python_queue.clone_ref(&Python::attach(|py| py));
-    let dispatch_clone = dispatch.clone_ref(&Python::attach(|py| py));
+    let queue_clone = python_queue.clone_ref(Python::attach(|py| py));
+    let dispatch_clone = dispatch.clone_ref(Python::attach(|py| py));
     let handler_map = HANDLER_MAP.get().expect("Handler map not initialized").clone();
 
     std::thread::spawn(move || {

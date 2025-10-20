@@ -63,21 +63,17 @@ fn add_cors_headers_rust(
     }
 
     if origin_to_use != "*" {
-        if let Ok(val) = HeaderValue::from_static("Origin") {
-            response.headers_mut().insert(
-                actix_web::http::header::VARY,
-                val,
-            );
-        }
+        response.headers_mut().insert(
+            actix_web::http::header::VARY,
+            HeaderValue::from_static("Origin"),
+        );
     }
 
     if cors_config.credentials {
-        if let Ok(val) = HeaderValue::from_static("true") {
-            response.headers_mut().insert(
-                actix_web::http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
-                val,
-            );
-        }
+        response.headers_mut().insert(
+            actix_web::http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            HeaderValue::from_static("true"),
+        );
     }
 
     if !cors_config.expose_headers.is_empty() {
@@ -105,7 +101,7 @@ pub async fn handle_request(
     let router = GLOBAL_ROUTER.get().expect("Router not initialized");
 
     // ===== PHASE 1: Route matching (NO GIL) =====
-    let (route_ref, path_params, handler_id) = {
+    let (_route_ref, path_params, handler_id) = {
         if let Some((route, path_params, handler_id)) = router.find(&method, &path) {
             (route, path_params, handler_id)
         } else {

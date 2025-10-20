@@ -120,4 +120,44 @@ impl PyRequest {
             _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
         }
     }
+
+    /// Convert request to dict for Python queue
+    fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
+        let d = PyDict::new(py);
+
+        d.set_item("method", &self.method)?;
+        d.set_item("path", &self.path)?;
+        d.set_item("body", PyBytes::new(py, &self.body))?;
+
+        let params_dict = PyDict::new(py);
+        for (k, v) in &self.path_params {
+            params_dict.set_item(k, v)?;
+        }
+        d.set_item("params", params_dict)?;
+
+        let query_dict = PyDict::new(py);
+        for (k, v) in &self.query_params {
+            query_dict.set_item(k, v)?;
+        }
+        d.set_item("query", query_dict)?;
+
+        let headers_dict = PyDict::new(py);
+        for (k, v) in &self.headers {
+            headers_dict.set_item(k, v)?;
+        }
+        d.set_item("headers", headers_dict)?;
+
+        let cookies_dict = PyDict::new(py);
+        for (k, v) in &self.cookies {
+            cookies_dict.set_item(k, v)?;
+        }
+        d.set_item("cookies", cookies_dict)?;
+
+        match &self.context {
+            Some(ctx) => d.set_item("context", ctx.clone_ref(py))?,
+            None => d.set_item("context", py.None())?,
+        }
+
+        Ok(d.unbind())
+    }
 }

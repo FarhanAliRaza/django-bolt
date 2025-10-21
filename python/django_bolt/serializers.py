@@ -299,13 +299,16 @@ class Serializer:
         super().__init_subclass__()
 
     @classmethod
-    def from_model(cls, instance: models.Model, *, validate: bool = True) -> msgspec.Struct:
+    def from_model(cls, instance: models.Model, *, validate: bool = False) -> msgspec.Struct:
         """
         Convert a Django model instance to a msgspec.Struct.
 
         Args:
             instance: Django model instance
-            validate: Whether to run field validators (default: True)
+            validate: Whether to run field validators (default: False).
+                     Set to False by default because database data is already
+                     validated. Only enable if you need to transform values or
+                     revalidate untrusted model instances.
 
         Returns:
             msgspec.Struct instance with data from the model
@@ -370,13 +373,15 @@ class Serializer:
         return data
 
     @classmethod
-    def from_models(cls, instances: List[models.Model], *, validate: bool = True) -> List[msgspec.Struct]:
+    def from_models(cls, instances: List[models.Model], *, validate: bool = False) -> List[msgspec.Struct]:
         """
         Convert a list of Django model instances to msgspec.Struct instances.
 
         Args:
             instances: List of Django model instances or queryset
-            validate: Whether to run field validators (default: True)
+            validate: Whether to run field validators (default: False).
+                     Set to False by default for performance when reading
+                     from database (data is already validated).
 
         Returns:
             List of msgspec.Struct instances

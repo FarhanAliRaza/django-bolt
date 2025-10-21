@@ -355,10 +355,35 @@ raise ValidationError([
 
 ## Performance Considerations
 
-- **Minimal Overhead**: Validation only runs when data needs to be validated
-- **Skip When Needed**: Use `validate=False` for trusted data sources
-- **Efficient**: Validation runs before struct creation, not on every field access
-- **Msgspec Speed**: Still benefits from msgspec's fast JSON parsing
+⚠️ **Important**: Custom validators run in **Python** and acquire the GIL, which is slower than msgspec's C-level validation.
+
+### Default Behavior (Optimized)
+
+- **`from_model()`**: `validate=False` by default (database reads are trusted, no Python overhead)
+- **`decode()`**: `validate=True` by default (user input needs validation)
+
+### Performance Impact
+
+```python
+# ✅ FAST: Reading from database (no Python validation)
+@api.get("/users/{id}")
+async def get_user(id: int):
+    user = await User.objects.aget(id=id)
+    return UserSerializer.from_model(user)  # validate=False by default
+
+# ✅ SAFE: Parsing user input (validation enabled)
+@api.post("/users")
+async def create_user(request):
+    user_data = UserSerializer.decode(request['body'])  # validate=True by default
+```
+
+### When Validation Matters
+
+- **Write operations**: Validation overhead is **negligible** compared to database latency (~1-5ms)
+- **Bulk reads**: Validation adds ~2μs per field per object (enable only when needed)
+- **List endpoints**: Use serializers without validators for maximum speed
+
+**See [SERIALIZER_PERFORMANCE.md](SERIALIZER_PERFORMANCE.md) for detailed performance analysis.**
 
 ## Comparison with DRF
 

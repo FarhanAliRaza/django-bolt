@@ -1,8 +1,11 @@
 """Dependency injection utilities."""
 import inspect
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, TYPE_CHECKING
 from .params import Depends as DependsMarker
 from .binding import convert_primitive
+
+if TYPE_CHECKING:
+    from .typing import FieldDefinition
 
 
 async def resolve_dependency(
@@ -77,52 +80,55 @@ async def call_dependency(
     dep_args: List[Any] = []
     dep_kwargs: Dict[str, Any] = {}
 
-    for dp in dep_meta["params"]:
-        dname = dp["name"]
-        dan = dp["annotation"]
-        dsrc = dp["source"]
-        dalias = dp.get("alias")
-
-        if dsrc == "request":
+    # Use FieldDefinition objects directly
+    for field in dep_meta["fields"]:
+        if field.source == "request":
             dval = request
         else:
-            dval = extract_dependency_value(dp, params_map, query_map, headers_map, cookies_map)
+            dval = extract_dependency_value(field, params_map, query_map, headers_map, cookies_map)
 
-        if dp["kind"] in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+        if field.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
             dep_args.append(dval)
         else:
-            dep_kwargs[dname] = dval
+            dep_kwargs[field.name] = dval
 
     return await dep_fn(*dep_args, **dep_kwargs)
 
 
 def extract_dependency_value(
-    param: Dict[str, Any],
+    field: "FieldDefinition",
     params_map: Dict[str, Any],
     query_map: Dict[str, Any],
     headers_map: Dict[str, str],
     cookies_map: Dict[str, str]
 ) -> Any:
-    """Extract value for a dependency parameter."""
-    dname = param["name"]
-    dan = param["annotation"]
-    dsrc = param["source"]
-    dalias = param.get("alias")
-    key = dalias or dname
+    """Extract value for a dependency parameter using FieldDefinition.
+
+    Args:
+        field: FieldDefinition object describing the parameter
+        params_map: Path parameters
+        query_map: Query parameters
+        headers_map: Request headers
+        cookies_map: Request cookies
+
+    Returns:
+        Extracted and converted parameter value
+    """
+    key = field.alias or field.name
 
     if key in params_map:
-        return convert_primitive(str(params_map[key]), dan)
+        return convert_primitive(str(params_map[key]), field.annotation)
     elif key in query_map:
-        return convert_primitive(str(query_map[key]), dan)
-    elif dsrc == "header":
+        return convert_primitive(str(query_map[key]), field.annotation)
+    elif field.source == "header":
         raw = headers_map.get(key.lower())
         if raw is None:
             raise ValueError(f"Missing required header: {key}")
-        return convert_primitive(str(raw), dan)
-    elif dsrc == "cookie":
+        return convert_primitive(str(raw), field.annotation)
+    elif field.source == "cookie":
         raw = cookies_map.get(key)
         if raw is None:
             raise ValueError(f"Missing required cookie: {key}")
-        return convert_primitive(str(raw), dan)
+        return convert_primitive(str(raw), field.annotation)
     else:
         return None

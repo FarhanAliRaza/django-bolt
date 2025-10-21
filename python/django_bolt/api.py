@@ -43,7 +43,7 @@ def _extract_path_params(path: str) -> set[str]:
 
 
 def extract_parameter_value(
-    param: Dict[str, Any],
+    field: "FieldDefinition",
     request: Dict[str, Any],
     params_map: Dict[str, Any],
     query_map: Dict[str, Any],
@@ -56,16 +56,29 @@ def extract_parameter_value(
     body_loaded: bool
 ) -> Tuple[Any, Any, bool]:
     """
-    Extract value for a handler parameter (backward compatibility function).
+    Extract value for a handler parameter using FieldDefinition.
 
-    This function maintains backward compatibility while using the new
-    extractor-based system internally.
+    Args:
+        field: FieldDefinition object describing the parameter
+        request: Request dictionary
+        params_map: Path parameters
+        query_map: Query parameters
+        headers_map: Request headers
+        cookies_map: Request cookies
+        form_map: Form data
+        files_map: Uploaded files
+        meta: Handler metadata
+        body_obj: Cached body object
+        body_loaded: Whether body has been loaded
+
+    Returns:
+        Tuple of (value, body_obj, body_loaded)
     """
-    name = param["name"]
-    annotation = param["annotation"]
-    default = param["default"]
-    source = param["source"]
-    alias = param.get("alias")
+    name = field.name
+    annotation = field.annotation
+    default = field.default
+    source = field.source
+    alias = field.alias
     key = alias or name
 
     # Handle different sources
@@ -717,20 +730,8 @@ class BoltAPI:
                 f"  3. Use simple types (str, int) which auto-infer as query params"
             )
 
-        # Convert FieldDefinitions to dict format for backward compatibility
-        # (We'll optimize this away in Phase 4)
-        for field in field_definitions:
-            meta["fields"].append({
-                "name": field.name,
-                "annotation": field.annotation,
-                "default": field.default,
-                "kind": field.kind,
-                "source": field.source,
-                "alias": field.alias,
-                "embed": field.embed,
-                "dependency": field.dependency,
-                "field_def": field,  # Store FieldDefinition for future use
-            })
+        # Store FieldDefinition objects directly (Phase 4: completed migration)
+        meta["fields"] = field_definitions
 
         # Detect single body parameter for fast path
         if len(body_fields) == 1:
@@ -744,9 +745,6 @@ class BoltAPI:
             meta["response_type"] = sig.return_annotation
 
         meta["mode"] = "mixed"
-
-        # Maintain backward compatibility with old "params" key
-        meta["params"] = meta["fields"]
 
         # Performance: Check if handler needs form/file parsing
         # This allows us to skip expensive form parsing for 95% of endpoints
@@ -778,34 +776,31 @@ class BoltAPI:
         body_loaded: bool = False
         dep_cache: Dict[Any, Any] = {}
 
-        for p in meta["params"]:
-            name = p["name"]
-            source = p["source"]
-            depends_marker = p.get("dependency")
-
-            if source == "request":
+        # Use FieldDefinition objects directly
+        fields = meta["fields"]
+        for field in fields:
+            if field.source == "request":
                 value = request
-            elif source == "dependency":
-                dep_fn = depends_marker.dependency if depends_marker else None
-                if dep_fn is None:
-                    raise ValueError(f"Depends for parameter {name} requires a callable")
+            elif field.source == "dependency":
+                if field.dependency is None:
+                    raise ValueError(f"Depends for parameter {field.name} requires a callable")
                 value = await resolve_dependency(
-                    dep_fn, depends_marker, request, dep_cache,
+                    field.dependency.dependency, field.dependency, request, dep_cache,
                     params_map, query_map, headers_map, cookies_map,
                     self._handler_meta, self._compile_binder,
                     meta.get("http_method", ""), meta.get("path", "")
                 )
             else:
                 value, body_obj, body_loaded = extract_parameter_value(
-                    p, request, params_map, query_map, headers_map, cookies_map,
+                    field, request, params_map, query_map, headers_map, cookies_map,
                     form_map, files_map, meta, body_obj, body_loaded
                 )
 
             # Respect positional-only/keyword-only kinds
-            if p["kind"] in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            if field.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
                 args.append(value)
             else:
-                kwargs[name] = value
+                kwargs[field.name] = value
 
         return args, kwargs
 
@@ -828,7 +823,7 @@ class BoltAPI:
         """Handle generic exception using error_handlers module."""
         from . import error_handlers
         # Use the error handler which respects Django DEBUG setting
-        return error_handlers.handle_exception(e, debug=False, request=request)  # debug will be checked dynamically
+        return error_handlers.handle_exception(e, debug=None, request=request)  # debug will be checked dynamically
 
     async def _dispatch(self, handler: Callable, request: Dict[str, Any], handler_id: int = None) -> Response:
         """Async dispatch that calls the handler and returns response tuple.

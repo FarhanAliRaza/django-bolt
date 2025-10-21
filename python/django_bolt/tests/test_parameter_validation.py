@@ -88,8 +88,8 @@ def test_get_with_simple_types_inferred_as_query():
     meta = api._handler_meta[handler]
 
     for field in meta["fields"]:
-        if field["name"] in ("page", "limit", "search"):
-            assert field["source"] == "query", f"{field['name']} should be query param"
+        if field.name in ("page", "limit", "search"):
+            assert field.source == "query", f"{field.name} should be query param"
 
 
 def test_post_with_struct_inferred_as_body():
@@ -103,8 +103,8 @@ def test_post_with_struct_inferred_as_body():
     handler = api._routes[0][3]
     meta = api._handler_meta[handler]
 
-    user_field = next(f for f in meta["fields"] if f["name"] == "user")
-    assert user_field["source"] == "body"
+    user_field = next(f for f in meta["fields"] if f.name == "user")
+    assert user_field.source == "body"
 
 
 def test_path_params_inferred_correctly():
@@ -118,11 +118,11 @@ def test_path_params_inferred_correctly():
     handler = api._routes[0][3]
     meta = api._handler_meta[handler]
 
-    user_id_field = next(f for f in meta["fields"] if f["name"] == "user_id")
-    post_id_field = next(f for f in meta["fields"] if f["name"] == "post_id")
+    user_id_field = next(f for f in meta["fields"] if f.name == "user_id")
+    post_id_field = next(f for f in meta["fields"] if f.name == "post_id")
 
-    assert user_id_field["source"] == "path"
-    assert post_id_field["source"] == "path"
+    assert user_id_field.source == "path"
+    assert post_id_field.source == "path"
 
 
 def test_mixed_params_inference():
@@ -136,11 +136,11 @@ def test_mixed_params_inference():
     handler = api._routes[0][3]
     meta = api._handler_meta[handler]
 
-    user_id_field = next(f for f in meta["fields"] if f["name"] == "user_id")
-    include_posts_field = next(f for f in meta["fields"] if f["name"] == "include_posts")
+    user_id_field = next(f for f in meta["fields"] if f.name == "user_id")
+    include_posts_field = next(f for f in meta["fields"] if f.name == "include_posts")
 
-    assert user_id_field["source"] == "path"
-    assert include_posts_field["source"] == "query"
+    assert user_id_field.source == "path"
+    assert include_posts_field.source == "query"
 
 
 def test_explicit_body_marker_with_post():
@@ -154,8 +154,8 @@ def test_explicit_body_marker_with_post():
     handler = api._routes[0][3]
     meta = api._handler_meta[handler]
 
-    user_field = next(f for f in meta["fields"] if f["name"] == "user")
-    assert user_field["source"] == "body"
+    user_field = next(f for f in meta["fields"] if f.name == "user")
+    assert user_field.source == "body"
 
 
 def test_error_message_clarity():

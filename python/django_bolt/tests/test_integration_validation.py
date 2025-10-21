@@ -79,20 +79,20 @@ def test_crud_operations_validation():
         if method == "GET" and path == "/users":
             # Query params should be inferred
             for field in meta["fields"]:
-                assert field["source"] == "query"
+                assert field.source == "query"
 
         elif method == "GET" and "user_id" in path:
             # Path param should be detected
-            user_id_field = next(f for f in meta["fields"] if f["name"] == "user_id")
-            assert user_id_field["source"] == "path"
+            user_id_field = next(f for f in meta["fields"] if f.name == "user_id")
+            assert user_id_field.source == "path"
 
         elif method in ("POST", "PUT", "PATCH"):
             # Should have body params
-            body_fields = [f for f in meta["fields"] if f["source"] == "body"]
+            body_fields = [f for f in meta["fields"] if f.source == "body"]
             if "POST" in method or "PUT" in method or "PATCH" in method:
                 # At least one body field expected
                 assert len(body_fields) >= 1 or any(
-                    f["source"] == "path" for f in meta["fields"]
+                    f.source == "path" for f in meta["fields"]
                 )
 
 
@@ -155,7 +155,7 @@ def test_authentication_headers():
     for method, path, handler_id, fn in api._routes:
         meta = api._handler_meta[fn]
         for field in meta["fields"]:
-            assert field["source"] == "header"
+            assert field.source == "header"
 
 
 # ============================================================================
@@ -204,7 +204,7 @@ def test_mixed_parameter_sources():
 
     meta = api._handler_meta[api._routes[0][3]]
 
-    sources = {f["name"]: f["source"] for f in meta["fields"]}
+    sources = {f.name: f.source for f in meta["fields"]}
     assert sources["item_id"] == "path"
     assert sources["include_details"] == "query"
     assert sources["user_agent"] == "header"
@@ -260,7 +260,7 @@ def test_nested_resources_with_path_params():
     # Verify all path params detected
     for method, path, handler_id, fn in api._routes:
         meta = api._handler_meta[fn]
-        path_fields = [f for f in meta["fields"] if f["source"] == "path"]
+        path_fields = [f for f in meta["fields"] if f.source == "path"]
 
         # Count expected path params
         import re
@@ -287,14 +287,14 @@ def test_optional_and_required_parameters():
 
     meta = api._handler_meta[api._routes[0][3]]
 
-    category_field = next(f for f in meta["fields"] if f["name"] == "category")
-    min_price_field = next(f for f in meta["fields"] if f["name"] == "min_price")
-    max_price_field = next(f for f in meta["fields"] if f["name"] == "max_price")
+    category_field = next(f for f in meta["fields"] if f.name == "category")
+    min_price_field = next(f for f in meta["fields"] if f.name == "min_price")
+    max_price_field = next(f for f in meta["fields"] if f.name == "max_price")
 
     # Check field definitions
-    assert category_field["field_def"].is_required
-    assert not min_price_field["field_def"].is_required
-    assert not max_price_field["field_def"].is_required
+    assert category_field.is_required
+    assert not min_price_field.is_required
+    assert not max_price_field.is_required
 
 
 # ============================================================================
@@ -310,8 +310,8 @@ def test_explicit_path_marker():
         return {"id": item_id}
 
     meta = api._handler_meta[api._routes[0][3]]
-    item_id_field = next(f for f in meta["fields"] if f["name"] == "item_id")
-    assert item_id_field["source"] == "path"
+    item_id_field = next(f for f in meta["fields"] if f.name == "item_id")
+    assert item_id_field.source == "path"
 
 
 # ============================================================================
@@ -356,7 +356,7 @@ def test_real_world_api_structure():
     for method, path, handler_id, fn in api._routes:
         if method == "GET":
             meta = api._handler_meta[fn]
-            body_fields = [f for f in meta["fields"] if f["source"] == "body"]
+            body_fields = [f for f in meta["fields"] if f.source == "body"]
             assert len(body_fields) == 0, f"GET {path} should not have body params"
 
 

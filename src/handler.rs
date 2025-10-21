@@ -1,6 +1,8 @@
 use actix_web::http::header::{HeaderName, HeaderValue};
 use actix_web::{http::StatusCode, web, HttpRequest, HttpResponse};
 use ahash::AHashMap;
+use bytes::Bytes;
+use futures_util::stream;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -8,8 +10,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
-use futures_util::stream;
-use bytes::Bytes;
 
 use crate::error;
 use crate::metadata::CorsConfig;
@@ -18,7 +18,9 @@ use crate::middleware::auth::{authenticate, populate_auth_context};
 use crate::permissions::{evaluate_guards, GuardResult};
 use crate::request::PyRequest;
 use crate::router::parse_query_string;
-use crate::state::{AppState, GLOBAL_ROUTER, MIDDLEWARE_METADATA, ROUTE_METADATA, RESPONSE_CHANNELS};
+use crate::state::{
+    AppState, GLOBAL_ROUTER, MIDDLEWARE_METADATA, RESPONSE_CHANNELS, ROUTE_METADATA,
+};
 
 /// Request ID counter for queue-based system
 static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -56,10 +58,9 @@ fn add_cors_headers_rust(
     };
 
     if let Ok(val) = HeaderValue::from_str(origin_to_use) {
-        response.headers_mut().insert(
-            actix_web::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-            val,
-        );
+        response
+            .headers_mut()
+            .insert(actix_web::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
     }
 
     if origin_to_use != "*" {
@@ -79,10 +80,9 @@ fn add_cors_headers_rust(
     if !cors_config.expose_headers.is_empty() {
         let expose_str = cors_config.expose_headers.join(", ");
         if let Ok(val) = HeaderValue::from_str(&expose_str) {
-            response.headers_mut().insert(
-                actix_web::http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
-                val,
-            );
+            response
+                .headers_mut()
+                .insert(actix_web::http::header::ACCESS_CONTROL_EXPOSE_HEADERS, val);
         }
     }
 }
@@ -146,7 +146,10 @@ pub async fn handle_request(
             if v.len() > max_header_size {
                 return HttpResponse::BadRequest()
                     .content_type("text/plain; charset=utf-8")
-                    .body(format!("Header value too large (max {} bytes)", max_header_size));
+                    .body(format!(
+                        "Header value too large (max {} bytes)",
+                        max_header_size
+                    ));
             }
 
             headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
@@ -155,9 +158,9 @@ pub async fn handle_request(
 
     let peer_addr = req.peer_addr().map(|addr| addr.ip().to_string());
 
-    let middleware_meta_ref = MIDDLEWARE_METADATA.get().and_then(|meta_map| {
-        meta_map.get(&handler_id)
-    });
+    let middleware_meta_ref = MIDDLEWARE_METADATA
+        .get()
+        .and_then(|meta_map| meta_map.get(&handler_id));
 
     let route_metadata = ROUTE_METADATA
         .get()
@@ -233,7 +236,7 @@ pub async fn handle_request(
     // ===== PHASE 5: Queue-based submission (SINGLE GIL acquisition, NO await on Python) =====
 
     // Check if Python queue is available
-    let python_queue = match &state.python_queue {
+    let _python_queue_present = match &state.python_queue {
         Some(q) => q,
         None => {
             return HttpResponse::InternalServerError()
@@ -253,7 +256,11 @@ pub async fn handle_request(
         channels.lock().unwrap().insert(request_id, response_tx);
     }
 
-    // Submit request to Python queue (SINGLE GIL ACQUISITION, NON-BLOCKING)
+    // Submit request to Python queue via thread-safe Python helper (SINGLE GIL ACQUISITION, NON-BLOCKING)
+    eprintln!(
+        "[django-bolt] Submitting request {} via submit_from_rust for handler {}",
+        request_id, handler_id
+    );
     let submit_result = Python::attach(|py| -> PyResult<()> {
         // Create context dict if needed
         let context = if middleware_meta_ref.is_some() || auth_ctx.is_some() {
@@ -282,9 +289,14 @@ pub async fn handle_request(
         // Convert to dict for Python queue
         let request_dict = request_obj.bind(py).call_method0("to_dict")?;
 
-        // Submit to queue (non-blocking put_nowait)
-        let queue = python_queue.bind(py);
-        queue.call_method1("put_nowait", ((request_id, handler_id, request_dict),))?;
+        // Submit to queue using thread-safe helper to avoid cross-thread put_nowait
+        let worker_module = py.import("django_bolt.event_loop_worker")?;
+        let submit_fn = worker_module.getattr("submit_from_rust")?;
+        submit_fn.call1(((request_id, handler_id, request_dict),))?;
+        eprintln!(
+            "[django-bolt] Request {} handed off to worker loop",
+            request_id
+        );
 
         Ok(())
     });
@@ -295,9 +307,22 @@ pub async fn handle_request(
             e.restore(py);
             if let Some(exc) = PyErr::take(py) {
                 let exc_value = exc.value(py);
-                error::handle_python_exception(py, exc_value, &path_clone, &method_clone, state.debug)
+                error::handle_python_exception(
+                    py,
+                    exc_value,
+                    &path_clone,
+                    &method_clone,
+                    state.debug,
+                )
             } else {
-                error::build_error_response(py, 500, "Failed to submit request to queue".to_string(), vec![], None, state.debug)
+                error::build_error_response(
+                    py,
+                    500,
+                    "Failed to submit request to queue".to_string(),
+                    vec![],
+                    None,
+                    state.debug,
+                )
             }
         });
     }
@@ -385,7 +410,11 @@ pub async fn handle_request(
                             builder.append_header(("content-encoding", "identity"));
                         }
 
-                        let response_body = if is_head_request { Vec::new() } else { file_bytes };
+                        let response_body = if is_head_request {
+                            Vec::new()
+                        } else {
+                            file_bytes
+                        };
                         builder.body(response_body)
                     }
                     Err(e) => {
@@ -413,14 +442,23 @@ pub async fn handle_request(
                     builder.append_header(("Content-Encoding", "identity"));
                 }
 
-                let response_body = if is_head_request { Vec::new() } else { body_bytes };
+                let response_body = if is_head_request {
+                    Vec::new()
+                } else {
+                    body_bytes
+                };
                 let mut response = builder.body(response_body);
 
                 // Add CORS headers if configured (NO GIL)
                 if let Some(ref route_meta) = route_metadata {
                     if let Some(ref cors_cfg) = route_meta.cors_config {
                         let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-                        add_cors_headers_rust(&mut response, origin, cors_cfg, &state.cors_allowed_origins);
+                        add_cors_headers_rust(
+                            &mut response,
+                            origin,
+                            cors_cfg,
+                            &state.cors_allowed_origins,
+                        );
                     }
                 }
 

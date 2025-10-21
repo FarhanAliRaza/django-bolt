@@ -22,7 +22,7 @@ from django_bolt.middleware import no_compress
 # OpenAPI is enabled by default at /docs with Swagger UI
 # You can customize it by passing openapi_config:
 api = BoltAPI()
-
+import test_data
 
 register_health_checks(api)
 
@@ -36,12 +36,12 @@ class Item(msgspec.Struct):
 
 
 @api.get("/")
-async def read_root() -> dict:
+async def read_root():
     """
     Root endpoint.
     Returns a simple "Hello World" dictionary.
     """
-    return {"Hello": "World"}
+    return test_data.JSON_10K
 
 
 @api.get("/items/{item_id}")

@@ -132,8 +132,8 @@ pub fn start_server_async(
         .set(response_channels.clone())
         .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Response channels already initialized"))?;
 
-    // Create Python asyncio.Queue for event loop worker
-    let (python_queue, send_response_fn) = Python::attach(|py| -> PyResult<_> {
+    // Create Python asyncio.Queue for event loop worker and get submit function
+    let (python_queue, send_response_fn, submit_fn) = Python::attach(|py| -> PyResult<_> {
         let asyncio = py.import("asyncio")?;
         let queue = asyncio.call_method0("Queue")?;
 
@@ -141,12 +141,16 @@ pub fn start_server_async(
         let core_module = py.import("django_bolt._core")?;
         let send_response = core_module.getattr("send_response")?;
 
-        Ok((queue.unbind(), send_response.unbind()))
+        // Get submit_from_rust function for thread-safe queue submission
+        let worker_module = py.import("django_bolt.event_loop_worker")?;
+        let submit_from_rust = worker_module.getattr("submit_from_rust")?;
+
+        Ok((queue.unbind(), send_response.unbind(), submit_from_rust.unbind()))
     })?;
 
     // Start Python event loop worker thread
-    let queue_clone = python_queue.clone_ref(Python::attach(|py| py));
-    let dispatch_clone = dispatch.clone_ref(Python::attach(|py| py));
+    let queue_clone = Python::attach(|py| python_queue.clone_ref(py));
+    let dispatch_clone = Python::attach(|py| dispatch.clone_ref(py));
     let handler_map = HANDLER_MAP.get().expect("Handler map not initialized").clone();
 
     std::thread::spawn(move || {
@@ -164,12 +168,18 @@ pub fn start_server_async(
             }
 
             // Start worker (blocks in this thread)
-            let _ = start_fn.call1((
+            if let Err(e) = start_fn.call1((
                 queue_clone.bind(py),
                 send_response_fn.bind(py),
                 py_handler_map,
                 dispatch_clone.bind(py),
-            ));
+            )) {
+                eprintln!("[django-bolt] ERROR: Event loop worker failed: {}", e);
+                e.restore(py);
+                if let Some(traceback) = PyErr::take(py) {
+                    eprintln!("[django-bolt] Traceback: {}", traceback);
+                }
+            }
         });
     });
 

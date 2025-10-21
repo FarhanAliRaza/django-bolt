@@ -17,6 +17,9 @@ import traceback
 from typing import Any, Dict, Callable
 
 
+WORKER_LOOP: asyncio.AbstractEventLoop | None = None
+REQUEST_QUEUE: asyncio.Queue | None = None
+
 async def python_event_loop_worker(
     request_queue: asyncio.Queue,
     send_response_fn: Callable,
@@ -33,13 +36,17 @@ async def python_event_loop_worker(
         api_dispatch: BoltAPI._dispatch method
     """
     print("[django-bolt] Python event loop worker started", file=sys.stderr)
+    print(f"[django-bolt] Queue type: {type(request_queue)}", file=sys.stderr)
+    print(f"[django-bolt] Handler map has {len(handler_map)} handlers", file=sys.stderr)
 
     processed_count = 0
 
     while True:
         try:
             # Get request from queue (blocks until available)
+            print("[django-bolt] Waiting for request from queue...", file=sys.stderr)
             request_id, handler_id, request_dict = await request_queue.get()
+            print(f"[django-bolt] Received request {request_id} for handler {handler_id}", file=sys.stderr)
 
             try:
                 # Get handler from map
@@ -112,9 +119,12 @@ def start_event_loop_worker(
 
     Should be called from a dedicated thread started by Rust.
     """
-    # Create new event loop for this thread
+    # Create new event loop for this thread and record globals for cross-thread submission
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    global WORKER_LOOP, REQUEST_QUEUE
+    WORKER_LOOP = loop
+    REQUEST_QUEUE = request_queue
 
     try:
         # Run the worker coroutine
@@ -130,3 +140,21 @@ def start_event_loop_worker(
         print("[django-bolt] Event loop worker interrupted", file=sys.stderr)
     finally:
         loop.close()
+
+
+def submit_from_rust(item: Any):
+    """
+    Thread-safe submission helper for Rust callers.
+    Uses the worker's loop and queue captured at startup.
+    """
+    if WORKER_LOOP is None or REQUEST_QUEUE is None:
+        print("[django-bolt] submit_from_rust called before worker initialized", file=sys.stderr)
+        return
+
+    async def _put():
+        await REQUEST_QUEUE.put(item)
+
+    def _schedule():
+        asyncio.ensure_future(_put(), loop=WORKER_LOOP)
+
+    WORKER_LOOP.call_soon_threadsafe(_schedule)

@@ -34,6 +34,7 @@ from .serializers import (
     ModelSerializer,
     Serializer,
     create_serializer,
+    ValidationError,
 )
 
 # Auth module
@@ -115,6 +116,7 @@ __all__ = [
     "ModelSerializer",
     "Serializer",
     "create_serializer",
+    "ValidationError",
     # Auth - Authentication
     "JWTAuthentication",
     "APIKeyAuthentication",

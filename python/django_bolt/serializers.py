@@ -18,6 +18,18 @@ Example:
             # read_only_fields = ['id', 'created_at']
             # depth = 1  # For nested relationships
 
+        # DRF-style field validation
+        def validate_age(self, value):
+            if value < 18:
+                raise ValidationError("Must be 18 or older")
+            return value
+
+        # Multi-field validation
+        def validate(self, data):
+            if data.get('is_premium') and data.get('age', 0) < 21:
+                raise ValidationError("Premium users must be 21+")
+            return data
+
     # Use with API endpoints
     @api.get("/users/{id}")
     async def get_user(id: int) -> UserSerializer:
@@ -26,13 +38,26 @@ Example:
 """
 
 import msgspec
-from typing import Any, Dict, List, Optional, Set, Type, get_type_hints, Union
+from typing import Any, Dict, List, Optional, Set, Type, get_type_hints, Union, Callable
 from django.db import models
 from django.db.models.fields.related import ForeignKey, ManyToManyField, OneToOneField
 from django.db.models.fields.reverse_related import ManyToOneRel, ManyToManyRel
 from datetime import datetime, date, time
 import decimal
 import uuid
+import inspect
+
+
+class ValidationError(Exception):
+    """
+    Validation error raised by field validators.
+
+    Compatible with DRF's ValidationError and django-bolt's exception handling.
+    """
+    def __init__(self, message: Union[str, Dict[str, Any], List[Any]]):
+        self.message = message
+        self.detail = message
+        super().__init__(message)
 
 
 class SerializerMetaclass(type):
@@ -90,11 +115,28 @@ class SerializerMetaclass(type):
             # Add to struct fields
             struct_fields[field_name] = field_type
 
+        # Detect DRF-style validators
+        # 1. Field-level validators: validate_<fieldname>(self, value)
+        field_validators: Dict[str, Callable] = {}
+        for attr_name, attr_value in namespace.items():
+            if attr_name.startswith('validate_') and callable(attr_value):
+                field_name = attr_name[9:]  # Remove 'validate_' prefix
+                if field_name and field_name in model_fields and not field_name.startswith('_'):
+                    field_validators[field_name] = attr_value
+
+        # 2. Object-level validator: validate(self, data)
+        object_validator = namespace.get('validate')
+        if object_validator and callable(object_validator):
+            # Check it's the custom validate method, not inherited
+            if 'validate' in namespace:
+                namespace['_object_validator'] = object_validator
+
         # Store metadata for from_model method
         namespace['_model'] = model
         namespace['_model_fields'] = model_fields
         namespace['_read_only_fields'] = read_only_set
         namespace['_depth'] = depth
+        namespace['_field_validators'] = field_validators
 
         # Create msgspec.Struct dynamically
         # We'll create a class that inherits from msgspec.Struct
@@ -257,15 +299,19 @@ class Serializer:
         super().__init_subclass__()
 
     @classmethod
-    def from_model(cls, instance: models.Model) -> msgspec.Struct:
+    def from_model(cls, instance: models.Model, *, validate: bool = True) -> msgspec.Struct:
         """
         Convert a Django model instance to a msgspec.Struct.
 
         Args:
             instance: Django model instance
+            validate: Whether to run field validators (default: True)
 
         Returns:
             msgspec.Struct instance with data from the model
+
+        Raises:
+            ValidationError: If validation fails
         """
         if not hasattr(cls, '_struct_cls'):
             raise ValueError(f"{cls.__name__} is not properly initialized")
@@ -300,6 +346,10 @@ class Serializer:
                 else:
                     data[field_name] = value
 
+        # Run validation if enabled
+        if validate:
+            data = cls._run_validation(data)
+
         # Create struct instance
         return cls._struct_cls(**data)
 
@@ -320,17 +370,132 @@ class Serializer:
         return data
 
     @classmethod
-    def from_models(cls, instances: List[models.Model]) -> List[msgspec.Struct]:
+    def from_models(cls, instances: List[models.Model], *, validate: bool = True) -> List[msgspec.Struct]:
         """
         Convert a list of Django model instances to msgspec.Struct instances.
 
         Args:
             instances: List of Django model instances or queryset
+            validate: Whether to run field validators (default: True)
 
         Returns:
             List of msgspec.Struct instances
         """
-        return [cls.from_model(instance) for instance in instances]
+        return [cls.from_model(instance, validate=validate) for instance in instances]
+
+    @classmethod
+    def _run_validation(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Run DRF-style validation on data dict.
+
+        This runs:
+        1. Field-level validators (validate_<fieldname> methods)
+        2. Object-level validation (validate method)
+
+        Args:
+            data: Dictionary of field values
+
+        Returns:
+            Validated data dictionary
+
+        Raises:
+            ValidationError: If validation fails
+        """
+        # Create a temporary instance for validation (validators need self)
+        validator_instance = cls.__new__(cls)
+
+        # 1. Run field-level validators
+        field_validators = getattr(cls, '_field_validators', {})
+        validated_data = {}
+
+        for field_name, value in data.items():
+            if field_name in field_validators:
+                # Run the validate_<fieldname> method
+                validator_method = field_validators[field_name]
+                try:
+                    validated_value = validator_method(validator_instance, value)
+                    validated_data[field_name] = validated_value
+                except ValidationError:
+                    raise
+                except Exception as e:
+                    raise ValidationError(f"Validation error for field '{field_name}': {str(e)}")
+            else:
+                validated_data[field_name] = value
+
+        # 2. Run object-level validator if present
+        object_validator = getattr(cls, '_object_validator', None)
+        if object_validator:
+            try:
+                validated_data = object_validator(validator_instance, validated_data)
+            except ValidationError:
+                raise
+            except Exception as e:
+                raise ValidationError(f"Object validation error: {str(e)}")
+
+        return validated_data
+
+    @classmethod
+    def decode(cls, data: bytes, *, validate: bool = True) -> msgspec.Struct:
+        """
+        Decode JSON bytes to msgspec.Struct with validation.
+
+        This is useful for request body parsing with validation.
+
+        Args:
+            data: JSON bytes
+            validate: Whether to run validators after decoding (default: True)
+
+        Returns:
+            Validated msgspec.Struct instance
+
+        Raises:
+            ValidationError: If validation fails
+            msgspec.DecodeError: If JSON is invalid
+
+        Example:
+            @api.post("/users")
+            async def create_user(request):
+                user_data = UserSerializer.decode(request['body'])
+                # user_data is validated UserStruct
+                user = await User.objects.acreate(**msgspec.structs.asdict(user_data))
+                return UserSerializer.from_model(user)
+        """
+        if not hasattr(cls, '_struct_cls'):
+            raise ValueError(f"{cls.__name__} is not properly initialized")
+
+        # Decode JSON to struct
+        struct_instance = msgspec.json.decode(data, type=cls._struct_cls)
+
+        # If validation is enabled, convert to dict, validate, and recreate
+        if validate:
+            # Convert struct to dict
+            data_dict = msgspec.structs.asdict(struct_instance)
+
+            # Run validation
+            validated_data = cls._run_validation(data_dict)
+
+            # Recreate struct with validated data
+            return cls._struct_cls(**validated_data)
+
+        return struct_instance
+
+    @classmethod
+    def decode_json(cls, json_str: str, *, validate: bool = True) -> msgspec.Struct:
+        """
+        Decode JSON string to msgspec.Struct with validation.
+
+        Args:
+            json_str: JSON string
+            validate: Whether to run validators (default: True)
+
+        Returns:
+            Validated msgspec.Struct instance
+
+        Raises:
+            ValidationError: If validation fails
+            msgspec.DecodeError: If JSON is invalid
+        """
+        return cls.decode(json_str.encode(), validate=validate)
 
 
 class ModelSerializer(Serializer, metaclass=SerializerMetaclass):

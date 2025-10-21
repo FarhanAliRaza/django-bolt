@@ -7,6 +7,7 @@ Django-Bolt now includes DRF-style `ModelSerializer` that automatically generate
 - **Automatic Schema Generation**: Automatically creates msgspec.Struct from Django models
 - **Field Selection**: Control which fields to include/exclude
 - **Read-Only Fields**: Mark fields as read-only (like auto-generated IDs and timestamps)
+- **DRF-Style Validation**: Field-level and object-level validation with `validate_<field>` methods
 - **Nested Relationships**: Support for ForeignKey and ManyToMany with depth parameter
 - **DRF-Compatible API**: Familiar interface for DRF users
 - **High Performance**: Leverages msgspec for fast serialization (5-10x faster than standard JSON)
@@ -68,6 +69,49 @@ class BookDetailSerializer(ModelSerializer):
         fields = ['id', 'title', 'author']
         depth = 1  # author will be dict with author's fields
 ```
+
+### DRF-Style Validation
+
+Add field-level and object-level validation just like Django REST Framework:
+
+```python
+from django_bolt.serializers import ModelSerializer, ValidationError
+
+class UserSerializer(ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'age', 'is_premium']
+
+    def validate_age(self, value):
+        """Validate individual field."""
+        if value < 18:
+            raise ValidationError("Must be 18 or older")
+        return value
+
+    def validate_email(self, value):
+        """Transform and validate."""
+        if not value.endswith('@company.com'):
+            raise ValidationError("Must use company email")
+        return value.lower()  # Normalize
+
+    def validate(self, data):
+        """Cross-field validation."""
+        if data.get('is_premium') and data.get('age', 0) < 21:
+            raise ValidationError("Premium users must be 21+")
+        return data
+
+# Usage
+@api.post("/users")
+async def create_user(request):
+    # Decode and validate in one step
+    user_data = UserSerializer.decode(request['body'])
+
+    # Data is already validated
+    user = await User.objects.acreate(**msgspec.structs.asdict(user_data))
+    return UserSerializer.from_model(user)
+```
+
+**See [VALIDATION_README.md](VALIDATION_README.md) for complete validation documentation.**
 
 ## Using with API Endpoints
 

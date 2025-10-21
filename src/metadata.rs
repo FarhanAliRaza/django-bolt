@@ -40,6 +40,24 @@ impl Default for CorsConfig {
     }
 }
 
+/// Rate limiting configuration parsed at startup
+#[derive(Debug, Clone)]
+pub struct RateLimitConfig {
+    pub rps: u32,
+    pub burst: u32,
+    pub key_type: String,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        RateLimitConfig {
+            rps: 100,
+            burst: 200,
+            key_type: "ip".to_string(),
+        }
+    }
+}
+
 /// Complete route metadata including middleware, auth, and guards
 #[derive(Debug, Clone)]
 pub struct RouteMetadata {
@@ -48,6 +66,7 @@ pub struct RouteMetadata {
     pub guards: Vec<Guard>,
     pub skip: HashSet<String>,
     pub cors_config: Option<CorsConfig>,
+    pub rate_limit_config: Option<RateLimitConfig>,
 }
 
 /// Parsed middleware configuration
@@ -65,8 +84,9 @@ impl RouteMetadata {
         let mut guards = Vec::new();
         let mut skip: HashSet<String> = HashSet::new();
 
-        // Parse middleware list and extract CORS config if present
+        // Parse middleware list and extract CORS and rate_limit configs
         let mut cors_config: Option<CorsConfig> = None;
+        let mut rate_limit_config: Option<RateLimitConfig> = None;
 
         if let Ok(Some(mw_list)) = py_meta.get_item("middleware") {
             if let Ok(py_list) = mw_list.extract::<Vec<HashMap<String, Py<PyAny>>>>() {
@@ -76,6 +96,11 @@ impl RouteMetadata {
                             // Parse CORS config separately for fast access
                             if type_str == "cors" && cors_config.is_none() {
                                 cors_config = parse_cors_config(&mw_dict, py);
+                            }
+
+                            // Parse rate_limit config separately for fast access
+                            if type_str == "rate_limit" && rate_limit_config.is_none() {
+                                rate_limit_config = parse_rate_limit_config(&mw_dict, py);
                             }
 
                             // Convert config to JSON-compatible format
@@ -134,6 +159,7 @@ impl RouteMetadata {
             guards,
             skip,
             cors_config,
+            rate_limit_config,
         })
     }
 }
@@ -181,6 +207,37 @@ fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Co
     if let Some(age_py) = dict.get("max_age") {
         if let Ok(age) = age_py.extract::<u32>(py) {
             config.max_age = age;
+        }
+    }
+
+    Some(config)
+}
+
+/// Parse rate limiting configuration from middleware dict
+fn parse_rate_limit_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<RateLimitConfig> {
+    let mut config = RateLimitConfig::default();
+
+    // Parse rps (required)
+    if let Some(rps_py) = dict.get("rps") {
+        if let Ok(rps) = rps_py.extract::<u32>(py) {
+            config.rps = rps;
+        }
+    }
+
+    // Parse burst (optional, defaults to 2x rps)
+    if let Some(burst_py) = dict.get("burst") {
+        if let Ok(burst) = burst_py.extract::<u32>(py) {
+            config.burst = burst;
+        }
+    } else {
+        // If burst not specified, default to 2x rps
+        config.burst = config.rps * 2;
+    }
+
+    // Parse key_type (optional, defaults to "ip")
+    if let Some(key_py) = dict.get("key") {
+        if let Ok(key_type) = key_py.extract::<String>(py) {
+            config.key_type = key_type;
         }
     }
 

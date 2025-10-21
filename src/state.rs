@@ -16,5 +16,4 @@ pub struct AppState {
 
 pub static GLOBAL_ROUTER: OnceCell<Arc<Router>> = OnceCell::new();
 pub static TASK_LOCALS: OnceCell<TaskLocals> = OnceCell::new();
-pub static MIDDLEWARE_METADATA: OnceCell<Arc<AHashMap<usize, Py<PyAny>>>> = OnceCell::new();
 pub static ROUTE_METADATA: OnceCell<Arc<AHashMap<usize, RouteMetadata>>> = OnceCell::new();

@@ -623,7 +623,7 @@ pub fn handle_actix_http_request(
                     && req.headers().contains_key("access-control-request-method");
 
                 // Get middleware config from route metadata and global CORS origins
-                let (cors_config, rate_limit_config, handler_id_opt, should_skip_cors, global_cors_origins) = Python::attach(|py| -> (Option<std::collections::HashMap<String, Py<PyAny>>>, Option<std::collections::HashMap<String, Py<PyAny>>>, Option<usize>, bool, Vec<String>) {
+                let (cors_config, rate_limit_config, handler_id_opt, should_skip_cors, global_cors_origins) = Python::attach(|py| -> (Option<crate::metadata::CorsConfig>, Option<crate::metadata::RateLimitConfig>, Option<usize>, bool, Vec<String>) {
                     let Some(entry) = registry().get(&app_id) else {
                         return (None, None, None, false, vec![]);
                     };
@@ -651,33 +651,10 @@ pub fn handle_actix_http_request(
                             // Check if CORS is skipped
                             let skip_cors = route_meta.skip.contains("cors");
 
-                            let mut cors_cfg = None;
-                            let mut rate_cfg = None;
+                            // Use parsed Rust configs directly
+                            let cors_cfg = route_meta.cors_config.clone();
+                            let rate_cfg = route_meta.rate_limit_config.clone();
 
-                            // Find middleware configs
-                            for mw in &route_meta.middleware {
-                                match mw.mw_type.as_str() {
-                                    "cors" => {
-                                        let mut config = std::collections::HashMap::new();
-                                        for (k, v) in &mw.config {
-                                            if let Ok(py_val) = json_to_python(v, py) {
-                                                config.insert(k.clone(), py_val);
-                                            }
-                                        }
-                                        cors_cfg = Some(config);
-                                    }
-                                    "rate_limit" => {
-                                        let mut config = std::collections::HashMap::new();
-                                        for (k, v) in &mw.config {
-                                            if let Ok(py_val) = json_to_python(v, py) {
-                                                config.insert(k.clone(), py_val);
-                                            }
-                                        }
-                                        rate_cfg = Some(config);
-                                    }
-                                    _ => {}
-                                }
-                            }
                             return (cors_cfg, rate_cfg, Some(handler_id), skip_cors, global_origins);
                         }
                     }
@@ -686,32 +663,56 @@ pub fn handle_actix_http_request(
 
                 // Handle CORS preflight
                 if is_preflight && !should_skip_cors {
-                    if let Some(config) = cors_config {
-                        return Python::attach(|py| {
-                            use crate::middleware::cors::handle_preflight;
-                            let origins_slice = if global_cors_origins.is_empty() {
-                                None
-                            } else {
-                                Some(global_cors_origins.as_slice())
-                            };
-                            let response = handle_preflight(&config, origins_slice, py);
-                            Ok::<_, actix_web::Error>(response)
-                        });
+                    if let Some(ref cors_cfg) = cors_config {
+                        use actix_web::HttpResponse;
+                        use actix_web::http::header::{
+                            ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
+                            ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
+                            ACCESS_CONTROL_MAX_AGE,
+                        };
+
+                        // Merge route-specific origins with global origins
+                        let origins = if !cors_cfg.origins.is_empty() {
+                            &cors_cfg.origins
+                        } else if !global_cors_origins.is_empty() {
+                            &global_cors_origins
+                        } else {
+                            return Ok(HttpResponse::Forbidden()
+                                .content_type("text/plain; charset=utf-8")
+                                .body("CORS not configured"));
+                        };
+
+                        let is_wildcard = origins.iter().any(|o| o == "*");
+                        if is_wildcard && cors_cfg.credentials {
+                            return Ok(HttpResponse::InternalServerError()
+                                .content_type("text/plain; charset=utf-8")
+                                .body("CORS misconfiguration: Cannot use wildcard '*' with credentials=true"));
+                        }
+
+                        let origin = origins.first().unwrap_or(&"*".to_string()).clone();
+                        let mut response = HttpResponse::NoContent();
+                        response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, origin));
+                        response.insert_header((ACCESS_CONTROL_ALLOW_METHODS, cors_cfg.methods.join(", ")));
+                        response.insert_header((ACCESS_CONTROL_ALLOW_HEADERS, cors_cfg.headers.join(", ")));
+
+                        if cors_cfg.credentials {
+                            response.insert_header((ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
+                        }
+
+                        response.insert_header((ACCESS_CONTROL_MAX_AGE, cors_cfg.max_age.to_string()));
+
+                        return Ok(response.finish());
                     }
                 }
 
                 // Check rate limiting
                 if let (Some(handler_id), Some(rate_cfg)) = (handler_id_opt, rate_limit_config.as_ref()) {
-                    let rate_limit_response = Python::attach(|py| {
-                        use crate::middleware::rate_limit::check_rate_limit;
-                        // Convert headers to AHashMap
-                        let header_map: ahash::AHashMap<String, String> = headers.iter()
-                            .map(|(k, v)| (k.to_lowercase(), v.clone()))
-                            .collect();
-                        check_rate_limit(handler_id, &header_map, None, rate_cfg, py)
-                    });
-
-                    if let Some(response) = rate_limit_response {
+                    use crate::middleware::rate_limit::check_rate_limit;
+                    // Convert headers to AHashMap
+                    let header_map: ahash::AHashMap<String, String> = headers.iter()
+                        .map(|(k, v)| (k.to_lowercase(), v.clone()))
+                        .collect();
+                    if let Some(response) = check_rate_limit(handler_id, &header_map, None, rate_cfg) {
                         return Ok(response);
                     }
                 }
@@ -743,22 +744,67 @@ pub fn handle_actix_http_request(
 
                         // Add CORS headers to response if not skipped
                         if !should_skip_cors {
-                            if let Some(config) = cors_config {
-                                Python::attach(|py| {
-                                    use crate::middleware::cors::add_cors_headers_to_response;
-                                    let origins_slice = if global_cors_origins.is_empty() {
-                                        None
+                            if let Some(ref cors_cfg) = cors_config {
+                                use actix_web::http::header::{
+                                    ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN,
+                                    ACCESS_CONTROL_EXPOSE_HEADERS, VARY,
+                                };
+
+                                // Merge route-specific origins with global origins
+                                let origins = if !cors_cfg.origins.is_empty() {
+                                    &cors_cfg.origins
+                                } else if !global_cors_origins.is_empty() {
+                                    &global_cors_origins
+                                } else {
+                                    // No CORS configured, skip
+                                    return Ok::<_, actix_web::Error>(http_response);
+                                };
+
+                                let is_wildcard = origins.iter().any(|o| o == "*");
+                                if is_wildcard && cors_cfg.credentials {
+                                    // Invalid configuration - skip adding headers
+                                    return Ok::<_, actix_web::Error>(http_response);
+                                }
+
+                                // Determine origin to use
+                                let origin_to_use = if is_wildcard {
+                                    "*"
+                                } else if let Some(req_origin) = request_origin.as_deref() {
+                                    if origins.iter().any(|o| o == req_origin) {
+                                        req_origin
                                     } else {
-                                        Some(global_cors_origins.as_slice())
-                                    };
-                                    add_cors_headers_to_response(
-                                        &mut http_response,
-                                        request_origin.as_deref(),
-                                        &config,
-                                        origins_slice,
-                                        py,
+                                        return Ok::<_, actix_web::Error>(http_response); // Origin not allowed
+                                    }
+                                } else {
+                                    origins.first().map(|s| s.as_str()).unwrap_or("*")
+                                };
+
+                                // Add headers
+                                http_response.headers_mut().insert(
+                                    ACCESS_CONTROL_ALLOW_ORIGIN,
+                                    origin_to_use.parse().unwrap(),
+                                );
+
+                                if origin_to_use != "*" {
+                                    http_response.headers_mut().insert(
+                                        VARY,
+                                        "Origin".parse().unwrap(),
                                     );
-                                });
+                                }
+
+                                if cors_cfg.credentials {
+                                    http_response.headers_mut().insert(
+                                        ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                                        "true".parse().unwrap(),
+                                    );
+                                }
+
+                                if !cors_cfg.expose_headers.is_empty() {
+                                    http_response.headers_mut().insert(
+                                        ACCESS_CONTROL_EXPOSE_HEADERS,
+                                        cors_cfg.expose_headers.join(", ").parse().unwrap(),
+                                    );
+                                }
                             }
                         }
 

@@ -166,11 +166,12 @@ class SchemaGenerator:
         fields = meta.get("fields", [])
 
         for field in fields:
-            source = field.get("source")
-            name = field.get("name")
-            alias = field.get("alias") or name
-            annotation = field.get("annotation")
-            default = field.get("default")
+            # Access FieldDefinition attributes directly
+            source = field.source
+            name = field.name
+            alias = field.alias or name
+            annotation = field.annotation
+            default = field.default
 
             # Skip request, body, form, file, and dependency parameters
             if source in ("request", "body", "form", "file", "dependency"):
@@ -222,17 +223,18 @@ class SchemaGenerator:
         if not body_param or not body_type:
             # Check for form/file fields
             fields = meta.get("fields", [])
-            form_fields = [f for f in fields if f.get("source") in ("form", "file")]
+            form_fields = [f for f in fields if f.source in ("form", "file")]
 
             if form_fields:
                 # Multipart form data
                 properties = {}
                 required = []
                 for field in form_fields:
-                    name = field.get("alias") or field.get("name")
-                    annotation = field.get("annotation")
-                    default = field.get("default")
-                    source = field.get("source")
+                    # Access FieldDefinition attributes directly
+                    name = field.alias or field.name
+                    annotation = field.annotation
+                    default = field.default
+                    source = field.source
 
                     if source == "file":
                         # File upload
@@ -316,7 +318,7 @@ class SchemaGenerator:
         if self.config.include_error_responses:
             # Check if request body is present (for 422 validation errors)
             has_request_body = meta.get("body_struct_param") or any(
-                f.get("source") in ("body", "form", "file")
+                f.source in ("body", "form", "file")
                 for f in meta.get("fields", [])
             )
 

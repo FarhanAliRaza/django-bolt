@@ -8,7 +8,7 @@ use crate::middleware::auth::{authenticate, populate_auth_context};
 use crate::permissions::{evaluate_guards, GuardResult};
 use crate::request::PyRequest;
 use crate::router::parse_query_string;
-use crate::state::{GLOBAL_ROUTER, MIDDLEWARE_METADATA, ROUTE_METADATA, TASK_LOCALS};
+use crate::state::{GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
 
 /// Handle a test request synchronously
 /// Returns (status_code, headers, body_bytes)
@@ -62,10 +62,6 @@ pub fn handle_test_request(
     }
 
     // Get metadata
-    let middleware_meta = MIDDLEWARE_METADATA
-        .get()
-        .and_then(|meta_map| meta_map.get(&handler_id).map(|m| m.clone_ref(py)));
-
     let route_metadata = ROUTE_METADATA
         .get()
         .and_then(|meta_map| meta_map.get(&handler_id).cloned());
@@ -126,7 +122,7 @@ pub fn handle_test_request(
     }
 
     // Create context dict
-    let context = if middleware_meta.is_some() || auth_ctx.is_some() {
+    let context = if auth_ctx.is_some() {
         let ctx_dict = PyDict::new(py);
         let ctx_py = ctx_dict.unbind();
         if let Some(ref auth) = auth_ctx {

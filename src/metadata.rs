@@ -9,6 +9,69 @@ use std::collections::{HashMap, HashSet};
 use crate::middleware::auth::AuthBackend;
 use crate::permissions::Guard;
 
+/// CORS configuration parsed at startup
+#[derive(Debug, Clone)]
+pub struct CorsConfig {
+    pub origins: Vec<String>,
+    pub credentials: bool,
+    pub methods: Vec<String>,
+    pub headers: Vec<String>,
+    pub expose_headers: Vec<String>,
+    pub max_age: u32,
+    // Pre-computed header strings to avoid per-request allocations
+    pub methods_str: String,
+    pub headers_str: String,
+    pub expose_headers_str: String,
+    pub max_age_str: String,
+}
+
+impl Default for CorsConfig {
+    fn default() -> Self {
+        let methods = vec![
+            "GET".to_string(),
+            "POST".to_string(),
+            "PUT".to_string(),
+            "PATCH".to_string(),
+            "DELETE".to_string(),
+            "OPTIONS".to_string(),
+        ];
+        let headers = vec!["Content-Type".to_string(), "Authorization".to_string()];
+        let expose_headers = vec![];
+        let max_age = 3600;
+
+        CorsConfig {
+            origins: vec![],
+            credentials: false,
+            methods_str: methods.join(", "),
+            headers_str: headers.join(", "),
+            expose_headers_str: expose_headers.join(", "),
+            max_age_str: max_age.to_string(),
+            methods,
+            headers,
+            expose_headers,
+            max_age,
+        }
+    }
+}
+
+/// Rate limiting configuration parsed at startup
+#[derive(Debug, Clone)]
+pub struct RateLimitConfig {
+    pub rps: u32,
+    pub burst: u32,
+    pub key_type: String,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        RateLimitConfig {
+            rps: 100,
+            burst: 200,
+            key_type: "ip".to_string(),
+        }
+    }
+}
+
 /// Complete route metadata including middleware, auth, and guards
 #[derive(Debug, Clone)]
 pub struct RouteMetadata {
@@ -16,6 +79,8 @@ pub struct RouteMetadata {
     pub auth_backends: Vec<AuthBackend>,
     pub guards: Vec<Guard>,
     pub skip: HashSet<String>,
+    pub cors_config: Option<CorsConfig>,
+    pub rate_limit_config: Option<RateLimitConfig>,
 }
 
 /// Parsed middleware configuration
@@ -33,12 +98,25 @@ impl RouteMetadata {
         let mut guards = Vec::new();
         let mut skip: HashSet<String> = HashSet::new();
 
-        // Parse middleware list
+        // Parse middleware list and extract CORS and rate_limit configs
+        let mut cors_config: Option<CorsConfig> = None;
+        let mut rate_limit_config: Option<RateLimitConfig> = None;
+
         if let Ok(Some(mw_list)) = py_meta.get_item("middleware") {
             if let Ok(py_list) = mw_list.extract::<Vec<HashMap<String, Py<PyAny>>>>() {
                 for mw_dict in py_list {
                     if let Some(mw_type) = mw_dict.get("type") {
                         if let Ok(type_str) = mw_type.extract::<String>(py) {
+                            // Parse CORS config separately for fast access
+                            if type_str == "cors" && cors_config.is_none() {
+                                cors_config = parse_cors_config(&mw_dict, py);
+                            }
+
+                            // Parse rate_limit config separately for fast access
+                            if type_str == "rate_limit" && rate_limit_config.is_none() {
+                                rate_limit_config = parse_rate_limit_config(&mw_dict, py);
+                            }
+
                             // Convert config to JSON-compatible format
                             let mut config = HashMap::new();
                             for (key, value) in &mw_dict {
@@ -94,8 +172,94 @@ impl RouteMetadata {
             auth_backends,
             guards,
             skip,
+            cors_config,
+            rate_limit_config,
         })
     }
+}
+
+/// Parse CORS configuration from middleware dict
+fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<CorsConfig> {
+    let mut config = CorsConfig::default();
+
+    // Parse origins (required for CORS to be active)
+    if let Some(origins_py) = dict.get("origins") {
+        if let Ok(origins) = origins_py.extract::<Vec<String>>(py) {
+            config.origins = origins;
+        }
+    }
+
+    // Parse credentials
+    if let Some(cred_py) = dict.get("credentials") {
+        if let Ok(cred) = cred_py.extract::<bool>(py) {
+            config.credentials = cred;
+        }
+    }
+
+    // Parse methods (optional, has defaults)
+    if let Some(methods_py) = dict.get("methods") {
+        if let Ok(methods) = methods_py.extract::<Vec<String>>(py) {
+            config.methods_str = methods.join(", ");
+            config.methods = methods;
+        }
+    }
+
+    // Parse headers (optional, has defaults)
+    if let Some(headers_py) = dict.get("headers") {
+        if let Ok(headers) = headers_py.extract::<Vec<String>>(py) {
+            config.headers_str = headers.join(", ");
+            config.headers = headers;
+        }
+    }
+
+    // Parse expose_headers (optional)
+    if let Some(expose_py) = dict.get("expose_headers") {
+        if let Ok(expose) = expose_py.extract::<Vec<String>>(py) {
+            config.expose_headers_str = expose.join(", ");
+            config.expose_headers = expose;
+        }
+    }
+
+    // Parse max_age (optional)
+    if let Some(age_py) = dict.get("max_age") {
+        if let Ok(age) = age_py.extract::<u32>(py) {
+            config.max_age_str = age.to_string();
+            config.max_age = age;
+        }
+    }
+
+    Some(config)
+}
+
+/// Parse rate limiting configuration from middleware dict
+fn parse_rate_limit_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<RateLimitConfig> {
+    let mut config = RateLimitConfig::default();
+
+    // Parse rps (required)
+    if let Some(rps_py) = dict.get("rps") {
+        if let Ok(rps) = rps_py.extract::<u32>(py) {
+            config.rps = rps;
+        }
+    }
+
+    // Parse burst (optional, defaults to 2x rps)
+    if let Some(burst_py) = dict.get("burst") {
+        if let Ok(burst) = burst_py.extract::<u32>(py) {
+            config.burst = burst;
+        }
+    } else {
+        // If burst not specified, default to 2x rps
+        config.burst = config.rps * 2;
+    }
+
+    // Parse key_type (optional, defaults to "ip")
+    if let Some(key_py) = dict.get("key") {
+        if let Ok(key_type) = key_py.extract::<String>(py) {
+            config.key_type = key_type;
+        }
+    }
+
+    Some(config)
 }
 
 /// Parse a single auth backend from Python dict

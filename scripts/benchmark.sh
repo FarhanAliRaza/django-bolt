@@ -256,22 +256,21 @@ ab -k -c $C -n $N -p "$FORM_FILE" -T 'application/x-www-form-urlencoded' http://
 rm -f "$FORM_FILE"
 
 echo "### File Upload (POST /upload)"
-# Create a multipart form data file
+# Create a multipart form data file with proper CRLF line endings
 UPLOAD_FILE=$(mktemp)
 BOUNDARY="----BoltBenchmark$(date +%s)"
-cat > "$UPLOAD_FILE" << EOF
---$BOUNDARY
-Content-Disposition: form-data; name="file"; filename="test1.txt"
-Content-Type: text/plain
-
-This is test file content 1
---$BOUNDARY
-Content-Disposition: form-data; name="file"; filename="test2.txt"
-Content-Type: text/plain
-
-This is test file content 2
---$BOUNDARY--
-EOF
+# Use printf with \r\n for proper CRLF line endings (required by HTTP multipart/form-data spec)
+printf -- "--%s\r\n" "$BOUNDARY" > "$UPLOAD_FILE"
+printf "Content-Disposition: form-data; name=\"file\"; filename=\"test1.txt\"\r\n" >> "$UPLOAD_FILE"
+printf "Content-Type: text/plain\r\n" >> "$UPLOAD_FILE"
+printf "\r\n" >> "$UPLOAD_FILE"
+printf "This is test file content 1\r\n" >> "$UPLOAD_FILE"
+printf -- "--%s\r\n" "$BOUNDARY" >> "$UPLOAD_FILE"
+printf "Content-Disposition: form-data; name=\"file\"; filename=\"test2.txt\"\r\n" >> "$UPLOAD_FILE"
+printf "Content-Type: text/plain\r\n" >> "$UPLOAD_FILE"
+printf "\r\n" >> "$UPLOAD_FILE"
+printf "This is test file content 2\r\n" >> "$UPLOAD_FILE"
+printf -- "--%s--\r\n" "$BOUNDARY" >> "$UPLOAD_FILE"
 ab -k -c $C -n $N -p "$UPLOAD_FILE" -T "multipart/form-data; boundary=$BOUNDARY" http://$HOST:$PORT/upload 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 rm -f "$UPLOAD_FILE"
 
@@ -279,22 +278,21 @@ rm -f "$UPLOAD_FILE"
 echo "### Mixed Form with Files (POST /mixed-form)"
 MIXED_FILE=$(mktemp)
 BOUNDARY="----BoltMixed$(date +%s)"
-cat > "$MIXED_FILE" << EOF
---$BOUNDARY
-Content-Disposition: form-data; name="title"
-
-Test Title
---$BOUNDARY
-Content-Disposition: form-data; name="description"
-
-This is a test description
---$BOUNDARY
-Content-Disposition: form-data; name="file"; filename="attachment.txt"
-Content-Type: text/plain
-
-File attachment content
---$BOUNDARY--
-EOF
+# Use printf with \r\n for proper CRLF line endings (required by HTTP multipart/form-data spec)
+printf -- "--%s\r\n" "$BOUNDARY" > "$MIXED_FILE"
+printf "Content-Disposition: form-data; name=\"title\"\r\n" >> "$MIXED_FILE"
+printf "\r\n" >> "$MIXED_FILE"
+printf "Test Title\r\n" >> "$MIXED_FILE"
+printf -- "--%s\r\n" "$BOUNDARY" >> "$MIXED_FILE"
+printf "Content-Disposition: form-data; name=\"description\"\r\n" >> "$MIXED_FILE"
+printf "\r\n" >> "$MIXED_FILE"
+printf "This is a test description\r\n" >> "$MIXED_FILE"
+printf -- "--%s\r\n" "$BOUNDARY" >> "$MIXED_FILE"
+printf "Content-Disposition: form-data; name=\"file\"; filename=\"attachment.txt\"\r\n" >> "$MIXED_FILE"
+printf "Content-Type: text/plain\r\n" >> "$MIXED_FILE"
+printf "\r\n" >> "$MIXED_FILE"
+printf "File attachment content\r\n" >> "$MIXED_FILE"
+printf -- "--%s--\r\n" "$BOUNDARY" >> "$MIXED_FILE"
 ab -k -c $C -n $N -p "$MIXED_FILE" -T "multipart/form-data; boundary=$BOUNDARY" http://$HOST:$PORT/mixed-form 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 rm -f "$MIXED_FILE"
 

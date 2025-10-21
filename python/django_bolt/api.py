@@ -18,7 +18,7 @@ from .binding import (
     convert_primitive,
     create_extractor,
 )
-from .typing import is_msgspec_struct, is_optional
+from .typing import is_msgspec_struct, is_optional, unwrap_optional
 from .request_parsing import parse_form_data
 from .dependencies import resolve_dependency
 from .serialization import serialize_response
@@ -118,7 +118,32 @@ def extract_parameter_value(
 
     elif source == "file":
         if key in files_map:
-            return files_map[key], body_obj, body_loaded
+            file_info = files_map[key]
+            # Extract appropriate value based on annotation type
+            unwrapped_type = unwrap_optional(annotation) if is_optional(annotation) else annotation
+
+            # Get the origin type (list, dict, etc.)
+            origin = get_origin(unwrapped_type)
+
+            if unwrapped_type is bytes:
+                # For bytes annotation, extract content from single file
+                if isinstance(file_info, list):
+                    # Multiple files, but bytes expects single - take first
+                    return file_info[0].get("content", b""), body_obj, body_loaded
+                return file_info.get("content", b""), body_obj, body_loaded
+            elif origin is list:
+                # For list annotation, ensure value is a list
+                if isinstance(file_info, list):
+                    return file_info, body_obj, body_loaded
+                else:
+                    # Wrap single file in list
+                    return [file_info], body_obj, body_loaded
+            else:
+                # Return full file info for dict/Any annotations
+                if isinstance(file_info, list):
+                    # List but annotation doesn't expect list - take first
+                    return file_info[0], body_obj, body_loaded
+                return file_info, body_obj, body_loaded
         elif default is not inspect.Parameter.empty or is_optional(annotation):
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise ValueError(f"Missing required file: {key}")

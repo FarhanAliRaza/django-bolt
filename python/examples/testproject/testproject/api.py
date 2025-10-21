@@ -33,15 +33,15 @@ class Item(msgspec.Struct):
     is_offer: Optional[bool] = None
 
 
-
+import test_data
 
 @api.get("/")
-async def read_root() -> dict:
+async def read_root():
     """
     Root endpoint.
     Returns a simple "Hello World" dictionary.
     """
-    return {"Hello": "World"}
+    return test_data.JSON_10K
 
 
 @api.get("/items/{item_id}")

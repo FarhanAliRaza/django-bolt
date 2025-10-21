@@ -11,13 +11,118 @@ use bytes::Bytes;
 
 use crate::direct_stream;
 use crate::error;
+use crate::metadata::CorsConfig;
 use crate::middleware;
 use crate::middleware::auth::{authenticate, populate_auth_context};
 use crate::permissions::{evaluate_guards, GuardResult};
 use crate::request::PyRequest;
 use crate::router::parse_query_string;
-use crate::state::{AppState, GLOBAL_ROUTER, MIDDLEWARE_METADATA, ROUTE_METADATA, TASK_LOCALS};
+use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
 use crate::streaming::create_python_stream;
+
+/// Add CORS headers to response using Rust-native config (NO GIL required)
+/// This replaces the Python-based CORS header addition
+fn add_cors_headers_rust(
+    response: &mut HttpResponse,
+    request_origin: Option<&str>,
+    cors_config: &CorsConfig,
+    global_origins: &[String],
+) {
+    // Merge route-specific origins with global origins
+    let origins = if !cors_config.origins.is_empty() {
+        &cors_config.origins
+    } else if !global_origins.is_empty() {
+        global_origins
+    } else {
+        // No CORS configured
+        return;
+    };
+
+    // SECURITY: Validate wildcard + credentials
+    let is_wildcard = origins.iter().any(|o| o == "*");
+    if is_wildcard && cors_config.credentials {
+        // Invalid configuration - skip adding headers
+        return;
+    }
+
+    // Determine origin to use
+    let origin_to_use = if is_wildcard {
+        "*"
+    } else if let Some(req_origin) = request_origin {
+        // Check if request origin is allowed
+        if origins.iter().any(|o| o == req_origin) {
+            req_origin
+        } else {
+            return; // Origin not allowed
+        }
+    } else {
+        origins.first().map(|s| s.as_str()).unwrap_or("*")
+    };
+
+    // Add Access-Control-Allow-Origin
+    if let Ok(val) = HeaderValue::from_str(origin_to_use) {
+        response.headers_mut().insert(
+            actix_web::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            val,
+        );
+    }
+
+    // Add Vary: Origin when not using wildcard
+    if origin_to_use != "*" {
+        response.headers_mut().insert(
+            actix_web::http::header::VARY,
+            HeaderValue::from_static("Origin"),
+        );
+    }
+
+    // Add credentials header if enabled
+    if cors_config.credentials {
+        response.headers_mut().insert(
+            actix_web::http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            HeaderValue::from_static("true"),
+        );
+    }
+
+    // Add exposed headers if specified (uses pre-computed string - zero allocations)
+    if !cors_config.expose_headers.is_empty() {
+        if let Ok(val) = HeaderValue::from_str(&cors_config.expose_headers_str) {
+            response.headers_mut().insert(
+                actix_web::http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
+                val,
+            );
+        }
+    }
+}
+
+/// Add CORS preflight headers for OPTIONS requests (uses pre-computed strings - zero allocations)
+fn add_cors_preflight_headers(
+    response: &mut HttpResponse,
+    cors_config: &CorsConfig,
+) {
+    // Use pre-computed methods_str - no allocation!
+    if let Ok(val) = HeaderValue::from_str(&cors_config.methods_str) {
+        response.headers_mut().insert(
+            actix_web::http::header::ACCESS_CONTROL_ALLOW_METHODS,
+            val,
+        );
+    }
+
+    // Use pre-computed headers_str - no allocation!
+    if let Ok(val) = HeaderValue::from_str(&cors_config.headers_str) {
+        response.headers_mut().insert(
+            actix_web::http::header::ACCESS_CONTROL_ALLOW_HEADERS,
+            val,
+        );
+    }
+
+    // Use pre-computed max_age_str - no allocation!
+    if let Ok(val) = HeaderValue::from_str(&cors_config.max_age_str) {
+        response.headers_mut().insert(
+            actix_web::http::header::ACCESS_CONTROL_MAX_AGE,
+            val,
+        );
+    }
+}
 
 pub async fn handle_request(
     req: HttpRequest,
@@ -42,17 +147,36 @@ pub async fn handle_request(
                 handler_id,
             )
         } else {
-            // Automatic OPTIONS handling: if no explicit OPTIONS handler exists,
-            // check if other methods are registered for this path and return Allow header
+            // No explicit handler found - check for automatic OPTIONS
             if method == "OPTIONS" {
                 let available_methods = router.find_all_methods(&path);
                 if !available_methods.is_empty() {
-                    // Return 200 OK with Allow header listing available methods
                     let allow_header = available_methods.join(", ");
-                    return HttpResponse::Ok()
+                    let mut response = HttpResponse::NoContent()
                         .insert_header(("Allow", allow_header))
-                        .content_type("application/json")
-                        .body(b"{}".to_vec());
+                        .insert_header(("Content-Type", "application/json"))
+                        .finish();
+
+                    // Try to find a GET route at this path to get CORS metadata
+                    if let Some((_, _, get_handler_id)) = router.find("GET", &path) {
+                        // Get route metadata for CORS config - clone once to release lock immediately
+                        let route_meta = ROUTE_METADATA
+                            .get()
+                            .and_then(|meta_map| meta_map.get(&get_handler_id).cloned());
+
+                        // Add CORS headers if configured
+                        if let Some(ref meta) = route_meta {
+                            if let Some(ref cors_cfg) = meta.cors_config {
+                                // Direct header lookup - no HashMap allocation
+                                let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+                                add_cors_headers_rust(&mut response, origin, cors_cfg, &state.cors_allowed_origins);
+                                // Add preflight-specific headers for OPTIONS
+                                add_cors_preflight_headers(&mut response, cors_cfg);
+                            }
+                        }
+                    }
+
+                    return response;
                 }
             }
 
@@ -100,37 +224,29 @@ pub async fn handle_request(
     // Get peer address for rate limiting fallback
     let peer_addr = req.peer_addr().map(|addr| addr.ip().to_string());
 
-    // Check for middleware metadata (Python-based, for backward compatibility)
-    let middleware_meta = MIDDLEWARE_METADATA.get().and_then(|meta_map| {
-        meta_map
-            .get(&handler_id)
-            .map(|m| Python::attach(|py| m.clone_ref(py)))
-    });
-
-    // Get parsed route metadata (Rust-native)
+    // Get parsed route metadata (Rust-native) - clone to release DashMap lock immediately
+    // This trade-off: small clone cost < lock contention across concurrent requests
     let route_metadata = ROUTE_METADATA
         .get()
         .and_then(|meta_map| meta_map.get(&handler_id).cloned());
+
     // Compute skip flags (e.g., skip compression)
     let skip_compression = route_metadata
         .as_ref()
         .map(|m| m.skip.contains("compression"))
         .unwrap_or(false);
 
-    // Process old-style middleware (CORS preflight, rate limiting, auth)
-    if let Some(ref meta) = middleware_meta {
-        if let Some(early_response) = middleware::process_middleware(
-            &method,
-            &path,
-            &headers,
-            peer_addr.as_deref(),
-            handler_id,
-            meta,
-            Some(&state.cors_allowed_origins),
-        )
-        .await
-        {
-            return early_response;
+    // Process rate limiting (Rust-native, no GIL)
+    if let Some(ref route_meta) = route_metadata {
+        if let Some(ref rate_config) = route_meta.rate_limit_config {
+            if let Some(response) = middleware::rate_limit::check_rate_limit(
+                handler_id,
+                &headers,
+                peer_addr.as_deref(),
+                rate_config,
+            ) {
+                return response;
+            }
         }
     }
 
@@ -190,8 +306,8 @@ pub async fn handle_request(
         let dispatch = state.dispatch.clone_ref(py);
         let handler = route_handler.clone_ref(py);
 
-        // Create context dict if middleware or auth is present
-        let context = if middleware_meta.is_some() || auth_ctx.is_some() {
+        // Create context dict if auth is present
+        let context = if auth_ctx.is_some() {
             let ctx_dict = PyDict::new(py);
             let ctx_py = ctx_dict.unbind();
             // Populate with auth context if present
@@ -381,10 +497,12 @@ pub async fn handle_request(
                     let response_body = if is_head_request { Vec::new() } else { body_bytes };
                     let mut response = builder.body(response_body);
 
-                    // Add CORS headers if middleware is configured
-                    if let Some(ref meta) = middleware_meta {
-                        let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-                        middleware::add_cors_headers(&mut response, origin, meta, Some(&state.cors_allowed_origins));
+                    // Add CORS headers if configured (NO GIL - uses Rust-native config)
+                    if let Some(ref route_meta) = route_metadata {
+                        if let Some(ref cors_cfg) = route_meta.cors_config {
+                            let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+                            add_cors_headers_rust(&mut response, origin, cors_cfg, &state.cors_allowed_origins);
+                        }
                     }
 
                     return response;

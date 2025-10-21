@@ -5,10 +5,10 @@ use governor::clock::{Clock, DefaultClock};
 use governor::state::{InMemoryState, NotKeyed};
 use governor::{Quota, RateLimiter};
 use once_cell::sync::Lazy;
-use pyo3::prelude::*;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::metadata::RateLimitConfig;
 
 type Limiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
@@ -28,24 +28,12 @@ pub fn check_rate_limit(
     handler_id: usize,
     headers: &AHashMap<String, String>,
     peer_addr: Option<&str>,
-    config: &HashMap<String, Py<PyAny>>,
-    py: Python,
+    config: &RateLimitConfig,
 ) -> Option<HttpResponse> {
-    // Extract rate limit config
-    let rps = config
-        .get("rps")
-        .and_then(|r| r.extract::<u32>(py).ok())
-        .unwrap_or(100);
-
-    let burst = config
-        .get("burst")
-        .and_then(|b| b.extract::<u32>(py).ok())
-        .unwrap_or(rps * 2);
-
-    let key_type = config
-        .get("key")
-        .and_then(|k| k.extract::<String>(py).ok())
-        .unwrap_or_else(|| "ip".to_string());
+    // Config is already parsed at startup - no GIL needed!
+    let rps = config.rps;
+    let burst = config.burst;
+    let key_type = &config.key_type;
 
     // Determine the rate limit key
     let key = match key_type.as_str() {

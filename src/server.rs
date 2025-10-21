@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::handler::handle_request;
 use crate::metadata::RouteMetadata;
 use crate::router::Router;
-use crate::state::{AppState, GLOBAL_ROUTER, MIDDLEWARE_METADATA, ROUTE_METADATA, TASK_LOCALS};
+use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
 
 #[pyfunction]
 pub fn register_routes(
@@ -32,14 +32,10 @@ pub fn register_middleware_metadata(
     py: Python<'_>,
     metadata: Vec<(usize, Py<PyAny>)>,
 ) -> PyResult<()> {
-    let mut metadata_map = AHashMap::new();
     let mut parsed_metadata_map = AHashMap::new();
 
     for (handler_id, meta) in metadata {
-        // Store raw Python metadata for backward compatibility
-        metadata_map.insert(handler_id, meta.clone_ref(py));
-
-        // Parse into typed Rust metadata
+        // Parse Python metadata into typed Rust metadata
         if let Ok(py_dict) = meta.bind(py).downcast::<PyDict>() {
             match RouteMetadata::from_python(py_dict, py) {
                 Ok(parsed) => {
@@ -51,10 +47,6 @@ pub fn register_middleware_metadata(
             }
         }
     }
-
-    MIDDLEWARE_METADATA
-        .set(Arc::new(metadata_map))
-        .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Middleware metadata already initialized"))?;
 
     ROUTE_METADATA
         .set(Arc::new(parsed_metadata_map))

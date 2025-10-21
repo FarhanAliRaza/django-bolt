@@ -81,31 +81,25 @@ class StaticRouteRegistrar:
         self.api._handlers[handler_id] = handler
 
         # Create metadata for static handler
-        # Extract path parameter metadata
+        # Extract path parameter metadata using FieldDefinition
+        from django_bolt.typing import FieldDefinition
+
         sig = inspect.signature(handler)
+        path_field = FieldDefinition(
+            name="path",
+            annotation=str,
+            default=inspect.Parameter.empty,
+            source="path",
+            alias=None,
+            embed=False,
+            dependency=None,
+            kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+
         meta = {
             "mode": "mixed",
             "sig": sig,
-            "fields": [{
-                "name": "path",
-                "annotation": str,
-                "default": inspect.Parameter.empty,
-                "kind": inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                "source": "path",
-                "alias": None,
-                "embed": False,
-                "dependency": None,
-            }],
+            "fields": [path_field],
             "path_params": {"path"},
-            "params": [{
-                "name": "path",
-                "annotation": str,
-                "default": inspect.Parameter.empty,
-                "kind": inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                "source": "path",
-                "alias": None,
-                "embed": False,
-                "dependency": None,
-            }],
         }
         self.api._handler_meta[handler] = meta

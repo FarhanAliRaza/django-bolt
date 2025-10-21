@@ -18,24 +18,38 @@ pub struct CorsConfig {
     pub headers: Vec<String>,
     pub expose_headers: Vec<String>,
     pub max_age: u32,
+    // Pre-computed header strings to avoid per-request allocations
+    pub methods_str: String,
+    pub headers_str: String,
+    pub expose_headers_str: String,
+    pub max_age_str: String,
 }
 
 impl Default for CorsConfig {
     fn default() -> Self {
+        let methods = vec![
+            "GET".to_string(),
+            "POST".to_string(),
+            "PUT".to_string(),
+            "PATCH".to_string(),
+            "DELETE".to_string(),
+            "OPTIONS".to_string(),
+        ];
+        let headers = vec!["Content-Type".to_string(), "Authorization".to_string()];
+        let expose_headers = vec![];
+        let max_age = 3600;
+
         CorsConfig {
             origins: vec![],
             credentials: false,
-            methods: vec![
-                "GET".to_string(),
-                "POST".to_string(),
-                "PUT".to_string(),
-                "PATCH".to_string(),
-                "DELETE".to_string(),
-                "OPTIONS".to_string(),
-            ],
-            headers: vec!["Content-Type".to_string(), "Authorization".to_string()],
-            expose_headers: vec![],
-            max_age: 3600,
+            methods_str: methods.join(", "),
+            headers_str: headers.join(", "),
+            expose_headers_str: expose_headers.join(", "),
+            max_age_str: max_age.to_string(),
+            methods,
+            headers,
+            expose_headers,
+            max_age,
         }
     }
 }
@@ -185,6 +199,7 @@ fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Co
     // Parse methods (optional, has defaults)
     if let Some(methods_py) = dict.get("methods") {
         if let Ok(methods) = methods_py.extract::<Vec<String>>(py) {
+            config.methods_str = methods.join(", ");
             config.methods = methods;
         }
     }
@@ -192,6 +207,7 @@ fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Co
     // Parse headers (optional, has defaults)
     if let Some(headers_py) = dict.get("headers") {
         if let Ok(headers) = headers_py.extract::<Vec<String>>(py) {
+            config.headers_str = headers.join(", ");
             config.headers = headers;
         }
     }
@@ -199,6 +215,7 @@ fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Co
     // Parse expose_headers (optional)
     if let Some(expose_py) = dict.get("expose_headers") {
         if let Ok(expose) = expose_py.extract::<Vec<String>>(py) {
+            config.expose_headers_str = expose.join(", ");
             config.expose_headers = expose;
         }
     }
@@ -206,6 +223,7 @@ fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Co
     // Parse max_age (optional)
     if let Some(age_py) = dict.get("max_age") {
         if let Ok(age) = age_py.extract::<u32>(py) {
+            config.max_age_str = age.to_string();
             config.max_age = age;
         }
     }

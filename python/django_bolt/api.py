@@ -932,7 +932,8 @@ class BoltAPI:
     def _handle_http_exception(self, he: HTTPException) -> Response:
         """Handle HTTPException and return response."""
         try:
-            body = msgspec.json.encode({"detail": he.detail})
+            from . import _json
+            body = _json.encode({"detail": he.detail})
             headers = [("content-type", "application/json")]
         except Exception:
             body = str(he.detail).encode()

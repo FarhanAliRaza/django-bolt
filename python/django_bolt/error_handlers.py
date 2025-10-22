@@ -7,6 +7,7 @@ structured HTTP error responses.
 import msgspec
 import traceback
 from typing import Any, Dict, List, Tuple, Optional
+from . import _json
 from .exceptions import (
     HTTPException,
     RequestValidationError,
@@ -38,7 +39,7 @@ def format_error_response(
     if extra is not None:
         error_body["extra"] = extra
 
-    body_bytes = msgspec.json.encode(error_body)
+    body_bytes = _json.encode(error_body)
 
     response_headers = [("content-type", "application/json")]
     if headers:

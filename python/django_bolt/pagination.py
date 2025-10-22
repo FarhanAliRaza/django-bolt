@@ -31,6 +31,7 @@ from asgiref.sync import sync_to_async
 
 from .params import Query
 from .typing import is_optional
+from . import _json
 
 __all__ = [
     "PaginationBase",
@@ -455,7 +456,7 @@ class CursorPagination(PaginationBase):
         Returns:
             Base64-encoded cursor string
         """
-        cursor_data = msgspec.json.encode({"v": value})
+        cursor_data = _json.encode({"v": value})
         return base64.b64encode(cursor_data).decode('utf-8')
 
     def _decode_cursor(self, cursor: str) -> Any:

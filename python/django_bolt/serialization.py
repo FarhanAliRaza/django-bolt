@@ -4,6 +4,7 @@ import msgspec
 from typing import Any, Dict, List, Optional, Tuple
 from .responses import Response as ResponseClass, JSON, PlainText, HTML, Redirect, File, FileResponse, StreamingResponse
 from .binding import coerce_to_response_type_async
+from . import _json
 
 ResponseTuple = Tuple[int, List[Tuple[str, str]], bytes]
 
@@ -71,7 +72,7 @@ async def serialize_generic_response(result: ResponseClass, response_tp: Optiona
     if response_tp is not None:
         try:
             validated = await coerce_to_response_type_async(result.content, response_tp)
-            data_bytes = msgspec.json.encode(validated) if result.media_type == "application/json" else result.to_bytes()
+            data_bytes = _json.encode(validated) if result.media_type == "application/json" else result.to_bytes()
         except Exception as e:
             err = f"Response validation error: {e}"
             return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
@@ -98,7 +99,7 @@ async def serialize_json_response(result: JSON, response_tp: Optional[Any]) -> R
     if response_tp is not None:
         try:
             validated = await coerce_to_response_type_async(result.data, response_tp)
-            data_bytes = msgspec.json.encode(validated)
+            data_bytes = _json.encode(validated)
         except Exception as e:
             err = f"Response validation error: {e}"
             return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
@@ -182,12 +183,12 @@ async def serialize_json_data(result: Any, response_tp: Optional[Any], meta: Dic
     if response_tp is not None:
         try:
             validated = await coerce_to_response_type_async(result, response_tp)
-            data = msgspec.json.encode(validated)
+            data = _json.encode(validated)
         except Exception as e:
             err = f"Response validation error: {e}"
             return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
     else:
-        data = msgspec.json.encode(result)
+        data = _json.encode(result)
 
     status = int(meta.get("default_status_code", 200))
     return status, [("content-type", "application/json")], data

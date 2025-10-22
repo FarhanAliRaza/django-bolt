@@ -1,6 +1,7 @@
 import msgspec
 from typing import Any, Dict, Optional, List
 from pathlib import Path
+from . import _json
 
 # Cache for BOLT_ALLOWED_FILE_PATHS - loaded once at server startup
 _ALLOWED_FILE_PATHS_CACHE: Optional[List[Path]] = None
@@ -70,7 +71,7 @@ class Response:
 
     def to_bytes(self) -> bytes:
         if self.media_type == "application/json":
-            return msgspec.json.encode(self.content)
+            return _json.encode(self.content)
         elif isinstance(self.content, str):
             return self.content.encode()
         elif isinstance(self.content, bytes):
@@ -86,7 +87,7 @@ class JSON:
         self.headers = headers or {}
 
     def to_bytes(self) -> bytes:
-        return msgspec.json.encode(self.data)
+        return _json.encode(self.data)
 
 
 

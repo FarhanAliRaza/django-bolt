@@ -41,7 +41,7 @@ Pagination helpers
 
 ⚠️ Request type maybe self.request
 ⚠️ Docs
-⚠️ Openapi tags summary detail
+✅ Openapi tags summary detail - DONE (Full implementation with tags, summary, description on all decorators)
 ⚠️ content negotiation
 ⚠️ log level setup from cli (easy to deploy)
 ⚠️ with broken settings it was not able to find api from root folder

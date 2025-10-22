@@ -35,7 +35,7 @@ class Item(msgspec.Struct):
 
 import test_data
 
-@api.get("/")
+@api.get("/", tags=["root"], summary="summary", description="description")
 async def read_root():
     """
     Endpoint that returns a simple "Hello World" dictionary.
@@ -43,7 +43,7 @@ async def read_root():
     return {"message": "Hello World"}
 
 
-@api.get("/10k")
+@api.get("/10k-json")
 async def read_10k():
     """
     Endpoint that returns 10k JSON objects.

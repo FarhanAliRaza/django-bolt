@@ -27,7 +27,7 @@ class ActionHandler:
         status_code: Optional HTTP status code
     """
 
-    __slots__ = ('fn', 'methods', 'detail', 'path', 'auth', 'guards', 'response_model', 'status_code')
+    __slots__ = ('fn', 'methods', 'detail', 'path', 'auth', 'guards', 'response_model', 'status_code', 'tags', 'summary', 'description')
 
     def __init__(
         self,
@@ -39,6 +39,9 @@ class ActionHandler:
         guards: Optional[List[Any]] = None,
         response_model: Optional[Any] = None,
         status_code: Optional[int] = None,
+        tags: Optional[List[str]] = None,
+        summary: Optional[str] = None,
+        description: Optional[str] = None,
     ):
         self.fn = fn
         self.methods = [m.upper() for m in methods]  # Normalize to uppercase
@@ -48,6 +51,9 @@ class ActionHandler:
         self.guards = guards
         self.response_model = response_model
         self.status_code = status_code
+        self.tags = tags
+        self.summary = summary
+        self.description = description
    
 
     def __call__(self, *args, **kwargs):
@@ -68,7 +74,10 @@ def action(
     auth: Optional[List[Any]] = None,
     guards: Optional[List[Any]] = None,
     response_model: Optional[Any] = None,
-    status_code: Optional[int] = None
+    status_code: Optional[int] = None,
+    tags: Optional[List[str]] = None,
+    summary: Optional[str] = None,
+    description: Optional[str] = None,
 ) -> Callable:
     """
     Decorator for ViewSet custom actions (DRF-style).
@@ -153,7 +162,10 @@ def action(
             auth=auth,
             guards=guards,
             response_model=response_model,
-            status_code=status_code
+            status_code=status_code,
+            tags=tags,
+            summary=summary,
+            description=description,
         )
 
     return decorator

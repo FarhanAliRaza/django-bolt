@@ -230,9 +230,9 @@ def test_action_decorator_with_metadata():
 def test_action_metadata_passed_to_route():
     """Test that action metadata is passed through to the route."""
     api = BoltAPI()
-
+    from django_bolt.views import ViewSet
     @api.viewset("/users")
-    class UserViewSet:
+    class UserViewSet(ViewSet):
         @action(
             methods=["POST"],
             detail=True,
@@ -246,7 +246,7 @@ def test_action_metadata_passed_to_route():
     # Find the registered handler
     deactivate_route = None
     for method, path, handler_id, handler in api._routes:
-        if path == "/users/{id}/deactivate":
+        if path == "/users/{pk}/deactivate":
             deactivate_route = handler
             break
 

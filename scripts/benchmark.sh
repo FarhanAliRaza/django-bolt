@@ -37,6 +37,12 @@ fi
 ab -k -c $C -n $N http://$HOST:$PORT/ 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
 echo ""
+echo "## 10kb JSON Response Performance"
+
+printf "### 10kb JSON  (/10k-json)\n"
+ab -k -c $C -n $N http://$HOST:$PORT/10k-json 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
+echo ""
 echo "## Response Type Endpoints"
 
 printf "### Header Endpoint (/header)\n"

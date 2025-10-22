@@ -1,196 +1,203 @@
 # Django-Bolt Benchmark
-Generated: Wed Oct 22 10:51:09 PM PKT 2025
+Generated: Wed Oct 22 11:50:02 PM PKT 2025
 Config: 8 processes × 1 workers | C=100 N=10000
 
 ## Root Endpoint Performance
 Failed requests:        0
-Requests per second:    84935.79 [#/sec] (mean)
-Time per request:       1.177 [ms] (mean)
-Time per request:       0.012 [ms] (mean, across all concurrent requests)
+Requests per second:    87911.32 [#/sec] (mean)
+Time per request:       1.138 [ms] (mean)
+Time per request:       0.011 [ms] (mean, across all concurrent requests)
+
+## 10kb JSON Response Performance
+### 10kb JSON  (/10k-json)
+Failed requests:        0
+Requests per second:    69789.03 [#/sec] (mean)
+Time per request:       1.433 [ms] (mean)
+Time per request:       0.014 [ms] (mean, across all concurrent requests)
 
 ## Response Type Endpoints
 ### Header Endpoint (/header)
 Failed requests:        0
-Requests per second:    87234.15 [#/sec] (mean)
-Time per request:       1.146 [ms] (mean)
-Time per request:       0.011 [ms] (mean, across all concurrent requests)
+Requests per second:    83795.61 [#/sec] (mean)
+Time per request:       1.193 [ms] (mean)
+Time per request:       0.012 [ms] (mean, across all concurrent requests)
 ### Cookie Endpoint (/cookie)
 Failed requests:        0
-Requests per second:    83315.28 [#/sec] (mean)
-Time per request:       1.200 [ms] (mean)
+Requests per second:    82520.51 [#/sec] (mean)
+Time per request:       1.212 [ms] (mean)
 Time per request:       0.012 [ms] (mean, across all concurrent requests)
 ### Exception Endpoint (/exc)
 Failed requests:        0
-Requests per second:    83151.09 [#/sec] (mean)
-Time per request:       1.203 [ms] (mean)
+Requests per second:    82648.73 [#/sec] (mean)
+Time per request:       1.210 [ms] (mean)
 Time per request:       0.012 [ms] (mean, across all concurrent requests)
 ### HTML Response (/html)
 Failed requests:        0
-Requests per second:    86200.21 [#/sec] (mean)
-Time per request:       1.160 [ms] (mean)
+Requests per second:    86434.91 [#/sec] (mean)
+Time per request:       1.157 [ms] (mean)
 Time per request:       0.012 [ms] (mean, across all concurrent requests)
 ### Redirect Response (/redirect)
 Failed requests:        0
-Requests per second:    85856.07 [#/sec] (mean)
-Time per request:       1.165 [ms] (mean)
+Requests per second:    86174.21 [#/sec] (mean)
+Time per request:       1.160 [ms] (mean)
 Time per request:       0.012 [ms] (mean, across all concurrent requests)
 ### File Static via FileResponse (/file-static)
 Failed requests:        0
-Requests per second:    29642.36 [#/sec] (mean)
-Time per request:       3.374 [ms] (mean)
-Time per request:       0.034 [ms] (mean, across all concurrent requests)
+Requests per second:    32293.17 [#/sec] (mean)
+Time per request:       3.097 [ms] (mean)
+Time per request:       0.031 [ms] (mean, across all concurrent requests)
 
 ## Streaming and SSE Performance
 ### Streaming Plain Text (/stream)
-  Total:	0.2261 secs
-  Slowest:	0.0133 secs
-  Fastest:	0.0002 secs
-  Average:	0.0021 secs
-  Requests/sec:	44228.7458
-Status code distribution:
-### Server-Sent Events (/sse)
-  Total:	0.2068 secs
-  Slowest:	0.0095 secs
+  Total:	0.2098 secs
+  Slowest:	0.0100 secs
   Fastest:	0.0002 secs
   Average:	0.0020 secs
-  Requests/sec:	48358.1670
+  Requests/sec:	47661.8461
+Status code distribution:
+### Server-Sent Events (/sse)
+  Total:	0.1915 secs
+  Slowest:	0.0114 secs
+  Fastest:	0.0002 secs
+  Average:	0.0018 secs
+  Requests/sec:	52219.9816
 Status code distribution:
 ### Server-Sent Events (async) (/sse-async)
-  Total:	0.3686 secs
-  Slowest:	0.0138 secs
+  Total:	0.3733 secs
+  Slowest:	0.0154 secs
   Fastest:	0.0003 secs
   Average:	0.0035 secs
-  Requests/sec:	27131.1431
+  Requests/sec:	26786.2922
 Status code distribution:
 ### OpenAI Chat Completions (stream) (/v1/chat/completions)
-  Total:	0.6329 secs
-  Slowest:	0.0165 secs
+  Total:	0.6960 secs
+  Slowest:	0.0441 secs
   Fastest:	0.0004 secs
-  Average:	0.0060 secs
-  Requests/sec:	15800.6622
+  Average:	0.0064 secs
+  Requests/sec:	14367.9304
 Status code distribution:
 ### OpenAI Chat Completions (async stream) (/v1/chat/completions-async)
-  Total:	0.8341 secs
-  Slowest:	0.0289 secs
+  Total:	0.8356 secs
+  Slowest:	0.0270 secs
   Fastest:	0.0005 secs
-  Average:	0.0080 secs
-  Requests/sec:	11989.2200
+  Average:	0.0079 secs
+  Requests/sec:	11967.9144
 Status code distribution:
 
 ## Items GET Performance (/items/1?q=hello)
 Failed requests:        0
-Requests per second:    83546.38 [#/sec] (mean)
-Time per request:       1.197 [ms] (mean)
+Requests per second:    82157.12 [#/sec] (mean)
+Time per request:       1.217 [ms] (mean)
 Time per request:       0.012 [ms] (mean, across all concurrent requests)
 
 ## Items PUT JSON Performance (/items/1)
 Failed requests:        0
-Requests per second:    73000.69 [#/sec] (mean)
-Time per request:       1.370 [ms] (mean)
+Requests per second:    73552.67 [#/sec] (mean)
+Time per request:       1.360 [ms] (mean)
 Time per request:       0.014 [ms] (mean, across all concurrent requests)
 
 ## ORM Performance
 ### Users Full10 (/users/full10)
 Failed requests:        0
-Requests per second:    13712.38 [#/sec] (mean)
-Time per request:       7.293 [ms] (mean)
-Time per request:       0.073 [ms] (mean, across all concurrent requests)
+Requests per second:    12584.05 [#/sec] (mean)
+Time per request:       7.947 [ms] (mean)
+Time per request:       0.079 [ms] (mean, across all concurrent requests)
 ### Users Mini10 (/users/mini10)
 Failed requests:        0
-Requests per second:    14913.95 [#/sec] (mean)
-Time per request:       6.705 [ms] (mean)
-Time per request:       0.067 [ms] (mean, across all concurrent requests)
+Requests per second:    14530.32 [#/sec] (mean)
+Time per request:       6.882 [ms] (mean)
+Time per request:       0.069 [ms] (mean, across all concurrent requests)
 
 ## Class-Based Views (CBV) Performance
 ### Simple APIView GET (/cbv-simple)
 Failed requests:        0
-Requests per second:    84317.03 [#/sec] (mean)
-Time per request:       1.186 [ms] (mean)
-Time per request:       0.012 [ms] (mean, across all concurrent requests)
+Requests per second:    87136.10 [#/sec] (mean)
+Time per request:       1.148 [ms] (mean)
+Time per request:       0.011 [ms] (mean, across all concurrent requests)
 ### Simple APIView POST (/cbv-simple)
 Failed requests:        0
-Requests per second:    78823.95 [#/sec] (mean)
-Time per request:       1.269 [ms] (mean)
+Requests per second:    77909.53 [#/sec] (mean)
+Time per request:       1.284 [ms] (mean)
 Time per request:       0.013 [ms] (mean, across all concurrent requests)
 ### Items100 ViewSet GET (/cbv-items100)
 Failed requests:        0
-Requests per second:    60946.62 [#/sec] (mean)
-Time per request:       1.641 [ms] (mean)
-Time per request:       0.016 [ms] (mean, across all concurrent requests)
+Requests per second:    59903.56 [#/sec] (mean)
+Time per request:       1.669 [ms] (mean)
+Time per request:       0.017 [ms] (mean, across all concurrent requests)
 
 ## CBV Items - Basic Operations
 ### CBV Items GET (Retrieve) (/cbv-items/1)
 Failed requests:        0
-Requests per second:    79273.22 [#/sec] (mean)
-Time per request:       1.261 [ms] (mean)
-Time per request:       0.013 [ms] (mean, across all concurrent requests)
+Requests per second:    80071.74 [#/sec] (mean)
+Time per request:       1.249 [ms] (mean)
+Time per request:       0.012 [ms] (mean, across all concurrent requests)
 ### CBV Items PUT (Update) (/cbv-items/1)
 Failed requests:        0
-Requests per second:    74232.99 [#/sec] (mean)
-Time per request:       1.347 [ms] (mean)
+Requests per second:    76502.90 [#/sec] (mean)
+Time per request:       1.307 [ms] (mean)
 Time per request:       0.013 [ms] (mean, across all concurrent requests)
 
 ## CBV Additional Benchmarks
 ### CBV Bench Parse (POST /cbv-bench-parse)
 Failed requests:        0
-Requests per second:    74170.22 [#/sec] (mean)
-Time per request:       1.348 [ms] (mean)
+Requests per second:    77787.72 [#/sec] (mean)
+Time per request:       1.286 [ms] (mean)
 Time per request:       0.013 [ms] (mean, across all concurrent requests)
 ### CBV Response Types (/cbv-response)
 Failed requests:        0
-Requests per second:    82762.96 [#/sec] (mean)
-Time per request:       1.208 [ms] (mean)
+Requests per second:    84578.04 [#/sec] (mean)
+Time per request:       1.182 [ms] (mean)
 Time per request:       0.012 [ms] (mean, across all concurrent requests)
 ### CBV Streaming Plain Text (/cbv-stream)
-  Total:	0.4052 secs
-  Slowest:	0.0179 secs
+  Total:	0.3853 secs
+  Slowest:	0.0177 secs
   Fastest:	0.0002 secs
-  Average:	0.0039 secs
-  Requests/sec:	24679.6220
+  Average:	0.0037 secs
+  Requests/sec:	25954.4278
 Status code distribution:
 ### CBV Server-Sent Events (/cbv-sse)
-  Total:	0.3646 secs
-  Slowest:	0.0249 secs
+  Total:	0.3769 secs
+  Slowest:	0.0206 secs
   Fastest:	0.0002 secs
-  Average:	0.0035 secs
-  Requests/sec:	27427.4343
+  Average:	0.0036 secs
+  Requests/sec:	26535.4889
 Status code distribution:
 ### CBV Chat Completions (stream) (/cbv-chat-completions)
-  Total:	0.8333 secs
-  Slowest:	0.0276 secs
+  Total:	0.8573 secs
+  Slowest:	0.0341 secs
   Fastest:	0.0005 secs
-  Average:	0.0080 secs
-  Requests/sec:	11999.9905
+  Average:	0.0082 secs
+  Requests/sec:	11665.1607
 Status code distribution:
 
 ## ORM Performance with CBV
 ### Users CBV Mini10 (List) (/users/cbv-mini10)
 Failed requests:        0
-Requests per second:    16308.11 [#/sec] (mean)
-Time per request:       6.132 [ms] (mean)
-Time per request:       0.061 [ms] (mean, across all concurrent requests)
+Requests per second:    16705.87 [#/sec] (mean)
+Time per request:       5.986 [ms] (mean)
+Time per request:       0.060 [ms] (mean, across all concurrent requests)
 
 
 ## Form and File Upload Performance
 ### Form Data (POST /form)
 Failed requests:        0
-Requests per second:    68178.87 [#/sec] (mean)
-Time per request:       1.467 [ms] (mean)
+Requests per second:    68089.28 [#/sec] (mean)
+Time per request:       1.469 [ms] (mean)
 Time per request:       0.015 [ms] (mean, across all concurrent requests)
 ### File Upload (POST /upload)
 Failed requests:        0
-Requests per second:    54183.51 [#/sec] (mean)
-Time per request:       1.846 [ms] (mean)
+Requests per second:    54708.49 [#/sec] (mean)
+Time per request:       1.828 [ms] (mean)
 Time per request:       0.018 [ms] (mean, across all concurrent requests)
 ### Mixed Form with Files (POST /mixed-form)
 Failed requests:        0
-Requests per second:    52519.08 [#/sec] (mean)
-Time per request:       1.904 [ms] (mean)
+Requests per second:    51391.16 [#/sec] (mean)
+Time per request:       1.946 [ms] (mean)
 Time per request:       0.019 [ms] (mean, across all concurrent requests)
 
 ## Django Ninja-style Benchmarks
 ### JSON Parse/Validate (POST /bench/parse)
 Failed requests:        0
-Requests per second:    80486.78 [#/sec] (mean)
-Time per request:       1.242 [ms] (mean)
-Time per request:       0.012 [ms] (mean, across all concurrent requests)
+Requests per second:    28811.80 [#/sec] (mean)
+Time per request:       3.471 [ms] (mean)
+Time per request:       0.035 [ms] (mean, across all concurrent requests)

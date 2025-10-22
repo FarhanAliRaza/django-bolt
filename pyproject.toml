@@ -69,5 +69,5 @@ dev = [
     "pytest-django>=4.9.0",
     "pydantic>=2",
     "pyyaml>=6.0",
-
+    "maturin>=1.9.4",
 ]

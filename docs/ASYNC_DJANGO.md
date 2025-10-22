@@ -288,31 +288,31 @@ The binding layer (`python/django_bolt/binding.py:279-284`) detects QuerySets an
 
 ### ✅ Fully Supported in Async Context
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| **QuerySet iteration** | ✅ Works | Use `async for` |
-| **Filtering** | ✅ Works | `filter()`, `exclude()`, `Q()` objects |
-| **Sorting** | ✅ Works | `order_by()`, `distinct()` |
-| **Aggregation** | ✅ Works | Use `await .aaggregate()`, `await .acount()` |
-| **Single object ops** | ✅ Works | Use `await .aget()`, `await .acreate()`, etc. |
-| **Bulk operations** | ✅ Works | Use `await .abulk_create()`, etc. |
-| **select_related()** | ✅ Works | With `async for` iteration |
-| **only()/defer()** | ✅ Works | Query optimization works |
-| **values()/values_list()** | ✅ Works | With `async for` iteration |
-| **Django Cache** | ✅ Works | All cache operations work |
-| **Django Forms** | ✅ Works | Validation and cleaning work |
-| **Django Auth** | ✅ Works | Use `await aauthenticate()` |
+| Feature                    | Status   | Notes                                         |
+| -------------------------- | -------- | --------------------------------------------- |
+| **QuerySet iteration**     | ✅ Works | Use `async for`                               |
+| **Filtering**              | ✅ Works | `filter()`, `exclude()`, `Q()` objects        |
+| **Sorting**                | ✅ Works | `order_by()`, `distinct()`                    |
+| **Aggregation**            | ✅ Works | Use `await .aaggregate()`, `await .acount()`  |
+| **Single object ops**      | ✅ Works | Use `await .aget()`, `await .acreate()`, etc. |
+| **Bulk operations**        | ✅ Works | Use `await .abulk_create()`, etc.             |
+| **select_related()**       | ✅ Works | With `async for` iteration                    |
+| **only()/defer()**         | ✅ Works | Query optimization works                      |
+| **values()/values_list()** | ✅ Works | With `async for` iteration                    |
+| **Django Cache**           | ✅ Works | All cache operations work                     |
+| **Django Forms**           | ✅ Works | Validation and cleaning work                  |
+| **Django Auth**            | ✅ Works | Use `await aauthenticate()`                   |
 
 ## What Doesn't Work
 
 ### ❌ Not Supported (Requires Workarounds)
 
-| Feature | Status | Error | Workaround |
-|---------|--------|-------|------------|
-| **Paginator** | ❌ Fails | `SynchronousOnlyOperation` | Build manual pagination |
-| **Transactions** | ❌ Fails | `SynchronousOnlyOperation` | Use `sync_to_async()` |
-| **prefetch_related()** | ❌ Fails | `SynchronousOnlyOperation` | Use `select_related()` |
-| **Sync ORM methods** | ❌ Fails | `SynchronousOnlyOperation` | Use async versions |
+| Feature                | Status   | Error                      | Workaround              |
+| ---------------------- | -------- | -------------------------- | ----------------------- |
+| **Paginator**          | ❌ Fails | `SynchronousOnlyOperation` | Build manual pagination |
+| **Transactions**       | ❌ Fails | `SynchronousOnlyOperation` | Use `sync_to_async()`   |
+| **prefetch_related()** | ❌ Fails | `SynchronousOnlyOperation` | Use `select_related()`  |
+| **Sync ORM methods**   | ❌ Fails | `SynchronousOnlyOperation` | Use async versions      |
 
 ## Workarounds
 
@@ -412,23 +412,27 @@ async def fetch_external():
 ### DO ✅
 
 1. **Use async ORM methods everywhere**
+
    ```python
    user = await User.objects.aget(pk=1)  # ✅
    ```
 
 2. **Use `async for` to iterate QuerySets**
+
    ```python
    async for user in User.objects.all():  # ✅
        process(user)
    ```
 
 3. **Use `select_related()` for joins**
+
    ```python
    async for post in Post.objects.select_related('author'):  # ✅
        print(post.author.name)
    ```
 
 4. **Return QuerySets directly from handlers**
+
    ```python
    @api.get("/users")
    async def list_users() -> list[UserSchema]:
@@ -436,6 +440,7 @@ async def fetch_external():
    ```
 
 5. **Use `sync_to_async` for unsupported features**
+
    ```python
    from asgiref.sync import sync_to_async
 
@@ -445,23 +450,27 @@ async def fetch_external():
 ### DON'T ❌
 
 1. **Don't use sync ORM methods**
+
    ```python
    user = User.objects.get(pk=1)  # ❌ Raises SynchronousOnlyOperation
    ```
 
 2. **Don't use sync iteration**
+
    ```python
    for user in User.objects.all():  # ❌ Raises SynchronousOnlyOperation
        process(user)
    ```
 
 3. **Don't use Django Paginator**
+
    ```python
    from django.core.paginator import Paginator
    paginator = Paginator(queryset, 20)  # ❌ Fails in async context
    ```
 
 4. **Don't try async transactions**
+
    ```python
    async with transaction.atomic():  # ❌ Not supported
        await user.asave()
@@ -475,11 +484,13 @@ async def fetch_external():
 ### Performance Tips
 
 1. **Minimize Database Queries**
+
    - Use `select_related()` for ForeignKey/OneToOne
    - Use `only()` to fetch specific fields
    - Use `defer()` to exclude heavy fields
 
 2. **Use Bulk Operations**
+
    ```python
    # ✅ Good: Single query
    await User.objects.abulk_create(users)
@@ -490,6 +501,7 @@ async def fetch_external():
    ```
 
 3. **Batch Aggregations**
+
    ```python
    # ✅ Good: Single query
    stats = await User.objects.aaggregate(
@@ -503,6 +515,7 @@ async def fetch_external():
    ```
 
 4. **Use QuerySet Slicing**
+
    ```python
    # ✅ Good: Limit in database
    async for user in User.objects.all()[:100]:
@@ -520,26 +533,26 @@ async def fetch_external():
 
 If you're migrating from traditional Django views:
 
-| Sync Code | Async Code |
-|-----------|------------|
-| `User.objects.get(pk=1)` | `await User.objects.aget(pk=1)` |
+| Sync Code                  | Async Code                        |
+| -------------------------- | --------------------------------- |
+| `User.objects.get(pk=1)`   | `await User.objects.aget(pk=1)`   |
 | `User.objects.create(...)` | `await User.objects.acreate(...)` |
-| `User.objects.count()` | `await User.objects.acount()` |
-| `for u in queryset:` | `async for u in queryset:` |
-| `list(queryset)` | `[u async for u in queryset]` |
-| `authenticate(...)` | `await aauthenticate(...)` |
+| `User.objects.count()`     | `await User.objects.acount()`     |
+| `for u in queryset:`       | `async for u in queryset:`        |
+| `list(queryset)`           | `[u async for u in queryset]`     |
+| `authenticate(...)`        | `await aauthenticate(...)`        |
 
 ## Django Version Compatibility
 
-| Django Version | Async ORM Support |
-|----------------|-------------------|
-| Django 3.1 | Basic async views, no ORM |
-| Django 4.0 | Async ORM queries added |
-| Django 4.1 | More async methods (acreate, aget, etc.) |
-| Django 4.2 | Bulk async operations |
-| Django 5.0 | **async for on QuerySets** |
-| Django 5.1 | Expanded async ORM coverage |
-| Django 5.2 | **Recommended for Django-Bolt** |
+| Django Version | Async ORM Support                        |
+| -------------- | ---------------------------------------- |
+| Django 3.1     | Basic async views, no ORM                |
+| Django 4.0     | Async ORM queries added                  |
+| Django 4.1     | More async methods (acreate, aget, etc.) |
+| Django 4.2     | Bulk async operations                    |
+| Django 5.0     | **async for on QuerySets**               |
+| Django 5.1     | Expanded async ORM coverage              |
+| Django 5.2     | **Recommended for Django-Bolt**          |
 
 **Minimum requirement**: Django 5.0+ for full async ORM support.
 
@@ -547,7 +560,7 @@ If you're migrating from traditional Django views:
 
 - [Django Async Documentation](https://docs.djangoproject.com/en/5.2/topics/async/)
 - [QuerySet API Reference](https://docs.djangoproject.com/en/5.2/ref/models/querysets/)
-- [Django-Bolt Examples](/python/examples/testproject/testproject/api.py)
+- [Django-Bolt Examples](/python/example/testproject/api.py)
 
 ## Summary
 

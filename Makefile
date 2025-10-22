@@ -16,7 +16,7 @@ build:
 
 # Start test server in background with multi-process
 run-bg:
-	cd python/examples/testproject && \
+	cd python/example && \
 	DJANGO_BOLT_WORKERS=$(WORKERS) nohup uv run python manage.py runbolt --host $(HOST) --port $(PORT) --processes $(P) \
 		> /tmp/django-bolt-test.log 2>&1 & echo $$! > /tmp/django-bolt-test.pid && \
 		echo "started: $$(cat /tmp/django-bolt-test.pid) (log: /tmp/django-bolt-test.log)"
@@ -86,8 +86,8 @@ perf-test: build
 # ORM performance test
 orm-test: build
 	@echo "Setting up test data..."
-	@cd python/examples/testproject && uv run python manage.py makemigrations users --noinput
-	@cd python/examples/testproject && uv run python manage.py migrate --noinput
+	@cd python/example && uv run python manage.py makemigrations users --noinput
+	@cd python/example && uv run python manage.py migrate --noinput
 	@echo "ORM performance test: 2 processes, 2 workers each"
 	@make test-server-bg P=2 WORKERS=2
 	@sleep 3

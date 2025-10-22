@@ -75,7 +75,7 @@ python manage.py runbolt --dev  # for development with reload enabled
 
 > **⚠️ Disclaimer:** Django-Bolt is a **feature-incomplete framework** currently in development. Benchmarks were run on a Ryzen 5600G with 16GB RAM (8 processes × 1 worker, C=100 N=10000) on localhost. Performance will vary significantly based on hardware, OS, configuration, and workload.
 >
-> **📁 Resources:** Example project available at [python/examples/testproject/](python/examples/testproject/). Run benchmarks with `make save-bench` or see [scripts/benchmark.sh](scripts/benchmark.sh).
+> **📁 Resources:** Example project available at [python/example/](python/example/). Run benchmarks with `make save-bench` or see [scripts/benchmark.sh](scripts/benchmark.sh).
 
 | Endpoint Type              | Requests/sec    |
 | -------------------------- | --------------- |

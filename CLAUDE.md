@@ -24,7 +24,7 @@ make clean
 ### Running the Server
 
 ```bash
-# From Django project directory (e.g., python/examples/testproject/)
+# From Django project directory (e.g., python/example)
 python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 2 --workers 2
 
 # Development mode with auto-reload (single process, watches for file changes)

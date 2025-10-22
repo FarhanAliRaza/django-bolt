@@ -1,13 +1,13 @@
 use actix_web::http::header::{HeaderName, HeaderValue};
 use actix_web::{http::StatusCode, web, HttpRequest, HttpResponse};
 use ahash::AHashMap;
+use bytes::Bytes;
+use futures_util::stream;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyBytes, PyDict, PyTuple};
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
-use futures_util::stream;
-use bytes::Bytes;
 
 use crate::direct_stream;
 use crate::error;
@@ -19,6 +19,8 @@ use crate::request::PyRequest;
 use crate::router::parse_query_string;
 use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
 use crate::streaming::create_python_stream;
+
+// Reuse the global Python asyncio event loop created at server startup (TASK_LOCALS)
 
 /// Add CORS headers to response using Rust-native config (NO GIL required)
 /// This replaces the Python-based CORS header addition
@@ -61,10 +63,9 @@ fn add_cors_headers_rust(
 
     // Add Access-Control-Allow-Origin
     if let Ok(val) = HeaderValue::from_str(origin_to_use) {
-        response.headers_mut().insert(
-            actix_web::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-            val,
-        );
+        response
+            .headers_mut()
+            .insert(actix_web::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
     }
 
     // Add Vary: Origin when not using wildcard
@@ -86,41 +87,34 @@ fn add_cors_headers_rust(
     // Add exposed headers if specified (uses pre-computed string - zero allocations)
     if !cors_config.expose_headers.is_empty() {
         if let Ok(val) = HeaderValue::from_str(&cors_config.expose_headers_str) {
-            response.headers_mut().insert(
-                actix_web::http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
-                val,
-            );
+            response
+                .headers_mut()
+                .insert(actix_web::http::header::ACCESS_CONTROL_EXPOSE_HEADERS, val);
         }
     }
 }
 
 /// Add CORS preflight headers for OPTIONS requests (uses pre-computed strings - zero allocations)
-fn add_cors_preflight_headers(
-    response: &mut HttpResponse,
-    cors_config: &CorsConfig,
-) {
+fn add_cors_preflight_headers(response: &mut HttpResponse, cors_config: &CorsConfig) {
     // Use pre-computed methods_str - no allocation!
     if let Ok(val) = HeaderValue::from_str(&cors_config.methods_str) {
-        response.headers_mut().insert(
-            actix_web::http::header::ACCESS_CONTROL_ALLOW_METHODS,
-            val,
-        );
+        response
+            .headers_mut()
+            .insert(actix_web::http::header::ACCESS_CONTROL_ALLOW_METHODS, val);
     }
 
     // Use pre-computed headers_str - no allocation!
     if let Ok(val) = HeaderValue::from_str(&cors_config.headers_str) {
-        response.headers_mut().insert(
-            actix_web::http::header::ACCESS_CONTROL_ALLOW_HEADERS,
-            val,
-        );
+        response
+            .headers_mut()
+            .insert(actix_web::http::header::ACCESS_CONTROL_ALLOW_HEADERS, val);
     }
 
     // Use pre-computed max_age_str - no allocation!
     if let Ok(val) = HeaderValue::from_str(&cors_config.max_age_str) {
-        response.headers_mut().insert(
-            actix_web::http::header::ACCESS_CONTROL_MAX_AGE,
-            val,
-        );
+        response
+            .headers_mut()
+            .insert(actix_web::http::header::ACCESS_CONTROL_MAX_AGE, val);
     }
 }
 
@@ -168,8 +162,14 @@ pub async fn handle_request(
                         if let Some(ref meta) = route_meta {
                             if let Some(ref cors_cfg) = meta.cors_config {
                                 // Direct header lookup - no HashMap allocation
-                                let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-                                add_cors_headers_rust(&mut response, origin, cors_cfg, &state.cors_allowed_origins);
+                                let origin =
+                                    req.headers().get("origin").and_then(|v| v.to_str().ok());
+                                add_cors_headers_rust(
+                                    &mut response,
+                                    origin,
+                                    cors_cfg,
+                                    &state.cors_allowed_origins,
+                                );
                                 // Add preflight-specific headers for OPTIONS
                                 add_cors_preflight_headers(&mut response, cors_cfg);
                             }
@@ -214,7 +214,10 @@ pub async fn handle_request(
             if v.len() > max_header_size {
                 return HttpResponse::BadRequest()
                     .content_type("text/plain; charset=utf-8")
-                    .body(format!("Header value too large (max {} bytes)", max_header_size));
+                    .body(format!(
+                        "Header value too large (max {} bytes)",
+                        max_header_size
+                    ));
             }
 
             headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
@@ -331,17 +334,14 @@ pub async fn handle_request(
         };
         let request_obj = Py::new(py, request)?;
 
-        let locals_owned;
-        let locals = if let Some(globals) = TASK_LOCALS.get() {
-            globals
-        } else {
-            locals_owned = pyo3_async_runtimes::tokio::get_current_locals(py)?;
-            &locals_owned
-        };
+        // Reuse the global event loop locals initialized at server startup
+        let locals = TASK_LOCALS.get().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Asyncio loop not initialized")
+        })?;
 
         // Pass handler_id to dispatch so it can lookup the original API instance
         let coroutine = dispatch.call1(py, (handler, request_obj, handler_id))?;
-        pyo3_async_runtimes::into_future_with_locals(&locals, coroutine.into_bound(py))
+        pyo3_async_runtimes::into_future_with_locals(locals, coroutine.into_bound(py))
     }) {
         Ok(f) => f,
         Err(e) => {
@@ -374,9 +374,43 @@ pub async fn handle_request(
 
     match fut.await {
         Ok(result_obj) => {
-            let tuple_result: Result<(u16, Vec<(String, String)>, Vec<u8>), _> =
-                Python::attach(|py| result_obj.extract(py));
-            if let Ok((status_code, resp_headers, body_bytes)) = tuple_result {
+            // Fast-path: minimize GIL time for tuple responses (status, headers, body)
+            let fast_tuple: Option<(u16, Vec<(String, String)>, Py<PyAny>, *const u8, usize)> =
+                Python::attach(|py| {
+                    let obj = result_obj.bind(py);
+                    let tuple = obj.downcast::<PyTuple>().ok()?;
+                    if tuple.len() != 3 {
+                        return None;
+                    }
+
+                    // 0: status
+                    let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
+
+                    // 1: headers
+                    let resp_headers: Vec<(String, String)> = tuple
+                        .get_item(1)
+                        .ok()?
+                        .extract::<Vec<(String, String)>>()
+                        .ok()?;
+
+                    // 2: body (bytes or bytearray)
+                    let body_obj = match tuple.get_item(2) {
+                        Ok(v) => v,
+                        Err(_) => return None,
+                    };
+                    // Only support bytes (tuple serializer returns bytes)
+                    if let Ok(pybytes) = body_obj.downcast::<PyBytes>() {
+                        let slice = pybytes.as_bytes();
+                        let len = slice.len();
+                        let ptr = slice.as_ptr();
+                        let owner: Py<PyAny> = body_obj.unbind();
+                        Some((status_code, resp_headers, owner, ptr, len))
+                    } else {
+                        None
+                    }
+                });
+
+            if let Some((status_code, resp_headers, body_owner, body_ptr, body_len)) = fast_tuple {
                 let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
                 let mut file_path: Option<String> = None;
                 let mut headers: Vec<(String, String)> = Vec::with_capacity(resp_headers.len());
@@ -441,7 +475,10 @@ pub async fn handle_request(
                                         Ok(0) => None, // EOF
                                         Ok(n) => {
                                             buffer.truncate(n);
-                                            Some((Ok::<_, std::io::Error>(Bytes::from(buffer)), file))
+                                            Some((
+                                                Ok::<_, std::io::Error>(Bytes::from(buffer)),
+                                                file,
+                                            ))
                                         }
                                         Err(e) => Some((Err(e), file)),
                                     }
@@ -466,7 +503,11 @@ pub async fn handle_request(
                             }
 
                             // HEAD requests must have empty body per RFC 7231
-                            let response_body = if is_head_request { Vec::new() } else { file_bytes };
+                            let response_body = if is_head_request {
+                                Vec::new()
+                            } else {
+                                file_bytes
+                            };
                             builder.body(response_body)
                         }
                         Err(e) => {
@@ -493,21 +534,170 @@ pub async fn handle_request(
                     if skip_compression {
                         builder.append_header(("Content-Encoding", "identity"));
                     }
+
                     // HEAD requests must have empty body per RFC 7231
-                    let response_body = if is_head_request { Vec::new() } else { body_bytes };
-                    let mut response = builder.body(response_body);
+                    let mut response = if is_head_request {
+                        builder.body(Vec::<u8>::new())
+                    } else {
+                        // Copy body bytes outside of the GIL
+                        let mut body_vec = Vec::<u8>::with_capacity(body_len);
+                        unsafe {
+                            body_vec.set_len(body_len);
+                            std::ptr::copy_nonoverlapping(
+                                body_ptr,
+                                body_vec.as_mut_ptr(),
+                                body_len,
+                            );
+                        }
+                        // Drop the Python owner with the GIL attached
+                        let _ = Python::attach(|_| drop(body_owner));
+                        builder.body(body_vec)
+                    };
 
                     // Add CORS headers if configured (NO GIL - uses Rust-native config)
                     if let Some(ref route_meta) = route_metadata {
                         if let Some(ref cors_cfg) = route_meta.cors_config {
                             let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-                            add_cors_headers_rust(&mut response, origin, cors_cfg, &state.cors_allowed_origins);
+                            add_cors_headers_rust(
+                                &mut response,
+                                origin,
+                                cors_cfg,
+                                &state.cors_allowed_origins,
+                            );
                         }
                     }
 
                     return response;
                 }
             } else {
+                // Fallback: handle tuple by extracting Vec<u8> under the GIL (compat path)
+                if let Ok((status_code, resp_headers, body_bytes)) = Python::attach(|py| {
+                    result_obj.extract::<(u16, Vec<(String, String)>, Vec<u8>)>(py)
+                }) {
+                    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+                    let mut file_path: Option<String> = None;
+                    let mut headers: Vec<(String, String)> = Vec::with_capacity(resp_headers.len());
+                    for (k, v) in resp_headers {
+                        if k.eq_ignore_ascii_case("x-bolt-file-path") {
+                            file_path = Some(v);
+                        } else {
+                            headers.push((k, v));
+                        }
+                    }
+                    if let Some(path) = file_path {
+                        return match File::open(&path).await {
+                            Ok(mut file) => {
+                                let file_size = match file.metadata().await {
+                                    Ok(metadata) => metadata.len(),
+                                    Err(e) => {
+                                        return HttpResponse::InternalServerError()
+                                            .content_type("text/plain; charset=utf-8")
+                                            .body(format!("Failed to read file metadata: {}", e));
+                                    }
+                                };
+                                let file_bytes = if file_size < 10 * 1024 * 1024 {
+                                    let mut buffer = Vec::with_capacity(file_size as usize);
+                                    match file.read_to_end(&mut buffer).await {
+                                        Ok(_) => buffer,
+                                        Err(e) => {
+                                            return HttpResponse::InternalServerError()
+                                                .content_type("text/plain; charset=utf-8")
+                                                .body(format!("Failed to read file: {}", e));
+                                        }
+                                    }
+                                } else {
+                                    let mut builder = HttpResponse::build(status);
+                                    for (k, v) in headers {
+                                        if let Ok(name) = HeaderName::try_from(k) {
+                                            if let Ok(val) = HeaderValue::try_from(v) {
+                                                builder.append_header((name, val));
+                                            }
+                                        }
+                                    }
+                                    if skip_compression {
+                                        builder.append_header(("content-encoding", "identity"));
+                                    }
+                                    if is_head_request {
+                                        return builder.body(Vec::<u8>::new());
+                                    }
+                                    let stream = stream::unfold(file, |mut file| async move {
+                                        let mut buffer = vec![0u8; 64 * 1024];
+                                        match file.read(&mut buffer).await {
+                                            Ok(0) => None,
+                                            Ok(n) => {
+                                                buffer.truncate(n);
+                                                Some((
+                                                    Ok::<_, std::io::Error>(Bytes::from(buffer)),
+                                                    file,
+                                                ))
+                                            }
+                                            Err(e) => Some((Err(e), file)),
+                                        }
+                                    });
+                                    return builder.streaming(stream);
+                                };
+                                let mut builder = HttpResponse::build(status);
+                                for (k, v) in headers {
+                                    if let Ok(name) = HeaderName::try_from(k) {
+                                        if let Ok(val) = HeaderValue::try_from(v) {
+                                            builder.append_header((name, val));
+                                        }
+                                    }
+                                }
+                                if skip_compression {
+                                    builder.append_header(("content-encoding", "identity"));
+                                }
+                                let response_body = if is_head_request {
+                                    Vec::new()
+                                } else {
+                                    file_bytes
+                                };
+                                builder.body(response_body)
+                            }
+                            Err(e) => {
+                                use std::io::ErrorKind;
+                                match e.kind() {
+                                    ErrorKind::NotFound => HttpResponse::NotFound()
+                                        .content_type("text/plain; charset=utf-8")
+                                        .body("File not found"),
+                                    ErrorKind::PermissionDenied => HttpResponse::Forbidden()
+                                        .content_type("text/plain; charset=utf-8")
+                                        .body("Permission denied"),
+                                    _ => HttpResponse::InternalServerError()
+                                        .content_type("text/plain; charset=utf-8")
+                                        .body(format!("File error: {}", e)),
+                                }
+                            }
+                        };
+                    } else {
+                        let mut builder = HttpResponse::build(status);
+                        for (k, v) in headers {
+                            builder.append_header((k, v));
+                        }
+                        if skip_compression {
+                            builder.append_header(("Content-Encoding", "identity"));
+                        }
+                        let response_body = if is_head_request {
+                            Vec::new()
+                        } else {
+                            body_bytes
+                        };
+                        let mut response = builder.body(response_body);
+                        if let Some(ref route_meta) = route_metadata {
+                            if let Some(ref cors_cfg) = route_meta.cors_config {
+                                let origin =
+                                    req.headers().get("origin").and_then(|v| v.to_str().ok());
+                                add_cors_headers_rust(
+                                    &mut response,
+                                    origin,
+                                    cors_cfg,
+                                    &state.cors_allowed_origins,
+                                );
+                            }
+                        }
+                        return response;
+                    }
+                }
                 let streaming = Python::attach(|py| {
                     let obj = result_obj.bind(py);
                     let is_streaming = (|| -> PyResult<bool> {

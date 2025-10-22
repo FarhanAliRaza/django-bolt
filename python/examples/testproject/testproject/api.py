@@ -44,6 +44,14 @@ async def read_root():
     return test_data.JSON_10K
 
 
+@api.get("/1k")
+async def read_root():
+    """
+    Root endpoint.
+    Returns a simple "Hello World" dictionary.
+    """
+    return test_data.JSON_1K
+
 @api.get("/items/{item_id}")
 async def read_item(item_id: int, q: Optional[str] = None):
     return {"item_id": item_id, "q": q}

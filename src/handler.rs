@@ -4,7 +4,7 @@ use ahash::AHashMap;
 use bytes::Bytes;
 use futures_util::stream;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyBytes, PyDict, PyTuple};
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -374,9 +374,43 @@ pub async fn handle_request(
 
     match fut.await {
         Ok(result_obj) => {
-            let tuple_result: Result<(u16, Vec<(String, String)>, Vec<u8>), _> =
-                Python::attach(|py| result_obj.extract(py));
-            if let Ok((status_code, resp_headers, body_bytes)) = tuple_result {
+            // Fast-path: minimize GIL time for tuple responses (status, headers, body)
+            let fast_tuple: Option<(u16, Vec<(String, String)>, Py<PyAny>, *const u8, usize)> =
+                Python::attach(|py| {
+                    let obj = result_obj.bind(py);
+                    let tuple = obj.downcast::<PyTuple>().ok()?;
+                    if tuple.len() != 3 {
+                        return None;
+                    }
+
+                    // 0: status
+                    let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
+
+                    // 1: headers
+                    let resp_headers: Vec<(String, String)> = tuple
+                        .get_item(1)
+                        .ok()?
+                        .extract::<Vec<(String, String)>>()
+                        .ok()?;
+
+                    // 2: body (bytes or bytearray)
+                    let body_obj = match tuple.get_item(2) {
+                        Ok(v) => v,
+                        Err(_) => return None,
+                    };
+                    // Only support bytes (tuple serializer returns bytes)
+                    if let Ok(pybytes) = body_obj.downcast::<PyBytes>() {
+                        let slice = pybytes.as_bytes();
+                        let len = slice.len();
+                        let ptr = slice.as_ptr();
+                        let owner: Py<PyAny> = body_obj.unbind();
+                        Some((status_code, resp_headers, owner, ptr, len))
+                    } else {
+                        None
+                    }
+                });
+
+            if let Some((status_code, resp_headers, body_owner, body_ptr, body_len)) = fast_tuple {
                 let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
                 let mut file_path: Option<String> = None;
                 let mut headers: Vec<(String, String)> = Vec::with_capacity(resp_headers.len());
@@ -500,13 +534,25 @@ pub async fn handle_request(
                     if skip_compression {
                         builder.append_header(("Content-Encoding", "identity"));
                     }
+
                     // HEAD requests must have empty body per RFC 7231
-                    let response_body = if is_head_request {
-                        Vec::new()
+                    let mut response = if is_head_request {
+                        builder.body(Vec::<u8>::new())
                     } else {
-                        body_bytes
+                        // Copy body bytes outside of the GIL
+                        let mut body_vec = Vec::<u8>::with_capacity(body_len);
+                        unsafe {
+                            body_vec.set_len(body_len);
+                            std::ptr::copy_nonoverlapping(
+                                body_ptr,
+                                body_vec.as_mut_ptr(),
+                                body_len,
+                            );
+                        }
+                        // Drop the Python owner with the GIL attached
+                        let _ = Python::attach(|_| drop(body_owner));
+                        builder.body(body_vec)
                     };
-                    let mut response = builder.body(response_body);
 
                     // Add CORS headers if configured (NO GIL - uses Rust-native config)
                     if let Some(ref route_meta) = route_metadata {
@@ -524,6 +570,134 @@ pub async fn handle_request(
                     return response;
                 }
             } else {
+                // Fallback: handle tuple by extracting Vec<u8> under the GIL (compat path)
+                if let Ok((status_code, resp_headers, body_bytes)) = Python::attach(|py| {
+                    result_obj.extract::<(u16, Vec<(String, String)>, Vec<u8>)>(py)
+                }) {
+                    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+                    let mut file_path: Option<String> = None;
+                    let mut headers: Vec<(String, String)> = Vec::with_capacity(resp_headers.len());
+                    for (k, v) in resp_headers {
+                        if k.eq_ignore_ascii_case("x-bolt-file-path") {
+                            file_path = Some(v);
+                        } else {
+                            headers.push((k, v));
+                        }
+                    }
+                    if let Some(path) = file_path {
+                        return match File::open(&path).await {
+                            Ok(mut file) => {
+                                let file_size = match file.metadata().await {
+                                    Ok(metadata) => metadata.len(),
+                                    Err(e) => {
+                                        return HttpResponse::InternalServerError()
+                                            .content_type("text/plain; charset=utf-8")
+                                            .body(format!("Failed to read file metadata: {}", e));
+                                    }
+                                };
+                                let file_bytes = if file_size < 10 * 1024 * 1024 {
+                                    let mut buffer = Vec::with_capacity(file_size as usize);
+                                    match file.read_to_end(&mut buffer).await {
+                                        Ok(_) => buffer,
+                                        Err(e) => {
+                                            return HttpResponse::InternalServerError()
+                                                .content_type("text/plain; charset=utf-8")
+                                                .body(format!("Failed to read file: {}", e));
+                                        }
+                                    }
+                                } else {
+                                    let mut builder = HttpResponse::build(status);
+                                    for (k, v) in headers {
+                                        if let Ok(name) = HeaderName::try_from(k) {
+                                            if let Ok(val) = HeaderValue::try_from(v) {
+                                                builder.append_header((name, val));
+                                            }
+                                        }
+                                    }
+                                    if skip_compression {
+                                        builder.append_header(("content-encoding", "identity"));
+                                    }
+                                    if is_head_request {
+                                        return builder.body(Vec::<u8>::new());
+                                    }
+                                    let stream = stream::unfold(file, |mut file| async move {
+                                        let mut buffer = vec![0u8; 64 * 1024];
+                                        match file.read(&mut buffer).await {
+                                            Ok(0) => None,
+                                            Ok(n) => {
+                                                buffer.truncate(n);
+                                                Some((
+                                                    Ok::<_, std::io::Error>(Bytes::from(buffer)),
+                                                    file,
+                                                ))
+                                            }
+                                            Err(e) => Some((Err(e), file)),
+                                        }
+                                    });
+                                    return builder.streaming(stream);
+                                };
+                                let mut builder = HttpResponse::build(status);
+                                for (k, v) in headers {
+                                    if let Ok(name) = HeaderName::try_from(k) {
+                                        if let Ok(val) = HeaderValue::try_from(v) {
+                                            builder.append_header((name, val));
+                                        }
+                                    }
+                                }
+                                if skip_compression {
+                                    builder.append_header(("content-encoding", "identity"));
+                                }
+                                let response_body = if is_head_request {
+                                    Vec::new()
+                                } else {
+                                    file_bytes
+                                };
+                                builder.body(response_body)
+                            }
+                            Err(e) => {
+                                use std::io::ErrorKind;
+                                match e.kind() {
+                                    ErrorKind::NotFound => HttpResponse::NotFound()
+                                        .content_type("text/plain; charset=utf-8")
+                                        .body("File not found"),
+                                    ErrorKind::PermissionDenied => HttpResponse::Forbidden()
+                                        .content_type("text/plain; charset=utf-8")
+                                        .body("Permission denied"),
+                                    _ => HttpResponse::InternalServerError()
+                                        .content_type("text/plain; charset=utf-8")
+                                        .body(format!("File error: {}", e)),
+                                }
+                            }
+                        };
+                    } else {
+                        let mut builder = HttpResponse::build(status);
+                        for (k, v) in headers {
+                            builder.append_header((k, v));
+                        }
+                        if skip_compression {
+                            builder.append_header(("Content-Encoding", "identity"));
+                        }
+                        let response_body = if is_head_request {
+                            Vec::new()
+                        } else {
+                            body_bytes
+                        };
+                        let mut response = builder.body(response_body);
+                        if let Some(ref route_meta) = route_metadata {
+                            if let Some(ref cors_cfg) = route_meta.cors_config {
+                                let origin =
+                                    req.headers().get("origin").and_then(|v| v.to_str().ok());
+                                add_cors_headers_rust(
+                                    &mut response,
+                                    origin,
+                                    cors_cfg,
+                                    &state.cors_allowed_origins,
+                                );
+                            }
+                        }
+                        return response;
+                    }
+                }
                 let streaming = Python::attach(|py| {
                     let obj = result_obj.bind(py);
                     let is_streaming = (|| -> PyResult<bool> {

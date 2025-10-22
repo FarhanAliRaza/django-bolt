@@ -57,7 +57,8 @@ class OpenAPIRenderPlugin(ABC):
         Returns:
             The rendered JSON as string.
         """
-        return msgspec.json.encode(openapi_schema).decode('utf-8')
+        from .. import _json
+        return _json.encode(openapi_schema).decode('utf-8')
 
     @abstractmethod
     def render(self, openapi_schema: Dict[str, Any], schema_url: str) -> str:
@@ -294,7 +295,7 @@ class ScalarRenderPlugin(OpenAPIRenderPlugin):
         if self.options:
             options_script = f"""
                 <script>
-                  document.getElementById('api-reference').dataset.configuration = '{msgspec.json.encode(self.options).decode()}'
+                  document.getElementById('api-reference').dataset.configuration = '{__import__("django_bolt")._json.encode(self.options).decode()}'
                 </script>
                 """
 

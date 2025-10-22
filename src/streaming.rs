@@ -13,6 +13,8 @@ use crate::state::TASK_LOCALS;
 
 // Note: buffer pool removed during modularization; reintroduce if needed for micro-alloc tuning
 
+// Reuse the global Python asyncio event loop created at server startup (TASK_LOCALS)
+
 #[inline(always)]
 pub fn convert_python_chunk(value: &Bound<'_, PyAny>) -> Option<Bytes> {
     if let Ok(py_bytes) = value.downcast::<PyBytes>() {
@@ -191,21 +193,15 @@ pub fn create_python_stream(
                 };
                 batch_futures.clear();
                 Python::attach(|py| {
-                    let locals_owned;
-                    let locals = if let Some(globals) = TASK_LOCALS.get() {
-                        globals
-                    } else {
-                        match pyo3_async_runtimes::tokio::get_current_locals(py) {
-                            Ok(l) => {
-                                locals_owned = l;
-                                &locals_owned
-                            }
-                            Err(_) => {
-                                exhausted = true;
-                                return;
-                            }
+                    // Reuse the global event loop locals initialized at server startup
+                    let locals = match TASK_LOCALS.get() {
+                        Some(l) => l,
+                        None => {
+                            exhausted = true;
+                            return;
                         }
                     };
+
                     let iterations = if is_optimized_batcher {
                         1
                     } else {
@@ -215,7 +211,7 @@ pub fn create_python_stream(
                         match async_iter.bind(py).call_method0("__anext__") {
                             Ok(awaitable) => {
                                 match pyo3_async_runtimes::into_future_with_locals(
-                                    &locals, awaitable,
+                                    locals, awaitable,
                                 ) {
                                     Ok(f) => batch_futures.push(f),
                                     Err(_) => {

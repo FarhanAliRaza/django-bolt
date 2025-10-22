@@ -184,63 +184,11 @@ python manage.py runbolt --dev  # for development with reload enabled
 - ✅ **OpenAPI/Swagger** - 7 render plugins: Swagger UI, ReDoc, Scalar, RapidDoc, Stoplight Elements, JSON, YAML
 - ✅ **Error Messages** - Clear, structured error messages with Django DEBUG integration
 - ✅ **Type Hints** - Full type hint support with msgspec
+- ✅ **Dependency Injection** - `Depends()` marker with per-request caching
+
+**📖 See [docs/README.md](docs/README.md) for complete documentation index.**
 
 ---
-
-## 📋 TODO / Roadmap
-
-### Must Have (Blockers) 🚨
-
-- ✅ **Core API functionality** - DONE
-- ✅ **Authentication** - DONE (JWT complete)
-- ✅ **Tests passing** - DONE (142 passed)
-- ✅ **Better error messages** - DONE (Enhanced exception system with structured errors)
-- ✅ **Health check endpoints** - DONE (`/health`, `/ready` with custom checks)
-- ✅ **Request/Response logging** - DONE (Integrates with Django's logging)
-- ❌ **PyPI package** - Missing (currently manual install)
-
-### Should Have (Important) 🎯
-
-- ✅ **Error handling with Django DEBUG integration** - DONE
-- ✅ **Structured error responses** (FastAPI-compatible) - DONE
-- ✅ **Response compression** - DONE (gzip/brotli/zstd)
-- ✅ **OpenAPI/Swagger docs** - DONE (full support for tags, summary, description)
-- ✅ **Django admin integration** - DONE
-- ⚠️ **API Key auth** - Partial (only in-memory)
-- ⚠️ **Testing utilities** - Partial
-
-### Nice to Have (Can defer) 📝
-
-- [ ] **Static file serving** - Efficient static file serving from Rust
-- [ ] **Pagination helpers** - Built-in pagination utilities
-- [ ] **OAuth2/OpenID** - OAuth2 and OpenID Connect support
-- [ ] **API Versioning** - URL/header-based versioning
-- [ ] **Content Negotiation** - Accept header-based content negotiation
-- [ ] **ETags & Conditional Requests** - Caching optimization
-- [ ] **Filtering & Sorting** - Query parameter-based filtering
-
----
-
-## 🏗️ Architecture
-
-### Core Components
-
-1. **[src/lib.rs](src/lib.rs)** - Main Rust entry point, exposes PyO3 module
-2. **[src/server.rs](src/server.rs)** - Actix Web server with multi-worker tokio runtime
-3. **[src/router.rs](src/router.rs)** - matchit-based routing
-4. **[src/middleware/](src/middleware/)** - Middleware pipeline
-   - `auth.rs` - JWT/API Key authentication (zero GIL overhead)
-   - `cors.rs` - CORS handling
-   - `rate_limit.rs` - Token bucket rate limiting
-5. **[src/permissions.rs](src/permissions.rs)** - Guard evaluation
-6. **[python/django_bolt/api.py](python/django_bolt/api.py)** - Python decorator-based API
-7. **[python/django_bolt/auth/](python/django_bolt/auth/)** - Authentication system
-   - `backends.py` - Auth backend classes (compile to Rust metadata)
-   - `guards.py` - Permission guard classes
-   - `jwt_utils.py` - JWT utilities for Django User integration
-   - `middleware.py` - Middleware decorators
-   - `token.py` - Token handling
-   - `revocation.py` - Token revocation stores
 
 ### Request Flow
 

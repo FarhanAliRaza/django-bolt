@@ -41,13 +41,13 @@ make kill
 
 ```bash
 # Python unit tests
-make test-py  # or: uv run --with pytest pytest python/django_bolt/tests -s -vv
+make test-py  # or: uv run --with pytest pytest python/tests -s -vv
 
 # Run specific test file
-uv run --with pytest pytest python/django_bolt/tests/test_syntax.py -s -vv
+uv run --with pytest pytest python/tests/test_syntax.py -s -vv
 
 # Run specific test function
-uv run --with pytest pytest python/django_bolt/tests/test_syntax.py::test_streaming_async_mixed_types -s -vv
+uv run --with pytest pytest python/tests/test_syntax.py::test_streaming_async_mixed_types -s -vv
 
 # Quick endpoint smoke tests
 make smoke      # Test basic endpoints
@@ -78,25 +78,40 @@ python manage.py migrate
 python manage.py makemigrations [app_name]
 ```
 
+### CLI Tool
+
+```bash
+# Initialize Django-Bolt in a new Django project
+python -m django_bolt init
+
+# This creates:
+# - api.py in project root
+# - Adds django_bolt to INSTALLED_APPS
+# - Configures basic settings
+```
+
 ## Architecture Overview
 
 ### Core Components
 
 1. **Rust Layer (`src/`)**
+
    - `lib.rs` - PyO3 module entry point, registers Python-callable functions
-   - `server.rs` - Actix Web server with tokio runtime, handles multi-worker/multi-process setup
+   - `server.rs` - Actix Web server with tokio runtime, handles multi-worker/multi-process setup (includes CORS and compression via Actix middleware)
    - `router.rs` - matchit-based routing (zero-copy path matching)
    - `handler.rs` - Python callback dispatcher via PyO3
-   - `middleware/` - Middleware pipeline running in Rust (no Python GIL overhead)
-     - `auth.rs` - JWT/API Key authentication in Rust
-     - `cors.rs` - CORS handling with preflight support
+   - `middleware/` - Custom middleware pipeline running in Rust (no Python GIL overhead)
+     - `auth.rs` - JWT/API Key/Session authentication in Rust
      - `rate_limit.rs` - Token bucket rate limiting
    - `permissions.rs` - Guard/permission evaluation in Rust
-   - `streaming.rs` - Streaming response handling
+   - `streaming.rs` - Streaming response handling (SSE, async generators)
    - `state.rs` - Shared server state (auth config, middleware config)
    - `metadata.rs` - Route metadata structures
+   - `error.rs` - Error handling and HTTP exceptions
+   - `request.rs` - Request handling utilities
 
 2. **Python Framework (`python/django_bolt/`)**
+
    - `api.py` - BoltAPI class with decorator-based routing (`@api.get/post/put/patch/delete/head/options`)
    - `binding.py` - Parameter extraction and type coercion
    - `responses.py` - Response types (PlainText, HTML, Redirect, File, FileResponse, StreamingResponse)
@@ -105,8 +120,12 @@ python manage.py makemigrations [app_name]
    - `dependencies.py` - Dependency injection system
    - `serialization.py` - msgspec-based serialization
    - `bootstrap.py` - Django configuration helper
+   - `cli.py` - CLI tool for project initialization
+   - `health.py` - Health check endpoints
+   - `openapi.py` - OpenAPI schema generation
+   - `pagination.py` - Pagination helpers (PageNumber, LimitOffset, Cursor)
+   - `viewsets.py` - Class-based ViewSet and ModelViewSet
    - `auth/` - Authentication system
-     - `backends.py` - JWTAuthentication, APIKeyAuthentication classes
      - `guards.py` - Permission guards (IsAuthenticated, IsAdminUser, HasPermission, etc.)
      - `jwt_utils.py` - JWT utilities (create_jwt_for_user)
      - `token.py` - Token handling and validation
@@ -132,11 +151,13 @@ HTTP Request → Actix Web (Rust)
     Middleware Pipeline (Rust - no GIL)
       - CORS preflight/handling
       - Rate limiting (token bucket)
+      - Compression (gzip/brotli/zstd)
            ↓
-    Authentication (Rust - no GIL for JWT/API key validation)
+    Authentication (Rust - no GIL for JWT/API key/session validation)
       - JWT signature verification
       - Token expiration check
       - API key validation
+      - Session validation (Django integration)
            ↓
     Guards/Permissions (Rust - no GIL)
       - IsAuthenticated, IsAdminUser, IsStaff
@@ -162,6 +183,10 @@ HTTP Request → Actix Web (Rust)
       - msgspec for JSON (5-10x faster than stdlib)
       - Response model validation if specified
            ↓
+    Response Compression (if enabled)
+      - Client-negotiated (Accept-Encoding)
+      - gzip/brotli/zstd support
+           ↓
     HTTP Response (back to Actix Web)
 ```
 
@@ -169,9 +194,10 @@ HTTP Request → Actix Web (Rust)
 
 - **Authentication/Guards run in Rust**: JWT validation, API key checks, and permission guards execute without Python GIL overhead
 - **Zero-copy routing**: matchit router matches paths without allocations
-- **Batched middleware**: Middleware runs in a pipeline before Python handler is invoked
+- **Batched middleware**: Middleware (CORS, rate limiting, compression) runs in a pipeline before Python handler is invoked
 - **Multi-process scaling**: SO_REUSEPORT allows kernel-level load balancing across processes
 - **msgspec serialization**: 5-10x faster than standard JSON for request/response handling
+- **Efficient compression**: Client-negotiated gzip/brotli/zstd compression in Rust
 
 ## API Development Patterns
 
@@ -217,20 +243,37 @@ async def options_items():
 ### Authentication & Guards
 
 ```python
-from django_bolt.auth import JWTAuthentication, IsAuthenticated, HasPermission
+from django_bolt.auth import (
+    JWTAuthentication,
+    APIKeyAuthentication,    IsAuthenticated,
+    HasPermission
+)
 
+# JWT Authentication
 @api.get("/protected", auth=[JWTAuthentication()], guards=[IsAuthenticated()])
 async def protected_route(request):
     auth = request.get("auth", {})
     user_id = auth.get("user_id")
     return {"user_id": user_id}
+
+# Multiple auth backends (tries in order)
+@api.get("/flexible", auth=[JWTAuthentication()], guards=[IsAuthenticated()])
+async def flexible_auth(request):
+    auth = request.get("auth", {})
+    backend = auth.get("auth_backend")  # "jwt", "api_key", or "session"
+    return {"backend": backend}
 ```
+
+**See [docs/SECURITY.md](docs/SECURITY.md) for complete authentication documentation.**
 
 ### Middleware
 
 - **Global middleware**: Applied via `BoltAPI(middleware_config={...})`
 - **Per-route middleware**: Applied via decorators (`@cors`, `@rate_limit`)
-- **Skip middleware**: Use `@skip_middleware("cors", "rate_limit")` to selectively disable
+- **Skip middleware**: Use `@skip_middleware("cors", "rate_limit", "compression")` to selectively disable
+- **Compression**: Automatic gzip/brotli/zstd compression based on Accept-Encoding header
+
+**See [docs/MIDDLEWARE.md](docs/MIDDLEWARE.md) for complete middleware documentation.**
 
 ### Response Types
 
@@ -242,22 +285,188 @@ async def protected_route(request):
 - **FileResponse**: `return FileResponse(path, filename="doc.pdf")` (streaming from Rust)
 - **StreamingResponse**: `return StreamingResponse(async_generator(), media_type="text/event-stream")`
 
+**See [docs/RESPONSES.md](docs/RESPONSES.md) for complete response documentation.**
+
+### Class-Based Views
+
+Django-Bolt supports DRF-style ViewSets:
+
+```python
+from django_bolt.viewsets import ViewSet, ModelViewSet
+from django.contrib.auth.models import User
+import msgspec
+
+# Basic ViewSet
+@api.viewset("/users")
+class UserViewSet(ViewSet):
+    async def list(self, request):
+        users = await User.objects.all()
+        return [{"id": u.id, "username": u.username} async for u in users]
+
+    async def retrieve(self, request, pk: int):
+        user = await User.objects.aget(id=pk)
+        return {"id": user.id, "username": user.username}
+
+# ModelViewSet (includes CRUD operations)
+@api.viewset("/articles")
+class ArticleViewSet(ModelViewSet):
+    model = Article
+    queryset = Article.objects.all()
+    serializer_class = ArticleSchema
+
+    # Custom actions
+    @action(methods=["GET"], detail=False)
+    async def published(self, request):
+        articles = await Article.objects.filter(published=True).all()
+        return [{"id": a.id, "title": a.title} async for a in articles]
+
+```
+
+**See [docs/CLASS_BASED_VIEWS.md](docs/CLASS_BASED_VIEWS.md) for complete documentation.**
+
+### Pagination
+
+Django-Bolt provides built-in pagination helpers:
+
+```python
+from django_bolt.pagination import PageNumberPagination, LimitOffsetPagination, CursorPagination
+
+# Page number pagination
+@api.get("/users")
+async def list_users(page: int = 1, page_size: int = 10):
+    paginator = PageNumberPagination(page=page, page_size=page_size)
+    users = await User.objects.all()
+    return await paginator.paginate(users)
+
+# Limit/offset pagination
+@api.get("/articles")
+async def list_articles(limit: int = 10, offset: int = 0):
+    paginator = LimitOffsetPagination(limit=limit, offset=offset)
+    articles = await Article.objects.all()
+    return await paginator.paginate(articles)
+
+# Cursor-based pagination (for large datasets)
+@api.get("/posts")
+async def list_posts(cursor: str = None, page_size: int = 20):
+    paginator = CursorPagination(cursor=cursor, page_size=page_size)
+    posts = await Post.objects.order_by("-created_at").all()
+    return await paginator.paginate(posts)
+```
+
+**See [docs/PAGINATION.md](docs/PAGINATION.md) for complete documentation.**
+
+### Health Check Endpoints
+
+Django-Bolt provides built-in health check endpoints:
+
+```python
+from django_bolt import BoltAPI
+
+api = BoltAPI()
+
+# Built-in health endpoints (automatically available)
+# GET /health - Basic health check (returns {"status": "ok"})
+# GET /ready - Readiness check (returns {"status": "ready"})
+
+# Custom health checks
+from django_bolt.health import register_health_check
+
+@register_health_check
+async def check_database():
+    # Custom health check logic
+    return {"database": "connected"}
+```
+
+### OpenAPI Documentation
+
+Django-Bolt automatically generates OpenAPI documentation:
+
+```python
+from django_bolt import BoltAPI
+
+# OpenAPI documentation is automatically available at:
+# - /docs - Swagger UI
+# - /redoc - ReDoc
+# - /scalar - Scalar API Reference
+# - /rapidoc - RapiDoc
+# - /stoplight - Stoplight Elements
+# - /openapi.json - OpenAPI JSON schema
+# - /openapi.yaml - OpenAPI YAML schema
+
+api = BoltAPI(
+    title="My API",
+    version="1.0.0",
+    description="API description",
+    openapi_url="/openapi.json"  # Customize OpenAPI endpoint
+)
+
+# Document routes with tags and descriptions
+@api.get("/users/{user_id}", tags=["users"], summary="Get a user")
+async def get_user(user_id: int):
+    """
+    Retrieve a user by ID.
+
+    - **user_id**: The user's unique identifier
+    """
+    return {"user_id": user_id}
+```
+
+**See [docs/OPENAPI.md](docs/OPENAPI.md) for complete documentation.**
+
 ## Testing Strategy
 
 ### Unit Tests
 
-Located in `python/django_bolt/tests/`:
+Located in `python/tests/`:
+
+**Core Functionality**:
+
 - `test_syntax.py` - Route syntax, parameter extraction, response types
+- `test_decorator_syntax.py` - Decorator-based route definitions
+- `test_parameter_validation.py` - Parameter validation logic
+- `test_json_validation.py` - JSON request/response validation
+- `test_integration_validation.py` - End-to-end validation tests
+- `test_file_response.py` - File download and streaming
+
+**Authentication & Authorization**:
+
 - `test_jwt_auth.py` - JWT authentication logic
 - `test_jwt_token.py` - Token generation and validation
 - `test_guards_auth.py` - Guard/permission logic
 - `test_guards_integration.py` - Integration tests for guards
-- `test_middleware.py` - Middleware system tests
 - `test_auth_secret_key.py` - Secret key handling
+
+**Middleware & CORS**:
+
+- `test_middleware.py` - Middleware system tests
+- `test_global_cors.py` - Global CORS configuration
+- `test_middleware_server.py` - Middleware integration tests
+
+**Advanced Features**:
+
+- `test_error_handling.py` - Error handling and exceptions
+- `test_logging.py` - Request/response logging
+- `test_logging_merge.py` - Logging configuration merging
+- `test_health.py` - Health check endpoints
+- `test_openapi_docs.py` - OpenAPI documentation generation
+- `test_pagination.py` - Pagination helpers (PageNumber, LimitOffset, Cursor)
+- `test_testing_utilities.py` - Testing utilities and test client
+
+**Class-Based Views**:
+
+- `cbv/test_viewset_unified.py` - ViewSet pattern tests
+- `cbv/test_model_viewset.py` - ModelViewSet pattern tests
+- `cbv/test_action_decorator.py` - Custom action decorators
+
+**Django Integration**:
+
+- `admin_tests/` - Django admin integration tests
+- `test_models.py` - Django model integration
 
 ### Test Servers
 
 Test infrastructure uses separate server files:
+
 - `syntax_test_server.py` - Routes for testing basic functionality
 - `middleware_test_server.py` - Routes for testing middleware
 - Server instances are started in subprocess for integration tests
@@ -265,8 +474,9 @@ Test infrastructure uses separate server files:
 ### Running Tests
 
 Always run tests with `-s -vv` for detailed output:
+
 ```bash
-uv run --with pytest pytest python/django_bolt/tests -s -vv
+uv run --with pytest pytest python/tests -s -vv
 ```
 
 ## Common Development Tasks

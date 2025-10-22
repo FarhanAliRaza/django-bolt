@@ -43,7 +43,7 @@ jobs:
         run: uv run maturin develop --release
 
       - name: Run tests
-        run: uv run --with pytest pytest python/django_bolt/tests -s -vv
+        run: uv run --with pytest pytest python/tests -s -vv
 
   # Build wheels for Linux x86_64 (covers most Linux users including Arch)
   linux:

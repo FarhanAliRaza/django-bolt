@@ -18,7 +18,7 @@ from django_bolt import (
     paginate,
 )
 from django_bolt.testing import TestClient
-from django_bolt.tests.test_models import Article
+from .test_models import Article
 
 
 # ============================================================================

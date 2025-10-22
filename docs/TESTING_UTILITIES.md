@@ -23,7 +23,7 @@ Django-Bolt test client supports **two modes** for different testing scenarios:
 ### Fast Mode (Default)
 **Best for**: Unit tests, handler logic, parameter extraction
 
-- Routes through: Rust routing ’ auth ’ guards ’ handler dispatch
+- Routes through: Rust routing ï¿½ auth ï¿½ guards ï¿½ handler dispatch
 - **Bypasses**: Actix HTTP middleware layer
 - **Speed**: ~7,300 req/s
 - **Use when**: Testing handler logic, business code, auth/guards
@@ -36,7 +36,7 @@ with TestClient(api) as client:  # Fast mode by default
 ### HTTP Layer Mode
 **Best for**: Integration tests, middleware testing
 
-- Routes through: Full Actix HTTP stack ’ compression ’ CORS ’ rate limiting ’ routing ’ auth ’ guards ’ handler
+- Routes through: Full Actix HTTP stack ï¿½ compression ï¿½ CORS ï¿½ rate limiting ï¿½ routing ï¿½ auth ï¿½ guards ï¿½ handler
 - **Includes**: All Actix middleware (Compress, CORS, rate limiting)
 - **Speed**: ~1,500 req/s
 - **Use when**: Testing middleware behavior, compression, CORS headers, rate limiting
@@ -298,7 +298,7 @@ We implemented a dual-layer solution:
 #### Rust Layer ([src/test_state.rs](../src/test_state.rs))
 - **Per-instance routers**: Each test gets its own isolated router (no global state conflicts)
 - **Per-instance event loops**: Each test app manages its own Python asyncio event loop
-- **Full pipeline execution**: Routes through routing ’ auth ’ middleware ’ handler ’ compression
+- **Full pipeline execution**: Routes through routing ï¿½ auth ï¿½ middleware ï¿½ handler ï¿½ compression
 - **Synchronous execution**: Uses `asyncio.run_until_complete()` to execute async handlers
 
 Key functions:
@@ -337,7 +337,7 @@ Test execution: ~20-100ms per test
 Performance: ~1,500 req/s
 ```
 
-**Result**: Fast mode is **50-100x faster** than subprocess testing, HTTP layer mode is **10-20x faster** =€
+**Result**: Fast mode is **50-100x faster** than subprocess testing, HTTP layer mode is **10-20x faster** =ï¿½
 
 ## Testing the Full Stack
 
@@ -412,7 +412,7 @@ This is **true integration testing** without the network overhead!
 - `src/test_state.rs` - Rust per-instance test state management
 - `src/testing.rs` - Additional test utilities
 - `python/django_bolt/testing/` - Python test client package
-- `python/django_bolt/tests/test_testing_utilities.py` - Test suite
+- `python/tests/test_testing_utilities.py` - Test suite
 
 ### Modified Files
 - `src/lib.rs` - Export test_state functions to Python
@@ -513,7 +513,7 @@ We successfully implemented **in-memory testing for a hybrid Python/Rust framewo
 
 The result is a **fast, reliable, and comprehensive** testing solution that exercises the full Rust pipeline without subprocess/network overhead.
 
-**Tests run 50-100x faster** while providing **better test isolation** than subprocess-based approaches! <‰
+**Tests run 50-100x faster** while providing **better test isolation** than subprocess-based approaches! <ï¿½
 
 ### Quick Reference
 

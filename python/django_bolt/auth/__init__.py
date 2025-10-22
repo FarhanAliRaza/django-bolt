@@ -10,7 +10,7 @@ from .backends import (
     BaseAuthentication,
     JWTAuthentication,
     APIKeyAuthentication,
-    SessionAuthentication,
+    SessionAuthentication, # Session authentication is not implemented
     AuthContext,
     get_default_authentication_classes,
 )
@@ -53,7 +53,7 @@ __all__ = [
     "BaseAuthentication",
     "JWTAuthentication",
     "APIKeyAuthentication",
-    "SessionAuthentication",
+    "SessionAuthentication", # Session authentication is not implemented
     "AuthContext",
     "get_default_authentication_classes",
 

@@ -662,7 +662,7 @@ Always test edge cases:
 - Offset beyond total results
 - Invalid cursors
 
-Django-Bolt includes comprehensive pagination tests in [test_pagination.py](../python/django_bolt/tests/test_pagination.py) with **46 test cases** covering:
+Django-Bolt includes comprehensive pagination tests in [test_pagination.py](../python/tests/test_pagination.py) with **46 test cases** covering:
 - All three pagination classes with real Django ORM integration
 - Edge cases (empty results, single result, invalid inputs)
 - ViewSet integration

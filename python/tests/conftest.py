@@ -53,7 +53,7 @@ def pytest_configure(config):
                 'django.contrib.messages.middleware.MessageMiddleware',
                 'django.middleware.clickjacking.XFrameOptionsMiddleware',
             ],
-            ROOT_URLCONF='django_bolt.tests.admin_tests.urls',
+            ROOT_URLCONF='tests.admin_tests.urls',
             TEMPLATES=[
                 {
                     'BACKEND': 'django.template.backends.django.DjangoTemplates',
@@ -102,7 +102,7 @@ def django_db_setup(django_db_setup, django_db_blocker):
 
         # Create test model tables manually since they're not in migrations
         with connection.schema_editor() as schema_editor:
-            from django_bolt.tests.test_models import Article
+            from .test_models import Article
             schema_editor.create_model(Article)
 
 

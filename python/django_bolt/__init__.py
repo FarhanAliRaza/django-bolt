@@ -34,7 +34,7 @@ from .auth import (
     # Authentication backends
     JWTAuthentication,
     APIKeyAuthentication,
-    SessionAuthentication,
+    SessionAuthentication, # Session authentication is not implemented
     AuthContext,
     # Guards/Permissions
     AllowAny,
@@ -107,7 +107,7 @@ __all__ = [
     # Auth - Authentication
     "JWTAuthentication",
     "APIKeyAuthentication",
-    "SessionAuthentication",
+    "SessionAuthentication", # Session authentication is not implemented
     "AuthContext",
     # Auth - Guards/Permissions
     "AllowAny",

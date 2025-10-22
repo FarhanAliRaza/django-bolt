@@ -47,7 +47,6 @@ Pagination helpers
 ⚠️ with broken settings it was not able to find api from root folder
 ⚠️ If api folder has error it does not discover the apis
 ⚠️ Msgspec based serializer and stuff
-
 ⚠️ Larger json has some GIL contention issue have done alot of investigation. Serialization hold gil when moved serialization to rust it improved but not that much .. Under large concurrency i think it happens . Have to investigate more.
 
 ## Known Limitations (BOTH Function & Class-Based)

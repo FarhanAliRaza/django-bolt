@@ -73,7 +73,7 @@ dev-test: build test-server-bg
 
 # Run Python tests (verbose)
 test-py:
-	uv run --with pytest pytest python/django_bolt/tests -s -vv
+	uv run --with pytest pytest python/tests -s -vv
 
 # High-performance test (for benchmarking)
 perf-test: build

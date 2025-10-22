@@ -7,7 +7,9 @@ Django-Bolt includes comprehensive security features to protect your API endpoin
 - [Authentication](#authentication)
   - [JWT Authentication](#jwt-authentication)
   - [API Key Authentication](#api-key-authentication)
+  - [Session Authentication](#session-authentication)
   - [Token Revocation](#token-revocation)
+  - [Auth Context](#auth-context)
 - [Authorization & Guards](#authorization--guards)
 - [CORS Security](#cors-security)
 - [Rate Limiting](#rate-limiting)
@@ -71,17 +73,22 @@ token = create_jwt_for_user(
 #### JWT Configuration Options
 
 - **secret**: Secret key for signing tokens (defaults to Django's `SECRET_KEY`)
-- **algorithms**: List of allowed algorithms (e.g., `["HS256", "HS512"]`)
-  - **Performance Note**: Only the FIRST algorithm in the list is used for validation
+- **algorithms**: List of allowed algorithms (e.g., `["HS256"]`)
+  - **IMPORTANT**: Only the FIRST algorithm in the list is used for validation
+  - No fallback to other algorithms - if validation fails with the first algorithm, the request is rejected
   - For maximum performance, specify exactly one algorithm: `algorithms=["HS256"]`
-  - Multiple algorithms are supported but only the first will be checked
+  - Supported algorithms: HS256, HS384, HS512, RS256, RS384, RS512, ES256, ES384
 - **header**: Header name to read token from (default: `"authorization"`)
 - **audience**: Expected audience claim (optional)
 - **issuer**: Expected issuer claim (optional)
+- **revocation_store**: Token revocation store (see [Token Revocation](#token-revocation))
+- **revoked_token_handler**: Alias for `revocation_store` (deprecated, use `revocation_store`)
+- **require_jti**: Require JWT ID claim in tokens (default: `False`, auto-enabled if revocation is configured)
 
 #### Security Considerations
 
 **✅ Secret Key Validation**
+
 ```python
 # GOOD: Explicit secret
 jwt_auth = JWTAuthentication(secret="strong-secret-key-here")
@@ -95,21 +102,26 @@ jwt_auth = JWTAuthentication(secret="")    # Error!
 ```
 
 **✅ Algorithm Specification**
+
 ```python
 # Best practice: Specify ONE algorithm for maximum performance
 jwt_auth = JWTAuthentication(
     secret="secret",
-    algorithms=["HS256"]  # Fast - single algorithm validation
+    algorithms=["HS256"]  # Single algorithm - optimal performance
 )
 
-# Multiple algorithms: Only FIRST is used
+# Multiple algorithms in list: Only FIRST is used (no fallback!)
 jwt_auth = JWTAuthentication(
     secret="secret",
-    algorithms=["HS256", "HS512"]  # Only HS256 is validated (first in list)
+    algorithms=["HS256", "HS512"]  # ⚠️ Only HS256 is validated!
+    # HS512 is NEVER tried - if HS256 validation fails, request is rejected
 )
 ```
 
+**Performance Note**: Authentication runs in Rust without Python GIL overhead. Using a single algorithm ensures zero overhead from algorithm selection logic.
+
 **❌ Empty Algorithm List**
+
 ```python
 # Defaults to ["HS256"] if empty
 jwt_auth = JWTAuthentication(algorithms=[])  # Uses HS256
@@ -141,6 +153,7 @@ async def get_data(request):
 #### Security Considerations
 
 **✅ Non-Empty Key Set Required**
+
 ```python
 # GOOD: API keys provided
 api_key_auth = APIKeyAuthentication(api_keys={"key1", "key2"})
@@ -173,10 +186,18 @@ revocation = DjangoCacheRevocation(cache_alias="default")
 # Django ORM Revocation (persistent)
 revocation = DjangoORMRevocation()
 
+# Configure JWT with revocation support
 jwt_auth = JWTAuthentication(
     secret="secret",
-    revocation_store=revocation,
-    require_jti=True  # Enforce jti in tokens
+    revocation_store=revocation,  # Preferred parameter name
+    require_jti=True  # Enforce jti claim in all tokens
+)
+
+# Alternative (deprecated): revoked_token_handler
+jwt_auth = JWTAuthentication(
+    secret="secret",
+    revoked_token_handler=revocation,  # Alias for revocation_store
+    require_jti=True
 )
 
 # Revoke a token
@@ -185,6 +206,102 @@ await revocation.revoke_token("token-jti-here")
 # Check if revoked
 is_revoked = await revocation.is_revoked("token-jti-here")
 ```
+
+#### Auto-Enable require_jti
+
+When `revocation_store` or `revoked_token_handler` is provided, `require_jti` is automatically enabled:
+
+```python
+# require_jti is automatically set to True
+jwt_auth = JWTAuthentication(
+    secret="secret",
+    revocation_store=DjangoCacheRevocation()
+)
+# Token validation will reject tokens without 'jti' claim
+```
+
+### Auth Context
+
+After successful authentication, Django-Bolt populates the request context with authentication information. This context is built in Rust and passed to your Python handlers.
+
+#### Accessing Auth Context
+
+```python
+@api.get("/protected", auth=[jwt_auth], guards=[IsAuthenticated()])
+async def protected_route(request):
+    # Get authentication context
+    auth = request.get("auth", {})
+
+    # Access auth fields
+    user_id = auth.get("user_id")          # User identifier
+    is_staff = auth.get("is_staff", False)  # Staff status
+    is_admin = auth.get("is_admin", False)  # Admin/superuser status
+    backend = auth.get("auth_backend")      # "jwt", "api_key", or "session"
+    permissions = auth.get("permissions", []) # List of permissions
+
+    return {
+        "user_id": user_id,
+        "is_staff": is_staff,
+        "is_admin": is_admin,
+        "permissions": permissions
+    }
+```
+
+#### Auth Context Fields
+
+The following fields are populated in the auth context:
+
+| Field          | Type          | Description                 | Source                                                    |
+| -------------- | ------------- | --------------------------- | --------------------------------------------------------- |
+| `user_id`      | `str \| None` | User identifier             | JWT `sub` claim or `apikey:{key}` for API keys            |
+| `is_staff`     | `bool`        | Staff status                | JWT `is_staff` claim (default: `False`)                   |
+| `is_admin`     | `bool`        | Admin/superuser status      | JWT `is_superuser` or `is_admin` claim (default: `False`) |
+| `auth_backend` | `str`         | Authentication backend used | `"jwt"`, `"api_key"`, or `"session"`                      |
+| `permissions`  | `list[str]`   | User permissions            | JWT `permissions` claim or API key permissions            |
+| `auth_claims`  | `dict`        | Full JWT claims (JWT only)  | All JWT claims including custom fields                    |
+
+#### JWT-Specific Fields
+
+When using JWT authentication, the `auth_claims` field contains all JWT claims:
+
+```python
+@api.get("/profile", auth=[jwt_auth])
+async def profile(request):
+    auth = request.get("auth", {})
+    claims = auth.get("auth_claims", {})
+
+    # Standard JWT claims
+    sub = claims.get("sub")          # Subject (user ID)
+    exp = claims.get("exp")          # Expiration timestamp
+    iat = claims.get("iat")          # Issued at timestamp
+    iss = claims.get("iss")          # Issuer
+    aud = claims.get("aud")          # Audience
+    jti = claims.get("jti")          # JWT ID
+
+    # Custom claims (from extra_claims in create_jwt_for_user)
+    role = claims.get("role")
+    department = claims.get("department")
+
+    return {"sub": sub, "role": role}
+```
+
+#### API Key Auth Context
+
+For API key authentication, the `user_id` is in the format `apikey:{key}`:
+
+```python
+@api.get("/data", auth=[api_key_auth])
+async def get_data(request):
+    auth = request.get("auth", {})
+    user_id = auth.get("user_id")  # Returns "apikey:abc123"
+    permissions = auth.get("permissions", [])  # From key_permissions
+
+    return {"user_id": user_id, "permissions": permissions}
+```
+
+#### Performance Note
+
+Auth context population happens in Rust using PyO3. Only the necessary fields are copied to Python, minimizing GIL overhead. The entire authentication process (token validation, permission extraction) runs in Rust without acquiring the Python GIL.
 
 ---
 
@@ -278,6 +395,7 @@ BOLT_CORS_ALLOWED_ORIGINS = [
 ### Security Features
 
 **✅ Wildcard + Credentials Validation**
+
 ```python
 # BAD: This is rejected (violates CORS spec)
 @cors(origins=["*"], credentials=True)  # Error!
@@ -290,6 +408,7 @@ BOLT_CORS_ALLOWED_ORIGINS = [
 ```
 
 **✅ Secure Defaults**
+
 ```python
 # Default: Empty origin list (no origins allowed)
 # You must explicitly configure allowed origins
@@ -300,6 +419,7 @@ BOLT_CORS_ALLOWED_ORIGINS = []  # Empty by default
 ```
 
 **✅ Origin Validation**
+
 - Origins are validated against the allowlist
 - Requests from unauthorized origins receive no CORS headers
 - Proper `Vary` headers for caching
@@ -356,18 +476,21 @@ async def search(query: str): ...
 ### Security Features
 
 **✅ Key Length Validation**
+
 ```python
 # Keys are limited to 256 bytes to prevent memory attacks
 # Long keys are rejected with 400 Bad Request
 ```
 
 **✅ Automatic Cleanup**
+
 ```python
 # Maximum 100,000 rate limiters
 # Automatic cleanup when limit is reached (removes 20% oldest)
 ```
 
 **✅ IP-based Rate Limiting**
+
 ```python
 # Checks X-Forwarded-For, X-Real-IP headers
 # Falls back to peer address
@@ -399,6 +522,7 @@ async def download_file(filename: str):
 ### Security Features
 
 **✅ Path Canonicalization**
+
 ```python
 # Paths are resolved and validated
 FileResponse("/path/to/file.txt")
@@ -408,6 +532,7 @@ FileResponse("/path/to/file.txt")
 ```
 
 **✅ Directory Whitelist**
+
 ```python
 # settings.py
 BOLT_ALLOWED_FILE_PATHS = [
@@ -424,6 +549,7 @@ FileResponse("/var/app/uploads/../../../etc/passwd")  # 🚫 Blocked
 ```
 
 **✅ Automatic Error Handling**
+
 ```python
 # FileNotFoundError -> 404
 FileResponse("/nonexistent.txt")  # Returns 404
@@ -501,6 +627,7 @@ BOLT_ALLOWED_FILE_PATHS = [...]     # File serving whitelist
 ### Why This Matters
 
 **Before (Slow - Regression)**:
+
 ```python
 # ❌ BAD: Reading Django settings on EVERY request
 def handle_request():
@@ -510,6 +637,7 @@ def handle_request():
 ```
 
 **After (Fast - Current)**:
+
 ```python
 # ✅ GOOD: Read once at startup, cached in Rust
 fn handle_request(state: &AppState) {
@@ -519,32 +647,47 @@ fn handle_request(state: &AppState) {
 ```
 
 **Performance Impact**:
+
 - Reading Django settings per-request: ~30-40% performance loss (33k → 44k RPS)
 - Caching at startup: Zero per-request overhead
 
 ### Authentication Algorithm Performance
 
-JWT authentication uses only the FIRST algorithm specified:
+JWT authentication uses only the FIRST algorithm specified for maximum performance:
 
 ```python
-# FAST: Single algorithm validation
+# OPTIMAL: Single algorithm validation
 jwt_auth = JWTAuthentication(algorithms=["HS256"])
+# Validates using HS256 only - zero overhead from algorithm selection
 
-# SLOW: Would try multiple algorithms (old behavior - removed)
-# jwt_auth = JWTAuthentication(algorithms=["HS256", "HS512", "RS256"])
-# This would loop through all algorithms on auth failure - REMOVED for performance
+# SUBOPTIMAL: Multiple algorithms listed (only first is used!)
+jwt_auth = JWTAuthentication(algorithms=["HS256", "HS512", "RS256"])
+# Still only validates with HS256 (first in list)
+# Other algorithms are IGNORED - no fallback on failure
 ```
 
-**Current Behavior**: Only the first algorithm in the list is used for validation. If validation fails, the request is rejected immediately (no fallback to other algorithms).
+**Current Behavior**:
+
+- Only the first algorithm in the list is used for validation
+- If validation fails with the first algorithm, the request is rejected immediately
+- No fallback to other algorithms (this prevents algorithm confusion attacks)
+- If you need to support multiple algorithms, create separate authentication backends
+
+**Why This Matters**:
+
+- **Old approach** (trying multiple algorithms on failure): Vulnerable to algorithm downgrade attacks, adds overhead
+- **Current approach** (single algorithm only): Secure, fast, predictable behavior
 
 ### Best Practices for Performance
 
 1. **Specify ONE algorithm for JWT**:
+
    ```python
    JWTAuthentication(algorithms=["HS256"])  # Not ["HS256", "HS512"]
    ```
 
 2. **Configure settings before server start**:
+
    ```python
    # settings.py - loaded ONCE at startup
    BOLT_MAX_HEADER_SIZE = 8192
@@ -600,15 +743,19 @@ BOLT_CORS_ALLOWED_ORIGINS = [
 
 ```python
 # ✅ GOOD: Strong algorithm (single for best performance)
-JWTAuthentication(algorithms=["HS256"])
-JWTAuthentication(algorithms=["RS256"])  # RSA signatures
+JWTAuthentication(algorithms=["HS256"])    # HMAC-SHA256 (symmetric)
+JWTAuthentication(algorithms=["RS256"])    # RSA signatures (asymmetric)
+JWTAuthentication(algorithms=["ES256"])    # ECDSA signatures (asymmetric)
 
-# ⚠️ AVOID: Multiple algorithms (only first is used anyway)
-JWTAuthentication(algorithms=["HS256", "HS512"])  # Only HS256 is validated
+# ⚠️ AVOID: Multiple algorithms (only first is used, no fallback!)
+JWTAuthentication(algorithms=["HS256", "HS512"])  # Only HS256 is validated!
+# If token uses HS512, validation will FAIL
 
 # ⚠️ AVOID: Weak algorithms
 # None algorithm is not supported (security)
 ```
+
+**Algorithm Selection**: Only the first algorithm in the list is used. If your tokens use different algorithms, you must create separate authentication backends.
 
 ### 5. Implement Rate Limiting
 
@@ -645,17 +792,21 @@ BOLT_ALLOWED_FILE_PATHS = [
 # For apps requiring logout or token invalidation
 jwt_auth = JWTAuthentication(
     revocation_store=DjangoCacheRevocation(),
-    require_jti=True
+    # require_jti=True  # Auto-enabled when revocation_store is set
 )
 
 # Implement logout endpoint
-@api.post("/logout")
+@api.post("/logout", auth=[jwt_auth], guards=[IsAuthenticated()])
 async def logout(request):
     auth = request.get("auth", {})
-    jti = auth.get("jti")
+    claims = auth.get("auth_claims", {})
+    jti = claims.get("jti")
+
     if jti:
         await jwt_auth.revocation_store.revoke_token(jti)
-    return {"message": "Logged out"}
+        return {"message": "Logged out successfully"}
+    else:
+        return {"message": "Token has no JTI claim"}, 400
 ```
 
 ### 8. Monitor and Log Security Events
@@ -705,18 +856,35 @@ async def get_user(user_id: int):
 
 ```python
 from django_bolt.dependencies import Depends
+from django_bolt.exceptions import Unauthorized
 
 async def get_current_user(request):
+    """Dependency that extracts and validates the current user."""
     auth = request.get("auth", {})
     user_id = auth.get("user_id")
+
     if not user_id:
         raise Unauthorized("Authentication required")
-    return await User.objects.aget(id=user_id)
+
+    # For API keys, user_id is "apikey:{key}" format
+    if user_id.startswith("apikey:"):
+        raise Unauthorized("API key authentication not supported for this endpoint")
+
+    try:
+        return await User.objects.aget(id=user_id)
+    except User.DoesNotExist:
+        raise Unauthorized("User not found")
 
 @api.get("/profile")
 async def profile(user = Depends(get_current_user)):
-    return {"username": user.username}
+    return {
+        "username": user.username,
+        "email": user.email,
+        "is_staff": user.is_staff
+    }
 ```
+
+This pattern centralizes authentication logic and makes handlers cleaner.
 
 ---
 

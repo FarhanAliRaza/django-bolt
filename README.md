@@ -1,32 +1,23 @@
 <div align="center">
   <img src="docs/logo.png" alt="Django-Bolt Logo" width="400"/>
 
-  [![Seeking Remote Work](https://img.shields.io/badge/🌍-Actively%20Seeking%20Remote%20Work-success?style=for-the-badge)](mailto:farhanalirazaazeemi@gmail.com)
+[![Seeking Remote Work](https://img.shields.io/badge/🌍-Actively%20Seeking%20Remote%20Work-success?style=for-the-badge)](mailto:farhanalirazaazeemi@gmail.com)
+
 </div>
 
-**High-Performance Fully Typed API Framework for Django**
+# High-Performance Fully Typed API Framework for Django
 
-Django-Bolt is a high-performance API framework for Django that provides Rust-powered API endpoints capable of **60k+ RPS** performance. Similar to Django REST Framework or Django Ninja, it integrates seamlessly with existing Django projects while leveraging Actix Web for HTTP handling, PyO3 to bridge Python async handlers with Rust's async runtime, msgspec for fast serialization, and supports multi-process scaling with SO_REUSEPORT.
-
-**Key Features:**
-
-- 🚀 **High Performance** - Rust-powered HTTP server (Actix Web + Tokio + PYO3)
-- 🔐 **Authentication in Rust** - JWT/API Key validation without Python GIL
-- 📦 **msgspec Serialization** - 5-10x faster than standard JSON
-- 🎯 **Django Integration** - Use your existing Django models and other django features you love (django admin, django packages (All django packages will work except that use django middlware for now. I will work on some compatibilty layer to make them work but it is not a priority right now) )
-- 🔄 **Async/Await** - Full async support with Python coroutines
-- 🎛️ **Middleware System** - CORS, rate limiting, compression, custom middleware
-- 🔒 **Guards & Permissions** - DRF and litestar inspired route protection
-
----
+Your first question might be: why? Well, consider this: **Faster than _FastAPI_, but with Django ORM, Django Admin, and Django packages**. That’s exactly what this project achieves. Django-Bolt is a high-performance API framework for Django, providing Rust-powered API endpoints capable of 60k+ RPS. Similar to Django REST Framework or Django Ninja, it integrates seamlessly with existing Django projects while leveraging Actix Web for HTTP handling, PyO3 to bridge Python async handlers with Rust's async runtime, and msgspec for fast serialization. You can deploy it directly—no gunicorn or uvicorn needed.
 
 ## 🚀 Quick Start
 
-### Installation
+### Installation 🎉
 
-COMING VERY SOON NEAR YOUR DJANGO PROJECTS
+```bash
+pip install django-bolt
+```
 
-For now you can build and use it locally if you want.
+**📖 Full Documentation:** (Coming Soon).
 
 ### Run Your First API
 
@@ -52,11 +43,33 @@ async def get_user(user_id: int) -> UserSchema: # 🎉 Reponse is type validated
 
 ```bash
 # Start the server
-python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 4 --workers 1
+python manage.py runbolt --dev  # for development with reload enabled
+[django-bolt] OpenAPI docs enabled at /docs
+[django-bolt] Django admin enabled at http://0.0.0.0:8000/admin/ #django admin
+[django-bolt] Static files serving enabled
+[django-bolt] Found 94 routes
+[django-bolt] Registered middleware for 83 handlers
+[django-bolt] Starting server on http://0.0.0.0:8000
+[django-bolt] Workers: 1, Processes: 1
+[django-bolt] OpenAPI docs enabled at http://0.0.0.0:8000/docs/ #swagger docs builtin
+
 # processes are python processes that handle request 1 actix worker
 ```
 
 ---
+
+**Key Features:**
+
+- 🚀 **High Performance** - Rust-powered HTTP server (Actix Web + Tokio + PyO3)
+- 🔐 **Authentication in Rust** - JWT/API Key/Session validation without Python GIL
+- 📦 **msgspec Serialization** - 5-10x faster than standard JSON
+- 🎯 **Django Integration** - Use your existing Django models and other django features you love (django admin, django packages)
+- 🔄 **Async/Await** - Full async support with Python coroutines
+- 🎛️ **Middleware System** - CORS, rate limiting, compression (gzip/brotli/zstd)
+- 🔒 **Guards & Permissions** - DRF and Litestar inspired route protection
+- 📚 **OpenAPI Support** - 7 render plugins (Swagger, ReDoc, Scalar, RapidDoc, Stoplight, JSON, YAML)
+- 📡 **Streaming Responses** - SSE, long-polling, async generators
+- 🎨 **Class-Based Views** - ViewSet and ModelViewSet with DRF-style conventions
 
 ## 📊 Performance Benchmarks
 
@@ -66,20 +79,18 @@ python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 4 --workers 1
 
 | Endpoint Type              | Requests/sec    |
 | -------------------------- | --------------- |
-| Root endpoint              | **~86,500 RPS** |
-| JSON parsing/validation    | **~81,000 RPS** |
-| Path + Query params        | **~62,500 RPS** |
-| HTML/Redirect responses    | **~88,000 RPS** |
-| Form data handling         | **~69,000 RPS** |
-| ORM reads (SQLite, 10 rec) | **~12,000 RPS** |
+| Root endpoint              | **~85,000 RPS** |
+| JSON parsing/validation    | **~80,000 RPS** |
+| Path + Query params        | **~83,500 RPS** |
+| HTML/Redirect responses    | **~86,000 RPS** |
+| Form data handling         | **~68,000 RPS** |
+| ORM reads (SQLite, 10 rec) | **~15,000 RPS** |
 
 **Why so fast?**
 
-- Authentication and guards run in Rust without the Python GIL
+- HTTP Parsing and Reponse is handled Actix-rs framework(One of the fastest in the world)
 - Request routing uses matchit (zero-copy path matching)
-- No middleware overhead if not required
 - JSON serialization with msgspec
-- Multi-process with SO_REUSEPORT (kernel-level load balancing)
 
 ---
 
@@ -128,16 +139,24 @@ python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 4 --workers 1
 
   - Algorithms: HS256, HS384, HS512, RS256, RS384, RS512, ES256, ES384, ES512
   - Token validation in Rust (zero Python overhead)
-  - Expiration validation
-  - Custom claims support
+  - Expiration validation (`exp`) and not-before (`nbf`) checks
+  - Custom claims support with audience/issuer validation
   - Django User integration helpers
-  - Token revocation support (optional)
+  - Token revocation support (optional: `InMemoryRevocation`, `DjangoCacheRevocation`, `DjangoORMRevocation`)
 
-- ✅ **API Key Authentication** - **Partial** (runs in Rust without GIL)
+- ✅ **API Key Authentication** - **Complete** (runs in Rust without GIL)
 
-  - Header-based API keys
+  - Header-based API keys (Bearer or ApiKey prefix)
   - Per-key permissions
+  - Constant-time comparison (timing attack prevention)
   - Fast validation in Rust
+
+- ✅ **Session Authentication** - **Complete** (Django session integration)
+
+  - Django session backend integration
+  - Automatic user lookup from session
+  - Compatible with Django's session middleware
+  - Supports both cookie-based and custom session stores
 
 - ✅ **Permission Guards** (all run in Rust):
 
@@ -149,80 +168,27 @@ python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 4 --workers 1
   - `HasAnyPermission("p1", "p2")` - OR logic
   - `HasAllPermissions("p1", "p2")` - AND logic
 
-- ✅ **Auth Context** - Request-level auth context with user info
+- ✅ **Auth Context** - Request-level auth context with user info, permissions, and backend details
 - ✅ **Token Utilities**:
 
-  - `create_jwt_for_user(user)` - Generate JWT for Django User
+  - `create_jwt_for_user(user, exp_hours=24)` - Generate JWT for Django User
+  - Custom claims and permissions support
 
-- ✅ **Token Revocation** (optional):
-  - `InMemoryRevocation` - In-memory token blacklist
-  - `DjangoCacheRevocation` - Cache-based revocation
-  - `DjangoORMRevocation` - Database-backed revocation
+**📖 See [docs/SECURITY.md](docs/SECURITY.md) for complete authentication documentation.**
 
 ### Developer Tools ✅
 
 - ✅ **CLI** - `python -m django_bolt init` for project setup
-- ✅ **Management Command** - `python manage.py runbolt`
-- ✅ **Auto-Discovery** - Finds APIs in all Django apps
-- ⚠️ **Error Messages** - Clear error messages (In Progress)
+- ✅ **Management Command** - `python manage.py runbolt` with auto-discovery
+- ✅ **Auto-Discovery** - Finds `api.py` in project root and all Django apps
+- ✅ **OpenAPI/Swagger** - 7 render plugins: Swagger UI, ReDoc, Scalar, RapidDoc, Stoplight Elements, JSON, YAML
+- ✅ **Error Messages** - Clear, structured error messages with Django DEBUG integration
 - ✅ **Type Hints** - Full type hint support with msgspec
+- ✅ **Dependency Injection** - `Depends()` marker with per-request caching
+
+**📖 See [docs/README.md](docs/README.md) for complete documentation index.**
 
 ---
-
-## 📋 TODO / Roadmap
-
-### Must Have (Blockers) 🚨
-
-- ✅ **Core API functionality** - DONE
-- ✅ **Authentication** - DONE (JWT complete)
-- ✅ **Tests passing** - DONE (142 passed)
-- ✅ **Better error messages** - DONE (Enhanced exception system with structured errors)
-- ✅ **Health check endpoints** - DONE (`/health`, `/ready` with custom checks)
-- ✅ **Request/Response logging** - DONE (Integrates with Django's logging)
-- ❌ **PyPI package** - Missing (currently manual install)
-
-### Should Have (Important) 🎯
-
-- ✅ **Error handling with Django DEBUG integration** - DONE
-- ✅ **Structured error responses** (FastAPI-compatible) - DONE
-- ✅ **Response compression** - DONE (gzip/brotli/zstd)
-- ✅ **OpenAPI/Swagger docs** - DONE (some parts remaining like grouping)
-- ✅ **Django admin integration** - DONE
-- ⚠️ **API Key auth** - Partial (only in-memory)
-- ⚠️ **Testing utilities** - Partial
-
-### Nice to Have (Can defer) 📝
-
-- [ ] **Static file serving** - Efficient static file serving from Rust
-- [ ] **Pagination helpers** - Built-in pagination utilities
-- [ ] **OAuth2/OpenID** - OAuth2 and OpenID Connect support
-- [ ] **API Versioning** - URL/header-based versioning
-- [ ] **Content Negotiation** - Accept header-based content negotiation
-- [ ] **ETags & Conditional Requests** - Caching optimization
-- [ ] **Filtering & Sorting** - Query parameter-based filtering
-
----
-
-## 🏗️ Architecture
-
-### Core Components
-
-1. **[src/lib.rs](src/lib.rs)** - Main Rust entry point, exposes PyO3 module
-2. **[src/server.rs](src/server.rs)** - Actix Web server with multi-worker tokio runtime
-3. **[src/router.rs](src/router.rs)** - matchit-based routing
-4. **[src/middleware/](src/middleware/)** - Middleware pipeline
-   - `auth.rs` - JWT/API Key authentication (zero GIL overhead)
-   - `cors.rs` - CORS handling
-   - `rate_limit.rs` - Token bucket rate limiting
-5. **[src/permissions.rs](src/permissions.rs)** - Guard evaluation
-6. **[python/django_bolt/api.py](python/django_bolt/api.py)** - Python decorator-based API
-7. **[python/django_bolt/auth/](python/django_bolt/auth/)** - Authentication system
-   - `backends.py` - Auth backend classes (compile to Rust metadata)
-   - `guards.py` - Permission guard classes
-   - `jwt_utils.py` - JWT utilities for Django User integration
-   - `middleware.py` - Middleware decorators
-   - `token.py` - Token handling
-   - `revocation.py` - Token revocation stores
 
 ### Request Flow
 
@@ -235,9 +201,10 @@ HTTP Request → Actix Web (Rust)
       - CORS
       - Rate Limiting
            ↓
-    Authentication (Rust - no GIL for most part may require in future)
-      - JWT validation
-      - API Key validation
+    Authentication (Rust - no GIL)
+      - JWT validation (HS256/384/512, RS256/384/512, ES256/384)
+      - API Key validation (constant-time comparison)
+      - Session validation (Django session integration)
            ↓
     Guards/Permissions (Rust - no GIL)
       - IsAuthenticated
@@ -256,6 +223,20 @@ HTTP Request → Actix Web (Rust)
            ↓
     HTTP Response
 ```
+
+---
+
+## 📖 Documentation (Coming Soon)
+
+- **[Getting Started Guide](docs/GETTING_STARTED.md)** - Complete tutorial from installation to first API
+- **[Security Guide](docs/SECURITY.md)** - Authentication, authorization, CORS, rate limiting
+- **[Middleware Guide](docs/MIDDLEWARE.md)** - CORS, rate limiting, custom middleware
+- **[Responses Guide](docs/RESPONSES.md)** - All response types and streaming
+- **[Class-Based Views](docs/CLASS_BASED_VIEWS.md)** - ViewSet and ModelViewSet patterns
+- **[OpenAPI Guide](docs/OPENAPI.md)** - Auto-generated API documentation
+- **[Pagination Guide](docs/PAGINATION.md)** - PageNumber, LimitOffset, Cursor pagination
+- **[Logging Guide](docs/LOGGING.md)** - Request/response logging and metrics
+- **[Full Documentation Index](docs/README.md)** - Complete list of all documentation
 
 ---
 
@@ -303,6 +284,7 @@ async def create_user(user: CreateUserRequest):
 from django_bolt import BoltAPI
 from django_bolt.auth import (
     JWTAuthentication,
+    APIKeyAuthentication,
     IsAuthenticated,
     IsAdminUser,
     HasPermission,
@@ -310,25 +292,25 @@ from django_bolt.auth import (
 
 api = BoltAPI()
 
-# Require JWT authentication
+# JWT Authentication
 @api.get(
     "/protected",
     auth=[JWTAuthentication()],
     guards=[IsAuthenticated()]
 )
 async def protected_route(request):
-    auth_context = request.get("auth", {})
-    user_id = auth_context.get("user_id")
+    auth = request.get("auth", {})
+    user_id = auth.get("user_id")
     return {"message": f"Hello, user {user_id}"}
 
-# Require admin access
+# API Key Authentication
 @api.get(
-    "/admin",
-    auth=[JWTAuthentication()],
-    guards=[IsAdminUser()]
+    "/api-data",
+    auth=[APIKeyAuthentication(api_keys={"key1", "key2"})],
+    guards=[IsAuthenticated()]
 )
-async def admin_only(request):
-    return {"message": "Admin access"}
+async def api_data(request):
+    return {"message": "API key authenticated"}
 
 # Permission-based access
 @api.post(
@@ -351,11 +333,13 @@ async def login(username: str, password: str):
     return {"access_token": token, "token_type": "bearer"}
 ```
 
+**📖 See [docs/SECURITY.md](docs/SECURITY.md) for complete authentication documentation.**
+
 ### Middleware
 
 ```python
 from django_bolt import BoltAPI
-from django_bolt.auth import cors, rate_limit, skip_middleware
+from django_bolt.middleware import cors, rate_limit, skip_middleware
 
 # Global middleware
 api = BoltAPI(
@@ -363,28 +347,37 @@ api = BoltAPI(
         "cors": {
             "origins": ["http://localhost:3000"],
             "methods": ["GET", "POST", "PUT", "DELETE"],
+            "credentials": True,
         }
     }
 )
 
-# Per-route rate limiting
+# Per-route rate limiting (runs in Rust, no GIL)
 @api.get("/limited")
-@rate_limit(rps=10, burst=20)
+@rate_limit(rps=100, burst=200, key="ip")  # 100 req/s with burst of 200
 async def limited_endpoint():
-    return {"message": "Rate limited to 10 req/s"}
+    return {"message": "Rate limited"}
+
+# Rate limiting by user ID
+@api.get("/user-limited", auth=[JWTAuthentication()], guards=[IsAuthenticated()])
+@rate_limit(rps=50, burst=100, key="user")
+async def user_limited():
+    return {"message": "Per-user rate limiting"}
 
 # Custom CORS for specific route
 @api.get("/public")
-@cors(origins=["*"])
+@cors(origins=["https://example.com"], credentials=True, max_age=3600)
 async def public_endpoint():
     return {"message": "Public endpoint with CORS"}
 
 # Skip global middleware
 @api.get("/no-cors")
-@skip_middleware("cors")
+@skip_middleware("cors", "rate_limit")
 async def no_cors():
-    return {"message": "CORS disabled for this route"}
+    return {"message": "Middleware skipped"}
 ```
+
+**📖 See [docs/MIDDLEWARE.md](docs/MIDDLEWARE.md) for complete middleware documentation.**
 
 ### Django ORM Integration
 
@@ -423,7 +416,10 @@ async def list_articles(limit: int = 10):
 
 ```python
 from django_bolt import BoltAPI
-from django_bolt.responses import PlainText, HTML, Redirect, FileResponse
+from django_bolt.responses import (
+    PlainText, HTML, Redirect, File, FileResponse, StreamingResponse
+)
+import asyncio
 
 api = BoltAPI()
 
@@ -437,25 +433,22 @@ async def html_response():
 
 @api.get("/redirect")
 async def redirect_response():
-    return Redirect("/new-location")
+    return Redirect("/new-location", status_code=302)
 
-@api.get("/download")
-async def download_file():
-    # Streams file from Rust (zero-copy)
+@api.get("/download-memory")
+async def download_memory():
+    # In-memory file download
+    content = b"File contents here"
+    return File(content, filename="document.txt", media_type="text/plain")
+
+@api.get("/download-disk")
+async def download_disk():
+    # Streams file from disk (zero-copy in Rust)
     return FileResponse("/path/to/file.pdf", filename="document.pdf")
-```
 
-### Streaming Responses
-
-```python
-from django_bolt import BoltAPI
-from django_bolt.responses import StreamingResponse
-import asyncio
-
-api = BoltAPI()
-
-@api.get("/stream")
-async def stream_data():
+@api.get("/stream-sse")
+async def stream_sse():
+    # Server-Sent Events
     async def generate():
         for i in range(100):
             yield f"data: {i}\n\n"
@@ -465,7 +458,22 @@ async def stream_data():
         generate(),
         media_type="text/event-stream"
     )
+
+@api.get("/stream-json")
+async def stream_json():
+    # Streaming JSON (sync generator)
+    def generate():
+        yield '{"items": ['
+        for i in range(1000):
+            yield f'{{"id": {i}}}'
+            if i < 999:
+                yield ','
+        yield ']}'
+
+    return StreamingResponse(generate(), media_type="application/json")
 ```
+
+**📖 See [docs/RESPONSES.md](docs/RESPONSES.md) for complete response documentation.**
 
 ---
 
@@ -497,68 +505,11 @@ make rebuild        # Clean and rebuild
 
 # Testing
 make test-py        # Run Python tests
-make smoke          # Quick smoke tests
-make orm-smoke      # ORM-specific tests
 
 # Benchmarking
-make bench          # Run benchmarks
 make save-bench     # Run and save results
-make bench C=100 N=50000  # Custom benchmark
 
 # Server
-make run-bg HOST=127.0.0.1 PORT=8000 P=2 WORKERS=2
-```
-
----
-
-## 📁 Project Structure
-
-```
-django-bolt/
-├── src/                              # Rust server code
-│   ├── lib.rs                        # PyO3 module entry point
-│   ├── server.rs                     # Actix Web server
-│   ├── router.rs                     # matchit routing
-│   ├── middleware/
-│   │   ├── mod.rs
-│   │   ├── auth.rs                   # JWT/API Key auth (no GIL)
-│   │   ├── cors.rs                   # CORS handling
-│   │   └── rate_limit.rs             # Token bucket rate limiting
-│   ├── permissions.rs                # Guard evaluation
-│   └── streaming.rs                  # Streaming response handling
-├── python/django_bolt/               # Python framework
-│   ├── api.py                        # BoltAPI class, decorators
-│   ├── responses.py                  # Response types
-│   ├── exceptions.py                 # HTTP exceptions
-│   ├── params.py                     # Parameter markers
-│   ├── auth/                         # Authentication system
-│   │   ├── __init__.py
-│   │   ├── backends.py               # Auth backends
-│   │   ├── guards.py                 # Permission guards
-│   │   ├── middleware.py             # Middleware decorators
-│   │   ├── jwt_utils.py              # JWT utilities
-│   │   ├── token.py                  # Token handling
-│   │   └── revocation.py             # Token revocation
-│   ├── management/commands/
-│   │   └── runbolt.py                # Django management command
-│   ├── cli.py                        # django-bolt CLI
-│   ├── tests/                        # Test suite
-│   │   ├── test_auth_secret_key.py
-│   │   ├── test_guards_auth.py
-│   │   ├── test_guards_integration.py
-│   │   ├── test_jwt_auth.py
-│   │   ├── test_jwt_token.py
-│   │   ├── test_middleware.py
-│   │   └── test_syntax.py
-│   └── bootstrap.py                  # Django setup helper
-└── python/examples/testproject/      # Example Django project
-    ├── manage.py
-    ├── testproject/
-    │   ├── settings.py
-    │   └── api.py                    # Example routes
-    └── users/                        # Example app
-        ├── models.py
-        └── api.py
 ```
 
 ---
@@ -577,11 +528,43 @@ Contributions welcome! Here's how:
 
 ### Areas That Need Help
 
-- Authentication
-- OpenAPI/Swagger generation
-- More comprehensive tests and test utilities
-- Documentation improvements
+- Testing utilities and test client
+- WebSocket support
+- OAuth2/OpenID Connect
+- API versioning
+- More examples and tutorials
 
 ---
 
-**Built with ⚡ by developers who need speed without sacrificing Python's elegance**
+## 🙏 Acknowledgments & Inspiration
+
+Django-Bolt stands on the shoulders of giants. We're grateful to the following projects and communities that inspired our design and implementation:
+
+### Core Inspirations
+
+- **[Django REST Framework](https://github.com/encode/django-rest-framework)** - Our syntax, ViewSet patterns, and permission system are heavily inspired by DRF's elegant API design. The class-based views and guard system follow DRF's philosophy of making common patterns simple.
+
+- **[FastAPI](https://github.com/tivy520/fastapi)** - We drew extensive inspiration from FastAPI's dependency injection system, parameter extraction patterns, and modern Python type hints usage. The codebase structure and async patterns heavily influenced our implementation.
+
+- **[Litestar](https://github.com/litestar-org/litestar)** - Our OpenAPI plugin system is adapted from Litestar's excellent architecture. Many architectural decisions around middleware, guards, and route handling were inspired by Litestar's design philosophy.
+
+- **[Robyn](https://github.com/sparckles/Robyn)** - Robyn's Rust-Python integration patterns and performance-first approach influenced our decision to use PyO3 and showed us the potential of Rust-powered Python web frameworks.
+
+### Additional Credits
+
+- **[Actix Web](https://github.com/actix/actix-web)** - The Rust HTTP framework that powers our performance
+- **[PyO3](https://github.com/PyO3/pyo3)** - For making Rust-Python interop seamless
+- **[msgspec](https://github.com/jcrist/msgspec)** - For blazing-fast serialization
+- **[matchit](https://github.com/ibraheemdev/matchit)** - For zero-copy routing
+
+Thank you to all the maintainers, contributors, and communities behind these projects. Django-Bolt wouldn't exist without your incredible work.
+
+---
+
+## 📄 License
+
+Django-Bolt is open source and available under the MIT License.
+
+---
+
+For questions, issues, or feature requests, please visit our [GitHub repository](https://github.com/FarhanAliRaza/django-bolt).

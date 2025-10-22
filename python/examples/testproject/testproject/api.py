@@ -38,19 +38,18 @@ import test_data
 @api.get("/")
 async def read_root():
     """
-    Root endpoint.
-    Returns a simple "Hello World" dictionary.
+    Endpoint that returns a simple "Hello World" dictionary.
+    """
+    return {"message": "Hello World"}
+
+
+@api.get("/10k")
+async def read_10k():
+    """
+    Endpoint that returns 10k JSON objects.
+    
     """
     return test_data.JSON_10K
-
-
-@api.get("/1k")
-async def read_root():
-    """
-    Root endpoint.
-    Returns a simple "Hello World" dictionary.
-    """
-    return test_data.JSON_1K
 
 @api.get("/items/{item_id}")
 async def read_item(item_id: int, q: Optional[str] = None):

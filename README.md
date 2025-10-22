@@ -152,13 +152,6 @@ python manage.py runbolt --processes 8 workers 1 #for deployment (depends on you
   - Constant-time comparison (timing attack prevention)
   - Fast validation in Rust
 
-- ✅ **Session Authentication** - **Complete** (Django session integration)
-
-  - Django session backend integration
-  - Automatic user lookup from session
-  - Compatible with Django's session middleware
-  - Supports both cookie-based and custom session stores
-
 - ✅ **Permission Guards** (all run in Rust):
 
   - `AllowAny()` - Public access

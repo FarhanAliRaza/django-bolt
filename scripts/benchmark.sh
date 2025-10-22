@@ -20,7 +20,7 @@ echo "Config: $P processes × $WORKERS workers | C=$C N=$N"
 echo ""
 
 echo "## Root Endpoint Performance"
-cd python/examples/testproject
+cd python/example
 DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
 SERVER_PID=$!
 sleep 2

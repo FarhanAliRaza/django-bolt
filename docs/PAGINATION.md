@@ -26,15 +26,15 @@ Pagination divides large datasets into smaller, manageable pages, improving API 
 
 ### Quick Comparison
 
-| Feature | PageNumber | LimitOffset | Cursor |
-|---------|-----------|-------------|--------|
-| **Use Case** | General purpose | Fine-grained control | Large datasets, real-time feeds |
-| **Performance** | Good | Good | Excellent |
-| **Jump to page** | ✅ Yes | ✅ Yes | ❌ No (sequential only) |
-| **Total count** | ✅ Yes | ✅ Yes | ❌ No (for performance) |
-| **User-friendly** | ✅✅✅ Very | ✅✅ Moderate | ✅ Less intuitive |
-| **Query params** | `page`, `page_size` | `limit`, `offset` | `cursor`, `page_size` |
-| **Best for** | Standard APIs, web UIs | SQL-like queries, exports | Infinite scroll, activity feeds |
+| Feature           | PageNumber             | LimitOffset               | Cursor                          |
+| ----------------- | ---------------------- | ------------------------- | ------------------------------- |
+| **Use Case**      | General purpose        | Fine-grained control      | Large datasets, real-time feeds |
+| **Performance**   | Good                   | Good                      | Excellent                       |
+| **Jump to page**  | ✅ Yes                 | ✅ Yes                    | ❌ No (sequential only)         |
+| **Total count**   | ✅ Yes                 | ✅ Yes                    | ❌ No (for performance)         |
+| **User-friendly** | ✅✅✅ Very            | ✅✅ Moderate             | ✅ Less intuitive               |
+| **Query params**  | `page`, `page_size`    | `limit`, `offset`         | `cursor`, `page_size`           |
+| **Best for**      | Standard APIs, web UIs | SQL-like queries, exports | Infinite scroll, activity feeds |
 
 ## Quick Start
 
@@ -93,10 +93,12 @@ curl http://localhost:8000/articles?page=2&page_size=20
 Standard page number-based pagination. Best for most use cases.
 
 **Query Parameters:**
+
 - `page` - Page number (default: 1)
 - `page_size` - Items per page (optional, default: 100)
 
 **Configuration:**
+
 ```python
 from django_bolt.pagination import PageNumberPagination
 
@@ -107,6 +109,7 @@ class MyPagination(PageNumberPagination):
 ```
 
 **Response Format:**
+
 ```json
 {
   "items": [...],
@@ -122,6 +125,7 @@ class MyPagination(PageNumberPagination):
 ```
 
 **Example:**
+
 ```python
 @api.get("/users")
 @paginate(PageNumberPagination)
@@ -136,10 +140,12 @@ async def list_users(request):
 SQL-style limit/offset pagination. Useful for APIs that need fine-grained control over result sets.
 
 **Query Parameters:**
+
 - `limit` - Number of items to return (default: 100)
 - `offset` - Starting position (default: 0)
 
 **Configuration:**
+
 ```python
 from django_bolt.pagination import LimitOffsetPagination
 
@@ -149,6 +155,7 @@ class MyPagination(LimitOffsetPagination):
 ```
 
 **Response Format:**
+
 ```json
 {
   "items": [...],
@@ -161,6 +168,7 @@ class MyPagination(LimitOffsetPagination):
 ```
 
 **Example:**
+
 ```python
 @api.get("/articles")
 @paginate(LimitOffsetPagination)
@@ -175,10 +183,12 @@ async def list_articles(request):
 Cursor-based pagination for large datasets. Most efficient for sequential traversal as it doesn't require counting all records.
 
 **Query Parameters:**
+
 - `cursor` - Opaque cursor string (optional, for next/previous page)
 - `page_size` - Items per page (optional, default: 100)
 
 **Configuration:**
+
 ```python
 from django_bolt.pagination import CursorPagination
 
@@ -190,6 +200,7 @@ class MyPagination(CursorPagination):
 ```
 
 **Response Format:**
+
 ```json
 {
   "items": [...],
@@ -205,6 +216,7 @@ class MyPagination(CursorPagination):
 **Note:** Cursor pagination doesn't provide `total` count for performance reasons.
 
 **Example:**
+
 ```python
 @api.get("/events")
 @paginate(CursorPagination)
@@ -654,6 +666,7 @@ async def list_events(request):
 ### 9. Test Your Pagination
 
 Always test edge cases:
+
 - Empty results
 - Single page of results
 - Last page
@@ -663,6 +676,7 @@ Always test edge cases:
 - Invalid cursors
 
 Django-Bolt includes comprehensive pagination tests in [test_pagination.py](../python/tests/test_pagination.py) with **46 test cases** covering:
+
 - All three pagination classes with real Django ORM integration
 - Edge cases (empty results, single result, invalid inputs)
 - ViewSet integration
@@ -700,7 +714,7 @@ async def test_limit_offset_max_enforcement():
 
 ## Examples
 
-See the [examples/testproject/users/api.py](../python/examples/testproject/users/api.py) file for complete working examples of all pagination styles.
+See the [example/users/api.py](../python/example/users/api.py) file for complete working examples of all pagination styles.
 
 ## API Reference
 

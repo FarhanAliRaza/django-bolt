@@ -28,6 +28,7 @@ Django-Bolt combines the elegance of Django with the speed of Rust, providing:
   - Complete example application
 
 **Quick Installation:**
+
 ```bash
 # Clone and build (not yet on PyPI)
 git clone https://github.com/yourusername/django-bolt.git
@@ -40,6 +41,7 @@ make test-py
 ```
 
 **Key Concepts:**
+
 - **BoltAPI** - The main API object for defining routes
 - **Route Decorators** - `@api.get()`, `@api.post()`, etc. for HTTP methods
 - **Async Handlers** - All route handlers must be `async def`
@@ -161,6 +163,7 @@ async def create_article(request): ...
 ```
 
 Guards available:
+
 - `IsAuthenticated()` - Requires valid authentication
 - `IsAdminUser()` - Requires superuser status
 - `IsStaff()` - Requires staff status
@@ -231,6 +234,7 @@ See the **[Security Guide](SECURITY.md)** for file serving security features.
 ## ⚡ Middleware
 
 - **[Middleware Guide](MIDDLEWARE.md)** - Complete middleware documentation
+
   - Middleware system overview
   - Global vs. per-route middleware
   - Built-in middleware (CORS, rate limiting)
@@ -282,6 +286,7 @@ See the **[Security Guide](SECURITY.md)** for file serving security features.
 ### Working with Django
 
 - **[Async Django](ASYNC_DJANGO.md)** - Using Django ORM with async
+
   - Async ORM methods (`aget`, `acreate`, `afilter`)
   - `sync_to_async` for sync code
   - Transaction handling
@@ -311,26 +316,26 @@ See the **[Security Guide](SECURITY.md)** for file serving security features.
 
 ### All Documentation Files
 
-| Document | Description |
-|----------|-------------|
-| **[Getting Started](GETTING_STARTED.md)** | Complete tutorial from installation to first API |
-| **[Annotation Guide](ANNOTATION_GUIDE.md)** | Parameter extraction (path, query, headers, etc.) |
-| **[Responses](RESPONSES.md)** | All response types and usage |
-| **[Dependency Injection](DEPENDENCY_INJECTION.md)** | Reusable dependencies with `Depends()` |
-| **[Class-Based Views](CLASS_BASED_VIEWS.md)** | APIView and ViewSet patterns |
-| **[Pagination](PAGINATION.md)** | PageNumber, LimitOffset, and Cursor pagination |
-| **[OpenAPI](OPENAPI.md)** | Auto-generated API documentation |
-| **[OpenAPI Error Responses](OPENAPI_ERROR_RESPONSES.md)** | Documenting error responses |
-| **[Security Guide](SECURITY.md)** | Authentication, authorization, and security |
-| **[Middleware](MIDDLEWARE.md)** | Middleware system and built-in middleware |
-| **[Compression](COMPRESSION.md)** | Response compression (gzip, brotli, zstd) |
-| **[Logging](LOGGING.md)** | Request/response logging and metrics |
-| **[Exception Handling](EXCEPTIONS.md)** | Error handling patterns |
-| **[Testing Utilities](TESTING_UTILITIES.md)** | Testing tools and patterns |
-| **[Async Django](ASYNC_DJANGO.md)** | Using Django ORM with async |
-| **[Django Admin](DJANGO_ADMIN.md)** | Django Admin integration |
-| **[GIL Optimization](GIL_OPTIMIZATION.md)** | Performance architecture and optimization |
-| **[Publishing Guide](PUBLISHING.md)** | Guide for publishing to PyPI |
+| Document                                                  | Description                                       |
+| --------------------------------------------------------- | ------------------------------------------------- |
+| **[Getting Started](GETTING_STARTED.md)**                 | Complete tutorial from installation to first API  |
+| **[Annotation Guide](ANNOTATION_GUIDE.md)**               | Parameter extraction (path, query, headers, etc.) |
+| **[Responses](RESPONSES.md)**                             | All response types and usage                      |
+| **[Dependency Injection](DEPENDENCY_INJECTION.md)**       | Reusable dependencies with `Depends()`            |
+| **[Class-Based Views](CLASS_BASED_VIEWS.md)**             | APIView and ViewSet patterns                      |
+| **[Pagination](PAGINATION.md)**                           | PageNumber, LimitOffset, and Cursor pagination    |
+| **[OpenAPI](OPENAPI.md)**                                 | Auto-generated API documentation                  |
+| **[OpenAPI Error Responses](OPENAPI_ERROR_RESPONSES.md)** | Documenting error responses                       |
+| **[Security Guide](SECURITY.md)**                         | Authentication, authorization, and security       |
+| **[Middleware](MIDDLEWARE.md)**                           | Middleware system and built-in middleware         |
+| **[Compression](COMPRESSION.md)**                         | Response compression (gzip, brotli, zstd)         |
+| **[Logging](LOGGING.md)**                                 | Request/response logging and metrics              |
+| **[Exception Handling](EXCEPTIONS.md)**                   | Error handling patterns                           |
+| **[Testing Utilities](TESTING_UTILITIES.md)**             | Testing tools and patterns                        |
+| **[Async Django](ASYNC_DJANGO.md)**                       | Using Django ORM with async                       |
+| **[Django Admin](DJANGO_ADMIN.md)**                       | Django Admin integration                          |
+| **[GIL Optimization](GIL_OPTIMIZATION.md)**               | Performance architecture and optimization         |
+| **[Publishing Guide](PUBLISHING.md)**                     | Guide for publishing to PyPI                      |
 
 ---
 
@@ -338,7 +343,7 @@ See the **[Security Guide](SECURITY.md)** for file serving security features.
 
 Complete example applications are available in the repository:
 
-- **[Example Project](../python/examples/testproject/)** - Full Django project with:
+- **[Example Project](../python/example/)** - Full Django project with:
   - Authentication (JWT and API Key)
   - CRUD operations with Django ORM
   - File uploads and downloads
@@ -362,6 +367,7 @@ We welcome contributions! Please see:
 ## 📝 Quick Reference
 
 ### Route Decorators
+
 ```python
 @api.get("/path")           # GET request
 @api.post("/path")          # POST request
@@ -373,6 +379,7 @@ We welcome contributions! Please see:
 ```
 
 ### Authentication & Guards
+
 ```python
 from django_bolt.auth import JWTAuthentication, IsAuthenticated
 
@@ -384,6 +391,7 @@ from django_bolt.auth import JWTAuthentication, IsAuthenticated
 ```
 
 ### Middleware Decorators
+
 ```python
 from django_bolt.middleware import cors, rate_limit, skip_middleware
 
@@ -398,6 +406,7 @@ async def handler(): ...
 ```
 
 ### Response Types
+
 ```python
 from django_bolt.responses import PlainText, HTML, Redirect, File, FileResponse, StreamingResponse
 
@@ -411,6 +420,7 @@ return StreamingResponse(generator())  # Streaming response
 ```
 
 ### Parameter Extraction
+
 ```python
 from typing import Annotated
 from django_bolt.param_functions import Header, Cookie, Form, File

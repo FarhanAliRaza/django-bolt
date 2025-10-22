@@ -53,6 +53,7 @@ python manage.py runbolt --dev  # for development with reload enabled
 [django-bolt] Workers: 1, Processes: 1
 [django-bolt] OpenAPI docs enabled at http://0.0.0.0:8000/docs/ #swagger docs builtin
 
+python manage.py runbolt --processes 8 workers 1 #for deployment (depends on your cpu cores)
 # processes are python processes that handle request 1 actix worker
 ```
 

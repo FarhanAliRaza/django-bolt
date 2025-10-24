@@ -28,46 +28,6 @@ macro_rules! test_debug {
     };
 }
 
-/// Helper to convert serde_json::Value to Python object
-fn json_to_python(value: &serde_json::Value, py: Python) -> PyResult<Py<PyAny>> {
-    match value {
-        serde_json::Value::Null => Ok(py.None()),
-        serde_json::Value::Bool(b) => {
-            let py_bool = pyo3::types::PyBool::new(py, *b);
-            Ok(py_bool.as_any().clone().unbind())
-        }
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                let py_int = pyo3::types::PyInt::new(py, i);
-                Ok(py_int.as_any().clone().unbind())
-            } else if let Some(f) = n.as_f64() {
-                let py_float = pyo3::types::PyFloat::new(py, f);
-                Ok(py_float.as_any().clone().unbind())
-            } else {
-                Ok(py.None())
-            }
-        }
-        serde_json::Value::String(s) => {
-            let py_str = pyo3::types::PyString::new(py, s);
-            Ok(py_str.as_any().clone().unbind())
-        }
-        serde_json::Value::Array(arr) => {
-            let py_list = pyo3::types::PyList::empty(py);
-            for item in arr {
-                py_list.append(json_to_python(item, py)?)?;
-            }
-            Ok(py_list.as_any().clone().unbind())
-        }
-        serde_json::Value::Object(obj) => {
-            let py_dict = pyo3::types::PyDict::new(py);
-            for (k, v) in obj {
-                py_dict.set_item(k, json_to_python(v, py)?)?;
-            }
-            Ok(py_dict.as_any().clone().unbind())
-        }
-    }
-}
-
 /// Test-only application state stored per instance (identified by app_id)
 pub struct TestApp {
     pub router: Router,
@@ -623,7 +583,7 @@ pub fn handle_actix_http_request(
                     && req.headers().contains_key("access-control-request-method");
 
                 // Get middleware config from route metadata and global CORS origins
-                let (cors_config, rate_limit_config, handler_id_opt, should_skip_cors, global_cors_origins) = Python::attach(|py| -> (Option<crate::metadata::CorsConfig>, Option<crate::metadata::RateLimitConfig>, Option<usize>, bool, Vec<String>) {
+                let (cors_config, rate_limit_config, handler_id_opt, should_skip_cors, global_cors_origins) = Python::attach(|_py| -> (Option<crate::metadata::CorsConfig>, Option<crate::metadata::RateLimitConfig>, Option<usize>, bool, Vec<String>) {
                     let Some(entry) = registry().get(&app_id) else {
                         return (None, None, None, false, vec![]);
                     };
@@ -661,14 +621,14 @@ pub fn handle_actix_http_request(
                     (None, None, None, false, global_origins)
                 });
 
-                // Handle CORS preflight
+                // Handle CORS preflight - MUST validate origin per RFC 6454
                 if is_preflight && !should_skip_cors {
                     if let Some(ref cors_cfg) = cors_config {
                         use actix_web::HttpResponse;
                         use actix_web::http::header::{
                             ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
                             ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
-                            ACCESS_CONTROL_MAX_AGE,
+                            ACCESS_CONTROL_MAX_AGE, VARY,
                         };
 
                         // Merge route-specific origins with global origins
@@ -677,29 +637,78 @@ pub fn handle_actix_http_request(
                         } else if !global_cors_origins.is_empty() {
                             &global_cors_origins
                         } else {
+                            // No CORS configured - reject preflight
                             return Ok(HttpResponse::Forbidden()
                                 .content_type("text/plain; charset=utf-8")
                                 .body("CORS not configured"));
                         };
 
                         let is_wildcard = origins.iter().any(|o| o == "*");
+
+                        // Wildcard + credentials is invalid per CORS spec
                         if is_wildcard && cors_cfg.credentials {
-                            return Ok(HttpResponse::InternalServerError()
-                                .content_type("text/plain; charset=utf-8")
-                                .body("CORS misconfiguration: Cannot use wildcard '*' with credentials=true"));
+                            // Reflect origin instead of using wildcard
+                            if let Some(req_origin) = request_origin.as_deref() {
+                                let mut response = HttpResponse::NoContent();
+                                response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, req_origin));
+                                response.insert_header((VARY, "Origin"));
+                                response.insert_header((ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
+                                response.insert_header((ACCESS_CONTROL_ALLOW_METHODS, cors_cfg.methods.join(", ")));
+                                response.insert_header((ACCESS_CONTROL_ALLOW_HEADERS, cors_cfg.headers.join(", ")));
+                                response.insert_header((ACCESS_CONTROL_MAX_AGE, cors_cfg.max_age.to_string()));
+                                // CRITICAL: Add Vary headers for preflight (RFC 7234)
+                                response.insert_header((VARY, "Access-Control-Request-Method, Access-Control-Request-Headers"));
+                                return Ok(response.finish());
+                            }
+                            // No origin header, reject
+                            return Ok(HttpResponse::Forbidden().finish());
                         }
 
-                        let origin = origins.first().unwrap_or(&"*".to_string()).clone();
+                        // Handle wildcard without credentials
+                        if is_wildcard {
+                            let mut response = HttpResponse::NoContent();
+                            response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, "*"));
+                            response.insert_header((ACCESS_CONTROL_ALLOW_METHODS, cors_cfg.methods.join(", ")));
+                            response.insert_header((ACCESS_CONTROL_ALLOW_HEADERS, cors_cfg.headers.join(", ")));
+                            response.insert_header((ACCESS_CONTROL_MAX_AGE, cors_cfg.max_age.to_string()));
+                            // CRITICAL: Add Vary headers for preflight (RFC 7234)
+                            response.insert_header((VARY, "Access-Control-Request-Method, Access-Control-Request-Headers"));
+                            return Ok(response.finish());
+                        }
+
+                        // CRITICAL: Validate origin from request header
+                        let req_origin = match request_origin.as_deref() {
+                            Some(o) => o,
+                            None => {
+                                // No origin header, reject preflight
+                                return Ok(HttpResponse::Forbidden()
+                                    .content_type("text/plain; charset=utf-8")
+                                    .body("Missing Origin header"));
+                            }
+                        };
+
+                        // Check if request origin is in allowed origins list
+                        if !origins.iter().any(|o| o == req_origin) {
+                            // CRITICAL: Origin not allowed, reject preflight
+                            return Ok(HttpResponse::Forbidden()
+                                .content_type("text/plain; charset=utf-8")
+                                .body("Origin not allowed"));
+                        }
+
+                        // Origin validated - add preflight headers
                         let mut response = HttpResponse::NoContent();
-                        response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, origin));
+                        response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, req_origin));
+                        response.insert_header((VARY, "Origin"));
                         response.insert_header((ACCESS_CONTROL_ALLOW_METHODS, cors_cfg.methods.join(", ")));
                         response.insert_header((ACCESS_CONTROL_ALLOW_HEADERS, cors_cfg.headers.join(", ")));
+                        response.insert_header((ACCESS_CONTROL_MAX_AGE, cors_cfg.max_age.to_string()));
 
                         if cors_cfg.credentials {
                             response.insert_header((ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
                         }
 
-                        response.insert_header((ACCESS_CONTROL_MAX_AGE, cors_cfg.max_age.to_string()));
+                        // CRITICAL: Add Vary headers for preflight per RFC 7234
+                        response.insert_header((VARY, "Access-Control-Request-Method, Access-Control-Request-Headers"));
 
                         return Ok(response.finish());
                     }

@@ -107,45 +107,50 @@ wheels = [
 
 [[package]]
 name = "django-bolt"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "django" },
-    { name = "maturin" },
     { name = "msgspec" },
     { name = "multipart" },
-    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+yaml = [
     { name = "pyyaml" },
-    { name = "watchfiles" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "httpx" },
+    { name = "maturin" },
+    { name = "pydantic" },
     { name = "pyjwt" },
     { name = "pytest-asyncio" },
     { name = "pytest-django" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "django", specifier = ">=4.2" },
-    { name = "maturin", specifier = ">=1.9.4" },
     { name = "msgspec", specifier = ">=0.18" },
     { name = "multipart", specifier = ">=1.3" },
-    { name = "pydantic", specifier = ">=2" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "watchfiles", specifier = ">=0.24" },
+    { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=6.0" },
 ]
+provides-extras = ["yaml"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "maturin", specifier = ">=1.9.6" },
+    { name = "pydantic", specifier = ">=2" },
     { name = "pyjwt", specifier = ">=2.10.1" },
     { name = "pytest-asyncio", specifier = ">=1.2.0" },
     { name = "pytest-django", specifier = ">=4.9.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
 ]
 
 [[package]]

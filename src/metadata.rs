@@ -2,8 +2,11 @@
 ///
 /// This module handles parsing Python metadata dicts into strongly-typed
 /// Rust enums at registration time, eliminating per-request GIL overhead.
+use actix_web::http::header::HeaderValue;
+use ahash::AHashSet;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
 use crate::middleware::auth::AuthBackend;
@@ -13,6 +16,10 @@ use crate::permissions::Guard;
 #[derive(Debug, Clone)]
 pub struct CorsConfig {
     pub origins: Vec<String>,
+    pub origin_regexes: Vec<String>, // Stored as strings for serialization
+    pub compiled_origin_regexes: Vec<Regex>, // Compiled regex patterns for O(1) matching
+    pub origin_set: AHashSet<String>, // O(1) lookup for exact origin matches
+    pub allow_all_origins: bool,
     pub credentials: bool,
     pub methods: Vec<String>,
     pub headers: Vec<String>,
@@ -23,6 +30,11 @@ pub struct CorsConfig {
     pub headers_str: String,
     pub expose_headers_str: String,
     pub max_age_str: String,
+    // Pre-cached HeaderValue for zero-allocation header injection
+    pub methods_header: Option<HeaderValue>,
+    pub headers_header: Option<HeaderValue>,
+    pub expose_headers_header: Option<HeaderValue>,
+    pub max_age_header: Option<HeaderValue>,
 }
 
 impl Default for CorsConfig {
@@ -39,18 +51,105 @@ impl Default for CorsConfig {
         let expose_headers = vec![];
         let max_age = 3600;
 
+        let methods_str = methods.join(", ");
+        let headers_str = headers.join(", ");
+        let expose_headers_str = expose_headers.join(", ");
+        let max_age_str = max_age.to_string();
+
+        // Pre-cache HeaderValue for zero-allocation header injection
+        let methods_header = HeaderValue::from_str(&methods_str).ok();
+        let headers_header = HeaderValue::from_str(&headers_str).ok();
+        let expose_headers_header = if expose_headers.is_empty() {
+            None
+        } else {
+            HeaderValue::from_str(&expose_headers_str).ok()
+        };
+        let max_age_header = HeaderValue::from_str(&max_age_str).ok();
+
         CorsConfig {
             origins: vec![],
+            origin_regexes: vec![],
+            compiled_origin_regexes: vec![],
+            origin_set: AHashSet::new(),
+            allow_all_origins: false,
             credentials: false,
-            methods_str: methods.join(", "),
-            headers_str: headers.join(", "),
-            expose_headers_str: expose_headers.join(", "),
-            max_age_str: max_age.to_string(),
+            methods_str,
+            headers_str,
+            expose_headers_str,
+            max_age_str,
             methods,
             headers,
             expose_headers,
             max_age,
+            methods_header,
+            headers_header,
+            expose_headers_header,
+            max_age_header,
         }
+    }
+}
+
+impl CorsConfig {
+    /// Create CorsConfig from Django settings (django-cors-headers compatible)
+    pub fn from_django_settings(
+        origins: Vec<String>,
+        origin_regexes: Vec<String>,
+        allow_all_origins: bool,
+        allow_credentials: bool,
+        allow_methods: Option<Vec<String>>,
+        allow_headers: Option<Vec<String>>,
+        expose_headers: Option<Vec<String>>,
+        max_age: Option<u32>,
+    ) -> Self {
+        let mut config = CorsConfig::default();
+
+        // Build origin set for O(1) lookups
+        config.origin_set = origins.iter().cloned().collect();
+        config.origins = origins;
+
+        // Compile origin regex patterns at startup
+        config.origin_regexes = origin_regexes.clone();
+        config.compiled_origin_regexes = origin_regexes.iter()
+            .filter_map(|pattern| {
+                Regex::new(pattern).ok().or_else(|| {
+                    eprintln!("[django-bolt] Warning: Invalid route-level CORS origin regex pattern: {}", pattern);
+                    None
+                })
+            })
+            .collect();
+
+        config.allow_all_origins = allow_all_origins;
+        config.credentials = allow_credentials;
+
+        if let Some(methods) = allow_methods {
+            config.methods_str = methods.join(", ");
+            config.methods_header = HeaderValue::from_str(&config.methods_str).ok();
+            config.methods = methods;
+        }
+
+        if let Some(headers) = allow_headers {
+            config.headers_str = headers.join(", ");
+            config.headers_header = HeaderValue::from_str(&config.headers_str).ok();
+            config.headers = headers;
+        }
+
+        if let Some(expose) = expose_headers {
+            config.expose_headers_str = expose.join(", ");
+            config.expose_headers_header = if !expose.is_empty() {
+                HeaderValue::from_str(&config.expose_headers_str).ok()
+            } else {
+                None
+            };
+            config.expose_headers = expose;
+        }
+
+        if let Some(age) = max_age {
+            config.max_age_str = age.to_string();
+            config.max_age_header = HeaderValue::from_str(&config.max_age_str).ok();
+            config.max_age = age;
+        }
+
+        config
     }
 }
 
@@ -75,7 +174,6 @@ impl Default for RateLimitConfig {
 /// Complete route metadata including middleware, auth, and guards
 #[derive(Debug, Clone)]
 pub struct RouteMetadata {
-    pub middleware: Vec<MiddlewareConfig>,
     pub auth_backends: Vec<AuthBackend>,
     pub guards: Vec<Guard>,
     pub skip: HashSet<String>,
@@ -83,17 +181,9 @@ pub struct RouteMetadata {
     pub rate_limit_config: Option<RateLimitConfig>,
 }
 
-/// Parsed middleware configuration
-#[derive(Debug, Clone)]
-pub struct MiddlewareConfig {
-    pub mw_type: String,
-    pub config: HashMap<String, serde_json::Value>,
-}
-
 impl RouteMetadata {
     /// Parse Python metadata dict into strongly-typed Rust metadata
     pub fn from_python(py_meta: &Bound<'_, PyDict>, py: Python) -> PyResult<Self> {
-        let mut middleware = Vec::new();
         let mut auth_backends = Vec::new();
         let mut guards = Vec::new();
         let mut skip: HashSet<String> = HashSet::new();
@@ -116,20 +206,6 @@ impl RouteMetadata {
                             if type_str == "rate_limit" && rate_limit_config.is_none() {
                                 rate_limit_config = parse_rate_limit_config(&mw_dict, py);
                             }
-
-                            // Convert config to JSON-compatible format
-                            let mut config = HashMap::new();
-                            for (key, value) in &mw_dict {
-                                if key != "type" {
-                                    if let Ok(json_val) = python_to_json(value.bind(py), py) {
-                                        config.insert(key.clone(), json_val);
-                                    }
-                                }
-                            }
-                            middleware.push(MiddlewareConfig {
-                                mw_type: type_str,
-                                config,
-                            });
                         }
                     }
                 }
@@ -168,7 +244,6 @@ impl RouteMetadata {
         }
 
         Ok(RouteMetadata {
-            middleware,
             auth_backends,
             guards,
             skip,
@@ -182,10 +257,26 @@ impl RouteMetadata {
 fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<CorsConfig> {
     let mut config = CorsConfig::default();
 
-    // Parse origins (required for CORS to be active)
+    // Parse origins and build origin set for O(1) lookups
     if let Some(origins_py) = dict.get("origins") {
         if let Ok(origins) = origins_py.extract::<Vec<String>>(py) {
+            config.origin_set = origins.iter().cloned().collect();
             config.origins = origins;
+        }
+    }
+
+    // Parse origin_regexes and compile them at startup
+    if let Some(regexes_py) = dict.get("origin_regexes") {
+        if let Ok(regex_patterns) = regexes_py.extract::<Vec<String>>(py) {
+            config.origin_regexes = regex_patterns.clone();
+            config.compiled_origin_regexes = regex_patterns.iter()
+                .filter_map(|pattern| {
+                    Regex::new(pattern).ok().or_else(|| {
+                        eprintln!("[django-bolt] Warning: Invalid route-level CORS origin regex pattern: {}", pattern);
+                        None
+                    })
+                })
+                .collect();
         }
     }
 
@@ -200,6 +291,7 @@ fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Co
     if let Some(methods_py) = dict.get("methods") {
         if let Ok(methods) = methods_py.extract::<Vec<String>>(py) {
             config.methods_str = methods.join(", ");
+            config.methods_header = HeaderValue::from_str(&config.methods_str).ok();
             config.methods = methods;
         }
     }
@@ -208,6 +300,7 @@ fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Co
     if let Some(headers_py) = dict.get("headers") {
         if let Ok(headers) = headers_py.extract::<Vec<String>>(py) {
             config.headers_str = headers.join(", ");
+            config.headers_header = HeaderValue::from_str(&config.headers_str).ok();
             config.headers = headers;
         }
     }
@@ -216,6 +309,11 @@ fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Co
     if let Some(expose_py) = dict.get("expose_headers") {
         if let Ok(expose) = expose_py.extract::<Vec<String>>(py) {
             config.expose_headers_str = expose.join(", ");
+            config.expose_headers_header = if !expose.is_empty() {
+                HeaderValue::from_str(&config.expose_headers_str).ok()
+            } else {
+                None
+            };
             config.expose_headers = expose;
         }
     }
@@ -224,6 +322,7 @@ fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Co
     if let Some(age_py) = dict.get("max_age") {
         if let Ok(age) = age_py.extract::<u32>(py) {
             config.max_age_str = age.to_string();
+            config.max_age_header = HeaderValue::from_str(&config.max_age_str).ok();
             config.max_age = age;
         }
     }
@@ -342,50 +441,4 @@ fn parse_guard(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Guard> {
         }
         _ => None,
     }
-}
-
-/// Convert Python value to serde_json::Value
-fn python_to_json(value: &Bound<'_, PyAny>, py: Python) -> PyResult<serde_json::Value> {
-    if value.is_none() {
-        return Ok(serde_json::Value::Null);
-    }
-
-    if let Ok(b) = value.extract::<bool>() {
-        return Ok(serde_json::Value::Bool(b));
-    }
-
-    if let Ok(i) = value.extract::<i64>() {
-        return Ok(serde_json::Value::Number(i.into()));
-    }
-
-    if let Ok(f) = value.extract::<f64>() {
-        if let Some(n) = serde_json::Number::from_f64(f) {
-            return Ok(serde_json::Value::Number(n));
-        }
-    }
-
-    if let Ok(s) = value.extract::<String>() {
-        return Ok(serde_json::Value::String(s));
-    }
-
-    if let Ok(lst) = value.extract::<Vec<Py<PyAny>>>() {
-        let mut arr = Vec::new();
-        for item in lst {
-            arr.push(python_to_json(&item.bind(py), py)?);
-        }
-        return Ok(serde_json::Value::Array(arr));
-    }
-
-    // Try dict
-    if let Ok(dict) = value.downcast::<PyDict>() {
-        let mut map = serde_json::Map::new();
-        for (k, v) in dict {
-            if let Ok(key) = k.extract::<String>() {
-                map.insert(key, python_to_json(&v, py)?);
-            }
-        }
-        return Ok(serde_json::Value::Object(map));
-    }
-
-    Ok(serde_json::Value::Null)
 }

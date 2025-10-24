@@ -16,7 +16,7 @@ from django_bolt.exceptions import (
     RequestValidationError,
 )
 from django_bolt.health import register_health_checks, add_health_check
-from django_bolt.middleware import no_compress
+from django_bolt.middleware import no_compress, cors
 
 
 # OpenAPI is enabled by default at /docs with Swagger UI
@@ -36,6 +36,7 @@ class Item(msgspec.Struct):
 import test_data
 
 @api.get("/", tags=["root"], summary="summary", description="description")
+@cors()  # Uses global CORS_ALLOWED_ORIGINS from Django settings
 async def read_root():
     """
     Endpoint that returns a simple "Hello World" dictionary.

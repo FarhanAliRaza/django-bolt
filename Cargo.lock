@@ -647,6 +647,7 @@ dependencies = [
  "parking_lot",
  "pyo3",
  "pyo3-async-runtimes",
+ "regex",
  "serde",
  "serde_json",
  "socket2 0.5.10",

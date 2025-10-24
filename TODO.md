@@ -5,7 +5,7 @@ Must Have (Blockers):
 ✅ Better error messages - DONE (Enhanced exception system with structured errors)
 ✅ Health check endpoints - DONE (/health, /ready with custom checks)
 ✅ Request/Response logging - DONE (Integrates with Django's logging)
-❌ PyPI package - Missing (currently manual install)
+✅ PyPI package - Missing (pip install django-bolt)
 
 Should Have (Important):
 ✅ Error handling with Django DEBUG integration - DONE
@@ -47,7 +47,7 @@ Pagination helpers
 ⚠️ with broken settings it was not able to find api from root folder
 ⚠️ If api folder has error it does not discover the apis
 ⚠️ Msgspec based serializer and stuff
-⚠️ Larger json has some GIL contention issue have done alot of investigation. Serialization hold gil when moved serialization to rust it improved but not that much .. Under large concurrency i think it happens . Have to investigate more.
+✅ Larger json has some GIL contention issue have done alot of investigation. Serialization hold gil when moved serialization to rust it improved but not that much .. Under large concurrency i think it happens . Have to investigate more. (Fixeed using batching gil, reuse event loop, copy memory outside of the gil)
 
 ## Known Limitations (BOTH Function & Class-Based)
 

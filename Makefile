@@ -13,14 +13,6 @@ WORKERS ?= 1
 build:
 	uv run maturin develop --release
 
-
-# Start test server in background with multi-process
-run-bg:
-	cd python/example && \
-	DJANGO_BOLT_WORKERS=$(WORKERS) nohup uv run python manage.py runbolt --host $(HOST) --port $(PORT) --processes $(P) \
-		> /tmp/django-bolt-test.log 2>&1 & echo $$! > /tmp/django-bolt-test.pid && \
-		echo "started: $$(cat /tmp/django-bolt-test.pid) (log: /tmp/django-bolt-test.log)"
-
 # Kill any servers on PORT
 kill:
 	@pids=$$(lsof -tiTCP:$(PORT) -sTCP:LISTEN 2>/dev/null || true); \
@@ -32,28 +24,6 @@ kill:
 	@[ -f /tmp/django-bolt-test.pid ] && kill $$(cat /tmp/django-bolt-test.pid) 2>/dev/null || true
 	@rm -f /tmp/django-bolt-test.pid /tmp/django-bolt-test.log
 
-# Benchmark root endpoint
-bench:
-	@echo "Benchmarking http://$(HOST):$(PORT)/ with C=$(C) N=$(N)"
-	@echo "Config: $(P) processes, $(WORKERS) workers per process"
-	@if command -v ab >/dev/null 2>&1; then \
-		ab -k -c $(C) -n $(N) http://$(HOST):$(PORT)/; \
-	else \
-		echo "ab not found. install apachebench: sudo apt install apache2-utils"; \
-	fi
-
-# Quick smoke test
-smoke:
-	@echo "Testing endpoints..."
-	@curl -s http://$(HOST):$(PORT)/ | head -1
-	@curl -s http://$(HOST):$(PORT)/items/1 | head -1
-	@curl -s http://$(HOST):$(PORT)/users/ | head -1
-
-# ORM smoke test (requires seeded data)
-orm-smoke:
-	@echo "Testing ORM endpoints..."
-	@curl -s http://$(HOST):$(PORT)/users/stats | head -1
-	@curl -s http://$(HOST):$(PORT)/users/1 | head -1
 
 # Clean build artifacts
 clean:
@@ -64,39 +34,14 @@ clean:
 # Full rebuild
 rebuild: kill clean build
 
-# Development workflow: build, start server, run benchmark
-dev-test: build test-server-bg
-	@sleep 2
-	@make smoke
-	@make bench
-	@make kill
 
+
+run-dev:
+	uv run python python/example/manage.py runbolt --dev
 # Run Python tests (verbose)
 test-py:
 	uv run --with pytest pytest python/tests -s -vv
 
-# High-performance test (for benchmarking)
-perf-test: build
-	@echo "High-performance test: 4 processes, 1 worker each"
-	@make test-server-bg P=4 WORKERS=1
-	@sleep 2
-	@make bench C=100 N=50000
-	@make kill
-
-# ORM performance test
-orm-test: build
-	@echo "Setting up test data..."
-	@cd python/example && uv run python manage.py makemigrations users --noinput
-	@cd python/example && uv run python manage.py migrate --noinput
-	@echo "ORM performance test: 2 processes, 2 workers each"
-	@make test-server-bg P=2 WORKERS=2
-	@sleep 3
-	@echo "Seeding database..."
-	@curl -s http://$(HOST):$(PORT)/users/seed | head -1
-	@sleep 1
-	@echo "Benchmarking ORM endpoint /users/ ..."
-	@ab -k -c $(C) -n $(N) http://$(HOST):$(PORT)/users/ | grep -E "(Requests per second|Time per request|Failed requests)"
-	@make kill
 
 # Seed database with test data
 seed-data:
@@ -147,3 +92,8 @@ save-bench:
 		awk '/### Server-Sent Events/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' BENCHMARK_DEV.md || true; \
 	fi
 
+
+
+build-bench:
+	uv run maturin develop --release
+	make save-bench

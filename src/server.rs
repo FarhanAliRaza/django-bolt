@@ -8,9 +8,9 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use crate::handler::handle_request;
-use crate::metadata::RouteMetadata;
+use crate::metadata::{CorsConfig, RouteMetadata};
 use crate::router::Router;
-use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
+use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, ROUTE_METADATA_TEMP, TASK_LOCALS};
 
 #[pyfunction]
 pub fn register_routes(
@@ -48,8 +48,8 @@ pub fn register_middleware_metadata(
         }
     }
 
-    ROUTE_METADATA
-        .set(Arc::new(parsed_metadata_map))
+    ROUTE_METADATA_TEMP
+        .set(parsed_metadata_map)
         .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Route metadata already initialized"))?;
 
     Ok(())
@@ -86,7 +86,7 @@ pub fn start_server_async(
     });
 
     // Get configuration from Django settings ONCE at startup (not per-request)
-    let (debug, max_header_size, cors_allowed_origins) = Python::attach(|py| {
+    let (debug, max_header_size, cors_config_data) = Python::attach(|py| {
         let debug = (|| -> PyResult<bool> {
             let django_conf = py.import("django.conf")?;
             let settings = django_conf.getattr("settings")?;
@@ -99,20 +99,122 @@ pub fn start_server_async(
             settings.getattr("BOLT_MAX_HEADER_SIZE")?.extract::<usize>()
         })().unwrap_or(8192); // Default 8KB
 
-        let cors_allowed_origins = (|| -> PyResult<Vec<String>> {
+        // Read django-cors-headers compatible CORS settings
+        let cors_data = (|| -> PyResult<(Vec<String>, Vec<String>, bool, bool, Option<Vec<String>>, Option<Vec<String>>, Option<Vec<String>>, Option<u32>)> {
             let django_conf = py.import("django.conf")?;
             let settings = django_conf.getattr("settings")?;
-            settings.getattr("BOLT_CORS_ALLOWED_ORIGINS")?.extract::<Vec<String>>()
-        })().unwrap_or_else(|_| vec![]); // Default empty (secure)
 
-        (debug, max_header_size, cors_allowed_origins)
+            let origins = settings.getattr("CORS_ALLOWED_ORIGINS")
+                .and_then(|o| o.extract::<Vec<String>>())
+                .unwrap_or_else(|_| vec![]);
+
+            let origin_regexes = settings.getattr("CORS_ALLOWED_ORIGIN_REGEXES")
+                .and_then(|r| r.extract::<Vec<String>>())
+                .unwrap_or_else(|_| vec![]);
+
+            let allow_all = settings.getattr("CORS_ALLOW_ALL_ORIGINS")
+                .and_then(|a| a.extract::<bool>())
+                .unwrap_or(false);
+
+            let credentials = settings.getattr("CORS_ALLOW_CREDENTIALS")
+                .and_then(|c| c.extract::<bool>())
+                .unwrap_or(false);
+
+            let methods = settings.getattr("CORS_ALLOW_METHODS")
+                .and_then(|m| m.extract::<Vec<String>>())
+                .ok();
+
+            let headers = settings.getattr("CORS_ALLOW_HEADERS")
+                .and_then(|h| h.extract::<Vec<String>>())
+                .ok();
+
+            let expose_headers = settings.getattr("CORS_EXPOSE_HEADERS")
+                .and_then(|e| e.extract::<Vec<String>>())
+                .ok();
+
+            let max_age = settings.getattr("CORS_PREFLIGHT_MAX_AGE")
+                .and_then(|a| a.extract::<u32>())
+                .ok();
+
+            Ok((origins, origin_regexes, allow_all, credentials, methods, headers, expose_headers, max_age))
+        })().unwrap_or_else(|_| (vec![], vec![], false, false, None, None, None, None));
+
+        (debug, max_header_size, cors_data)
     });
+
+    // Unpack CORS configuration data
+    let (origins, origin_regex_patterns, allow_all, credentials, methods, headers, expose_headers, max_age) = cors_config_data;
+
+    // Validate CORS configuration: wildcard + credentials is invalid per spec
+    if allow_all && credentials {
+        eprintln!("[django-bolt] Warning: CORS_ALLOW_ALL_ORIGINS=True with CORS_ALLOW_CREDENTIALS=True is invalid.");
+        eprintln!("[django-bolt] Per CORS spec, wildcard origin (*) cannot be used with credentials.");
+        eprintln!("[django-bolt] CORS will reflect the request origin instead of using wildcard.");
+    }
+
+    // Build global CORS config if any CORS settings are configured
+    let global_cors_config = if !origins.is_empty() || !origin_regex_patterns.is_empty() || allow_all {
+        let mut cors_origins = origins.clone();
+
+        // If CORS_ALLOW_ALL_ORIGINS = True, use wildcard
+        if allow_all {
+            cors_origins = vec!["*".to_string()];
+        }
+
+        Some(CorsConfig::from_django_settings(
+            cors_origins,
+            origin_regex_patterns.clone(),
+            allow_all,
+            credentials,
+            methods,
+            headers,
+            expose_headers,
+            max_age,
+        ))
+    } else {
+        None
+    };
+
+    // Compile origin regex patterns at startup (zero runtime overhead)
+    let cors_origin_regexes: Vec<regex::Regex> = origin_regex_patterns.iter()
+        .filter_map(|pattern| {
+            regex::Regex::new(pattern).ok().or_else(|| {
+                eprintln!("[django-bolt] Warning: Invalid CORS origin regex pattern: {}", pattern);
+                None
+            })
+        })
+        .collect();
+
+    // Inject global CORS config into routes that don't have explicit config
+    if let (Some(ref global_config), Some(metadata_temp)) = (&global_cors_config, ROUTE_METADATA_TEMP.get()) {
+        // Clone the metadata HashMap to make it mutable
+        let mut updated_metadata = metadata_temp.clone();
+
+        for (_handler_id, route_meta) in updated_metadata.iter_mut() {
+            // Inject CORS if:
+            // 1. Route doesn't have explicit cors_config
+            // 2. CORS not skipped via @skip_middleware("cors")
+            let should_inject = route_meta.cors_config.is_none()
+                && !route_meta.skip.contains("cors");
+
+            if should_inject {
+                route_meta.cors_config = Some(global_config.clone());
+            }
+        }
+
+        // Set the final ROUTE_METADATA with updated version (only set once)
+        let _ = ROUTE_METADATA.set(Arc::new(updated_metadata));
+    } else if let Some(metadata_temp) = ROUTE_METADATA_TEMP.get() {
+        // No global CORS config, just use the metadata as-is
+        let _ = ROUTE_METADATA.set(Arc::new(metadata_temp.clone()));
+    }
 
     let app_state = Arc::new(AppState {
         dispatch: dispatch.into(),
         debug,
         max_header_size,
-        cors_allowed_origins,
+        global_cors_config,
+        cors_origin_regexes,
     });
 
     // Note: compression_config is provided but not used yet in Rust

@@ -53,6 +53,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Free disk space
+        run: |
+          docker system prune -af
+          docker volume prune -f
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -60,6 +65,7 @@ jobs:
           args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
           sccache: 'true'
           manylinux: auto
+          docker-options: --pull always
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -116,6 +122,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          docker system prune -af
+          docker volume prune -f
 
       - name: Build sdist
         uses: PyO3/maturin-action@v1

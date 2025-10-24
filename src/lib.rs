@@ -14,6 +14,7 @@ mod state;
 mod streaming;
 mod test_state;
 mod testing;
+mod validation;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

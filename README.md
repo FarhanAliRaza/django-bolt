@@ -128,7 +128,11 @@ python manage.py runbolt --processes 8 workers 1 #for deployment (depends on you
 
 - ✅ **Global Middleware** - Apply to all routes via `BoltAPI(middleware=[...])`
 - ✅ **Per-Route Middleware** - `@middleware`, `@rate_limit`, `@cors` decorators
-- ✅ **CORS Middleware** - Full CORS support with preflight
+- ✅ **CORS Middleware** - Full CORS support with preflight handling
+  - Django settings integration (`CORS_ALLOWED_ORIGINS`, `CORS_ALLOW_ALL_ORIGINS`)
+  - Route-level overrides with `@cors()` decorator
+  - Origin validation, credentials support, preflight caching
+  - Runs entirely in Rust (zero GIL overhead)
 - ✅ **Rate Limiting** - Token bucket algorithm (in Rust, no GIL)
 - ✅ **Compression** - Automatic gzip/brotli/zstd compression (client-negotiated)
 - ✅ **Skip Middleware** - `@skip_middleware("cors", "rate_limit", "compression")`
@@ -336,24 +340,45 @@ async def login(username: str, password: str):
 
 **📖 See [docs/SECURITY.md](docs/SECURITY.md) for complete authentication documentation.**
 
-### Middleware
+### Middleware & CORS
 
 ```python
 from django_bolt import BoltAPI
 from django_bolt.middleware import cors, rate_limit, skip_middleware
 
-# Global middleware
+# Option 1: Use Django settings (recommended for production)
+# In settings.py:
+# CORS_ALLOWED_ORIGINS = ["https://example.com", "https://app.example.com"]
+# CORS_ALLOW_CREDENTIALS = True
+# CORS_MAX_AGE = 3600
+
+api = BoltAPI()  # Automatically reads Django CORS settings
+
+# Option 2: Global middleware config
 api = BoltAPI(
     middleware_config={
         "cors": {
             "origins": ["http://localhost:3000"],
             "methods": ["GET", "POST", "PUT", "DELETE"],
             "credentials": True,
+            "max_age": 3600,
         }
     }
 )
 
-# Per-route rate limiting (runs in Rust, no GIL)
+# Option 3: Per-route CORS override (overrides global/Django settings)
+@api.get("/public-api")
+@cors(origins=["*"], credentials=False)  # Allow all origins
+async def public_endpoint():
+    return {"message": "Public endpoint with custom CORS"}
+
+# CORS with credentials and specific origins
+@api.post("/auth-endpoint")
+@cors(origins=["https://app.example.com"], credentials=True, max_age=3600)
+async def auth_endpoint():
+    return {"message": "Authenticated endpoint with CORS"}
+
+# Rate limiting (runs in Rust, no GIL)
 @api.get("/limited")
 @rate_limit(rps=100, burst=200, key="ip")  # 100 req/s with burst of 200
 async def limited_endpoint():
@@ -364,12 +389,6 @@ async def limited_endpoint():
 @rate_limit(rps=50, burst=100, key="user")
 async def user_limited():
     return {"message": "Per-user rate limiting"}
-
-# Custom CORS for specific route
-@api.get("/public")
-@cors(origins=["https://example.com"], credentials=True, max_age=3600)
-async def public_endpoint():
-    return {"message": "Public endpoint with CORS"}
 
 # Skip global middleware
 @api.get("/no-cors")

@@ -129,6 +129,31 @@ class TestClient(httpx.Client):
 
     __test__ = False  # Tell pytest this is not a test class
 
+    @staticmethod
+    def _read_cors_settings_from_django() -> list[str] | None:
+        """Read CORS_ALLOWED_ORIGINS from Django settings (same as production server).
+
+        Returns:
+            List of allowed origins from Django settings, or None if not configured
+        """
+        try:
+            from django.conf import settings
+
+            # Check if CORS_ALLOWED_ORIGINS is defined
+            if hasattr(settings, 'CORS_ALLOWED_ORIGINS'):
+                origins = settings.CORS_ALLOWED_ORIGINS
+                if isinstance(origins, (list, tuple)):
+                    return list(origins)
+
+            # Check for CORS_ALLOW_ALL_ORIGINS (wildcard)
+            if hasattr(settings, 'CORS_ALLOW_ALL_ORIGINS') and settings.CORS_ALLOW_ALL_ORIGINS:
+                return ["*"]
+
+            return None
+        except (ImportError, AttributeError):
+            # Django not configured or settings not available
+            return None
+
     def __init__(
         self,
         api: BoltAPI,
@@ -136,6 +161,7 @@ class TestClient(httpx.Client):
         raise_server_exceptions: bool = True,
         use_http_layer: bool = False,
         cors_allowed_origins: list[str] | None = None,
+        read_django_settings: bool = True,
         **kwargs: Any,
     ):
         """Initialize test client.
@@ -146,10 +172,18 @@ class TestClient(httpx.Client):
             raise_server_exceptions: If True, raise exceptions from handlers
             use_http_layer: If True, route through Actix HTTP layer (enables testing
                            CORS, rate limiting, compression). Default False for fast tests.
-            cors_allowed_origins: Global CORS allowed origins for testing
+            cors_allowed_origins: Global CORS allowed origins for testing.
+                                  If None and read_django_settings=True, reads from Django settings.
+            read_django_settings: If True, read CORS_ALLOWED_ORIGINS from Django settings
+                                 when cors_allowed_origins is None. Default True.
             **kwargs: Additional arguments passed to httpx.Client
         """
         from django_bolt import _core
+
+        # If cors_allowed_origins not provided and read_django_settings=True,
+        # read from Django settings (same as production server does)
+        if cors_allowed_origins is None and read_django_settings:
+            cors_allowed_origins = self._read_cors_settings_from_django()
 
         # Create test app instance
         self.app_id = _core.create_test_app(api._dispatch, False, cors_allowed_origins)
@@ -193,82 +227,3 @@ class TestClient(httpx.Client):
         except:
             pass
         return super().__exit__(*args)
-
-
-class AsyncTestClient(httpx.AsyncClient):
-    """Asynchronous test client for django-bolt using per-instance test state."""
-
-    __test__ = False  # Tell pytest this is not a test class
-
-    def __init__(
-        self,
-        api: BoltAPI,
-        base_url: str = "http://testserver.local",
-        raise_server_exceptions: bool = True,
-        use_http_layer: bool = False,
-        cors_allowed_origins: list[str] | None = None,
-        **kwargs: Any,
-    ):
-        """Initialize async test client.
-
-        Args:
-            api: BoltAPI instance to test
-            base_url: Base URL for requests
-            raise_server_exceptions: If True, raise exceptions from handlers
-            use_http_layer: If True, route through Actix HTTP layer (enables testing
-                           CORS, rate limiting, compression). Default False for fast tests.
-            cors_allowed_origins: Global CORS allowed origins for testing
-            **kwargs: Additional arguments passed to httpx.AsyncClient
-        """
-        from django_bolt import _core
-
-        # Create test app instance
-        self.app_id = _core.create_test_app(api._dispatch, False, cors_allowed_origins)
-
-        # Register routes
-        rust_routes = [
-            (method, path, handler_id, handler)
-            for method, path, handler_id, handler in api._routes
-        ]
-        _core.register_test_routes(self.app_id, rust_routes)
-
-        # Register middleware metadata if any exists
-        if api._handler_middleware:
-            middleware_data = [
-                (handler_id, meta)
-                for handler_id, meta in api._handler_middleware.items()
-            ]
-            _core.register_test_middleware_metadata(self.app_id, middleware_data)
-
-        # Ensure runtime is ready
-        _core.ensure_test_runtime(self.app_id)
-
-        # Create async transport
-        class AsyncTransport(httpx.AsyncBaseTransport):
-            def __init__(self, app_id: int, raise_exceptions: bool, use_http_layer: bool):
-                self._sync_transport = BoltTestTransport(app_id, raise_exceptions, use_http_layer)
-
-            async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-                return self._sync_transport.handle_request(request)
-
-        super().__init__(
-            base_url=base_url,
-            transport=AsyncTransport(self.app_id, raise_server_exceptions, use_http_layer),
-            follow_redirects=True,
-            **kwargs,
-        )
-        self.api = api
-
-    async def __aenter__(self):
-        """Enter async context manager."""
-        return await super().__aenter__()
-
-    async def __aexit__(self, *args):
-        """Exit async context manager and cleanup test app."""
-        from django_bolt import _core
-
-        try:
-            _core.destroy_test_app(self.app_id)
-        except:
-            pass
-        return await super().__aexit__(*args)

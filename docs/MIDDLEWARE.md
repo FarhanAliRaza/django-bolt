@@ -123,6 +123,136 @@ This eliminates per-request string allocations.
 **Automatic OPTIONS Handling:**
 Django-Bolt automatically handles OPTIONS preflight requests for routes with CORS configured. No explicit OPTIONS handler needed.
 
+#### Testing CORS with TestClient
+
+Django-Bolt's TestClient provides full support for testing CORS middleware, including Django settings-based configuration and preflight request handling.
+
+**Django Settings-Based CORS:**
+
+TestClient automatically reads CORS configuration from Django settings:
+
+```python
+# settings.py
+CORS_ALLOWED_ORIGINS = [
+    "https://example.com",
+    "https://app.example.com"
+]
+CORS_ALLOW_ALL_ORIGINS = False  # Set to True for wildcard (*)
+
+# test_cors.py
+from django_bolt.testing import TestClient
+from myapp.api import api
+
+def test_cors_from_settings():
+    client = TestClient(api)
+
+    # Test with allowed origin
+    response = client.get(
+        "/api/data",
+        headers={"Origin": "https://example.com"}
+    )
+    assert response.status_code == 200
+    assert response.headers["Access-Control-Allow-Origin"] == "https://example.com"
+
+    # Test with disallowed origin
+    response = client.get(
+        "/api/data",
+        headers={"Origin": "https://evil.com"}
+    )
+    assert response.status_code == 200
+    assert "Access-Control-Allow-Origin" not in response.headers
+```
+
+**Full Middleware Validation:**
+
+Use `use_http_layer=True` to test CORS middleware through the complete request pipeline:
+
+```python
+def test_cors_with_http_layer():
+    client = TestClient(api, use_http_layer=True)
+
+    # Test CORS headers on actual request
+    response = client.get(
+        "/api/users",
+        headers={
+            "Origin": "https://example.com",
+            "Content-Type": "application/json"
+        }
+    )
+
+    assert response.status_code == 200
+    assert response.headers["Access-Control-Allow-Origin"] == "https://example.com"
+    assert "Access-Control-Allow-Credentials" in response.headers
+```
+
+**Testing CORS Preflight Requests:**
+
+TestClient supports OPTIONS preflight validation:
+
+```python
+def test_cors_preflight():
+    client = TestClient(api, use_http_layer=True)
+
+    # Send OPTIONS preflight request
+    response = client.options(
+        "/api/users",
+        headers={
+            "Origin": "https://example.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type, Authorization"
+        }
+    )
+
+    # Validate preflight response
+    assert response.status_code == 200
+    assert response.headers["Access-Control-Allow-Origin"] == "https://example.com"
+    assert response.headers["Access-Control-Allow-Methods"] == "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+    assert "Content-Type" in response.headers["Access-Control-Allow-Headers"]
+    assert "Authorization" in response.headers["Access-Control-Allow-Headers"]
+    assert response.headers["Access-Control-Max-Age"] == "3600"
+```
+
+**Route-Level CORS Override:**
+
+Route-level `@cors()` decorators override Django settings:
+
+```python
+# api.py
+@api.get("/special")
+@cors(origins=["https://special.com"], credentials=False)
+async def special_endpoint():
+    return {"data": "special"}
+
+# test_cors.py
+def test_route_level_cors_override():
+    client = TestClient(api, use_http_layer=True)
+
+    # Route-level CORS overrides Django settings
+    response = client.get(
+        "/special",
+        headers={"Origin": "https://special.com"}
+    )
+    assert response.status_code == 200
+    assert response.headers["Access-Control-Allow-Origin"] == "https://special.com"
+
+    # Django settings origin won't work for this route
+    response = client.get(
+        "/special",
+        headers={"Origin": "https://example.com"}
+    )
+    assert response.status_code == 200
+    assert "Access-Control-Allow-Origin" not in response.headers
+```
+
+**Architecture Note:**
+
+CORS middleware runs in Rust for both production and testing environments. The testing path uses the same code as production (shared functions in `src/validation.rs`), ensuring that tests accurately reflect production behavior. This means:
+
+- JWT validation logic is identical in tests and production
+- CORS origin matching uses the same algorithm
+- Preflight request handling follows the exact same code path
+- No mocking or test-specific behavior differences
+
 ### Authentication
 
 **IMPORTANT:** Authentication is NOT a decorator. Use the `auth` parameter in route definition.

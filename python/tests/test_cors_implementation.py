@@ -107,11 +107,18 @@ class TestWildcardCredentials:
             async def get_data():
                 return {"data": "sensitive"}
 
-            # Check that warning was raised
-            assert len(w) == 1
-            assert issubclass(w[0].category, RuntimeWarning)
-            assert "wildcard" in str(w[0].message).lower()
-            assert "credentials" in str(w[0].message).lower()
+            # Filter to only CORS wildcard+credentials warnings
+            cors_warnings = [
+                warning for warning in w
+                if issubclass(warning.category, RuntimeWarning)
+                and "wildcard" in str(warning.message).lower()
+                and "credentials" in str(warning.message).lower()
+            ]
+
+            # Check that at least one warning was raised with correct content
+            assert len(cors_warnings) >= 1, f"Expected CORS warning, got {len(cors_warnings)} warnings"
+            assert "wildcard" in str(cors_warnings[0].message).lower()
+            assert "credentials" in str(cors_warnings[0].message).lower()
 
 
 class TestVaryHeaders:

@@ -4,6 +4,12 @@
 
 Django-Bolt provides **in-memory testing utilities** that allow you to test your API endpoints **50-100x faster** than subprocess-based testing. The test client routes requests through the **full Rust pipeline** including routing, authentication, middleware, compression, CORS, rate limiting, and guards.
 
+**Key Features:**
+- **Full middleware validation** - Test CORS, rate limiting, compression, and auth using production code
+- **Django settings integration** - Automatically reads `CORS_ALLOWED_ORIGINS` from Django settings
+- **Dual testing modes** - Fast mode for unit tests, HTTP layer mode for middleware testing
+- **Zero code duplication** - Tests use the same validation code as production via `src/validation.rs`
+
 ## Why We Built This
 
 Traditional testing approaches for django-bolt required:
@@ -236,6 +242,61 @@ with TestClient(api, use_http_layer=True) as client:
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
 ```
 
+### Django Settings Integration
+
+TestClient automatically reads CORS configuration from Django settings, matching production behavior:
+
+```python
+# settings.py
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "https://example.com",
+]
+
+# OR for wildcard:
+# CORS_ALLOW_ALL_ORIGINS = True
+
+# test_api.py
+from django_bolt import BoltAPI
+from django_bolt.testing import TestClient
+
+api = BoltAPI()
+
+@api.get("/data")
+async def get_data():
+    return {"value": 42}
+
+# Automatically reads CORS_ALLOWED_ORIGINS from Django settings
+with TestClient(api, use_http_layer=True) as client:
+    response = client.get("/data", headers={"Origin": "http://localhost:3000"})
+    # CORS headers are validated using Django settings!
+    assert "access-control-allow-origin" in response.headers
+```
+
+**Configuration Options:**
+
+```python
+# 1. Auto-read from Django settings (default)
+with TestClient(api, use_http_layer=True) as client:
+    # Reads CORS_ALLOWED_ORIGINS from settings.py
+    pass
+
+# 2. Disable Django settings reading
+with TestClient(api, use_http_layer=True, read_django_settings=False) as client:
+    # No CORS allowed origins (stricter testing)
+    pass
+
+# 3. Override with explicit parameter
+with TestClient(api, use_http_layer=True, cors_allowed_origins=["http://test.local"]) as client:
+    # Uses explicit list instead of Django settings
+    pass
+```
+
+**Why this matters:**
+- Tests use the same CORS configuration as production
+- No need to duplicate CORS settings in test code
+- Catches misconfigurations before deployment
+
 ### Pytest Fixtures
 
 ```python
@@ -291,28 +352,41 @@ Unlike pure Python frameworks (Litestar, FastAPI), django-bolt has critical logi
 
 **We cannot bypass Rust** or we won't be testing the real request flow!
 
-### Solution: Per-Instance Test State in Rust
+### Solution: Per-Instance Test State + Shared Validation
 
-We implemented a dual-layer solution:
+We implemented a three-layer solution:
+
+#### Shared Validation Layer ([src/validation.rs](../src/validation.rs))
+- **Zero-copy authentication**: Shared auth/guard validation used by both production and testing
+- **Inline functions**: All validation functions marked `#[inline(always)]` for zero runtime cost
+- **Production-identical**: Tests validate the exact same code that runs in production
+- **No duplication**: Single source of truth for auth, guards, and cookie parsing
+
+Key functions:
+- `parse_cookies_inline()` - Parse HTTP Cookie header (used by production & tests)
+- `validate_auth_and_guards()` - Combined auth + guard validation (used by production & tests)
 
 #### Rust Layer ([src/test_state.rs](../src/test_state.rs))
 - **Per-instance routers**: Each test gets its own isolated router (no global state conflicts)
 - **Per-instance event loops**: Each test app manages its own Python asyncio event loop
 - **Full pipeline execution**: Routes through routing � auth � middleware � handler � compression
 - **Synchronous execution**: Uses `asyncio.run_until_complete()` to execute async handlers
+- **Django settings integration**: Reads CORS configuration from Django settings
 
 Key functions:
-- `create_test_app(dispatch, debug)` - Create isolated test app, returns `app_id`
+- `create_test_app(dispatch, debug, cors_allowed_origins)` - Create isolated test app, returns `app_id`
 - `register_test_routes(app_id, routes)` - Register routes for this app instance
 - `register_test_middleware_metadata(app_id, metadata)` - Register middleware
-- `handle_test_request_for(app_id, ...)` - Fast mode handler dispatch
+- `handle_test_request_for(app_id, ...)` - Fast mode handler dispatch (uses shared validation)
 - `handle_actix_http_request(app_id, ...)` - HTTP layer mode with full Actix stack
 
 #### Python Layer ([python/django_bolt/testing/](../python/django_bolt/testing/))
 - **TestClient**: Synchronous test client extending `httpx.Client`
-- **AsyncTestClient**: Async test client extending `httpx.AsyncClient`
 - **Custom httpx transport**: Routes requests through Rust handlers
 - **Automatic cleanup**: Destroys test app on context manager exit
+- **Django settings reader**: Automatically reads `CORS_ALLOWED_ORIGINS` from Django settings
+
+**Note**: AsyncTestClient was removed due to event loop conflicts and lack of usage. Only the synchronous TestClient is supported.
 
 ## Performance Comparison
 
@@ -366,6 +440,21 @@ The HTTP layer mode adds **middleware testing**:
 
 This is **true integration testing** without the network overhead!
 
+### Production Code Validation
+
+Both testing modes use the **exact same validation code** as production:
+
+- **Authentication & Guards**: The `validate_auth_and_guards()` function in `src/validation.rs` is shared between:
+  - Production handler (`src/handler.rs`)
+  - Fast mode test handler (`src/testing.rs`)
+  - HTTP layer test handler (`src/test_state.rs`)
+
+- **Zero Performance Impact**: All validation functions are marked `#[inline(always)]`, meaning they're inlined at compile time with no runtime overhead
+
+- **No Mocks**: Your tests validate against the real authentication and guard logic, not mock implementations
+
+This architecture ensures that if your tests pass, your production authentication and guards will behave identically.
+
 ## What's Tested in Each Mode
 
 ### Fast Mode (`use_http_layer=False` - default)
@@ -395,28 +484,32 @@ This is **true integration testing** without the network overhead!
 ## Limitations & Future Work
 
 ### Current Limitations
-1. **Streaming responses**: Basic support, full streaming tests need `AsyncTestClient`
+1. **Streaming responses**: Basic support for synchronous iteration
 2. **WebSocket testing**: Not yet implemented
-3. **Performance overhead**: HTTP layer mode is 4x slower (expected due to full stack)
+3. **Performance overhead**: HTTP layer mode is 4x slower than fast mode (expected due to full stack)
+4. **Async test client**: Removed due to event loop conflicts; only synchronous TestClient is available
 
 ### Future Enhancements
-1. Better streaming support with async iteration
+1. Better streaming support for async iteration patterns
 2. WebSocket test client
 3. Performance benchmarks vs subprocess tests
 4. Test fixtures for common scenarios (auth, DB, etc.)
-5. Optimize HTTP layer mode (reuse Actix service?)
+5. Optimize HTTP layer mode (reuse Actix service across requests?)
 
 ## Files Created/Modified
 
 ### New Files
 - `src/test_state.rs` - Rust per-instance test state management
+- `src/validation.rs` - Shared validation logic used by production and testing
 - `src/testing.rs` - Additional test utilities
 - `python/django_bolt/testing/` - Python test client package
 - `python/tests/test_testing_utilities.py` - Test suite
 
 ### Modified Files
 - `src/lib.rs` - Export test_state functions to Python
+- `src/handler.rs` - Uses shared validation from validation.rs
 - `python/django_bolt/testing/__init__.py` - Export TestClient
+- `python/django_bolt/testing/client.py` - Django settings integration
 - Various test files migrated to use TestClient
 
 ## Example: Complete Test Suite

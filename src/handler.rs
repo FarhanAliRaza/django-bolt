@@ -13,12 +13,12 @@ use crate::direct_stream;
 use crate::error;
 use crate::metadata::CorsConfig;
 use crate::middleware;
-use crate::middleware::auth::{authenticate, populate_auth_context};
-use crate::permissions::{evaluate_guards, GuardResult};
+use crate::middleware::auth::populate_auth_context;
 use crate::request::PyRequest;
 use crate::router::parse_query_string;
 use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
 use crate::streaming::create_python_stream;
+use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
 
 // Reuse the global Python asyncio event loop created at server startup (TASK_LOCALS)
 
@@ -313,52 +313,27 @@ pub async fn handle_request(
         }
     }
 
-    // Execute authentication and guards (new system)
+    // Execute authentication and guards using shared validation logic
     let auth_ctx = if let Some(ref route_meta) = route_metadata {
-        if !route_meta.auth_backends.is_empty() {
-            authenticate(&headers, &route_meta.auth_backends)
-        } else {
-            None
+        match validate_auth_and_guards(&headers, &route_meta.auth_backends, &route_meta.guards) {
+            AuthGuardResult::Allow(ctx) => ctx,
+            AuthGuardResult::Unauthorized => {
+                return HttpResponse::Unauthorized()
+                    .content_type("application/json")
+                    .body(r#"{"detail":"Authentication required"}"#);
+            }
+            AuthGuardResult::Forbidden => {
+                return HttpResponse::Forbidden()
+                    .content_type("application/json")
+                    .body(r#"{"detail":"Permission denied"}"#);
+            }
         }
     } else {
         None
     };
 
-    // Evaluate guards
-    if let Some(ref route_meta) = route_metadata {
-        if !route_meta.guards.is_empty() {
-            match evaluate_guards(&route_meta.guards, auth_ctx.as_ref()) {
-                GuardResult::Allow => {
-                    // Pass through
-                }
-                GuardResult::Unauthorized => {
-                    return HttpResponse::Unauthorized()
-                        .content_type("application/json")
-                        .body(r#"{"detail":"Authentication required"}"#);
-                }
-                GuardResult::Forbidden => {
-                    return HttpResponse::Forbidden()
-                        .content_type("application/json")
-                        .body(r#"{"detail":"Permission denied"}"#);
-                }
-            }
-        }
-    }
-
-    // Pre-parse cookies outside of GIL
-    let mut cookies: AHashMap<String, String> = AHashMap::with_capacity(8);
-    if let Some(raw_cookie) = headers.get("cookie") {
-        for pair in raw_cookie.split(';') {
-            let part = pair.trim();
-            if let Some(eq) = part.find('=') {
-                let (k, v) = part.split_at(eq);
-                let v2 = &v[1..];
-                if !k.is_empty() {
-                    cookies.insert(k.to_string(), v2.to_string());
-                }
-            }
-        }
-    }
+    // Pre-parse cookies outside of GIL using shared inline function
+    let cookies = parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()));
 
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";

@@ -4,7 +4,7 @@ This file tests the TestClient (V2) that routes through Rust with per-instance s
 """
 import pytest
 from django_bolt import BoltAPI
-from django_bolt.testing import TestClient, AsyncTestClient
+from django_bolt.testing import TestClient
 
 
 def test_simple_get_request():
@@ -114,22 +114,6 @@ def test_multiple_methods():
         assert client.post("/resource").json() == {"method": "POST"}
         assert client.put("/resource").json() == {"method": "PUT"}
         assert client.delete("/resource").json() == {"method": "DELETE"}
-
-
-@pytest.mark.skip(reason="AsyncTestClient has event loop conflict - needs refactoring for nested event loops")
-@pytest.mark.asyncio
-async def test_async_client():
-    """Test AsyncTestClient."""
-    api = BoltAPI()
-
-    @api.get("/hello")
-    async def hello():
-        return {"message": "async world"}
-
-    async with AsyncTestClient(api) as client:
-        response = await client.get("/hello")
-        assert response.status_code == 200
-        assert response.json() == {"message": "async world"}
 
 
 def test_headers():

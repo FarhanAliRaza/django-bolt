@@ -88,7 +88,7 @@ pub fn check_rate_limit(
             .allow_burst(burst_nonzero);
         Arc::new(RateLimiter::direct(quota))
     });
-    
+
     // Check rate limit
     match limiter.check() {
         Ok(_) => None, // Request allowed

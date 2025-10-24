@@ -1,14 +1,48 @@
 /// Testing utilities for django-bolt
 /// Provides synchronous request handler for in-memory testing without subprocess/network
+///
+/// Key design: Reuses production middleware code (rate limiting, CORS, auth, guards)
+/// to ensure tests validate the actual request pipeline. HttpResponse is converted
+/// to simple tuples at the end for easy test assertions.
+use actix_web::HttpResponse;
 use ahash::AHashMap;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use crate::middleware::auth::{authenticate, populate_auth_context};
-use crate::permissions::{evaluate_guards, GuardResult};
+use crate::middleware;
+use crate::middleware::auth::populate_auth_context;
 use crate::request::PyRequest;
 use crate::router::parse_query_string;
 use crate::state::{GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
+use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
+
+/// Convert HttpResponse to test tuple format (status, headers, body)
+/// This allows tests to use simple tuple assertions while validating real middleware
+fn http_response_to_tuple(response: HttpResponse) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let status = response.status().as_u16();
+
+    let headers: Vec<(String, String)> = response
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.as_str().to_string(),
+                value.to_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+
+    let body = response.into_body();
+    // Extract body bytes from actix_web::body::BoxBody
+    // For testing, we assume the body is already materialized
+    use actix_web::body::MessageBody;
+    let body_bytes = match body.try_into_bytes() {
+        Ok(bytes) => bytes.to_vec(),
+        Err(_) => Vec::new(), // Streaming bodies return empty for now
+    };
+
+    (status, headers, body_bytes)
+}
 
 /// Handle a test request synchronously
 /// Returns (status_code, headers, body_bytes)
@@ -66,60 +100,46 @@ pub fn handle_test_request(
         .get()
         .and_then(|meta_map| meta_map.get(&handler_id).cloned());
 
-    // Note: Middleware processing (CORS, rate limiting) is async
-    // For testing, we skip async middleware checks and go directly to handler
-    // The test client can still test middleware by checking the response
+    // Process rate limiting (same as production)
+    // Note: peer_addr is None in tests, rate limiting uses headers only
+    if let Some(ref route_meta) = route_metadata {
+        if let Some(ref rate_config) = route_meta.rate_limit_config {
+            if let Some(response) = middleware::rate_limit::check_rate_limit(
+                handler_id,
+                &header_map,
+                None, // peer_addr not available in sync testing
+                rate_config,
+            ) {
+                return Ok(http_response_to_tuple(response));
+            }
+        }
+    }
 
-    // Authentication (synchronous part)
+    // Execute authentication and guards using shared validation logic (same as production)
     let auth_ctx = if let Some(ref route_meta) = route_metadata {
-        if !route_meta.auth_backends.is_empty() {
-            authenticate(&header_map, &route_meta.auth_backends)
-        } else {
-            None
+        match validate_auth_and_guards(&header_map, &route_meta.auth_backends, &route_meta.guards) {
+            AuthGuardResult::Allow(ctx) => ctx,
+            AuthGuardResult::Unauthorized => {
+                return Ok((
+                    401,
+                    vec![("content-type".to_string(), "application/json".to_string())],
+                    br#"{"detail":"Authentication required"}"#.to_vec(),
+                ));
+            }
+            AuthGuardResult::Forbidden => {
+                return Ok((
+                    403,
+                    vec![("content-type".to_string(), "application/json".to_string())],
+                    br#"{"detail":"Permission denied"}"#.to_vec(),
+                ));
+            }
         }
     } else {
         None
     };
 
-    // Guards evaluation
-    if let Some(ref route_meta) = route_metadata {
-        if !route_meta.guards.is_empty() {
-            match evaluate_guards(&route_meta.guards, auth_ctx.as_ref()) {
-                GuardResult::Allow => {
-                    // Continue
-                }
-                GuardResult::Unauthorized => {
-                    return Ok((
-                        401,
-                        vec![("content-type".to_string(), "application/json".to_string())],
-                        br#"{"detail":"Authentication required"}"#.to_vec(),
-                    ));
-                }
-                GuardResult::Forbidden => {
-                    return Ok((
-                        403,
-                        vec![("content-type".to_string(), "application/json".to_string())],
-                        br#"{"detail":"Permission denied"}"#.to_vec(),
-                    ));
-                }
-            }
-        }
-    }
-
-    // Parse cookies
-    let mut cookies: AHashMap<String, String> = AHashMap::with_capacity(8);
-    if let Some(raw_cookie) = header_map.get("cookie") {
-        for pair in raw_cookie.split(';') {
-            let part = pair.trim();
-            if let Some(eq) = part.find('=') {
-                let (k, v) = part.split_at(eq);
-                let v2 = &v[1..];
-                if !k.is_empty() {
-                    cookies.insert(k.to_string(), v2.to_string());
-                }
-            }
-        }
-    }
+    // Parse cookies using shared inline function (same as production)
+    let cookies = parse_cookies_inline(header_map.get("cookie").map(|s| s.as_str()));
 
     // Create context dict
     let context = if auth_ctx.is_some() {

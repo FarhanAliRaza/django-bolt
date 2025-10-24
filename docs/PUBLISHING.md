@@ -84,7 +84,34 @@ If you prefer to register the package first:
 
 ## Publishing a Release
 
-### Standard Release Process
+### Automated Release (Recommended)
+
+Use the provided release script to automate version bumping, committing, and tag pushing:
+
+```bash
+# Standard release
+./scripts/release.sh 0.2.2
+
+# Pre-release versions
+./scripts/release.sh 0.3.0-alpha1
+./scripts/release.sh 0.3.0-beta1
+./scripts/release.sh 0.3.0-rc1
+
+# Dry-run (test without making changes)
+./scripts/release.sh 0.2.2 --dry-run
+```
+
+The script will:
+1. ✓ Validate version format and git status
+2. ✓ Update version in both `pyproject.toml` and `Cargo.toml`
+3. ✓ Commit changes with proper message
+4. ✓ Create and push git tag
+5. ✓ Trigger GitHub Actions CI/CD pipeline
+6. ✓ Provide monitoring links and next steps
+
+### Manual Release Process
+
+If you prefer to release manually:
 
 1. **Update version** in `pyproject.toml` and `Cargo.toml`
 
@@ -101,17 +128,19 @@ If you prefer to register the package first:
    git push origin v0.2.0
    ```
 
-4. **GitHub Actions automatically**:
-   - Runs tests across Python 3.10-3.14
-   - Builds wheels for all platforms
-   - Validates all wheels
-   - Publishes to PyPI (if tests pass)
-   - Creates GitHub release with artifacts
+### What Happens After Tag Push
 
-5. **Monitor progress**:
-   - Go to Actions tab in GitHub
-   - Watch the CI workflow complete (~10-15 minutes)
-   - Check PyPI: https://pypi.org/project/django-bolt/
+**GitHub Actions automatically**:
+- Runs tests across Python 3.10-3.14
+- Builds wheels for all platforms
+- Validates all wheels
+- Publishes to PyPI (if tests pass)
+- Creates GitHub release with artifacts
+
+**Monitor progress**:
+- Go to Actions tab in GitHub
+- Watch the CI workflow complete (~10-15 minutes)
+- Check PyPI: https://pypi.org/project/django-bolt/
 
 ### Pre-release (Alpha/Beta/RC)
 

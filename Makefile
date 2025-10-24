@@ -7,7 +7,7 @@ N ?= 10000
 P ?= 8
 WORKERS ?= 1
 
-.PHONY: build test-server test-server-bg kill bench clean orm-test setup-test-data seed-data orm-smoke compare-frameworks save-baseline test-py
+.PHONY: build test-server test-server-bg kill bench clean orm-test setup-test-data seed-data orm-smoke compare-frameworks save-baseline test-py release
 
 # Build Rust extension in release mode
 build:
@@ -97,3 +97,21 @@ save-bench:
 build-bench:
 	uv run maturin develop --release
 	make save-bench
+
+# Release new version
+# Usage: make release VERSION=0.2.2
+# Usage: make release VERSION=0.3.0-alpha1 (for pre-releases)
+# Usage: make release VERSION=0.2.2 DRY_RUN=1 (for testing)
+release:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "Error: VERSION is required"; \
+		echo "Usage: make release VERSION=0.2.2"; \
+		echo "       make release VERSION=0.3.0-alpha1"; \
+		echo "       make release VERSION=0.2.2 DRY_RUN=1"; \
+		exit 1; \
+	fi
+	@if [ "$(DRY_RUN)" = "1" ]; then \
+		./scripts/release.sh $(VERSION) --dry-run; \
+	else \
+		./scripts/release.sh $(VERSION); \
+	fi

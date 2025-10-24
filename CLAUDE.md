@@ -78,6 +78,19 @@ python manage.py migrate
 python manage.py makemigrations [app_name]
 ```
 
+### Release
+
+```bash
+# Create a new release (bumps version, commits, tags, and pushes)
+make release VERSION=0.2.2              # Standard release
+make release VERSION=0.3.0-alpha1       # Pre-release
+make release VERSION=0.2.2 DRY_RUN=1    # Test without changes
+
+# Or use the script directly
+./scripts/release.sh 0.2.2              # Standard release
+./scripts/release.sh 0.2.2 --dry-run    # Test without changes
+```
+
 ### CLI Tool
 
 ```bash

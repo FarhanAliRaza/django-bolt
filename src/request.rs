@@ -39,6 +39,7 @@ impl PyRequest {
         }
     }
 
+    #[pyo3(signature = (key, /, default=None))]
     fn get<'py>(&self, py: Python<'py>, key: &str, default: Option<Py<PyAny>>) -> Py<PyAny> {
         match key {
             "method" => PyString::new(py, &self.method).into_any().unbind(),
@@ -74,7 +75,7 @@ impl PyRequest {
             }
             "auth" | "context" => match &self.context {
                 Some(ctx) => ctx.clone_ref(py).into_any(),
-                None => py.None()
+                None => default.unwrap_or_else(|| py.None())
             }
             _ => default.unwrap_or_else(|| py.None()),
         }

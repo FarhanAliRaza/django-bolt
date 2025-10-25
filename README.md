@@ -496,11 +496,11 @@ async def stream_json():
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/django-bolt.git
+git clone https://github.com/FarhanAliRaza/django-bolt.git
 cd django-bolt
 
 # Install dependencies
-pip install -r requirements-dev.txt
+uv sync
 
 # Build Rust extension
 make build  # or: maturin develop --release

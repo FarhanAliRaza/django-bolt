@@ -4,6 +4,8 @@ Type definitions for Django-Bolt.
 This module provides type hints and protocols for Django-Bolt objects,
 enabling full IDE autocomplete and static type checking.
 """
+from __future__ import annotations
+
 from typing import Protocol, Any, Dict, Optional, overload, runtime_checkable
 
 

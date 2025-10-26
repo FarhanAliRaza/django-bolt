@@ -1,11 +1,11 @@
 """Dependency injection utilities."""
+from __future__ import annotations
+
 import inspect
-from typing import Any, Callable, Dict, List, TYPE_CHECKING
+from typing import Any, Callable, Dict, List
 from .params import Depends as DependsMarker
 from .binding import convert_primitive
-
-if TYPE_CHECKING:
-    from .typing import FieldDefinition
+from .typing import FieldDefinition
 
 
 async def resolve_dependency(

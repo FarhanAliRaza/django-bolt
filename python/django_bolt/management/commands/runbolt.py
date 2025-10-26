@@ -50,9 +50,6 @@ class Command(BaseCommand):
                 )
                 options['processes'] = 1
 
-            self.stdout.write(
-                self.style.SUCCESS("[django-bolt] 🔥 Development mode enabled (auto-reload on file changes)")
-            )
             self.run_with_autoreload(options)
         else:
             # Production mode (current logic)
@@ -75,11 +72,18 @@ class Command(BaseCommand):
             import sys
             sys.exit(1)
 
+        # Print dev mode message only once (in the main reloader process)
+        import os
+        if os.environ.get('RUN_MAIN') == 'true':
+            self.stdout.write(
+                self.style.SUCCESS("[django-bolt] 🔥 Development mode enabled (auto-reload on file changes)")
+            )
+
         # Use Django's autoreload system which is optimized
         # It only restarts the Python interpreter when necessary
         # and reuses the same process for faster reloads
         def run_server():
-            self.start_single_process(options)
+            self.start_single_process(options, dev_mode=True)
 
         autoreload.run_with_reloader(run_server)
 
@@ -133,7 +137,7 @@ class Command(BaseCommand):
         except KeyboardInterrupt:
             pass
     
-    def start_single_process(self, options, process_id=None):
+    def start_single_process(self, options, process_id=None, dev_mode=False):
         """Start a single process server"""
         # Setup Django logging once at server startup (one-shot, respects existing LOGGING)
         from django_bolt.logging.config import setup_django_logging
@@ -178,9 +182,9 @@ class Command(BaseCommand):
             merged_api._register_openapi_routes()
 
             if process_id is not None:
-                self.stdout.write(f"[django-bolt] Process {process_id}: OpenAPI docs enabled at {openapi_config.path}")
+                self.stdout.write(f"[django-bolt] Process {process_id}: OpenAPI docs enabled at http://{options['host']}:{options['port']}{openapi_config.path}")
             else:
-                self.stdout.write(self.style.SUCCESS(f"[django-bolt] OpenAPI docs enabled at {openapi_config.path}"))
+                self.stdout.write(self.style.SUCCESS(f"[django-bolt] OpenAPI docs enabled at http://{options['host']}:{options['port']}{openapi_config.path}"))
 
         # Register Django admin routes if not disabled
         # Admin is controlled solely by --no-admin command-line flag
@@ -242,7 +246,6 @@ class Command(BaseCommand):
         else:
             self.stdout.write(self.style.SUCCESS(f"[django-bolt] Starting server on http://{options['host']}:{options['port']}"))
             self.stdout.write(f"[django-bolt] Workers: {options['workers']}, Processes: {options['processes']}")
-            self.stdout.write(self.style.SUCCESS(f"[django-bolt] OpenAPI docs enabled at http://{options['host']}:{options['port']}/docs/"))
         # Set environment variable for Rust to read worker count
         import os
         os.environ['DJANGO_BOLT_WORKERS'] = str(options['workers'])

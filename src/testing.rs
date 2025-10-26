@@ -141,13 +141,11 @@ pub fn handle_test_request(
     // Parse cookies using shared inline function (same as production)
     let cookies = parse_cookies_inline(header_map.get("cookie").map(|s| s.as_str()));
 
-    // Create context dict
-    let context = if auth_ctx.is_some() {
+    // Create context dict only if auth context is present
+    let context = if let Some(ref auth) = auth_ctx {
         let ctx_dict = PyDict::new(py);
         let ctx_py = ctx_dict.unbind();
-        if let Some(ref auth) = auth_ctx {
-            populate_auth_context(&ctx_py, auth, py);
-        }
+        populate_auth_context(&ctx_py, auth, py);
         Some(ctx_py)
     } else {
         None

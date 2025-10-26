@@ -344,14 +344,11 @@ pub async fn handle_request(
         let dispatch = state.dispatch.clone_ref(py);
         let handler = route_handler.clone_ref(py);
 
-        // Create context dict if auth is present
-        let context = if auth_ctx.is_some() {
+        // Create context dict only if auth context is present
+        let context = if let Some(ref auth) = auth_ctx {
             let ctx_dict = PyDict::new(py);
             let ctx_py = ctx_dict.unbind();
-            // Populate with auth context if present
-            if let Some(ref auth) = auth_ctx {
-                populate_auth_context(&ctx_py, auth, py);
-            }
+            populate_auth_context(&ctx_py, auth, py);
             Some(ctx_py)
         } else {
             None

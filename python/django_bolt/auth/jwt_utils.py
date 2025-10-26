@@ -6,8 +6,11 @@ extract user information from request context.
 """
 import time
 import jwt
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 from django.contrib.auth import get_user_model
+
+if TYPE_CHECKING:
+    from django_bolt.types import Request
 
 
 def create_jwt_for_user(
@@ -95,7 +98,7 @@ def create_jwt_for_user(
     return jwt.encode(payload, secret, algorithm=algorithm)
 
 
-async def get_current_user(request: Dict[str, Any]):
+async def get_current_user(request: "Request"):
     """
     Dependency function to extract and fetch Django User from request context.
 
@@ -147,7 +150,7 @@ async def get_current_user(request: Dict[str, Any]):
         return None
 
 
-def extract_user_id_from_context(request: Dict[str, Any]) -> Optional[str]:
+def extract_user_id_from_context(request: "Request") -> Optional[str]:
     """
     Extract user_id from request context.
 
@@ -173,7 +176,7 @@ def extract_user_id_from_context(request: Dict[str, Any]) -> Optional[str]:
     return context.get("user_id")
 
 
-def get_auth_context(request: Dict[str, Any]) -> Dict[str, Any]:
+def get_auth_context(request: "Request") -> Dict[str, Any]:
     """
     Get the full authentication context from request.
 

@@ -1,4 +1,5 @@
 from typing import Optional, List, Annotated
+from django_bolt.types import Request
 import msgspec
 import asyncio
 import time
@@ -78,8 +79,10 @@ class BenchPayload(msgspec.Struct):
 
 
 @api.post("/bench/parse")
-async def bench_parse(payload: BenchPayload):
+async def bench_parse(req: Request, payload: BenchPayload):
     # msgspec validates and decodes in one pass; just return minimal data
+   
+    context = req.context
     return {"ok": True, "n": len(payload.items), "count": payload.count}
 
 

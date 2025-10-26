@@ -23,8 +23,8 @@ from .request_parsing import parse_form_data
 from .dependencies import resolve_dependency
 from .serialization import serialize_response
 from .middleware.compiler import compile_middleware_meta
+from .types import Request
 
-Request = Dict[str, Any]
 Response = Tuple[int, List[Tuple[str, str]], bytes]
 
 # Global registry for BoltAPI instances (used by autodiscovery)

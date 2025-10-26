@@ -1,6 +1,7 @@
 from .api import BoltAPI
 from .responses import Response, JSON, StreamingResponse
 from .compression import CompressionConfig
+from .types import Request
 
 # Views module
 from .views import (
@@ -80,6 +81,7 @@ from .openapi import (
 
 __all__ = [
     "BoltAPI",
+    "Request",
     "Response",
     "JSON",
     "StreamingResponse",

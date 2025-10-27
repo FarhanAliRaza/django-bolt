@@ -2,7 +2,6 @@
 ///
 /// Guards are evaluated after authentication to determine if a request
 /// should be allowed. This happens in Rust for zero-GIL overhead.
-
 use crate::middleware::auth::AuthContext;
 
 /// Guard/permission types
@@ -37,56 +36,46 @@ pub fn evaluate_guards(guards: &[Guard], auth_ctx: Option<&AuthContext>) -> Guar
                     return GuardResult::Unauthorized;
                 }
             }
-            Guard::IsAdmin => {
-                match auth_ctx {
-                    None => return GuardResult::Unauthorized,
-                    Some(ctx) => {
-                        if !ctx.is_admin {
-                            return GuardResult::Forbidden;
-                        }
+            Guard::IsAdmin => match auth_ctx {
+                None => return GuardResult::Unauthorized,
+                Some(ctx) => {
+                    if !ctx.is_admin {
+                        return GuardResult::Forbidden;
                     }
                 }
-            }
-            Guard::IsStaff => {
-                match auth_ctx {
-                    None => return GuardResult::Unauthorized,
-                    Some(ctx) => {
-                        if !ctx.is_staff {
-                            return GuardResult::Forbidden;
-                        }
+            },
+            Guard::IsStaff => match auth_ctx {
+                None => return GuardResult::Unauthorized,
+                Some(ctx) => {
+                    if !ctx.is_staff {
+                        return GuardResult::Forbidden;
                     }
                 }
-            }
-            Guard::HasPermission(perm) => {
-                match auth_ctx {
-                    None => return GuardResult::Unauthorized,
-                    Some(ctx) => {
-                        if !ctx.permissions.contains(perm) {
-                            return GuardResult::Forbidden;
-                        }
+            },
+            Guard::HasPermission(perm) => match auth_ctx {
+                None => return GuardResult::Unauthorized,
+                Some(ctx) => {
+                    if !ctx.permissions.contains(perm) {
+                        return GuardResult::Forbidden;
                     }
                 }
-            }
-            Guard::HasAnyPermission(perms) => {
-                match auth_ctx {
-                    None => return GuardResult::Unauthorized,
-                    Some(ctx) => {
-                        if !perms.iter().any(|p| ctx.permissions.contains(p)) {
-                            return GuardResult::Forbidden;
-                        }
+            },
+            Guard::HasAnyPermission(perms) => match auth_ctx {
+                None => return GuardResult::Unauthorized,
+                Some(ctx) => {
+                    if !perms.iter().any(|p| ctx.permissions.contains(p)) {
+                        return GuardResult::Forbidden;
                     }
                 }
-            }
-            Guard::HasAllPermissions(perms) => {
-                match auth_ctx {
-                    None => return GuardResult::Unauthorized,
-                    Some(ctx) => {
-                        if !perms.iter().all(|p| ctx.permissions.contains(p)) {
-                            return GuardResult::Forbidden;
-                        }
+            },
+            Guard::HasAllPermissions(perms) => match auth_ctx {
+                None => return GuardResult::Unauthorized,
+                Some(ctx) => {
+                    if !perms.iter().all(|p| ctx.permissions.contains(p)) {
+                        return GuardResult::Forbidden;
                     }
                 }
-            }
+            },
         }
     }
 
@@ -97,6 +86,6 @@ pub fn evaluate_guards(guards: &[Guard], auth_ctx: Option<&AuthContext>) -> Guar
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuardResult {
     Allow,
-    Unauthorized,  // 401 - not authenticated
-    Forbidden,     // 403 - authenticated but lacking permission
+    Unauthorized, // 401 - not authenticated
+    Forbidden,    // 403 - authenticated but lacking permission
 }

@@ -13,7 +13,7 @@ pub struct AppState {
     pub debug: bool,
     pub max_header_size: usize,
     pub global_cors_config: Option<CorsConfig>, // Global CORS configuration from Django settings
-    pub cors_origin_regexes: Vec<Regex>, // Compiled regex patterns for origin matching
+    pub cors_origin_regexes: Vec<Regex>,        // Compiled regex patterns for origin matching
 }
 
 pub static GLOBAL_ROUTER: OnceCell<Arc<Router>> = OnceCell::new();

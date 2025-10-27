@@ -5,8 +5,8 @@ use governor::clock::{Clock, DefaultClock};
 use governor::state::{InMemoryState, NotKeyed};
 use governor::{Quota, RateLimiter};
 use once_cell::sync::Lazy;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use crate::metadata::RateLimitConfig;
 
@@ -39,7 +39,8 @@ pub fn check_rate_limit(
     let key = match key_type.as_str() {
         "ip" => {
             // Try to get client IP from headers (X-Forwarded-For, X-Real-IP, etc.)
-            headers.get("x-forwarded-for")
+            headers
+                .get("x-forwarded-for")
                 .or_else(|| headers.get("x-real-ip"))
                 .or_else(|| headers.get("remote-addr"))
                 .map(|ip| {
@@ -52,7 +53,8 @@ pub fn check_rate_limit(
         }
         header_name => {
             // Use custom header as key
-            headers.get(&header_name.to_lowercase())
+            headers
+                .get(&header_name.to_lowercase())
                 .cloned()
                 .unwrap_or_else(|| "unknown".to_string())
         }
@@ -64,7 +66,7 @@ pub fn check_rate_limit(
         return Some(
             HttpResponse::BadRequest()
                 .content_type("application/json")
-                .body(r#"{"detail":"Rate limit key too long"}"#)
+                .body(r#"{"detail":"Rate limit key too long"}"#),
         );
     }
 
@@ -84,8 +86,7 @@ pub fn check_rate_limit(
         // Use NonZero constructors properly
         let rps_nonzero = std::num::NonZeroU32::new(rps.max(1)).unwrap();
         let burst_nonzero = std::num::NonZeroU32::new(burst.max(1)).unwrap();
-        let quota = Quota::per_second(rps_nonzero)
-            .allow_burst(burst_nonzero);
+        let quota = Quota::per_second(rps_nonzero).allow_burst(burst_nonzero);
         Arc::new(RateLimiter::direct(quota))
     });
 

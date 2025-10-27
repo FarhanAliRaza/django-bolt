@@ -8,19 +8,19 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: Option<String>,  // Subject (user ID)
-    pub exp: Option<i64>,     // Expiry time
-    pub iat: Option<i64>,     // Issued at
-    pub nbf: Option<i64>,     // Not before
-    pub aud: Option<String>,  // Audience
-    pub iss: Option<String>,  // Issuer
-    pub jti: Option<String>,  // JWT ID
-    pub is_staff: Option<bool>,  // Staff status
-    pub is_superuser: Option<bool>,  // Admin/superuser status
-    pub is_admin: Option<bool>,  // Alternative admin field
-    pub permissions: Option<Vec<String>>,  // List of permissions
+    pub sub: Option<String>,              // Subject (user ID)
+    pub exp: Option<i64>,                 // Expiry time
+    pub iat: Option<i64>,                 // Issued at
+    pub nbf: Option<i64>,                 // Not before
+    pub aud: Option<String>,              // Audience
+    pub iss: Option<String>,              // Issuer
+    pub jti: Option<String>,              // JWT ID
+    pub is_staff: Option<bool>,           // Staff status
+    pub is_superuser: Option<bool>,       // Admin/superuser status
+    pub is_admin: Option<bool>,           // Alternative admin field
+    pub permissions: Option<Vec<String>>, // List of permissions
     #[serde(flatten)]
-    pub extra: HashMap<String, serde_json::Value>,  // Any extra claims
+    pub extra: HashMap<String, serde_json::Value>, // Any extra claims
 }
 
 /// Authentication context built from successful authentication
@@ -93,7 +93,6 @@ pub enum AuthBackend {
     },
 }
 
-
 /// Authenticate using configured backends and return AuthContext
 /// Returns None if no authentication was successful
 pub fn authenticate(
@@ -102,12 +101,29 @@ pub fn authenticate(
 ) -> Option<AuthContext> {
     for backend in backends {
         match backend {
-            AuthBackend::JWT { secret, algorithms, header, audience, issuer } => {
-                if let Some(ctx) = try_jwt_auth(headers, secret, algorithms, header, audience.as_deref(), issuer.as_deref()) {
+            AuthBackend::JWT {
+                secret,
+                algorithms,
+                header,
+                audience,
+                issuer,
+            } => {
+                if let Some(ctx) = try_jwt_auth(
+                    headers,
+                    secret,
+                    algorithms,
+                    header,
+                    audience.as_deref(),
+                    issuer.as_deref(),
+                ) {
                     return Some(ctx);
                 }
             }
-            AuthBackend::APIKey { api_keys, header, key_permissions } => {
+            AuthBackend::APIKey {
+                api_keys,
+                header,
+                key_permissions,
+            } => {
                 if let Some(ctx) = try_api_key_auth(headers, api_keys, header, key_permissions) {
                     return Some(ctx);
                 }
@@ -200,13 +216,8 @@ fn try_api_key_auth(
     }
 }
 
-
 /// Store authentication context in PyRequest context
-pub fn populate_auth_context(
-    context: &Py<PyDict>,
-    auth_ctx: &AuthContext,
-    py: Python,
-) {
+pub fn populate_auth_context(context: &Py<PyDict>, auth_ctx: &AuthContext, py: Python) {
     let dict = context.bind(py);
 
     // Store user_id
@@ -250,7 +261,9 @@ pub fn populate_auth_context(
         // Store extra claims
         for (key, value) in &claims.extra {
             let py_value = match value {
-                serde_json::Value::String(s) => s.clone().into_py_any(py).unwrap_or_else(|_| py.None()),
+                serde_json::Value::String(s) => {
+                    s.clone().into_py_any(py).unwrap_or_else(|_| py.None())
+                }
                 serde_json::Value::Number(n) => {
                     if let Some(i) = n.as_i64() {
                         i.into_py_any(py).unwrap_or_else(|_| py.None())

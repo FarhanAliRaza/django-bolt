@@ -1,8 +1,8 @@
+use crate::middleware::auth::{authenticate, AuthBackend, AuthContext};
+use crate::permissions::{evaluate_guards, Guard, GuardResult};
 /// Shared validation logic used by both production handler and test handler
 /// All functions marked #[inline(always)] for zero-cost abstraction
 use ahash::AHashMap;
-use crate::middleware::auth::{AuthContext, AuthBackend, authenticate};
-use crate::permissions::{Guard, GuardResult, evaluate_guards};
 
 /// Parse HTTP cookies from Cookie header
 /// Returns HashMap of cookie name -> cookie value

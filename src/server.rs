@@ -42,15 +42,18 @@ pub fn register_middleware_metadata(
                     parsed_metadata_map.insert(handler_id, parsed);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to parse metadata for handler {}: {}", handler_id, e);
+                    eprintln!(
+                        "Warning: Failed to parse metadata for handler {}: {}",
+                        handler_id, e
+                    );
                 }
             }
         }
     }
 
-    ROUTE_METADATA_TEMP
-        .set(parsed_metadata_map)
-        .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Route metadata already initialized"))?;
+    ROUTE_METADATA_TEMP.set(parsed_metadata_map).map_err(|_| {
+        pyo3::exceptions::PyRuntimeError::new_err("Route metadata already initialized")
+    })?;
 
     Ok(())
 }
@@ -64,7 +67,9 @@ pub fn start_server_async(
     compression_config: Option<Py<PyAny>>,
 ) -> PyResult<()> {
     if GLOBAL_ROUTER.get().is_none() {
-        return Err(pyo3::exceptions::PyRuntimeError::new_err("Routes not registered"));
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "Routes not registered",
+        ));
     }
 
     pyo3_async_runtimes::tokio::init(tokio::runtime::Builder::new_multi_thread());
@@ -91,13 +96,15 @@ pub fn start_server_async(
             let django_conf = py.import("django.conf")?;
             let settings = django_conf.getattr("settings")?;
             settings.getattr("DEBUG")?.extract::<bool>()
-        })().unwrap_or(false);
+        })()
+        .unwrap_or(false);
 
         let max_header_size = (|| -> PyResult<usize> {
             let django_conf = py.import("django.conf")?;
             let settings = django_conf.getattr("settings")?;
             settings.getattr("BOLT_MAX_HEADER_SIZE")?.extract::<usize>()
-        })().unwrap_or(8192); // Default 8KB
+        })()
+        .unwrap_or(8192); // Default 8KB
 
         // Read django-cors-headers compatible CORS settings
         let cors_data = (|| -> PyResult<(Vec<String>, Vec<String>, bool, bool, Option<Vec<String>>, Option<Vec<String>>, Option<Vec<String>>, Option<u32>)> {
@@ -143,50 +150,68 @@ pub fn start_server_async(
     });
 
     // Unpack CORS configuration data
-    let (origins, origin_regex_patterns, allow_all, credentials, methods, headers, expose_headers, max_age) = cors_config_data;
+    let (
+        origins,
+        origin_regex_patterns,
+        allow_all,
+        credentials,
+        methods,
+        headers,
+        expose_headers,
+        max_age,
+    ) = cors_config_data;
 
     // Validate CORS configuration: wildcard + credentials is invalid per spec
     if allow_all && credentials {
         eprintln!("[django-bolt] Warning: CORS_ALLOW_ALL_ORIGINS=True with CORS_ALLOW_CREDENTIALS=True is invalid.");
-        eprintln!("[django-bolt] Per CORS spec, wildcard origin (*) cannot be used with credentials.");
+        eprintln!(
+            "[django-bolt] Per CORS spec, wildcard origin (*) cannot be used with credentials."
+        );
         eprintln!("[django-bolt] CORS will reflect the request origin instead of using wildcard.");
     }
 
     // Build global CORS config if any CORS settings are configured
-    let global_cors_config = if !origins.is_empty() || !origin_regex_patterns.is_empty() || allow_all {
-        let mut cors_origins = origins.clone();
+    let global_cors_config =
+        if !origins.is_empty() || !origin_regex_patterns.is_empty() || allow_all {
+            let mut cors_origins = origins.clone();
 
-        // If CORS_ALLOW_ALL_ORIGINS = True, use wildcard
-        if allow_all {
-            cors_origins = vec!["*".to_string()];
-        }
+            // If CORS_ALLOW_ALL_ORIGINS = True, use wildcard
+            if allow_all {
+                cors_origins = vec!["*".to_string()];
+            }
 
-        Some(CorsConfig::from_django_settings(
-            cors_origins,
-            origin_regex_patterns.clone(),
-            allow_all,
-            credentials,
-            methods,
-            headers,
-            expose_headers,
-            max_age,
-        ))
-    } else {
-        None
-    };
+            Some(CorsConfig::from_django_settings(
+                cors_origins,
+                origin_regex_patterns.clone(),
+                allow_all,
+                credentials,
+                methods,
+                headers,
+                expose_headers,
+                max_age,
+            ))
+        } else {
+            None
+        };
 
     // Compile origin regex patterns at startup (zero runtime overhead)
-    let cors_origin_regexes: Vec<regex::Regex> = origin_regex_patterns.iter()
+    let cors_origin_regexes: Vec<regex::Regex> = origin_regex_patterns
+        .iter()
         .filter_map(|pattern| {
             regex::Regex::new(pattern).ok().or_else(|| {
-                eprintln!("[django-bolt] Warning: Invalid CORS origin regex pattern: {}", pattern);
+                eprintln!(
+                    "[django-bolt] Warning: Invalid CORS origin regex pattern: {}",
+                    pattern
+                );
                 None
             })
         })
         .collect();
 
     // Inject global CORS config into routes that don't have explicit config
-    if let (Some(ref global_config), Some(metadata_temp)) = (&global_cors_config, ROUTE_METADATA_TEMP.get()) {
+    if let (Some(ref global_config), Some(metadata_temp)) =
+        (&global_cors_config, ROUTE_METADATA_TEMP.get())
+    {
         // Clone the metadata HashMap to make it mutable
         let mut updated_metadata = metadata_temp.clone();
 
@@ -194,8 +219,8 @@ pub fn start_server_async(
             // Inject CORS if:
             // 1. Route doesn't have explicit cors_config
             // 2. CORS not skipped via @skip_middleware("cors")
-            let should_inject = route_meta.cors_config.is_none()
-                && !route_meta.skip.contains("cors");
+            let should_inject =
+                route_meta.cors_config.is_none() && !route_meta.skip.contains("cors");
 
             if should_inject {
                 route_meta.cors_config = Some(global_config.clone());
@@ -239,7 +264,7 @@ pub fn start_server_async(
                     let server = HttpServer::new(move || {
                         App::new()
                             .app_data(web::Data::new(app_state.clone()))
-                            .wrap(Compress::default())  // Always enabled, client-negotiated
+                            .wrap(Compress::default()) // Always enabled, client-negotiated
                             .default_service(web::route().to(handle_request))
                     })
                     .keep_alive(KeepAlive::Os)
@@ -251,31 +276,48 @@ pub fn start_server_async(
                         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                         .unwrap_or(false);
 
+                    let backlog = std::env::var("DJANGO_BOLT_BACKLOG")
+                        .ok()
+                        .and_then(|s| s.parse::<i32>().ok())
+                        .unwrap_or(1024);
+
                     if use_reuse_port {
                         let ip: IpAddr = host.parse().unwrap_or(IpAddr::from([0, 0, 0, 0]));
-                        let domain = match ip { IpAddr::V4(_) => Domain::IPV4, IpAddr::V6(_) => Domain::IPV6 };
+                        let domain = match ip {
+                            IpAddr::V4(_) => Domain::IPV4,
+                            IpAddr::V6(_) => Domain::IPV6,
+                        };
                         let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))
                             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-                        socket.set_reuse_address(true)
+                        socket
+                            .set_reuse_address(true)
                             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
                         #[cfg(not(target_os = "windows"))]
-                        socket.set_reuse_port(true)
+                        socket
+                            .set_reuse_port(true)
                             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
                         let addr = SocketAddr::new(ip, port);
-                        socket.bind(&addr.into())
+                        socket
+                            .bind(&addr.into())
                             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-                        socket.listen(1024)
+                        socket
+                            .listen(backlog)
                             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
                         let listener: std::net::TcpListener = socket.into();
-                        listener.set_nonblocking(true)
+                        listener
+                            .set_nonblocking(true)
                             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-                        server.listen(listener)
+                        server
+                            .listen(listener)
                             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
-                            .run().await
+                            .run()
+                            .await
                     } else {
-                        server.bind((host.as_str(), port))
+                        server
+                            .bind((host.as_str(), port))
                             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
-                            .run().await
+                            .run()
+                            .await
                     }
                 }
             })
@@ -285,5 +327,3 @@ pub fn start_server_async(
 
     Ok(())
 }
-
-

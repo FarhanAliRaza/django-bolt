@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 
 pub struct Route {
     pub handler: Py<PyAny>,
-    pub handler_id: usize,  // Store handler_id for middleware metadata lookup
+    pub handler_id: usize, // Store handler_id for middleware metadata lookup
 }
 
 /// Convert FastAPI-style paths like /items/{id} and /files/{path:path}
@@ -118,7 +118,11 @@ impl Router {
         Ok(())
     }
 
-    pub fn find(&self, method: &str, path: &str) -> Option<(&Route, AHashMap<String, String>, usize)> {
+    pub fn find(
+        &self,
+        method: &str,
+        path: &str,
+    ) -> Option<(&Route, AHashMap<String, String>, usize)> {
         let router = match method {
             "GET" => &self.get,
             "POST" => &self.post,

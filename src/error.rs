@@ -1,21 +1,27 @@
-use actix_web::{HttpResponse, http::StatusCode};
+use actix_web::{http::StatusCode, HttpResponse};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 /// Extract error information from a Python HTTPException
-pub fn extract_http_exception(_py: Python, exc: &Bound<PyAny>) -> Option<(u16, String, Vec<(String, String)>, Option<Py<PyAny>>)> {
+pub fn extract_http_exception(
+    _py: Python,
+    exc: &Bound<PyAny>,
+) -> Option<(u16, String, Vec<(String, String)>, Option<Py<PyAny>>)> {
     // Try to extract HTTPException fields
-    let status_code: u16 = exc.getattr("status_code")
+    let status_code: u16 = exc
+        .getattr("status_code")
         .ok()
         .and_then(|v| v.extract().ok())
         .unwrap_or(500);
 
-    let detail: String = exc.getattr("detail")
+    let detail: String = exc
+        .getattr("detail")
         .ok()
         .and_then(|v| v.extract().ok())
         .unwrap_or_else(|| "Internal Server Error".to_string());
 
-    let headers: Vec<(String, String)> = exc.getattr("headers")
+    let headers: Vec<(String, String)> = exc
+        .getattr("headers")
         .ok()
         .and_then(|h| {
             if let Ok(dict) = h.downcast::<PyDict>() {
@@ -32,9 +38,10 @@ pub fn extract_http_exception(_py: Python, exc: &Bound<PyAny>) -> Option<(u16, S
         })
         .unwrap_or_else(|| Vec::new());
 
-    let extra: Option<Py<PyAny>> = exc.getattr("extra")
-        .ok()
-        .and_then(|e| if e.is_none() { None } else { Some(e.unbind()) });
+    let extra: Option<Py<PyAny>> =
+        exc.getattr("extra")
+            .ok()
+            .and_then(|e| if e.is_none() { None } else { Some(e.unbind()) });
 
     Some((status_code, detail, headers, extra))
 }
@@ -45,7 +52,8 @@ pub fn is_http_exception(py: Python, exc: &Bound<PyAny>) -> bool {
         let exceptions_module = py.import("django_bolt.exceptions")?;
         let http_exc_class = exceptions_module.getattr("HTTPException")?;
         exc.is_instance(&http_exc_class)
-    })().unwrap_or(false)
+    })()
+    .unwrap_or(false)
 }
 
 /// Check if a Python exception is a ValidationError
@@ -55,7 +63,8 @@ pub fn is_validation_error(py: Python, exc: &Bound<PyAny>) -> bool {
         let msgspec = py.import("msgspec")?;
         let val_err_class = msgspec.getattr("ValidationError")?;
         exc.is_instance(&val_err_class)
-    })().unwrap_or(false);
+    })()
+    .unwrap_or(false);
 
     if is_msgspec {
         return true;
@@ -66,7 +75,8 @@ pub fn is_validation_error(py: Python, exc: &Bound<PyAny>) -> bool {
         let exceptions_module = py.import("django_bolt.exceptions")?;
         let val_exc_class = exceptions_module.getattr("ValidationException")?;
         exc.is_instance(&val_exc_class)
-    })().unwrap_or(false)
+    })()
+    .unwrap_or(false)
 }
 
 /// Build an error response from exception information
@@ -120,7 +130,8 @@ pub fn handle_python_exception(
         let django_conf = py.import("django.conf")?;
         let settings = django_conf.getattr("settings")?;
         settings.getattr("DEBUG")?.extract::<bool>()
-    })().unwrap_or(debug);
+    })()
+    .unwrap_or(debug);
     // Check if it's an HTTPException
     if is_http_exception(py, exc) {
         if let Some((status_code, detail, headers, extra)) = extract_http_exception(py, exc) {
@@ -137,15 +148,20 @@ pub fn handle_python_exception(
             let response_tuple = handle_exception.call1((exc, debug))?;
 
             // Extract (status_code, headers, body)
-            if let Ok((status, headers, body)) = response_tuple.extract::<(u16, Vec<(String, String)>, Vec<u8>)>() {
-                let status_code = StatusCode::from_u16(status).unwrap_or(StatusCode::UNPROCESSABLE_ENTITY);
+            if let Ok((status, headers, body)) =
+                response_tuple.extract::<(u16, Vec<(String, String)>, Vec<u8>)>()
+            {
+                let status_code =
+                    StatusCode::from_u16(status).unwrap_or(StatusCode::UNPROCESSABLE_ENTITY);
                 let mut response = HttpResponse::build(status_code);
                 for (k, v) in headers {
                     response.append_header((k, v));
                 }
                 Ok(response.body(body))
             } else {
-                Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>("Invalid response format"))
+                Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                    "Invalid response format",
+                ))
             }
         })();
 
@@ -156,7 +172,10 @@ pub fn handle_python_exception(
 
     // Generic exception handling
     let exc_str = exc.to_string();
-    let exc_type = exc.get_type().name().ok()
+    let exc_type = exc
+        .get_type()
+        .name()
+        .ok()
         .map(|s| s.to_string())
         .unwrap_or_else(|| "Exception".to_string());
 
@@ -170,7 +189,8 @@ pub fn handle_python_exception(
             let tb = format_exception.call1((exc_type, exc, tb_attr))?;
             let tb_list: Vec<String> = tb.extract()?;
             Ok(tb_list.join(""))
-        })().unwrap_or_else(|_| "Traceback unavailable".to_string());
+        })()
+        .unwrap_or_else(|_| "Traceback unavailable".to_string());
 
         (
             format!("{}: {}", exc_type, exc_str),
@@ -181,14 +201,18 @@ pub fn handle_python_exception(
                 escape_json(&traceback),
                 escape_json(path),
                 escape_json(method),
-            ))
+            )),
         )
     } else {
         ("Internal Server Error".to_string(), None)
     };
 
     let body = if let Some(extra) = extra_info {
-        format!(r#"{{"detail":"{}","extra":{}}}"#, escape_json(&detail), extra)
+        format!(
+            r#"{{"detail":"{}","extra":{}}}"#,
+            escape_json(&detail),
+            extra
+        )
     } else {
         format!(r#"{{"detail":"{}"}}"#, escape_json(&detail))
     };

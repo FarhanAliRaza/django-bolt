@@ -109,10 +109,14 @@ impl CorsConfig {
 
         // Compile origin regex patterns at startup
         config.origin_regexes = origin_regexes.clone();
-        config.compiled_origin_regexes = origin_regexes.iter()
+        config.compiled_origin_regexes = origin_regexes
+            .iter()
             .filter_map(|pattern| {
                 Regex::new(pattern).ok().or_else(|| {
-                    eprintln!("[django-bolt] Warning: Invalid route-level CORS origin regex pattern: {}", pattern);
+                    eprintln!(
+                        "[django-bolt] Warning: Invalid route-level CORS origin regex pattern: {}",
+                        pattern
+                    );
                     None
                 })
             })
@@ -331,7 +335,10 @@ fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Co
 }
 
 /// Parse rate limiting configuration from middleware dict
-fn parse_rate_limit_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<RateLimitConfig> {
+fn parse_rate_limit_config(
+    dict: &HashMap<String, Py<PyAny>>,
+    py: Python,
+) -> Option<RateLimitConfig> {
     let mut config = RateLimitConfig::default();
 
     // Parse rps (required)

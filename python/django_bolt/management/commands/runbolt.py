@@ -22,7 +22,7 @@ class Command(BaseCommand):
             "--processes", type=int, default=1, help="Number of processes (default: 1)"
         )
         parser.add_argument(
-            "--workers", type=int, default=2, help="Workers per process (default: 2)"
+            "--workers", type=int, default=1, help="Workers per process (default: 1)"
         )
         parser.add_argument(
             "--no-admin",
@@ -33,6 +33,12 @@ class Command(BaseCommand):
             "--dev",
             action="store_true",
             help="Enable auto-reload on file changes (development mode)"
+        )
+        parser.add_argument(
+            "--backlog",
+            type=int,
+            default=1024,
+            help="Socket listen backlog size (default: 1024)"
         )
 
     def handle(self, *args, **options):
@@ -246,9 +252,10 @@ class Command(BaseCommand):
         else:
             self.stdout.write(self.style.SUCCESS(f"[django-bolt] Starting server on http://{options['host']}:{options['port']}"))
             self.stdout.write(f"[django-bolt] Workers: {options['workers']}, Processes: {options['processes']}")
-        # Set environment variable for Rust to read worker count
+        # Set environment variable for Rust to read worker count and backlog
         import os
         os.environ['DJANGO_BOLT_WORKERS'] = str(options['workers'])
+        os.environ['DJANGO_BOLT_BACKLOG'] = str(options['backlog'])
 
         # Determine compression config (server-level in Actix)
         # Priority: Django setting > first API with compression config

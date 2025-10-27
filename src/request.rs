@@ -11,7 +11,7 @@ pub struct PyRequest {
     pub query_params: AHashMap<String, String>,
     pub headers: AHashMap<String, String>,
     pub cookies: AHashMap<String, String>,
-    pub context: Option<Py<PyDict>>,  // Middleware context data
+    pub context: Option<Py<PyDict>>, // Middleware context data
 }
 
 #[pymethods]
@@ -35,7 +35,7 @@ impl PyRequest {
     fn context<'py>(&self, py: Python<'py>) -> Py<PyAny> {
         match &self.context {
             Some(ctx) => ctx.clone_ref(py).into_any(),
-            None => py.None()
+            None => py.None(),
         }
     }
 
@@ -75,8 +75,8 @@ impl PyRequest {
             }
             "auth" | "context" => match &self.context {
                 Some(ctx) => ctx.clone_ref(py).into_any(),
-                None => default.unwrap_or_else(|| py.None())
-            }
+                None => default.unwrap_or_else(|| py.None()),
+            },
             _ => default.unwrap_or_else(|| py.None()),
         }
     }
@@ -116,7 +116,7 @@ impl PyRequest {
             }
             "context" => Ok(match &self.context {
                 Some(ctx) => ctx.clone_ref(py).into_any(),
-                None => py.None()
+                None => py.None(),
             }),
             _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
         }

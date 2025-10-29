@@ -75,8 +75,18 @@ pub fn start_server_async(
     pyo3_async_runtimes::tokio::init(tokio::runtime::Builder::new_multi_thread());
 
     let loop_obj: Py<PyAny> = {
-        let asyncio = py.import("asyncio")?;
-        let ev = asyncio.call_method0("new_event_loop")?;
+        // Try to use uvloop if available (2-4x faster than asyncio)
+        let ev = match py.import("uvloop") {
+            Ok(uvloop) => {
+                // uvloop available - use it for better performance
+                uvloop.call_method0("new_event_loop")?
+            }
+            Err(_) => {
+                // uvloop not available - fall back to standard asyncio
+                let asyncio = py.import("asyncio")?;
+                asyncio.call_method0("new_event_loop")?
+            }
+        };
         let locals = pyo3_async_runtimes::TaskLocals::new(ev.clone()).copy_context(py)?;
         let _ = TASK_LOCALS.set(locals);
         ev.unbind().into()
@@ -260,14 +270,22 @@ pub fn start_server_async(
                     .and_then(|s| s.parse::<usize>().ok())
                     .filter(|&w| w >= 1)
                     .unwrap_or(2);
+
+                // Read HTTP keep-alive configuration from environment
+                let keep_alive = std::env::var("DJANGO_BOLT_KEEP_ALIVE")
+                    .ok()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(|seconds| KeepAlive::Timeout(std::time::Duration::from_secs(seconds)))
+                    .unwrap_or(KeepAlive::Os);
+
                 {
                     let server = HttpServer::new(move || {
                         App::new()
                             .app_data(web::Data::new(app_state.clone()))
-                            .wrap(Compress::default()) // Always enabled, client-negotiated
+                            // .wrap(Compress::default()) // Always enabled, client-negotiated
                             .default_service(web::route().to(handle_request))
                     })
-                    .keep_alive(KeepAlive::Os)
+                    .keep_alive(keep_alive)
                     .client_request_timeout(std::time::Duration::from_secs(0))
                     .workers(workers);
 
@@ -281,44 +299,42 @@ pub fn start_server_async(
                         .and_then(|s| s.parse::<i32>().ok())
                         .unwrap_or(1024);
 
+                    // Always use socket2 for consistent backlog control
+                    let ip: IpAddr = host.parse().unwrap_or(IpAddr::from([0, 0, 0, 0]));
+                    let domain = match ip {
+                        IpAddr::V4(_) => Domain::IPV4,
+                        IpAddr::V6(_) => Domain::IPV6,
+                    };
+                    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                    socket
+                        .set_reuse_address(true)
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+                    // Only set SO_REUSEPORT when explicitly requested (multi-process mode)
+                    #[cfg(not(target_os = "windows"))]
                     if use_reuse_port {
-                        let ip: IpAddr = host.parse().unwrap_or(IpAddr::from([0, 0, 0, 0]));
-                        let domain = match ip {
-                            IpAddr::V4(_) => Domain::IPV4,
-                            IpAddr::V6(_) => Domain::IPV6,
-                        };
-                        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-                        socket
-                            .set_reuse_address(true)
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-                        #[cfg(not(target_os = "windows"))]
                         socket
                             .set_reuse_port(true)
                             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-                        let addr = SocketAddr::new(ip, port);
-                        socket
-                            .bind(&addr.into())
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-                        socket
-                            .listen(backlog)
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-                        let listener: std::net::TcpListener = socket.into();
-                        listener
-                            .set_nonblocking(true)
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-                        server
-                            .listen(listener)
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
-                            .run()
-                            .await
-                    } else {
-                        server
-                            .bind((host.as_str(), port))
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
-                            .run()
-                            .await
                     }
+
+                    let addr = SocketAddr::new(ip, port);
+                    socket
+                        .bind(&addr.into())
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                    socket
+                        .listen(backlog)
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                    let listener: std::net::TcpListener = socket.into();
+                    listener
+                        .set_nonblocking(true)
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                    server
+                        .listen(listener)
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+                        .run()
+                        .await
                 }
             })
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))

@@ -25,8 +25,6 @@ from django_bolt.middleware import no_compress, cors
 api = BoltAPI()
 
 
-register_health_checks(api)
-
 
 class Item(msgspec.Struct):
     name: str
@@ -35,6 +33,13 @@ class Item(msgspec.Struct):
 
 
 import test_data
+
+    
+@api.get("/health")
+async def health_check():
+    return {"status": "healthy", "timestamp": time.time()}
+
+
 
 @api.get("/", tags=["root"], summary="summary", description="description")
 @cors()  # Uses global CORS_ALLOWED_ORIGINS from Django settings
@@ -76,7 +81,6 @@ class BenchPayload(msgspec.Struct):
     title: str
     count: int
     items: List[Item]
-
 
 @api.post("/bench/parse")
 async def bench_parse(req: Request, payload: BenchPayload):

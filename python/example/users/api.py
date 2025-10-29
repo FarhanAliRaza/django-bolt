@@ -57,7 +57,28 @@ async def users_root():
 
 @api.get("/full10")
 async def list_full_10() -> List[UserFull]:
-    # Optimized: only fetch needed fields instead of all()
+    
+    
+    
+    user = User.objects.filter(asdf=12)
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     return User.objects.only("id", "username", "email", "first_name", "last_name", "is_active")[:10]
 
 

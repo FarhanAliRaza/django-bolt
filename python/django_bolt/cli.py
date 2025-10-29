@@ -4,6 +4,7 @@ from pathlib import Path
 import click
 
 from .api import BoltAPI
+from ._devtypes.cli import types as types_group
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -11,6 +12,7 @@ def main():
     """Django-Bolt command line interface."""
 
 
+main.add_command(types_group, name="types")
 @main.command()
 def init():
     """Initialize Django-Bolt in an existing Django project."""

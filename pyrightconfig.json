@@ -1,0 +1,10 @@
+{
+  "stubPath": "stubs",
+  "extraPaths": ["python", "python/example"],
+  "venvPath": ".",
+  "venv": ".venv",
+  "typeCheckingMode": "standard",
+  "reportUnknownMemberType": true,
+  "reportUnknownArgumentType": true,
+  "reportMissingImports": false
+}

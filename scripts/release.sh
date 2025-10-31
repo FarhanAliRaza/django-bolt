@@ -154,8 +154,13 @@ if [ "$DRY_RUN" = true ]; then
     info "Would run: git commit -m 'Bump version to $VERSION'"
 else
     git add pyproject.toml Cargo.toml
-    git commit -m "Bump version to $VERSION"
-    success "Changes committed"
+    # Check if there are any changes staged
+    if git diff --cached --quiet; then
+        warning "No changes to commit (version already at $VERSION)"
+    else
+        git commit -m "Bump version to $VERSION"
+        success "Changes committed"
+    fi
 fi
 
 # Step 5: Create and push tag

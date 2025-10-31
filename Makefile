@@ -7,7 +7,7 @@ N ?= 10000
 P ?= 8
 WORKERS ?= 1
 
-.PHONY: build test-server test-server-bg kill bench clean orm-test setup-test-data seed-data orm-smoke compare-frameworks save-baseline test-py release
+.PHONY: build test-server test-server-bg kill bench clean orm-test setup-test-data seed-data orm-smoke compare-frameworks save-baseline test-py release delete-tag
 
 # Build Rust extension in release mode
 build:
@@ -115,3 +115,17 @@ release:
 	else \
 		./scripts/release.sh $(VERSION); \
 	fi
+
+# Delete git tag locally and remotely
+# Usage: make delete-tag TAG=v0.2.2
+delete-tag:
+	@if [ -z "$(TAG)" ]; then \
+		echo "Error: TAG is required"; \
+		echo "Usage: make delete-tag TAG=v0.2.2"; \
+		exit 1; \
+	fi
+	@echo "Deleting tag $(TAG) locally..."
+	@git tag -d $(TAG) || echo "Tag $(TAG) not found locally"
+	@echo "Deleting tag $(TAG) from remote..."
+	@git push origin :refs/tags/$(TAG) || echo "Tag $(TAG) not found on remote"
+	@echo "✅ Tag $(TAG) deleted successfully"

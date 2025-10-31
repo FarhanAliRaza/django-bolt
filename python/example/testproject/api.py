@@ -18,14 +18,46 @@ from django_bolt.exceptions import (
 )
 from django_bolt.health import register_health_checks, add_health_check
 from django_bolt.middleware import no_compress, cors
-
+from django_bolt import CompressionConfig
 
 # OpenAPI is enabled by default at /docs with Swagger UI
 # You can customize it by passing openapi_config:
+#
+# Example compression configurations:
+#
+# 1. Default compression (brotli with gzip fallback):
 api = BoltAPI()
+#
+# 2. Custom compression with specific settings:
+# api = BoltAPI(
+#     compression=CompressionConfig(
+#         backend="brotli",           # Primary backend: "brotli", "gzip", or "zstd"
+#         minimum_size=500,            # Don't compress responses smaller than this (bytes)
+#         gzip_fallback=True,          # Fall back to gzip if client doesn't support primary backend
+#     )
+# )
+#
+# 3. Gzip-only configuration:
+# api = BoltAPI(
+#     compression=CompressionConfig(
+#         backend="gzip",
+#         minimum_size=1000,
+#         gzip_fallback=False,         # No fallback needed for gzip
+#     )
+# )
+#
+# 4. Zstd compression with gzip fallback:
+# api = BoltAPI(
+#     compression=CompressionConfig(
+#         backend="zstd",
+#         minimum_size=2000,           # Only compress larger responses
+#         gzip_fallback=True,
+#     )
+# )
+
+# Using default compression configuration
 
 
-register_health_checks(api)
 
 
 class Item(msgspec.Struct):
@@ -35,6 +67,12 @@ class Item(msgspec.Struct):
 
 
 import test_data
+
+@api.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "healthy", "timestamp": time.time()}
+
 
 @api.get("/", tags=["root"], summary="summary", description="description")
 @cors()  # Uses global CORS_ALLOWED_ORIGINS from Django settings

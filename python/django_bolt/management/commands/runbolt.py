@@ -40,6 +40,12 @@ class Command(BaseCommand):
             default=1024,
             help="Socket listen backlog size (default: 1024)"
         )
+        parser.add_argument(
+            "--keep-alive",
+            type=int,
+            default=None,
+            help="HTTP keep-alive timeout in seconds (default: OS setting)"
+        )
 
     def handle(self, *args, **options):
         processes = options['processes']
@@ -252,10 +258,12 @@ class Command(BaseCommand):
         else:
             self.stdout.write(self.style.SUCCESS(f"[django-bolt] Starting server on http://{options['host']}:{options['port']}"))
             self.stdout.write(f"[django-bolt] Workers: {options['workers']}, Processes: {options['processes']}")
-        # Set environment variable for Rust to read worker count and backlog
+        # Set environment variable for Rust to read worker count, backlog, and keep-alive
         import os
         os.environ['DJANGO_BOLT_WORKERS'] = str(options['workers'])
         os.environ['DJANGO_BOLT_BACKLOG'] = str(options['backlog'])
+        if options.get('keep_alive') is not None:
+            os.environ['DJANGO_BOLT_KEEP_ALIVE'] = str(options['keep_alive'])
 
         # Determine compression config (server-level in Actix)
         # Priority: Django setting > first API with compression config

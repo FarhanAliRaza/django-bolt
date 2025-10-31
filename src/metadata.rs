@@ -175,6 +175,24 @@ impl Default for RateLimitConfig {
     }
 }
 
+/// Compression configuration parsed at startup
+#[derive(Debug, Clone)]
+pub struct CompressionConfig {
+    pub backend: String,        // "gzip", "brotli", "zstd"
+    pub minimum_size: usize,    // Minimum response size to compress (bytes)
+    pub gzip_fallback: bool,    // Fall back to gzip if backend not supported
+}
+
+impl Default for CompressionConfig {
+    fn default() -> Self {
+        CompressionConfig {
+            backend: "brotli".to_string(),
+            minimum_size: 500,
+            gzip_fallback: true,
+        }
+    }
+}
+
 /// Complete route metadata including middleware, auth, and guards
 #[derive(Debug, Clone)]
 pub struct RouteMetadata {

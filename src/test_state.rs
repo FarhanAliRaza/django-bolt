@@ -628,6 +628,7 @@ pub fn handle_actix_http_request(
                     rate_limit_config,
                     handler_id_opt,
                     should_skip_cors,
+                    should_skip_compression,
                     global_cors_origins,
                 ) = Python::attach(
                     |_py| -> (
@@ -635,10 +636,11 @@ pub fn handle_actix_http_request(
                         Option<crate::metadata::RateLimitConfig>,
                         Option<usize>,
                         bool,
+                        bool,
                         Vec<String>,
                     ) {
                         let Some(entry) = registry().get(&app_id) else {
-                            return (None, None, None, false, vec![]);
+                            return (None, None, None, false, false, vec![]);
                         };
                         let app = entry.read();
 
@@ -665,6 +667,8 @@ pub fn handle_actix_http_request(
                             if let Some(route_meta) = app.route_metadata.get(&handler_id) {
                                 // Check if CORS is skipped
                                 let skip_cors = route_meta.skip.contains("cors");
+                                // Check if compression is skipped
+                                let skip_compression = route_meta.skip.contains("compression");
 
                                 // Use parsed Rust configs directly
                                 let cors_cfg = route_meta.cors_config.clone();
@@ -675,11 +679,12 @@ pub fn handle_actix_http_request(
                                     rate_cfg,
                                     Some(handler_id),
                                     skip_cors,
+                                    skip_compression,
                                     global_origins,
                                 );
                             }
                         }
-                        (None, None, None, false, global_origins)
+                        (None, None, None, false, false, global_origins)
                     },
                 );
 
@@ -841,7 +846,12 @@ pub fn handle_actix_http_request(
                 });
 
                 match result {
-                    Ok((status_code, resp_headers, resp_body)) => {
+                    Ok((status_code, mut resp_headers, resp_body)) => {
+                        // Add Content-Encoding: identity header if compression should be skipped
+                        if should_skip_compression {
+                            resp_headers.push(("content-encoding".to_string(), "identity".to_string()));
+                        }
+
                         let mut response = actix_web::HttpResponse::build(
                             actix_web::http::StatusCode::from_u16(status_code)
                                 .unwrap_or(actix_web::http::StatusCode::OK),
@@ -929,7 +939,7 @@ pub fn handle_actix_http_request(
         // Create Actix test service with middleware
         let app = test::init_service(
             App::new()
-                .wrap(actix_web::middleware::Compress::default())
+                .wrap(crate::middleware::compression::CompressionMiddleware::new())
                 // CORS handled in handler closure (preflight + response headers)
                 // Rate limiting handled in handler closure (per-route state)
                 .default_service(web::route().to(handler)),

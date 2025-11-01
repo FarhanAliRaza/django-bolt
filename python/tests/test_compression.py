@@ -5,8 +5,7 @@ Tests both global compression configuration and per-route skip functionality.
 """
 import pytest
 from django_bolt import BoltAPI
-from django_bolt.compression import CompressionConfig
-from django_bolt.middleware import skip_middleware, no_compress
+from django_bolt.middleware import skip_middleware, no_compress, CompressionConfig
 from django_bolt.testing import TestClient
 
 

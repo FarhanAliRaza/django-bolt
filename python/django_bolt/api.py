@@ -8,17 +8,22 @@ from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_a
 
 from .bootstrap import ensure_django_ready
 from django_bolt import _core
+
+# Import local modules
 from .responses import StreamingResponse
 from .exceptions import HTTPException
 from .params import Param, Depends as DependsMarker
 from .typing import FieldDefinition
-
+from .middleware import CompressionConfig
+from .logging.middleware import create_logging_middleware, LoggingMiddleware
+from .exceptions import RequestValidationError, parse_msgspec_decode_error
 # Import modularized components
 from .binding import (
     coerce_to_response_type,
     coerce_to_response_type_async,
     convert_primitive,
     create_extractor,
+    get_msgspec_decoder
 )
 from .typing import is_msgspec_struct, is_optional, unwrap_optional
 from .request_parsing import parse_form_data
@@ -26,6 +31,18 @@ from .dependencies import resolve_dependency
 from .serialization import serialize_response
 from .middleware.compiler import compile_middleware_meta
 from .types import Request
+from .views import APIView, ViewSet
+from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
+from .decorators import ActionHandler
+from .error_handlers import handle_exception
+from .openapi.schema_generator import SchemaGenerator
+from .openapi import OpenAPIConfig, SwaggerRenderPlugin, RedocRenderPlugin, ScalarRenderPlugin, RapidocRenderPlugin, StoplightRenderPlugin, JsonRenderPlugin, YamlRenderPlugin
+from .openapi.routes import OpenAPIRouteRegistrar
+from .admin.routes import AdminRouteRegistrar
+from .admin.static_routes import StaticRouteRegistrar
+from .admin.admin_detection import detect_admin_url_prefix
+
+from . import _json
 
 Response = Tuple[int, List[Tuple[str, str]], bytes]
 
@@ -156,8 +173,7 @@ def extract_parameter_value(
             if not body_loaded:
                 body_bytes: bytes = request["body"]
                 if is_msgspec_struct(meta["body_struct_type"]):
-                    from .binding import get_msgspec_decoder
-                    from .exceptions import RequestValidationError, parse_msgspec_decode_error
+                
                     decoder = get_msgspec_decoder(meta["body_struct_type"])
                     try:
                         value = decoder.decode(body_bytes)
@@ -173,7 +189,7 @@ def extract_parameter_value(
                             body=body_bytes,
                         ) from e
                 else:
-                    from .exceptions import RequestValidationError, parse_msgspec_decode_error
+                    
                     try:
                         value = msgspec.json.decode(body_bytes, type=meta["body_struct_type"])
                     except msgspec.ValidationError:
@@ -230,11 +246,9 @@ class BoltAPI:
         if self.enable_logging:
             # Create logging middleware (actual logging setup happens at server startup)
             if logging_config is not None:
-                from .logging.middleware import LoggingMiddleware
                 self._logging_middleware = LoggingMiddleware(logging_config)
             else:
                 # Use default logging configuration
-                from .logging.middleware import create_logging_middleware
                 self._logging_middleware = create_logging_middleware()
 
         # Compression configuration
@@ -244,7 +258,6 @@ class BoltAPI:
             self.compression = None
         elif compression is None:
             # Not provided, use default
-            from .compression import CompressionConfig
             self.compression = CompressionConfig()
         else:
             # Custom config provided
@@ -253,7 +266,6 @@ class BoltAPI:
         # OpenAPI configuration - enabled by default with sensible defaults
         if openapi_config is None:
             # Create default OpenAPI config
-            from .openapi import OpenAPIConfig, SwaggerRenderPlugin, RedocRenderPlugin, ScalarRenderPlugin, RapidocRenderPlugin, StoplightRenderPlugin, JsonRenderPlugin, YamlRenderPlugin
             try:
                 # Try to get Django project name from settings
                 from django.conf import settings
@@ -420,7 +432,6 @@ class BoltAPI:
         Raises:
             ValueError: If view class doesn't implement any requested methods
         """
-        from .views import APIView
 
         def decorator(view_cls: type) -> type:
             # Validate that view_cls is an APIView subclass
@@ -538,8 +549,6 @@ class BoltAPI:
         Returns:
             Decorator function that registers the viewset
         """
-        from .views import ViewSet
-        from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
 
         def decorator(viewset_cls: type) -> type:
             # Validate that viewset_cls is a ViewSet subclass
@@ -627,7 +636,6 @@ class BoltAPI:
         """
         import inspect
         import types
-        from .decorators import ActionHandler
 
         # Get class-level auth and guards (if any)
         class_auth = getattr(view_cls, 'auth', None)
@@ -934,7 +942,6 @@ class BoltAPI:
     def _handle_http_exception(self, he: HTTPException) -> Response:
         """Handle HTTPException and return response."""
         try:
-            from . import _json
             body = _json.encode({"detail": he.detail})
             headers = [("content-type", "application/json")]
         except Exception:
@@ -948,9 +955,8 @@ class BoltAPI:
 
     def _handle_generic_exception(self, e: Exception, request: Dict[str, Any] = None) -> Response:
         """Handle generic exception using error_handlers module."""
-        from . import error_handlers
         # Use the error handler which respects Django DEBUG setting
-        return error_handlers.handle_exception(e, debug=None, request=request)  # debug will be checked dynamically
+        return handle_exception(e, debug=None, request=request)  # debug will be checked dynamically
 
     async def _dispatch(self, handler: Callable, request: Dict[str, Any], handler_id: int = None) -> Response:
         """Async dispatch that calls the handler and returns response tuple.
@@ -1034,7 +1040,6 @@ class BoltAPI:
             OpenAPI schema as dictionary.
         """
         if self._openapi_schema is None:
-            from .openapi.schema_generator import SchemaGenerator
 
             generator = SchemaGenerator(self, self.openapi_config)
             openapi = generator.generate()
@@ -1047,7 +1052,6 @@ class BoltAPI:
 
         Delegates to OpenAPIRouteRegistrar for cleaner separation of concerns.
         """
-        from .openapi.routes import OpenAPIRouteRegistrar
 
         registrar = OpenAPIRouteRegistrar(self)
         registrar.register_routes()
@@ -1061,7 +1065,6 @@ class BoltAPI:
             host: Server hostname for ASGI scope
             port: Server port for ASGI scope
         """
-        from .admin.routes import AdminRouteRegistrar
 
         registrar = AdminRouteRegistrar(self)
         registrar.register_routes(host, port)
@@ -1071,7 +1074,6 @@ class BoltAPI:
 
         Delegates to StaticRouteRegistrar for cleaner separation of concerns.
         """
-        from .admin.static_routes import StaticRouteRegistrar
 
         registrar = StaticRouteRegistrar(self)
         registrar.register_routes()
@@ -1089,7 +1091,6 @@ class BoltAPI:
         if self.enable_admin:
             self._register_admin_routes(host, port)
             if self._admin_routes_registered:
-                from .admin.admin_detection import detect_admin_url_prefix
                 admin_prefix = detect_admin_url_prefix() or 'admin'
                 print(f"[django-bolt] Django admin available at http://{host}:{port}/{admin_prefix}/")
 

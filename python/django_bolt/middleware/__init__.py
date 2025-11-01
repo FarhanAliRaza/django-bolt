@@ -17,6 +17,7 @@ from .middleware import (
     CORSMiddleware,
     RateLimitMiddleware,
 )
+from .compression import CompressionConfig
 
 __all__ = [
     "Middleware",
@@ -29,4 +30,5 @@ __all__ = [
     "no_compress",
     "CORSMiddleware",
     "RateLimitMiddleware",
+    "CompressionConfig",
 ]

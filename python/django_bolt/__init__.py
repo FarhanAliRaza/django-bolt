@@ -1,6 +1,6 @@
 from .api import BoltAPI
 from .responses import Response, JSON, StreamingResponse
-from .compression import CompressionConfig
+from .middleware import CompressionConfig
 from .types import Request
 
 # Views module

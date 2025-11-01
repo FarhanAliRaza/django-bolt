@@ -533,3 +533,4 @@ uv run --with pytest pytest python/tests -s -vv
 - **Middleware compilation**: Python middleware config is compiled to Rust metadata at server startup
 - **Route autodiscovery**: Runs once at server startup, no hot-reload in production mode (use `--dev` for development)
 - **Multi-process**: Each process has its own Python interpreter and imports Django independently
+- never silently ignore the error or exception. At least we have print method there this happened. This create obscure errors .

@@ -366,25 +366,34 @@ class Command(BaseCommand):
 
     def import_api(self, dotted_path):
         """Import a BoltAPI instance from dotted path like 'myapp.api:api'"""
+        if ':' not in dotted_path:
+            return None
+
+        module_path, attr_name = dotted_path.split(':', 1)
+
         try:
-            if ':' not in dotted_path:
-                return None
-            
-            module_path, attr_name = dotted_path.split(':', 1)
             module = importlib.import_module(module_path)
-            
-            if not hasattr(module, attr_name):
+        except ModuleNotFoundError as e:
+            # Check if the error is for the target module itself (optional)
+            # or for a dependency within the module (fatal error)
+            if e.name == module_path or e.name == module_path.split('.')[0]:
+                # Target module doesn't exist - this is fine, api.py is optional
                 return None
-            
-            api = getattr(module, attr_name)
-            
-            # Verify it's a BoltAPI instance
-            if isinstance(api, BoltAPI):
-                return api
-            
-        except (ImportError, AttributeError, ValueError):
-            pass
-        
+            else:
+                # Module exists but has a missing dependency - let the original error bubble up
+                # This preserves the full traceback for debugging
+                raise
+
+        # If attribute doesn't exist, return None (not an error, just doesn't have that attr)
+        if not hasattr(module, attr_name):
+            return None
+
+        api = getattr(module, attr_name)
+
+        # Verify it's a BoltAPI instance
+        if isinstance(api, BoltAPI):
+            return api
+
         return None
 
     def merge_apis(self, apis):

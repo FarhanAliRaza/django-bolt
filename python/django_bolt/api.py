@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import msgspec
 import re
 import time
@@ -49,6 +50,9 @@ Response = Tuple[int, List[Tuple[str, str]], bytes]
 # Global registry for BoltAPI instances (used by autodiscovery)
 _BOLT_API_REGISTRY = []
 
+# Pre-compiled regex pattern for extracting path parameters
+_PATH_PARAM_REGEX = re.compile(r'\{(\w+)\}')
+
 
 def _extract_path_params(path: str) -> set[str]:
     """
@@ -58,7 +62,7 @@ def _extract_path_params(path: str) -> set[str]:
         "/users/{user_id}" -> {"user_id"}
         "/posts/{post_id}/comments/{comment_id}" -> {"post_id", "comment_id"}
     """
-    return set(re.findall(r'\{(\w+)\}', path))
+    return set(_PATH_PARAM_REGEX.findall(path))
 
 
 def extract_parameter_value(
@@ -981,7 +985,7 @@ class BoltAPI:
             logger = logging_middleware.logger
             should_time = False
             try:
-                if logger.isEnabledFor(__import__('logging').INFO):
+                if logger.isEnabledFor(logging.INFO):
                     should_time = True
             except Exception:
                 pass

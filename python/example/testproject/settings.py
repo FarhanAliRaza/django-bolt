@@ -23,7 +23,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-8l7jd)6zngu@-^(&lt=q3smdfx4rcuu9tp3&6&y)ovqm%y=20t'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = ["*"]
 
@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'users',
     'bench',
+    "core",
 ]
 
 MIDDLEWARE = [
@@ -182,27 +183,27 @@ if not DEBUG:
         "root": {"handlers": ["console"], "level": "ERROR"},
     }
 else:
+    pass
+
+    # LOGGING = {
+    #     "version": 1,
+    #     "disable_existing_loggers": False,
+    #     "formatters": {
+    #         "standard": {
+    #             "format": "%(levelname)s %(asctime)s %(name)s %(message)s",
+    #         },
+    #     },
+    #     "handlers": {
+    #         "console": {
+    #             "class": "logging.StreamHandler",
+    #             "formatter": "standard",
+    #         },
+    #     },
+    #     "loggers": {
+    #         "django": {"handlers": ["console"], "level": "INFO"},
+    #         "django.server": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    #     },
+    #     "root": {"handlers": ["console"], "level": "INFO"},
+    # }
     
-    
-    LOGGING = {
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "standard": {
-                "format": "%(levelname)s %(asctime)s %(name)s %(message)s",
-            },
-        },
-        "handlers": {
-            "console": {
-                "class": "logging.StreamHandler",
-                "formatter": "standard",
-            },
-        },
-        "loggers": {
-            "django": {"handlers": ["console"], "level": "INFO"},
-            "django.server": {"handlers": ["console"], "level": "INFO", "propagate": False},
-            "django_bolt": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        },
-        "root": {"handlers": ["console"], "level": "INFO"},
-    }
     

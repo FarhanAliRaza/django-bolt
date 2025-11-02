@@ -29,6 +29,32 @@ class LoggingMiddleware:
         self.config = config
         self.logger = config.get_logger()
 
+        # Cache logger state at initialization to avoid repeated isEnabledFor() checks per request
+        # This is a critical performance optimization (Litestar pattern)
+        self._logger_debug_enabled = self.logger.isEnabledFor(logging.DEBUG)
+        self._logger_info_enabled = self.logger.isEnabledFor(logging.INFO)
+        self._logger_warning_enabled = self.logger.isEnabledFor(logging.WARNING)
+        self._logger_error_enabled = self.logger.isEnabledFor(logging.ERROR)
+
+        # Determine if we need timing at all (avoid time.time() calls if not needed)
+        # Enable timing if:
+        # 1. "duration" field is requested in response logs
+        # 2. min_duration_ms is configured (slow-only logging)
+        self._needs_timing = (
+            "duration" in self.config.response_log_fields or
+            self.config.min_duration_ms is not None
+        )
+
+        # Determine if request/response logging is active (conditional processing)
+        self._request_logging_enabled = (
+            self._logger_debug_enabled and
+            len(self.config.request_log_fields) > 0
+        )
+        self._response_logging_enabled = (
+            (self._logger_info_enabled or self._logger_warning_enabled or self._logger_error_enabled) and
+            len(self.config.response_log_fields) > 0
+        )
+
     def obfuscate_headers(self, headers: Dict[str, str]) -> Dict[str, str]:
         """Obfuscate sensitive headers.
 
@@ -123,14 +149,15 @@ class LoggingMiddleware:
         Args:
             request: Request dictionary
         """
+        # Early exit if DEBUG logging disabled (use cached check - major performance win)
+        if not self._logger_debug_enabled:
+            return
+
         path = request.get("path", "")
         if not self.config.should_log_request(path):
             return
 
-        # Requests are always DEBUG level. Short-circuit if disabled.
-        if not self.logger.isEnabledFor(logging.DEBUG):
-            return
-
+        # Extract data only after passing all checks (avoid unnecessary work)
         data = self.extract_request_data(request)
 
         # Build log message from configured fields only
@@ -139,6 +166,18 @@ class LoggingMiddleware:
             message_parts.append(data["method"])
         if "path" in self.config.request_log_fields and "path" in data:
             message_parts.append(data["path"])
+
+        # Add query string if configured and present
+        if "query" in self.config.request_log_fields and "query" in data:
+            query_str = "&".join(f"{k}={v}" for k, v in data["query"].items())
+            if query_str:
+                message_parts.append(f"?{query_str}")
+
+        # Add headers if configured and present
+        if "headers" in self.config.request_log_fields and "headers" in data:
+            headers_str = " ".join(f"{k}:{v}" for k, v in list(data["headers"].items())[:3])  # First 3 headers
+            if headers_str:
+                message_parts.append(f"[{headers_str}...]")
 
         message = " ".join(message_parts) if message_parts else f"Request: {path}"
 
@@ -164,31 +203,42 @@ class LoggingMiddleware:
         if not self.config.should_log_request(path, status_code):
             return
 
-        # Determine log level early and short-circuit if disabled for success path
+        # Determine log level with early exit using cached checks (major performance optimization)
         if status_code >= 500:
+            # Server errors: ERROR level
+            if not self._logger_error_enabled:
+                return
             log_level = logging.ERROR
         elif status_code >= 400:
+            # Client errors: WARNING level
+            if not self._logger_warning_enabled:
+                return
             log_level = logging.WARNING
         else:
-            log_level = logging.INFO
-
-        # For successful responses, apply gating: level check, sampling, and slow-only
-        if status_code < 400:
-            if not self.logger.isEnabledFor(log_level):
+            # Success responses: INFO level with additional filtering
+            if not self._logger_info_enabled:
                 return
-            # Sampling gate
+
+            # Sampling gate (only for successful responses)
             if self.config.sample_rate is not None:
                 try:
                     if random.random() > float(self.config.sample_rate):
                         return
                 except Exception:
                     pass
-            # Slow-only gate
+
+            # Slow-only gate (only for successful responses)
             if self.config.min_duration_ms is not None:
+                # Skip if duration not available (timing disabled)
+                if duration is None:
+                    return
                 duration_ms_check = (duration * 1000.0)
                 if duration_ms_check < float(self.config.min_duration_ms):
                     return
 
+            log_level = logging.INFO
+
+        # NOW build data dict (after all early exits to avoid unnecessary work)
         data = {}
         message_parts = []
 
@@ -208,8 +258,8 @@ class LoggingMiddleware:
             data["status_code"] = status_code
             message_parts.append(f"{status_code}")
 
-        # Only include duration if configured
-        if "duration" in self.config.response_log_fields:
+        # Only include duration if configured and available
+        if "duration" in self.config.response_log_fields and duration is not None:
             duration_ms = round(duration * 1000, 2)
             data["duration_ms"] = duration_ms
             message_parts.append(f"({duration_ms}ms)")

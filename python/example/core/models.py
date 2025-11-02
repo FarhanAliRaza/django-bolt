@@ -1,0 +1,22 @@
+from random import choice
+from django.db import models
+
+# Create your models here.
+
+
+class Blog(models.Model):
+    
+    
+    
+    name = models.CharField(max_length=255)
+    
+    body = models.TextField()
+    
+    statuses = (
+        ("published", "published"),
+        ("draft", "draft"),
+    )
+    
+    status = models.CharField(choices=statuses, max_length=100, default="draft")
+    
+    

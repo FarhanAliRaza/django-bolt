@@ -970,33 +970,16 @@ class BoltAPI:
             request: The request dictionary
             handler_id: Handler ID to lookup original API (for merged APIs)
         """
-        # For merged APIs, use the original API's logging middleware
-        # This preserves per-API logging, auth, and middleware config (Litestar-style)
+        # For merged APIs, preserve per-API logging middleware for exception logging only
+        # (Request/response logging now happens in Rust for maximum performance)
         logging_middleware = self._logging_middleware
         if handler_id is not None and hasattr(self, '_handler_api_map'):
             original_api = self._handler_api_map.get(handler_id)
             if original_api and original_api._logging_middleware:
                 logging_middleware = original_api._logging_middleware
 
-        # Start timing only if we might log
-        start_time = None
-        if logging_middleware:
-            # Determine if INFO logs are enabled or a slow-only threshold exists
-            logger = logging_middleware.logger
-            should_time = False
-            try:
-                if logger.isEnabledFor(logging.INFO):
-                    should_time = True
-            except Exception:
-                pass
-            if not should_time:
-                # If slow-only is configured, we still need timing
-                should_time = bool(getattr(logging_middleware.config, 'min_duration_ms', None))
-            if should_time:
-                start_time = time.time()
-
-            # Log request if logging enabled (DEBUG-level guard happens inside)
-            logging_middleware.log_request(request)
+        # NOTE: Request/response logging moved to Rust (handler.rs) for 2-3x performance improvement
+        # Timing and logging now happen at the Rust layer with zero GIL overhead
 
         try:
             meta = self._handler_meta.get(handler)
@@ -1015,23 +998,12 @@ class BoltAPI:
             # Serialize response
             response = await serialize_response(result, meta)
 
-            # Log response if logging enabled
-            if logging_middleware and start_time is not None:
-                duration = time.time() - start_time
-                status_code = response[0] if isinstance(response, tuple) else 200
-                logging_middleware.log_response(request, status_code, duration)
-
             return response
 
         except HTTPException as he:
-            # Log exception if logging enabled
-            if logging_middleware and start_time is not None:
-                duration = time.time() - start_time
-                logging_middleware.log_response(request, he.status_code, duration)
-
             return self._handle_http_exception(he)
         except Exception as e:
-            # Log exception if logging enabled
+            # Keep exception logging in Python (needs Django context and traceback formatting)
             if logging_middleware:
                 logging_middleware.log_exception(request, e, exc_info=True)
 
@@ -1134,5 +1106,17 @@ class BoltAPI:
         if self.compression is not None:
             compression_config = self.compression.to_rust_config()
 
+        # Get logging config for Rust-native logging (high performance, zero GIL overhead)
+        logging_config = None
+        if self._logging_middleware:
+            config = self._logging_middleware.config
+            logging_config = {
+                "enabled": True,
+                "log_level": config.log_level,
+                "skip_paths": list(config.skip_paths),
+                "sample_rate": config.sample_rate,
+                "min_duration_ms": config.min_duration_ms,
+            }
+
         # Start async server
-        _core.start_server_async(self._dispatch, host, port, compression_config)
+        _core.start_server_async(self._dispatch, host, port, compression_config, logging_config)

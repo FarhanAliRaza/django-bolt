@@ -6,11 +6,13 @@ use futures_util::stream;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyTuple};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
 use crate::direct_stream;
 use crate::error;
+use crate::logging;
 use crate::metadata::CorsConfig;
 use crate::middleware;
 use crate::middleware::auth::populate_auth_context;
@@ -347,6 +349,9 @@ pub async fn handle_request(
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
 
+    // Start timing for logging (zero-cost if logging disabled)
+    let request_start = Instant::now();
+
     // Single GIL acquisition for all Python operations
     let fut = match Python::attach(|py| -> PyResult<_> {
         // Clone Python objects
@@ -603,6 +608,12 @@ pub async fn handle_request(
                         }
                     }
 
+                    // Log response after it's fully built (correct timing + ordering)
+                    if let Some(ref log_config) = state.log_config {
+                        let duration = request_start.elapsed();
+                        logging::log_response(&method_clone, &path_clone, status_code, duration, log_config);
+                    }
+
                     return response;
                 }
             } else {
@@ -727,6 +738,13 @@ pub async fn handle_request(
                                     add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
                             }
                         }
+
+                        // Log response after it's fully built (correct timing + ordering)
+                        if let Some(ref log_config) = state.log_config {
+                            let duration = request_start.elapsed();
+                            logging::log_response(&method_clone, &path_clone, status_code, duration, log_config);
+                        }
+
                         return response;
                     }
                 }
@@ -745,6 +763,12 @@ pub async fn handle_request(
                         .getattr("status_code")
                         .and_then(|v| v.extract())
                         .unwrap_or(200);
+
+                    // Log streaming response
+                    if let Some(ref log_config) = state.log_config {
+                        let duration = request_start.elapsed();
+                        logging::log_response(&method_clone, &path_clone, status_code, duration, log_config);
+                    }
                     let mut headers: Vec<(String, String)> = Vec::new();
                     if let Ok(hobj) = obj.getattr("headers") {
                         if let Ok(hdict) = hobj.downcast::<PyDict>() {
@@ -935,6 +959,12 @@ pub async fn handle_request(
             }
         }
         Err(e) => {
+            // Log error response
+            if let Some(ref log_config) = state.log_config {
+                let duration = request_start.elapsed();
+                logging::log_response(&method_clone, &path_clone, 500, duration, log_config);
+            }
+
             // Use new error handler for Python exceptions during handler execution
             return Python::attach(|py| {
                 // Convert PyErr to exception instance

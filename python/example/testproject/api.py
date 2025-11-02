@@ -1,3 +1,4 @@
+import logging
 from typing import Optional, List, Annotated
 from django_bolt.types import Request
 import msgspec
@@ -73,13 +74,15 @@ async def health():
     """Health check endpoint."""
     return {"status": "healthy", "timestamp": time.time()}
 
-
+log = logging.getLogger(__name__)
 @api.get("/", tags=["root"], summary="summary", description="description")
 @cors()  # Uses global CORS_ALLOWED_ORIGINS from Django settings
 async def read_root():
     """
     Endpoint that returns a simple "Hello World" dictionary.
     """
+    # Use logging instead of print for proper ordering with access logs
+    log.info("hello world")
     return {"message": "Hello World"}
 
 

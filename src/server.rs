@@ -7,6 +7,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
+use crate::logging::LogConfig;
 use crate::middleware::compression::CompressionMiddleware;
 use crate::handler::handle_request;
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
@@ -66,6 +67,7 @@ pub fn start_server_async(
     host: String,
     port: u16,
     compression_config: Option<Py<PyAny>>,
+    logging_config: Option<Py<PyAny>>,
 ) -> PyResult<()> {
     if GLOBAL_ROUTER.get().is_none() {
         return Err(pyo3::exceptions::PyRuntimeError::new_err(
@@ -275,6 +277,53 @@ pub fn start_server_async(
         })
     });
 
+    // Parse logging configuration from Python (Rust-native logging for max performance)
+    let log_config = logging_config.and_then(|config_py| {
+        Python::attach(|py| {
+            let config_obj = config_py.bind(py);
+
+            // Extract logging settings from Python dict
+            let enabled = config_obj
+                .get_item("enabled")
+                .ok()?
+                .extract::<bool>()
+                .ok()?;
+
+            if !enabled {
+                return None;
+            }
+
+            let log_level = config_obj
+                .get_item("log_level")
+                .ok()?
+                .extract::<String>()
+                .ok()?;
+
+            let skip_paths = config_obj
+                .get_item("skip_paths")
+                .ok()?
+                .extract::<Vec<String>>()
+                .ok()?;
+
+            let sample_rate = config_obj
+                .get_item("sample_rate")
+                .ok()
+                .and_then(|v| v.extract::<f32>().ok());
+
+            let min_duration_ms = config_obj
+                .get_item("min_duration_ms")
+                .ok()
+                .and_then(|v| v.extract::<u32>().ok());
+
+            Some(Arc::new(LogConfig::new(
+                &log_level,
+                skip_paths,
+                sample_rate,
+                min_duration_ms,
+            )))
+        })
+    });
+
     let app_state = Arc::new(AppState {
         dispatch: dispatch.into(),
         debug,
@@ -282,6 +331,7 @@ pub fn start_server_async(
         global_cors_config,
         cors_origin_regexes,
         global_compression_config: global_compression_config.clone(),
+        log_config,
     });
 
     py.detach(|| {

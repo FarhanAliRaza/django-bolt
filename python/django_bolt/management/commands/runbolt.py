@@ -46,6 +46,13 @@ class Command(BaseCommand):
             default=None,
             help="HTTP keep-alive timeout in seconds (default: OS setting)"
         )
+        parser.add_argument(
+            "--logging-level",
+            type=str,
+            default="INFO",
+            choices=["DEBUG", "INFO", "WARNING", "ERROR", "OFF"],
+            help="Logging level for HTTP requests/responses (default: INFO)"
+        )
 
     def handle(self, *args, **options):
         processes = options['processes']
@@ -151,6 +158,14 @@ class Command(BaseCommand):
     
     def start_single_process(self, options, process_id=None, dev_mode=False):
         """Start a single process server"""
+        # Force unbuffered Python output for correct log ordering
+        # This ensures Python print() statements flush immediately
+        import sys
+        import os
+        os.environ['PYTHONUNBUFFERED'] = '1'
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+
         # Setup Django logging once at server startup (one-shot, respects existing LOGGING)
         from django_bolt.logging.config import setup_django_logging
         setup_django_logging()
@@ -279,8 +294,19 @@ class Command(BaseCommand):
                     compression_config = api.compression.to_rust_config()
                     break
 
+        # Get logging config for Rust-native logging (high performance, zero GIL overhead)
+        # Use CLI flag for log level (ignore Python logging config)
+        log_level = options.get('logging_level', 'INFO')
+        logging_config = {
+            "enabled": log_level != "OFF",
+            "log_level": log_level,
+            "skip_paths": ["/health", "/ready", "/metrics"],
+            "sample_rate": None,
+            "min_duration_ms": None,
+        }
+
         # Start the server
-        _core.start_server_async(merged_api._dispatch, options["host"], options["port"], compression_config)
+        _core.start_server_async(merged_api._dispatch, options["host"], options["port"], compression_config, logging_config)
 
     def autodiscover_apis(self):
         """Discover BoltAPI instances from installed apps.

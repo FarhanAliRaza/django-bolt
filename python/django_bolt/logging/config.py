@@ -187,6 +187,9 @@ def get_default_logging_config() -> LoggingConfig:
     settings_level = None
     settings_sample = None
     settings_slow_ms = None
+    settings_request_fields = None
+    settings_response_fields = None
+
     try:
         from django.conf import settings
         if settings.configured:
@@ -195,6 +198,8 @@ def get_default_logging_config() -> LoggingConfig:
             settings_level = getattr(settings, "DJANGO_BOLT_LOG_LEVEL", None)
             settings_sample = getattr(settings, "DJANGO_BOLT_LOG_SAMPLE", None)
             settings_slow_ms = getattr(settings, "DJANGO_BOLT_LOG_SLOW_MS", None)
+            settings_request_fields = getattr(settings, "DJANGO_BOLT_LOG_REQUEST_FIELDS", None)
+            settings_response_fields = getattr(settings, "DJANGO_BOLT_LOG_RESPONSE_FIELDS", None)
             # Default base level by DEBUG
             log_level = "DEBUG" if debug else "WARNING"
     except (ImportError, AttributeError, Exception):
@@ -225,10 +230,27 @@ def get_default_logging_config() -> LoggingConfig:
         if not debug:
             min_duration_ms = 250
 
+    # Parse request/response log fields from Django settings
+    request_log_fields = {"method", "path", "status_code"}  # Default
+    if settings_request_fields is not None:
+        try:
+            request_log_fields = set(settings_request_fields)
+        except Exception:
+            pass
+
+    response_log_fields = {"status_code"}  # Default (no duration for max performance)
+    if settings_response_fields is not None:
+        try:
+            response_log_fields = set(settings_response_fields)
+        except Exception:
+            pass
+
     return LoggingConfig(
         log_level=log_level,
         sample_rate=sample_rate,
         min_duration_ms=min_duration_ms,
+        request_log_fields=request_log_fields,
+        response_log_fields=response_log_fields,
     )
 
 
@@ -253,7 +275,7 @@ def _ensure_queue_logging(base_level: str) -> QueueHandler:
         console_handler.setLevel(base_level)
         console_handler.setFormatter(
             logging.Formatter(
-                fmt="%(levelname)s - %(asctime)s - %(name)s - %(message)s",
+                fmt="%(levelname)s - %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S",
             )
         )

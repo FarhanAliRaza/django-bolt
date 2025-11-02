@@ -4,6 +4,7 @@ mod direct_stream;
 mod error;
 mod handler;
 mod json;
+mod logging;
 mod metadata;
 mod middleware;
 mod permissions;

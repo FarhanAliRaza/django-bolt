@@ -533,6 +533,7 @@ uv run --with pytest pytest python/tests -s -vv
 - **Middleware compilation**: Python middleware config is compiled to Rust metadata at server startup
 - **Route autodiscovery**: Runs once at server startup, no hot-reload in production mode (use `--dev` for development)
 - **Multi-process**: Each process has its own Python interpreter and imports Django independently
-- never silently ignore the error or exception. At least we have print method there this happened. This create obscure errors .
+- never silently ignore the error or exception. At least we have print method about this happened. This create obscure errors .
 - only add tests that test actual functionality and that test must fail when that code is changed or removed
-- always try to use from __future__ import annotations instead of string annotations
+- always try to use from **future** import annotations instead of string annotations
+- imports should always be on top

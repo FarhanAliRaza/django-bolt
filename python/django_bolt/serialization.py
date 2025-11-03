@@ -1,15 +1,19 @@
 """Response serialization utilities."""
+from __future__ import annotations
 import mimetypes
 import msgspec
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from .responses import Response as ResponseClass, JSON, PlainText, HTML, Redirect, File, FileResponse, StreamingResponse
 from .binding import coerce_to_response_type_async
 from . import _json
 
+if TYPE_CHECKING:
+    from .typing import HandlerMetadata
+
 ResponseTuple = Tuple[int, List[Tuple[str, str]], bytes]
 
 
-async def serialize_response(result: Any, meta: Dict[str, Any]) -> ResponseTuple:
+async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTuple:
     """Serialize handler result to HTTP response."""
     response_tp = meta.get("response_type")
 
@@ -27,7 +31,7 @@ async def serialize_response(result: Any, meta: Dict[str, Any]) -> ResponseTuple
         return await serialize_json_data(result, response_tp, meta)
     # Common: JSON wrapper
     elif isinstance(result, JSON):
-        return await serialize_json_response(result, response_tp)
+        return await serialize_json_response(result, response_tp, meta)
     # Common: Streaming responses
     elif isinstance(result, StreamingResponse):
         return result
@@ -49,13 +53,13 @@ async def serialize_response(result: Any, meta: Dict[str, Any]) -> ResponseTuple
     elif isinstance(result, FileResponse):
         return serialize_file_streaming_response(result)
     elif isinstance(result, ResponseClass):
-        return await serialize_generic_response(result, response_tp)
+        return await serialize_generic_response(result, response_tp, meta)
     else:
         # Fallback to msgspec encoding
         return await serialize_json_data(result, response_tp, meta)
 
 
-async def serialize_generic_response(result: ResponseClass, response_tp: Optional[Any]) -> ResponseTuple:
+async def serialize_generic_response(result: ResponseClass, response_tp: Optional[Any], meta: "Optional[HandlerMetadata]" = None) -> ResponseTuple:
     """Serialize generic Response object with custom headers."""
     # Check if content-type is already provided in custom headers
     has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
@@ -71,7 +75,7 @@ async def serialize_generic_response(result: ResponseClass, response_tp: Optiona
 
     if response_tp is not None:
         try:
-            validated = await coerce_to_response_type_async(result.content, response_tp)
+            validated = await coerce_to_response_type_async(result.content, response_tp, meta=meta)
             data_bytes = _json.encode(validated) if result.media_type == "application/json" else result.to_bytes()
         except Exception as e:
             err = f"Response validation error: {e}"
@@ -82,7 +86,7 @@ async def serialize_generic_response(result: ResponseClass, response_tp: Optiona
     return int(result.status_code), headers, data_bytes
 
 
-async def serialize_json_response(result: JSON, response_tp: Optional[Any]) -> ResponseTuple:
+async def serialize_json_response(result: JSON, response_tp: Optional[Any], meta: "Optional[HandlerMetadata]" = None) -> ResponseTuple:
     """Serialize JSON response object."""
     # Check if content-type is already provided in custom headers
     has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
@@ -98,7 +102,7 @@ async def serialize_json_response(result: JSON, response_tp: Optional[Any]) -> R
 
     if response_tp is not None:
         try:
-            validated = await coerce_to_response_type_async(result.data, response_tp)
+            validated = await coerce_to_response_type_async(result.data, response_tp, meta=meta)
             data_bytes = _json.encode(validated)
         except Exception as e:
             err = f"Response validation error: {e}"
@@ -178,11 +182,11 @@ def serialize_file_streaming_response(result: FileResponse) -> ResponseTuple:
     return int(result.status_code), headers, b""
 
 
-async def serialize_json_data(result: Any, response_tp: Optional[Any], meta: Dict[str, Any]) -> ResponseTuple:
+async def serialize_json_data(result: Any, response_tp: Optional[Any], meta: "HandlerMetadata") -> ResponseTuple:
     """Serialize dict/list/other data as JSON."""
     if response_tp is not None:
         try:
-            validated = await coerce_to_response_type_async(result, response_tp)
+            validated = await coerce_to_response_type_async(result, response_tp, meta=meta)
             data = _json.encode(validated)
         except Exception as e:
             err = f"Response validation error: {e}"

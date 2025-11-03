@@ -14,7 +14,7 @@ from django_bolt import _core
 from .responses import StreamingResponse
 from .exceptions import HTTPException
 from .params import Param, Depends as DependsMarker
-from .typing import FieldDefinition
+from .typing import FieldDefinition, HandlerMetadata
 from .middleware import CompressionConfig
 from .logging.middleware import create_logging_middleware, LoggingMiddleware
 from .exceptions import RequestValidationError, parse_msgspec_decode_error
@@ -74,7 +74,7 @@ def extract_parameter_value(
     cookies_map: Dict[str, str],
     form_map: Dict[str, Any],
     files_map: Dict[str, Any],
-    meta: Dict[str, Any],
+    meta: HandlerMetadata,
     body_obj: Any,
     body_loaded: bool
 ) -> Tuple[Any, Any, bool]:
@@ -113,7 +113,7 @@ def extract_parameter_value(
     elif source == "query":
         if key in query_map:
             return convert_primitive(str(query_map[key]), annotation), body_obj, body_loaded
-        elif default is not inspect.Parameter.empty or is_optional(annotation):
+        elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise ValueError(f"Missing required query parameter: {key}")
 
@@ -121,32 +121,30 @@ def extract_parameter_value(
         lower_key = key.lower()
         if lower_key in headers_map:
             return convert_primitive(str(headers_map[lower_key]), annotation), body_obj, body_loaded
-        elif default is not inspect.Parameter.empty or is_optional(annotation):
+        elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise ValueError(f"Missing required header: {key}")
 
     elif source == "cookie":
         if key in cookies_map:
             return convert_primitive(str(cookies_map[key]), annotation), body_obj, body_loaded
-        elif default is not inspect.Parameter.empty or is_optional(annotation):
+        elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise ValueError(f"Missing required cookie: {key}")
 
     elif source == "form":
         if key in form_map:
             return convert_primitive(str(form_map[key]), annotation), body_obj, body_loaded
-        elif default is not inspect.Parameter.empty or is_optional(annotation):
+        elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise ValueError(f"Missing required form field: {key}")
 
     elif source == "file":
         if key in files_map:
             file_info = files_map[key]
-            # Extract appropriate value based on annotation type
-            unwrapped_type = unwrap_optional(annotation) if is_optional(annotation) else annotation
-
-            # Get the origin type (list, dict, etc.)
-            origin = get_origin(unwrapped_type)
+            # Use pre-computed type properties from FieldDefinition (no runtime introspection)
+            unwrapped_type = field.unwrapped_annotation
+            origin = field.origin
 
             if unwrapped_type is bytes:
                 # For bytes annotation, extract content from single file
@@ -167,7 +165,7 @@ def extract_parameter_value(
                     # List but annotation doesn't expect list - take first
                     return file_info[0], body_obj, body_loaded
                 return file_info, body_obj, body_loaded
-        elif default is not inspect.Parameter.empty or is_optional(annotation):
+        elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise ValueError(f"Missing required file: {key}")
 
@@ -211,13 +209,13 @@ def extract_parameter_value(
             else:
                 return body_obj, body_obj, body_loaded
         else:
-            if default is not inspect.Parameter.empty or is_optional(annotation):
+            if field.is_optional:
                 return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
             raise ValueError(f"Missing required parameter: {name}")
 
     else:
         # Unknown source
-        if default is not inspect.Parameter.empty or is_optional(annotation):
+        if field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise ValueError(f"Missing required parameter: {name}")
 
@@ -234,7 +232,7 @@ class BoltAPI:
     ) -> None:
         self._routes: List[Tuple[str, str, int, Callable]] = []
         self._handlers: Dict[int, Callable] = {}
-        self._handler_meta: Dict[Callable, Dict[str, Any]] = {}
+        self._handler_meta: Dict[Callable, HandlerMetadata] = {}
         self._handler_middleware: Dict[int, Dict[str, Any]] = {}  # Middleware metadata per handler
         self._next_handler_id = 0
         self.prefix = prefix.rstrip("/")  # Remove trailing slash
@@ -779,7 +777,7 @@ class BoltAPI:
             return fn
         return decorator
 
-    def _compile_binder(self, fn: Callable, http_method: str = "", path: str = "") -> Dict[str, Any]:
+    def _compile_binder(self, fn: Callable, http_method: str = "", path: str = "") -> HandlerMetadata:
         """
         Compile parameter binding metadata for a handler function.
 
@@ -807,7 +805,7 @@ class BoltAPI:
         # Extract path parameters from route pattern
         path_params = _extract_path_params(path)
 
-        meta: Dict[str, Any] = {
+        meta: HandlerMetadata = {
             "sig": sig,
             "fields": [],
             "path_params": path_params,
@@ -882,6 +880,20 @@ class BoltAPI:
         if sig.return_annotation is not inspect._empty:
             meta["response_type"] = sig.return_annotation
 
+            # Pre-compute field names for QuerySet serialization (performance optimization)
+            # If response type is list[Struct], extract field names at registration time
+            # instead of doing runtime introspection on every request
+            origin = get_origin(sig.return_annotation)
+            from typing import List
+            if origin in (list, List):
+                args = get_args(sig.return_annotation)
+                if args:
+                    elem_type = args[0]
+                    if is_msgspec_struct(elem_type):
+                        # Extract field names from the struct's annotations
+                        fields = getattr(elem_type, "__annotations__", {})
+                        meta["response_field_names"] = list(fields.keys())
+
         meta["mode"] = "mixed"
 
         # Performance: Check if handler needs form/file parsing
@@ -891,7 +903,7 @@ class BoltAPI:
 
         return meta
 
-    async def _build_handler_arguments(self, meta: Dict[str, Any], request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+    async def _build_handler_arguments(self, meta: HandlerMetadata, request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
         """Build arguments for handler invocation."""
         args: List[Any] = []
         kwargs: Dict[str, Any] = {}

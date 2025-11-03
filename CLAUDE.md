@@ -534,3 +534,5 @@ uv run --with pytest pytest python/tests -s -vv
 - **Route autodiscovery**: Runs once at server startup, no hot-reload in production mode (use `--dev` for development)
 - **Multi-process**: Each process has its own Python interpreter and imports Django independently
 - never silently ignore the error or exception. At least we have print method there this happened. This create obscure errors .
+- only add tests that test actual functionality and that test must fail when that code is changed or removed
+- always try to use from __future__ import annotations instead of string annotations

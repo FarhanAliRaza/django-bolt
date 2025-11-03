@@ -9,10 +9,11 @@ from __future__ import annotations
 import inspect
 import msgspec
 from dataclasses import dataclass
-from typing import Any, get_origin, get_args, Union, Optional, List, Dict, Annotated
+from typing import Any, get_origin, get_args, Union, Optional, List, Dict, Annotated, TypedDict
 
 __all__ = [
     "FieldDefinition",
+    "HandlerMetadata",
     "is_msgspec_struct",
     "is_simple_type",
     "is_sequence_type",
@@ -20,6 +21,64 @@ __all__ = [
     "unwrap_optional",
     "infer_param_source",
 ]
+
+
+class HandlerMetadata(TypedDict, total=False):
+    """
+    Type-safe metadata dictionary for handler functions.
+
+    This structure is compiled once at route registration time and
+    contains all information needed for parameter binding, response
+    serialization, and OpenAPI documentation generation.
+    """
+
+    # Core function metadata
+    sig: inspect.Signature
+    """Function signature"""
+
+    fields: List[FieldDefinition]
+    """List of parameter field definitions"""
+
+    path_params: set[str]
+    """Set of path parameter names extracted from route pattern"""
+
+    http_method: str
+    """HTTP method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS)"""
+
+    mode: str
+    """Handler mode: 'request_only' or 'mixed'"""
+
+    # Body parameter metadata (for fast path optimization)
+    body_struct_param: str
+    """Name of the single body struct parameter (if present)"""
+
+    body_struct_type: Any
+    """Type of the body struct parameter"""
+
+    # Response metadata
+    response_type: Any
+    """Return type annotation from function signature"""
+
+    default_status_code: int
+    """Default HTTP status code for successful responses"""
+
+    # QuerySet serialization optimization (pre-computed at registration)
+    response_field_names: List[str]
+    """Pre-computed field names for QuerySet.values() call"""
+
+    # Performance optimizations
+    needs_form_parsing: bool
+    """Whether this handler needs form/multipart parsing (Form/File params)"""
+
+    # OpenAPI documentation metadata
+    openapi_tags: List[str]
+    """OpenAPI tags for grouping endpoints"""
+
+    openapi_summary: str
+    """Short summary for OpenAPI docs"""
+
+    openapi_description: str
+    """Detailed description for OpenAPI docs"""
 
 
 # Simple scalar types that map to query parameters
@@ -172,6 +231,7 @@ class FieldDefinition:
     _is_simple: Optional[bool] = None
     _is_struct: Optional[bool] = None
     _unwrapped: Optional[Any] = None
+    _origin: Optional[Any] = None
 
     @property
     def is_optional(self) -> bool:
@@ -211,6 +271,13 @@ class FieldDefinition:
         if self._unwrapped is None:
             object.__setattr__(self, "_unwrapped", unwrap_optional(self.annotation))
         return self._unwrapped
+
+    @property
+    def origin(self) -> Any:
+        """Get the origin type (list, dict, etc.) of the unwrapped annotation."""
+        if self._origin is None:
+            object.__setattr__(self, "_origin", get_origin(self.unwrapped_annotation))
+        return self._origin
 
     @property
     def field_alias(self) -> str:

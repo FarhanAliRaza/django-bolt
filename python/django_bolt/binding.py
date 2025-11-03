@@ -4,12 +4,16 @@ Parameter binding and extraction with pre-compiled extractors.
 This module provides high-performance parameter extraction using pre-compiled
 extractor functions that avoid runtime type checking.
 """
+from __future__ import annotations
+
+
 import inspect
 import msgspec
-from typing import Any, Dict, List, Tuple, Callable, Optional
-from functools import lru_cache
+from typing import Any, Dict, List, Tuple, Callable, Optional, TYPE_CHECKING, get_origin, get_args
+from asgiref.sync import sync_to_async
 
 from .typing import is_msgspec_struct, is_optional, unwrap_optional
+from .typing import HandlerMetadata
 
 __all__ = [
     "convert_primitive",
@@ -299,29 +303,53 @@ def create_extractor(field: Dict[str, Any]) -> Callable:
         return extract
 
 
-async def coerce_to_response_type_async(value: Any, annotation: Any) -> Any:
+async def coerce_to_response_type_async(value: Any, annotation: Any, meta: HandlerMetadata | None = None) -> Any:
     """
     Async version that handles Django QuerySets.
 
     Args:
         value: Value to coerce
         annotation: Target type annotation
+        meta: Handler metadata with pre-computed serialization info
 
     Returns:
         Coerced value
     """
-    # Check if value is a Django QuerySet
-    if hasattr(value, '_iterable_class') and hasattr(value, 'model'):
-        # It's a QuerySet - convert to list asynchronously
-        result = []
-        async for item in value:
-            result.append(item)
-        value = result
+    # Check if value is a QuerySet AND we have pre-computed field names
+    if meta and "response_field_names" in meta and hasattr(value, '_iterable_class') and hasattr(value, 'model'):
+        # Use pre-computed field names (computed at route registration time)
+        field_names = meta["response_field_names"]
 
-    return coerce_to_response_type(value, annotation)
+        # Call .values() to get a ValuesQuerySet
+        values_qs = value.values(*field_names)
+
+        # Convert QuerySet to list (this triggers SQL execution)
+        # Using sync_to_async(list) is MUCH faster than async for iteration
+        #
+        # Django's async for implementation (django/db/models/query.py:54-68):
+        #   - Uses GET_ITERATOR_CHUNK_SIZE = 100 (django/db/models/sql/constants.py:7)
+        #   - Calls sync_to_async for EACH chunk: `await sync_to_async(next_slice)(sync_generator)`
+        #   - For 10,000 items: 100 sync_to_async calls (~30-50ms overhead)
+        #   - For 100,000 items: 1000 sync_to_async calls (~300-500ms overhead)
+        #
+        # Our approach: 1 sync_to_async call total (~0.3ms overhead)
+        # Performance gain: 100-1000x fewer context switches
+        #
+        # Memory tradeoff:
+        #   - Paginated APIs (20-100 items/page): Trivial memory usage (~20-100KB)
+        #   - Small lists (<10K items): Acceptable memory usage (<10MB)
+        #   - Large unpaginated lists: Should use pagination or StreamingResponse + .iterator()
+        items = await sync_to_async(list)(values_qs)
+
+        # Let msgspec validate and convert entire list in one batch (much faster than N individual conversions)
+        result = msgspec.convert(items, annotation)
+
+        return result
+
+    return coerce_to_response_type(value, annotation, meta)
 
 
-def coerce_to_response_type(value: Any, annotation: Any) -> Any:
+def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata | None = None) -> Any:
     """
     Coerce arbitrary Python objects (including Django models) into the
     declared response type using msgspec.
@@ -334,30 +362,104 @@ def coerce_to_response_type(value: Any, annotation: Any) -> Any:
     Args:
         value: Value to coerce
         annotation: Target type annotation
+        meta: Handler metadata with pre-computed type info
 
     Returns:
         Coerced value
     """
-    from typing import get_origin, get_args, List
+    # Use pre-computed type information if available
+    if meta and "response_field_names" in meta:
+        # This is a list[Struct] response - use pre-computed field names
+        origin = get_origin(annotation)
 
-    origin = get_origin(annotation)
+        # Handle List[T]
+        if origin in (list, List):
+            # Check if value is actually a list/iterable
+            if not isinstance(value, (list, tuple)) and value is not None:
+                args = get_args(annotation)
+                elem_name = args[0].__name__ if args else 'Any'
+                raise TypeError(
+                    f"Response type mismatch: expected list[{elem_name}], "
+                    f"but handler returned {type(value).__name__}. "
+                    f"Make sure your handler returns a list."
+                )
 
-    # Handle List[T]
-    if origin in (list, List):
-        args = get_args(annotation)
-        elem_type = args[0] if args else Any
-        return [coerce_to_response_type(elem, elem_type) for elem in (value or [])]
+            # Convert objects to dicts if needed (for custom objects that aren't dicts/structs)
+            # Check first item to determine if conversion is needed
+            if value and len(value) > 0:
+                first_item = value[0]
+                # If it's not a dict or a msgspec.Struct, convert objects to dicts
+                if not isinstance(first_item, (dict, msgspec.Struct)):
+                    field_names = meta["response_field_names"]
+                    value = [
+                        {name: getattr(item, name, None) for name in field_names}
+                        for item in value
+                    ]
 
-    # Handle Struct
-    if is_msgspec_struct(annotation):
+            # For list of structs, we can use batch conversion with msgspec
+            # This is much faster than iterating and converting one by one
+            return msgspec.convert(value or [], annotation)
+
+    # Fast path: if value is already the right type, return it
+    # Cannot use isinstance() with parameterized generics (list[Item], dict[str, int], etc.)
+    # Only check for non-generic types
+    try:
         if isinstance(value, annotation):
             return value
+    except TypeError:
+        # annotation is a parameterized generic, skip the fast path
+        pass
+
+    # Handle Struct without metadata (single object, not list)
+    if is_msgspec_struct(annotation):
+        # Check for common type mismatches before msgspec validation
+        if isinstance(value, (list, tuple)):
+            raise TypeError(
+                f"Response type mismatch: expected a single {annotation.__name__}, "
+                f"but handler returned a list. Did you mean to annotate with list[{annotation.__name__}]?"
+            )
+
         if isinstance(value, dict):
-            return msgspec.convert(value, annotation)
-        # Build mapping from attributes based on struct annotations
-        fields = getattr(annotation, "__annotations__", {})
-        mapped = {name: getattr(value, name, None) for name in fields.keys()}
-        return msgspec.convert(mapped, annotation)
+            try:
+                return msgspec.convert(value, annotation)
+            except msgspec.ValidationError as e:
+                raise TypeError(
+                    f"Response validation failed for {annotation.__name__}: {e}"
+                ) from e
+
+        # Build mapping from attributes - use pre-computed field names if available
+        if meta and "response_field_names" in meta:
+            field_names = meta["response_field_names"]
+        else:
+            # Fallback: runtime introspection (slower)
+            field_names = list(getattr(annotation, "__annotations__", {}).keys())
+
+        mapped = {name: getattr(value, name, None) for name in field_names}
+        try:
+            return msgspec.convert(mapped, annotation)
+        except msgspec.ValidationError as e:
+            raise TypeError(
+                f"Response validation failed for {annotation.__name__}: {e}"
+            ) from e
+
+    # Fallback: Check if it's a list without metadata
+    origin = get_origin(annotation)
+    if origin in (list, List):
+        if not isinstance(value, (list, tuple)) and value is not None:
+            args = get_args(annotation)
+            elem_name = args[0].__name__ if args else 'Any'
+            raise TypeError(
+                f"Response type mismatch: expected list[{elem_name}], "
+                f"but handler returned {type(value).__name__}. "
+                f"Make sure your handler returns a list."
+            )
+        # Use msgspec batch conversion
+        return msgspec.convert(value or [], annotation)
 
     # Default convert path
-    return msgspec.convert(value, annotation)
+    try:
+        return msgspec.convert(value, annotation)
+    except msgspec.ValidationError as e:
+        raise TypeError(
+            f"Response validation failed: {e}"
+        ) from e

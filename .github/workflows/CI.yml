@@ -6,7 +6,7 @@ on:
       - master
       - main
     tags:
-      - 'v*'
+      - "v*"
   pull_request:
   workflow_dispatch:
 
@@ -21,23 +21,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13']
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.14t"]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
         with:
-          python-version: ${{ matrix.python-version }}
+          version: "latest"
+
+      - name: Set up Python
+        run: |
+          uv python install ${{ matrix.python-version }}
+          uv venv
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install dependencies
         run: |
-          pip install -U pip uv
-          uv pip install --system -e ".[dev]"
+          uv pip install -e ".[dev]"
 
       - name: Build extension
         run: uv run maturin develop --release
@@ -63,7 +67,7 @@ jobs:
         with:
           target: x86_64
           args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
-          sccache: 'true'
+          sccache: "true"
           manylinux: auto
           docker-options: --pull always
 
@@ -86,7 +90,7 @@ jobs:
         with:
           target: universal2-apple-darwin
           args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
-          sccache: 'true'
+          sccache: "true"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -107,7 +111,7 @@ jobs:
         with:
           target: x64
           args: --release --out dist --interpreter 3.10 3.11 3.12 3.13
-          sccache: 'true'
+          sccache: "true"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -175,8 +179,8 @@ jobs:
       name: pypi
       url: https://pypi.org/project/django-bolt/
     permissions:
-      id-token: write  # Required for trusted publishing
-      contents: write  # Required for GitHub release
+      id-token: write # Required for trusted publishing
+      contents: write # Required for GitHub release
 
     steps:
       - uses: actions/checkout@v4

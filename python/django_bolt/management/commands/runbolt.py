@@ -239,21 +239,32 @@ class Command(BaseCommand):
         if django_views_enabled:
             django_views_prefix = options.get('django_views_prefix', '')
             try:
+                # Count routes BEFORE registering Django views
+                routes_before = len(merged_api._routes)
+
                 merged_api._register_django_views(
                     host=options['host'],
                     port=options['port'],
                     urlpatterns=None  # Uses ROOT_URLCONF by default
                 )
 
+                # Count routes AFTER registering Django views
+                routes_after = len(merged_api._routes)
+                routes_added = routes_after - routes_before
+
                 if merged_api._django_views_registered:
                     prefix_info = f" with prefix {django_views_prefix}" if django_views_prefix else ""
                     if process_id is not None:
                         self.stdout.write(f"[django-bolt] Process {process_id}: Django views enabled{prefix_info} (experimental)")
+                        self.stdout.write(f"[django-bolt] Process {process_id}: Added {routes_added} Django view route(s)")
                     else:
                         self.stdout.write(f"[django-bolt] Django views enabled{prefix_info} (experimental)")
+                        self.stdout.write(f"[django-bolt] Added {routes_added} Django view route(s)")
             except Exception as e:
                 import sys
                 print(f"[django-bolt] Warning: Could not register Django views: {e}", file=sys.stderr)
+                import traceback
+                traceback.print_exc(file=sys.stderr)
 
         if process_id is not None:
             self.stdout.write(f"[django-bolt] Process {process_id}: Found {len(merged_api._routes)} routes from {len(apis)} APIs")
@@ -296,6 +307,34 @@ class Command(BaseCommand):
                     self.stdout.write(f"[django-bolt]   ... and {len(django_view_routes) - 10} more")
 
         # Register routes with Rust
+        import sys
+        print(f"\n[runbolt] === REGISTERING {len(rust_routes)} ROUTES TO RUST ===", file=sys.stderr)
+
+        # Find ALL /blog routes (GET method) to check for duplicates
+        blog_routes_get = []
+        for i, (method, path, handler_id, handler) in enumerate(rust_routes):
+            if path == '/blog' and method == 'GET':
+                blog_routes_get.append((i, handler_id, handler))
+
+        if blog_routes_get:
+            print(f"\n[runbolt] Found {len(blog_routes_get)} GET /blog route(s):", file=sys.stderr)
+            for idx, handler_id, handler in blog_routes_get:
+                print(f"[runbolt]   [{idx}] GET /blog handler_id={handler_id} handler_name={handler.__name__ if hasattr(handler, '__name__') else 'unknown'}", file=sys.stderr)
+
+            # Show routes around first /blog
+            blog_idx = blog_routes_get[0][0]
+            print(f"\n[runbolt] Routes around /blog (index {blog_idx}):", file=sys.stderr)
+            for i in range(max(0, blog_idx - 3), min(len(rust_routes), blog_idx + 8)):
+                method, path, handler_id, handler = rust_routes[i]
+                marker = " <-- /blog GET" if i == blog_idx else ""
+                print(f"[runbolt]   [{i}] {method:7} {path:40} id={handler_id:3}{marker}", file=sys.stderr)
+        else:
+            print(f"[runbolt] WARNING: GET /blog NOT FOUND in rust_routes!", file=sys.stderr)
+            print(f"[runbolt] Searching for any /blog routes...", file=sys.stderr)
+            for i, (method, path, handler_id, handler) in enumerate(rust_routes):
+                if '/blog' in path:
+                    print(f"[runbolt]   [{i}] {method:7} {path:40} id={handler_id:3}", file=sys.stderr)
+
         _core.register_routes(rust_routes)
 
         # Register middleware metadata if present

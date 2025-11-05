@@ -42,6 +42,7 @@ from .openapi.routes import OpenAPIRouteRegistrar
 from .admin.routes import AdminRouteRegistrar
 from .admin.static_routes import StaticRouteRegistrar
 from .admin.admin_detection import detect_admin_url_prefix
+from .admin.django_view_routes import DjangoViewRegistrar
 
 from . import _json
 
@@ -296,6 +297,7 @@ class BoltAPI:
         # Django admin configuration (controlled by --no-admin flag)
         self._admin_routes_registered = False
         self._static_routes_registered = False
+        self._django_views_registered = False
         self._asgi_handler = None
 
         # Register this instance globally for autodiscovery
@@ -1093,6 +1095,121 @@ class BoltAPI:
 
         registrar = StaticRouteRegistrar(self)
         registrar.register_routes()
+
+    def _register_django_views(self, host: str = "localhost", port: int = 8000, urlpatterns: Optional[Any] = None) -> None:
+        """Register Django views via ASGI bridge.
+
+        Auto-discovers and registers Django views from urlpatterns, with
+        URL resolution skipping for improved performance.
+
+        Args:
+            host: Server hostname for ASGI scope
+            port: Server port for ASGI scope
+            urlpatterns: Optional specific urlpatterns to register (defaults to ROOT_URLCONF)
+        """
+        if self._django_views_registered:
+            return
+
+        from django_bolt.admin.django_view_detection import get_django_views
+        from django_bolt.admin.django_view_routes import DjangoViewRegistrar
+
+        # Get Django views (admin and static are excluded by default)
+        views = get_django_views(urlpatterns=urlpatterns)
+
+        if not views:
+            return
+
+        # Debug: Show what views were extracted
+        import sys
+        print(f"[django-bolt] DEBUG: Extracted {len(views)} Django views for registration:", file=sys.stderr)
+        # Show first 5 and last 5 routes
+        for i, (route, view, methods) in enumerate(views):
+            if i < 5 or i >= len(views) - 5:
+                print(f"[django-bolt] DEBUG:   {i+1}. {route}: {len(methods)} methods", file=sys.stderr)
+            elif i == 5:
+                print(f"[django-bolt] DEBUG:   ... ({len(views) - 10} more) ...", file=sys.stderr)
+
+        # Register all views
+        registrar = DjangoViewRegistrar(self)
+        registrar.register_views(views, host=host, port=port)
+
+        self._django_views_registered = True
+
+    def django_view(self, path: str, view: Callable) -> Callable:
+        """Register a Django view manually.
+
+        Usage:
+            from django.shortcuts import render
+            from myapp.views import article_list
+
+            @api.django_view('/articles/')
+            def articles(request):
+                return article_list(request)
+
+        Args:
+            path: URL path pattern in matchit syntax (e.g., '/articles/{id}')
+            view: Django view callable (FBV or CBV via as_view())
+
+        Returns:
+            Decorator that registers the view
+        """
+        def decorator(fn: Callable) -> Callable:
+            from django_bolt.admin.django_view_routes import DjangoViewRegistrar
+
+            registrar = DjangoViewRegistrar(self)
+            # Use provided view, or the decorated function if it's a view
+            actual_view = view if view is not None else fn
+
+            # Default to GET, POST, PUT, PATCH, DELETE
+            methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
+            registrar.register_view(path, actual_view, methods=methods)
+
+            return fn
+
+        return decorator
+
+    def include_django_urls(self, prefix: str = "", patterns: Optional[Any] = None) -> None:
+        """Include Django URLs from urlpatterns or ROOT_URLCONF.
+
+        Auto-discovers and registers Django views with optional path prefix.
+
+        Usage:
+            from django.urls import path
+            from . import views
+
+            urlpatterns = [
+                path('articles/', views.article_list),
+                path('articles/<int:id>/', views.article_detail),
+            ]
+
+            # Register all views
+            api.include_django_urls(patterns=urlpatterns)
+
+            # Or register with prefix
+            api.include_django_urls(prefix='/api', patterns=urlpatterns)
+
+        Args:
+            prefix: Optional path prefix to add to all routes
+            patterns: Optional specific urlpatterns (defaults to ROOT_URLCONF)
+        """
+        from django_bolt.admin.django_view_detection import get_django_views
+        from django_bolt.admin.django_view_routes import DjangoViewRegistrar
+
+        # Get Django views (admin and static excluded by default)
+        views = get_django_views(urlpatterns=patterns)
+
+        if not views:
+            return
+
+        # Add prefix to all views if provided
+        if prefix:
+            views = [(prefix + path, view, methods) for path, view, methods in views]
+
+        # Register all views
+        registrar = DjangoViewRegistrar(self)
+        registrar.register_views(views)
+
+        self._django_views_registered = True
 
     def serve(self, host: str = "0.0.0.0", port: int = 8000) -> None:
         """Start the async server with registered routes"""

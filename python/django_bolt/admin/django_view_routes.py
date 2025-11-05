@@ -73,19 +73,28 @@ class DjangoViewRegistrar:
 
         # Register each view, continuing on error instead of failing on first error
         failed_routes = []
+        registered_routes = []
+        import sys
+
         for path_pattern, view, methods in views:
             try:
                 for method in methods:
                     self._register_single_route(method, path_pattern, view)
+                    registered_routes.append((method, path_pattern))
             except ValueError as e:
                 # Log the error but continue with other routes
                 failed_routes.append((path_pattern, str(e)))
-                import sys
-                print(f"[django-bolt] Skipped route {path_pattern}: {e}", file=sys.stderr)
+                print(f"[django-bolt] Failed to register {path_pattern}: {e}", file=sys.stderr)
+
+        # Show all registered routes
+        if registered_routes:
+            print(f"\n[django-bolt] REGISTERED DJANGO VIEW ROUTES ({len(registered_routes)} total):", file=sys.stderr)
+            for method, path in sorted(registered_routes):
+                print(f"[django-bolt]   {method:7} {path}", file=sys.stderr)
+            print(f"", file=sys.stderr)
 
         # If we had any failures, report them
         if failed_routes:
-            import sys
             print(f"[django-bolt] Note: {len(failed_routes)} route(s) could not be registered due to pattern validation", file=sys.stderr)
 
     def _is_valid_pattern(self, path_pattern: str) -> bool:
@@ -133,11 +142,20 @@ class DjangoViewRegistrar:
 
         # Create handler that delegates to ASGI bridge with url_route info
         # This skips Django's URL resolution
-        def make_django_view_handler(asgi_handler, django_view):
+        def make_django_view_handler(asgi_handler, django_view, path_pattern_for_debug):
             async def django_view_handler(request: Dict[str, Any]) -> tuple:
+                import sys
+                method = request.get("method", "GET")
+                path = request.get("path", "/")
+                print(f"\n[django-bolt] === DJANGO VIEW HANDLER CALLED ===", file=sys.stderr)
+                print(f"[django-bolt] Pattern: {path_pattern_for_debug}", file=sys.stderr)
+                print(f"[django-bolt] Request: {method} {path}", file=sys.stderr)
+                print(f"[django-bolt] View: {django_view}", file=sys.stderr)
+
                 # Extract path parameters from django-bolt's request dict
                 # These were already extracted by matchit router
                 path_kwargs = request.get("params", {})
+                print(f"[django-bolt] Path params: {path_kwargs}", file=sys.stderr)
 
                 # Create url_route dict to skip Django URL resolution
                 url_route = {
@@ -146,15 +164,26 @@ class DjangoViewRegistrar:
                     "url_name": None,
                     "app_names": [],
                     "namespaces": [],
-                    "route": path_pattern,
+                    "route": path_pattern_for_debug,
                 }
+                print(f"[django-bolt] url_route: {url_route}", file=sys.stderr)
 
                 # Call ASGI handler with url_route to skip Django URL resolution
-                return await asgi_handler.handle_request(request, url_route=url_route)
+                print(f"[django-bolt] Calling ASGI handler...", file=sys.stderr)
+                try:
+                    result = await asgi_handler.handle_request(request, url_route=url_route)
+                    status = result[0]
+                    print(f"[django-bolt] ASGI handler returned status: {status}", file=sys.stderr)
+                    return result
+                except Exception as e:
+                    print(f"[django-bolt] ASGI handler ERROR: {e}", file=sys.stderr)
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
+                    raise
 
             return django_view_handler
 
-        django_handler = make_django_view_handler(self.api._asgi_handler, view)
+        django_handler = make_django_view_handler(self.api._asgi_handler, view, path_pattern)
 
         # Register the route using internal route registration
         handler_id = self.api._next_handler_id

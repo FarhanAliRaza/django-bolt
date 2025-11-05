@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlencode
 logger = logging.getLogger(__name__)
 
 
-def actix_to_asgi_scope(request: Dict[str, Any], server_host: str = "localhost", server_port: int = 8000) -> Dict[str, Any]:
+def actix_to_asgi_scope(request: Dict[str, Any], server_host: str = "localhost", server_port: int = 8000, url_route: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Convert django-bolt PyRequest dict to ASGI3 scope dict.
 
@@ -23,6 +23,8 @@ def actix_to_asgi_scope(request: Dict[str, Any], server_host: str = "localhost",
         request: PyRequest dict with method, path, headers, body, etc.
         server_host: Server hostname (from settings or command args)
         server_port: Server port (from command args)
+        url_route: Optional pre-resolved URL route info to skip Django URL resolution
+                   Contains: view, kwargs, url_name, app_names, namespaces, route
 
     Returns:
         ASGI3 scope dict compatible with Django's ASGI application
@@ -80,6 +82,11 @@ def actix_to_asgi_scope(request: Dict[str, Any], server_host: str = "localhost",
         "client": (client_host, client_port),
         "extensions": {},
     }
+
+    # Add pre-resolved URL route to skip Django URL resolution (Django 3.1+)
+    # This tells Django "I've already resolved the URL, use this view directly"
+    if url_route:
+        scope["url_route"] = url_route
 
     return scope
 
@@ -206,21 +213,33 @@ class ASGIFallbackHandler:
 
         return self._asgi_app
 
-    async def handle_request(self, request: Dict[str, Any]) -> Tuple[int, List[Tuple[str, str]], bytes]:
+    async def handle_request(self, request: Dict[str, Any], url_route: Dict[str, Any] = None) -> Tuple[int, List[Tuple[str, str]], bytes]:
         """
         Handle request by converting to ASGI and calling Django app.
 
         Args:
             request: PyRequest dict from django-bolt
+            url_route: Optional pre-resolved URL route to skip Django URL resolution
+                      Contains: view, kwargs, url_name, app_names, namespaces, route
 
         Returns:
             Response tuple: (status_code, headers, body)
         """
+        import sys
+        method = request.get("method", "GET")
+        path = request.get("path", "/")
+        print(f"[asgi-bridge] === HANDLING REQUEST ===", file=sys.stderr)
+        print(f"[asgi-bridge] {method} {path}", file=sys.stderr)
+        print(f"[asgi-bridge] url_route provided: {url_route is not None}", file=sys.stderr)
+        if url_route:
+            print(f"[asgi-bridge] url_route view: {url_route.get('view')}", file=sys.stderr)
+
         # Get Django ASGI app
         asgi_app = self._get_asgi_app()
 
-        # Convert request to ASGI scope
-        scope = actix_to_asgi_scope(request, self.server_host, self.server_port)
+        # Convert request to ASGI scope (with optional url_route to skip resolution)
+        scope = actix_to_asgi_scope(request, self.server_host, self.server_port, url_route=url_route)
+        print(f"[asgi-bridge] ASGI scope created", file=sys.stderr)
 
         # Create ASGI receive channel with request body
         body = request.get("body", b"")

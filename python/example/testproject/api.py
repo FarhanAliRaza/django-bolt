@@ -75,12 +75,20 @@ async def health():
 
 
 @api.get("/", tags=["root"], summary="summary", description="description")
-@cors()  # Uses global CORS_ALLOWED_ORIGINS from Django settings
 async def read_root():
     """
     Endpoint that returns a simple "Hello World" dictionary.
     """
     return {"message": "Hello World"}
+
+
+@api.get("/bench/minimal")
+async def bench_minimal():
+    """
+    Minimal benchmark endpoint without CORS or OpenAPI metadata.
+    Use this to isolate baseline performance.
+    """
+    return {"message": "hello world"}
 
 
 @api.get("/10k-json")
@@ -854,6 +862,5 @@ class ChatCompletionsViewSet(ViewSet):
             ],
         }
         return response
-
 
 

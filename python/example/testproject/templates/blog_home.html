@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blog - Django Bolt Performance Demo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .fade-in { animation: fadeIn 0.5s ease-in-out; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
+    <!-- Navigation -->
+    <nav class="bg-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-16">
+                <h1 class="text-2xl font-bold text-indigo-600">Blog Platform</h1>
+                <p class="text-sm text-gray-500">Served with {{ server_type }}</p>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <div class="bg-white border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+            <h2 class="text-4xl font-bold text-gray-900 mb-4">Latest Articles</h2>
+            <p class="text-xl text-gray-600">Explore our collection of {{ blogs_count }} published articles</p>
+            <div class="mt-4 flex gap-4">
+                <span class="px-4 py-2 bg-indigo-100 text-indigo-800 rounded-full text-sm font-semibold">
+                    📊 Blogs: {{ blogs_count }}
+                </span>
+                <span class="px-4 py-2 bg-green-100 text-green-800 rounded-full text-sm font-semibold">
+                    ⚡ Loaded in {{ render_time }}ms
+                </span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Blog Grid -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        {% if blogs %}
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {% for blog in blogs %}
+                <div class="fade-in bg-white rounded-lg shadow-md hover:shadow-xl transition-shadow duration-300">
+                    <div class="p-6">
+                        <!-- Status Badge -->
+                        <div class="flex items-start justify-between mb-3">
+                            <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium {% if blog.status == 'published' %}bg-green-100 text-green-800{% else %}bg-yellow-100 text-yellow-800{% endif %}">
+                                {{ blog.status|upper }}
+                            </span>
+                            <span class="text-xs text-gray-500">ID: {{ blog.id }}</span>
+                        </div>
+
+                        <!-- Title -->
+                        <h3 class="text-xl font-bold text-gray-900 mb-2 line-clamp-2">
+                            {{ blog.name }}
+                        </h3>
+
+                        <!-- Description -->
+                        <p class="text-gray-600 text-sm mb-4 line-clamp-3">
+                            {{ blog.description }}
+                        </p>
+
+                        <!-- Footer -->
+                        <div class="flex items-center justify-between pt-4 border-t border-gray-200">
+                            <span class="text-xs text-gray-500">Blog #{{ blog.id }}</span>
+                            <a href="#" class="text-indigo-600 hover:text-indigo-800 font-semibold text-sm">
+                                Read More →
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="bg-white rounded-lg shadow-md p-12 text-center">
+                <h3 class="text-2xl font-bold text-gray-900 mb-2">No blogs found</h3>
+                <p class="text-gray-600">Start by creating your first blog post.</p>
+            </div>
+        {% endif %}
+    </div>
+
+    <!-- Footer -->
+    <footer class="bg-gray-900 text-white mt-16">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+                <div>
+                    <h4 class="font-bold text-lg mb-4">About</h4>
+                    <p class="text-gray-400 text-sm">A high-performance blog platform built with Django Bolt.</p>
+                </div>
+                <div>
+                    <h4 class="font-bold text-lg mb-4">Features</h4>
+                    <ul class="text-gray-400 text-sm space-y-2">
+                        <li>Fast Content Delivery</li>
+                        <li>Async Database Queries</li>
+                        <li>Real-time Performance Metrics</li>
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="font-bold text-lg mb-4">Performance</h4>
+                    <ul class="text-gray-400 text-sm space-y-2">
+                        <li>Total Blogs: {{ blogs_count }}</li>
+                        <li>Page Load: {{ render_time }}ms</li>
+                        <li>Server: {{ server_type }}</li>
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="font-bold text-lg mb-4">Tech Stack</h4>
+                    <ul class="text-gray-400 text-sm space-y-2">
+                        <li>Django 5.2+</li>
+                        <li>Django Bolt (Rust)</li>
+                        <li>Tailwind CSS</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="border-t border-gray-800 mt-8 pt-8 text-center text-gray-400 text-sm">
+                <p>&copy; 2024 Blog Platform. Built for performance. Powered by Django Bolt.</p>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>

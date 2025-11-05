@@ -537,3 +537,4 @@ uv run --with pytest pytest python/tests -s -vv
 - only add tests that test actual functionality and that test must fail when that code is changed or removed
 - always try to use from **future** import annotations instead of string annotations
 - imports should always be on top
+- NO TRADEOFFS. NO EXCLUSION WITHUOT STOPPING CONFIRMING THAT CHANGE

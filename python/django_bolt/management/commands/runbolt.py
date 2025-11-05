@@ -46,6 +46,17 @@ class Command(BaseCommand):
             default=None,
             help="HTTP keep-alive timeout in seconds (default: OS setting)"
         )
+        parser.add_argument(
+            "--django-views",
+            action="store_true",
+            help="(Experimental) Auto-register Django views from urlpatterns - may skip complex patterns"
+        )
+        parser.add_argument(
+            "--django-views-prefix",
+            type=str,
+            default="",
+            help="Path prefix for auto-registered Django views (e.g., '/api')"
+        )
 
     def handle(self, *args, **options):
         processes = options['processes']
@@ -222,6 +233,28 @@ class Command(BaseCommand):
                     else:
                         self.stdout.write("[django-bolt] Static files serving enabled")
 
+        # Register Django views if enabled
+        # NOTE: Auto-registration is experimental. For production use api.django_view() or api.include_django_urls()
+        django_views_enabled = options.get('django_views', False)
+        if django_views_enabled:
+            django_views_prefix = options.get('django_views_prefix', '')
+            try:
+                merged_api._register_django_views(
+                    host=options['host'],
+                    port=options['port'],
+                    urlpatterns=None  # Uses ROOT_URLCONF by default
+                )
+
+                if merged_api._django_views_registered:
+                    prefix_info = f" with prefix {django_views_prefix}" if django_views_prefix else ""
+                    if process_id is not None:
+                        self.stdout.write(f"[django-bolt] Process {process_id}: Django views enabled{prefix_info} (experimental)")
+                    else:
+                        self.stdout.write(f"[django-bolt] Django views enabled{prefix_info} (experimental)")
+            except Exception as e:
+                import sys
+                print(f"[django-bolt] Warning: Could not register Django views: {e}", file=sys.stderr)
+
         if process_id is not None:
             self.stdout.write(f"[django-bolt] Process {process_id}: Found {len(merged_api._routes)} routes from {len(apis)} APIs")
         else:
@@ -231,6 +264,7 @@ class Command(BaseCommand):
         
         # Register routes with Rust
         rust_routes = []
+        django_view_routes = []  # Track Django view routes for debugging
         for method, path, handler_id, handler in merged_api._routes:
             # Ensure matchit path syntax
             from django_bolt.api import BoltAPI
@@ -238,6 +272,30 @@ class Command(BaseCommand):
             norm_path = convert(path) if callable(convert) else path
             rust_routes.append((method, norm_path, handler_id, handler))
 
+            # Track Django view routes (from django_view_routes.py)
+            # Check if this handler's metadata has the is_django_view flag
+            handler_meta = merged_api._handler_meta.get(handler)
+            if handler_meta and handler_meta.get('is_django_view'):
+                django_view_routes.append((method, norm_path))
+
+        # Log Django views being registered to Rust
+        if django_view_routes:
+            if process_id is not None:
+                self.stdout.write(f"[django-bolt] Process {process_id}: Registering {len(django_view_routes)} Django view routes to Rust:")
+            else:
+                self.stdout.write(f"[django-bolt] Registering {len(django_view_routes)} Django view routes to Rust:")
+            for method, path in django_view_routes[:10]:  # Show first 10
+                if process_id is not None:
+                    self.stdout.write(f"[django-bolt] Process {process_id}:   {method} {path}")
+                else:
+                    self.stdout.write(f"[django-bolt]   {method} {path}")
+            if len(django_view_routes) > 10:
+                if process_id is not None:
+                    self.stdout.write(f"[django-bolt] Process {process_id}:   ... and {len(django_view_routes) - 10} more")
+                else:
+                    self.stdout.write(f"[django-bolt]   ... and {len(django_view_routes) - 10} more")
+
+        # Register routes with Rust
         _core.register_routes(rust_routes)
 
         # Register middleware metadata if present

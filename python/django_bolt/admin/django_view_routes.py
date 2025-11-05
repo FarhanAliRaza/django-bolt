@@ -144,18 +144,9 @@ class DjangoViewRegistrar:
         # This skips Django's URL resolution
         def make_django_view_handler(asgi_handler, django_view, path_pattern_for_debug):
             async def django_view_handler(request: Dict[str, Any]) -> tuple:
-                import sys
-                method = request.get("method", "GET")
-                path = request.get("path", "/")
-                print(f"\n[django-bolt] === DJANGO VIEW HANDLER CALLED ===", file=sys.stderr)
-                print(f"[django-bolt] Pattern: {path_pattern_for_debug}", file=sys.stderr)
-                print(f"[django-bolt] Request: {method} {path}", file=sys.stderr)
-                print(f"[django-bolt] View: {django_view}", file=sys.stderr)
-
                 # Extract path parameters from django-bolt's request dict
                 # These were already extracted by matchit router
                 path_kwargs = request.get("params", {})
-                print(f"[django-bolt] Path params: {path_kwargs}", file=sys.stderr)
 
                 # Create url_route dict to skip Django URL resolution
                 url_route = {
@@ -166,19 +157,14 @@ class DjangoViewRegistrar:
                     "namespaces": [],
                     "route": path_pattern_for_debug,
                 }
-                print(f"[django-bolt] url_route: {url_route}", file=sys.stderr)
 
                 # Call ASGI handler with url_route to skip Django URL resolution
-                print(f"[django-bolt] Calling ASGI handler...", file=sys.stderr)
                 try:
                     result = await asgi_handler.handle_request(request, url_route=url_route)
-                    status = result[0]
-                    print(f"[django-bolt] ASGI handler returned status: {status}", file=sys.stderr)
                     return result
                 except Exception as e:
-                    print(f"[django-bolt] ASGI handler ERROR: {e}", file=sys.stderr)
                     import traceback
-                    traceback.print_exc(file=sys.stderr)
+                    traceback.print_exc()
                     raise
 
             return django_view_handler

@@ -21,31 +21,36 @@ DJANGO_CONVERTERS = {
 }
 
 
-def _clean_pattern(pattern_str: str) -> str:
+def _clean_pattern(pattern_str: str) -> Tuple[str, bool]:
     """
     Clean up Django path pattern string by removing regex markers.
 
     Examples:
-        '^admin$' -> 'admin'
-        'articles/' -> 'articles'
-        '^$' -> ''
-        'users' -> 'users'
+        '^admin$' -> ('admin', False)
+        'articles/' -> ('articles', True)
+        '^$' -> ('', False)
+        'users' -> ('users', False)
 
     Args:
         pattern_str: Raw pattern string from Django
 
     Returns:
-        Cleaned pattern string
+        Tuple of (cleaned_pattern_string, had_trailing_slash)
     """
-    # Remove leading ^ and trailing $ and /
+    # Remove leading ^ and trailing $
     if pattern_str.startswith('^'):
         pattern_str = pattern_str[1:]
     if pattern_str.endswith('$'):
         pattern_str = pattern_str[:-1]
-    if pattern_str.endswith('/'):
+
+    # Track if pattern had trailing slash before removing it
+    had_trailing_slash = pattern_str.endswith('/')
+
+    # Remove trailing slash
+    if had_trailing_slash:
         pattern_str = pattern_str[:-1]
 
-    return pattern_str
+    return pattern_str, had_trailing_slash
 
 
 def django_path_to_matchit(django_path: str) -> str:
@@ -92,6 +97,10 @@ def extract_views_from_patterns(
     Recursively processes url() and path() patterns, handling include().
     Returns list of (route_pattern, view_callable, methods) tuples.
 
+    When a Django URL pattern has a trailing slash (e.g., 'blog/'), both
+    versions are registered: '/blog' and '/blog/' to maintain Django's
+    APPEND_SLASH behavior while supporting both URL styles.
+
     Args:
         urlpatterns: Django URLconf urlpatterns list
         prefix: Current URL prefix (for include())
@@ -107,7 +116,7 @@ def extract_views_from_patterns(
             # This is an include()
             pattern_str = str(url_pattern.pattern)
             # Clean up pattern string properly
-            pattern_str = _clean_pattern(pattern_str)
+            pattern_str, _ = _clean_pattern(pattern_str)
             if not pattern_str:
                 # Empty pattern, use existing prefix
                 new_prefix = prefix
@@ -126,8 +135,8 @@ def extract_views_from_patterns(
         if pattern_str.startswith('^'):
             continue
 
-        # Clean up pattern string
-        pattern_str = _clean_pattern(pattern_str)
+        # Clean up pattern string and track if it had trailing slash
+        pattern_str, had_trailing_slash = _clean_pattern(pattern_str)
         if not pattern_str:
             # Empty pattern, skip
             continue
@@ -161,7 +170,14 @@ def extract_views_from_patterns(
                     methods = [m.upper() for m in view_cls.http_method_names if m != 'options']
                     methods.append('OPTIONS')
 
+            # Register the route
             views.append((full_path, view, methods))
+
+            # If original Django URL had trailing slash, also register version with trailing slash
+            # This maintains Django's APPEND_SLASH behavior while supporting both URL styles
+            if had_trailing_slash and not full_path.endswith('/'):
+                full_path_with_slash = full_path + '/'
+                views.append((full_path_with_slash, view, methods))
 
     return views
 

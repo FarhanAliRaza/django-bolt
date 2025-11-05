@@ -225,21 +225,11 @@ class ASGIFallbackHandler:
         Returns:
             Response tuple: (status_code, headers, body)
         """
-        import sys
-        method = request.get("method", "GET")
-        path = request.get("path", "/")
-        print(f"[asgi-bridge] === HANDLING REQUEST ===", file=sys.stderr)
-        print(f"[asgi-bridge] {method} {path}", file=sys.stderr)
-        print(f"[asgi-bridge] url_route provided: {url_route is not None}", file=sys.stderr)
-        if url_route:
-            print(f"[asgi-bridge] url_route view: {url_route.get('view')}", file=sys.stderr)
-
         # Get Django ASGI app
         asgi_app = self._get_asgi_app()
 
         # Convert request to ASGI scope (with optional url_route to skip resolution)
         scope = actix_to_asgi_scope(request, self.server_host, self.server_port, url_route=url_route)
-        print(f"[asgi-bridge] ASGI scope created", file=sys.stderr)
 
         # Create ASGI receive channel with request body
         body = request.get("body", b"")

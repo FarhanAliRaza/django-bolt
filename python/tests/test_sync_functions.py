@@ -39,7 +39,7 @@ def api():
     # ========================
 
     # Test 1: Async function (existing behavior)
-    @api.get("/async", inline=True)
+    @api.get("/async")
     async def async_handler():
         return {"type": "async"}
 
@@ -48,8 +48,8 @@ def api():
     def sync_inline_handler():
         return {"type": "sync", "mode": "inline"}
 
-    # Test 3: Sync function with inline=False (spawn_blocking)
-    @api.get("/sync-blocking", inline=False)
+    # Test 3: Sync function without inline (uses default)
+    @api.get("/sync-blocking")
     def sync_blocking_handler():
         time.sleep(0.001)  # Simulate slow operation
         return {"type": "sync", "mode": "blocking"}
@@ -193,19 +193,16 @@ class TestMetadataDetection:
         """Async handlers should be marked as async."""
         meta = api._handler_meta[api._async_handler]
         assert meta["is_async"] is True, "Async handler should be marked as async"
-        assert meta["inline"] is True, "Async handler should have inline=True by default"
 
     def test_sync_inline_handler_metadata(self, api):
-        """Sync inline handlers should be marked as sync with inline=True."""
+        """Sync inline handlers should be marked as sync."""
         meta = api._handler_meta[api._sync_inline_handler]
         assert meta["is_async"] is False, "Sync handler should be marked as sync"
-        assert meta["inline"] is False, "Sync inline handler should have inline=False by default"
 
     def test_sync_blocking_handler_metadata(self, api):
-        """Sync blocking handlers should be marked as sync with inline=False."""
+        """Sync blocking handlers should be marked as sync."""
         meta = api._handler_meta[api._sync_blocking_handler]
         assert meta["is_async"] is False, "Sync handler should be marked as sync"
-        assert meta["inline"] is False, "Sync blocking handler should have inline=False"
 
 
 class TestHandlerInspection:

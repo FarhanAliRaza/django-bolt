@@ -82,7 +82,7 @@ async def read_root():
     """
     return {"message": "Hello World"}
 
-@api.get("/sync",inline=True, tags=["root"], summary="summary", description="description")
+@api.get("/sync", tags=["root"], summary="summary", description="description")
 @cors()  # Uses global CORS_ALLOWED_ORIGINS from Django settings
 def read_root():
     """
@@ -95,7 +95,16 @@ def read_root():
 async def read_10k():
     """
     Endpoint that returns 10k JSON objects.
-    
+
+    """
+    return test_data.JSON_10K
+
+
+@api.get("/sync-10k-json")
+def read_10k_sync():
+    """
+    Sync version: Endpoint that returns 10k JSON objects.
+
     """
     return test_data.JSON_10K
 
@@ -226,6 +235,16 @@ async def stream_plain():
     return StreamingResponse(gen, media_type="text/plain")
 
 
+@api.get("/sync-stream")
+@no_compress
+def stream_plain_sync():
+    """Sync version: Stream plain text."""
+    def gen():
+        for i in range(100):
+            yield "x"
+    return StreamingResponse(gen, media_type="text/plain")
+
+
 @api.get("/collected")
 async def collected_plain():
     # Same data but collected into a single response
@@ -234,6 +253,16 @@ async def collected_plain():
 @api.get("/sse")
 @no_compress
 async def sse():
+    def gen():
+        for i in range(3):
+            yield f"data: {i}\n\n"
+    return StreamingResponse(gen, media_type="text/event-stream")
+
+
+@api.get("/sync-sse")
+@no_compress
+def sse_sync():
+    """Sync version: Server-Sent Events."""
     def gen():
         for i in range(3):
             yield f"data: {i}\n\n"

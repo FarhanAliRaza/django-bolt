@@ -61,10 +61,16 @@ async def list_full_10() -> List[UserFull]:
     return User.objects.only("id", "username", "email", "first_name", "last_name", "is_active")[:10]
 
 
-@api.get("/sync-full10", inline=True)
-def list_full_10() -> List[UserFull]:
+@api.get("/sync-full10")
+def list_full_10_sync() -> List[UserFull]:
     # Optimized: only fetch needed fields instead of all()
     return User.objects.only("id", "username", "email", "first_name", "last_name", "is_active")[:10]
+
+
+@api.get("/sync-mini10")
+def list_mini_10_sync() -> List[UserMini]:
+    # Already optimized: only() fetches just id and username
+    return User.objects.only("id", "username")[:10]
 
 
 

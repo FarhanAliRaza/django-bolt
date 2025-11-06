@@ -123,7 +123,7 @@ def test_sync_api_view_multiple_methods(api):
 
 def test_sync_api_view_path_parameters(api):
     """Test path parameter extraction in sync class-based views."""
-    @api.view("/users/{user_id}", inline=True)
+    @api.view("/users/{user_id}")
     class UserView(APIView):
         def get(self, request, user_id: int) -> dict:
             return {"user_id": user_id, "type": type(user_id).__name__}
@@ -202,7 +202,7 @@ def test_sync_api_view_invalid_body(api):
 
 def test_sync_api_view_dependency_injection(api):
     """Test dependency injection in sync class-based views."""
-    def get_current_user(request) -> dict:
+    async def get_current_user(request) -> dict:
         return {"id": 1, "username": "testuser"}
 
     @api.view("/profile")

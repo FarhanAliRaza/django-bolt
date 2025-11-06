@@ -74,9 +74,6 @@ class HandlerMetadata(TypedDict, total=False):
     is_async: bool
     """Whether handler is async (coroutine function)"""
 
-    inline: bool
-    """For sync handlers: whether to call inline (True) or use spawn_blocking (False)"""
-
     # OpenAPI documentation metadata
     openapi_tags: List[str]
     """OpenAPI tags for grouping endpoints"""

@@ -347,75 +347,102 @@ pub async fn handle_request(
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
 
-    // Single GIL acquisition for all Python operations
-    let fut = match Python::attach(|py| -> PyResult<_> {
-        // Clone Python objects
-        let dispatch = state.dispatch.clone_ref(py);
+    // Read handler metadata to determine execution path (async vs sync)
+    let (is_async, inline) = Python::attach(|py| -> PyResult<(bool, bool)> {
+        let api_instance = state.dispatch.getattr(py, "__self__")?;
+        let handler_meta_dict = api_instance.getattr(py, "_handler_meta")?;
         let handler = route_handler.clone_ref(py);
 
-        // Create context dict only if auth context is present
-        let context = if let Some(ref auth) = auth_ctx {
-            let ctx_dict = PyDict::new(py);
-            let ctx_py = ctx_dict.unbind();
-            populate_auth_context(&ctx_py, auth, py);
-            Some(ctx_py)
+        // Get metadata for this handler
+        if let Ok(meta) = handler_meta_dict.call_method1(py, "get", (handler,)) {
+            let meta_bound = meta.bind(py);
+            let is_async = meta_bound
+                .get_item("is_async")
+                .ok()
+                .and_then(|v| v.extract::<bool>().ok())
+                .unwrap_or(true); // Default to async for backward compatibility
+            let inline = meta_bound
+                .get_item("inline")
+                .ok()
+                .and_then(|v| v.extract::<bool>().ok())
+                .unwrap_or(true); // Default to inline for sync functions
+            Ok((is_async, inline))
         } else {
-            None
-        };
-
-        let request = PyRequest {
-            method,
-            path,
-            body: body.to_vec(),
-            path_params,
-            query_params,
-            headers,
-            cookies,
-            context,
-        };
-        let request_obj = Py::new(py, request)?;
-
-        // Reuse the global event loop locals initialized at server startup
-        let locals = TASK_LOCALS.get().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Asyncio loop not initialized")
-        })?;
-
-        // Pass handler_id to dispatch so it can lookup the original API instance
-        let coroutine = dispatch.call1(py, (handler, request_obj, handler_id))?;
-        pyo3_async_runtimes::into_future_with_locals(locals, coroutine.into_bound(py))
-    }) {
-        Ok(f) => f,
-        Err(e) => {
-            // Use new error handler
-            return Python::attach(|py| {
-                // Convert PyErr to exception instance
-                e.restore(py);
-                if let Some(exc) = PyErr::take(py) {
-                    let exc_value = exc.value(py);
-                    error::handle_python_exception(
-                        py,
-                        exc_value,
-                        &path_clone,
-                        &method_clone,
-                        state.debug,
-                    )
-                } else {
-                    error::build_error_response(
-                        py,
-                        500,
-                        "Handler error: failed to create coroutine".to_string(),
-                        vec![],
-                        None,
-                        state.debug,
-                    )
-                }
-            });
+            Ok((true, true)) // Default to async if metadata not found
         }
-    };
+    }).unwrap_or((true, true));
 
-    match fut.await {
-        Ok(result_obj) => {
-            // Fast-path: minimize GIL time for tuple responses (status, headers, body)
+    // Branch based on handler type
+    if is_async {
+        // ASYNC PATH: Use current fast path (no overhead)
+        let fut = match Python::attach(|py| -> PyResult<_> {
+            // Clone Python objects
+            let dispatch = state.dispatch.clone_ref(py);
+            let handler = route_handler.clone_ref(py);
+
+            // Create context dict only if auth context is present
+            let context = if let Some(ref auth) = auth_ctx {
+                let ctx_dict = PyDict::new(py);
+                let ctx_py = ctx_dict.unbind();
+                populate_auth_context(&ctx_py, auth, py);
+                Some(ctx_py)
+            } else {
+                None
+            };
+
+            let request = PyRequest {
+                method,
+                path,
+                body: body.to_vec(),
+                path_params,
+                query_params,
+                headers,
+                cookies,
+                context,
+            };
+            let request_obj = Py::new(py, request)?;
+
+            // Reuse the global event loop locals initialized at server startup
+            let locals = TASK_LOCALS.get().ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("Asyncio loop not initialized")
+            })?;
+
+            // Pass handler_id to dispatch so it can lookup the original API instance
+            let coroutine = dispatch.call1(py, (handler, request_obj, handler_id))?;
+            pyo3_async_runtimes::into_future_with_locals(locals, coroutine.into_bound(py))
+        }) {
+            Ok(f) => f,
+            Err(e) => {
+                // Use new error handler
+                return Python::attach(|py| {
+                    // Convert PyErr to exception instance
+                    e.restore(py);
+                    if let Some(exc) = PyErr::take(py) {
+                        let exc_value = exc.value(py);
+                        error::handle_python_exception(
+                            py,
+                            exc_value,
+                            &path_clone,
+                            &method_clone,
+                            state.debug,
+                        )
+                    } else {
+                        error::build_error_response(
+                            py,
+                            500,
+                            "Handler error: failed to create coroutine".to_string(),
+                            vec![],
+                            None,
+                            state.debug,
+                        )
+                    }
+                });
+            }
+        };
+
+        match fut.await {
+            Ok(result_obj) => {
+                // Fast-path: minimize GIL time for tuple responses (status, headers, body)
             let fast_tuple: Option<(u16, Vec<(String, String)>, Py<PyAny>, *const u8, usize)> =
                 Python::attach(|py| {
                     let obj = result_obj.bind(py);
@@ -959,6 +986,297 @@ pub async fn handle_request(
                     )
                 }
             });
+        }
+    }
+    } else if inline {
+        // SYNC INLINE PATH: Call directly with GIL (zero overhead, but blocks async worker briefly)
+        let result_obj = Python::attach(|py| -> PyResult<_> {
+            let dispatch = state.dispatch.clone_ref(py);
+            let handler = route_handler.clone_ref(py);
+
+            // Create context dict only if auth context is present
+            let context = if let Some(ref auth) = auth_ctx {
+                let ctx_dict = PyDict::new(py);
+                let ctx_py = ctx_dict.unbind();
+                populate_auth_context(&ctx_py, auth, py);
+                Some(ctx_py)
+            } else {
+                None
+            };
+
+            let request = PyRequest {
+                method,
+                path,
+                body: body.to_vec(),
+                path_params,
+                query_params,
+                headers,
+                cookies,
+                context,
+            };
+            let request_obj = Py::new(py, request)?;
+
+            // Call dispatch (for sync handlers, this doesn't return a coroutine)
+            let result = dispatch.call1(py, (handler, request_obj, handler_id))?;
+            Ok(result)
+        });
+
+        match result_obj {
+            Ok(result) => {
+                // Process result (same as async path)
+                let fast_tuple: Option<(u16, Vec<(String, String)>, Py<PyAny>, *const u8, usize)> =
+                    Python::attach(|py| {
+                        let obj = result.bind(py);
+                        let tuple = obj.downcast::<PyTuple>().ok()?;
+                        if tuple.len() != 3 {
+                            return None;
+                        }
+
+                        let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
+                        let resp_headers: Vec<(String, String)> = tuple
+                            .get_item(1)
+                            .ok()?
+                            .extract::<Vec<(String, String)>>()
+                            .ok()?;
+
+                        let body_obj = match tuple.get_item(2) {
+                            Ok(v) => v,
+                            Err(_) => return None,
+                        };
+                        if let Ok(pybytes) = body_obj.downcast::<PyBytes>() {
+                            let slice = pybytes.as_bytes();
+                            let len = slice.len();
+                            let ptr = slice.as_ptr();
+                            let owner: Py<PyAny> = body_obj.unbind();
+                            Some((status_code, resp_headers, owner, ptr, len))
+                        } else {
+                            None
+                        }
+                    });
+
+                if let Some((status_code, resp_headers, body_owner, body_ptr, body_len)) = fast_tuple {
+                    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+                    let mut builder = HttpResponse::build(status);
+                    for (k, v) in resp_headers {
+                        builder.append_header((k, v));
+                    }
+                    if skip_compression {
+                        builder.append_header(("Content-Encoding", "identity"));
+                    }
+
+                    let mut response = if is_head_request {
+                        builder.body(Vec::<u8>::new())
+                    } else {
+                        let mut body_vec = Vec::<u8>::with_capacity(body_len);
+                        unsafe {
+                            body_vec.set_len(body_len);
+                            std::ptr::copy_nonoverlapping(
+                                body_ptr,
+                                body_vec.as_mut_ptr(),
+                                body_len,
+                            );
+                        }
+                        let _ = Python::attach(|_| drop(body_owner));
+                        builder.body(body_vec)
+                    };
+
+                    if let Some(ref route_meta) = route_metadata {
+                        if let Some(ref cors_cfg) = route_meta.cors_config {
+                            let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+                            let _ = add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
+                        }
+                    }
+
+                    return response;
+                } else {
+                    return Python::attach(|py| {
+                        error::build_error_response(
+                            py,
+                            500,
+                            "Sync handler returned unsupported response type".to_string(),
+                            vec![],
+                            None,
+                            state.debug,
+                        )
+                    });
+                }
+            }
+            Err(e) => {
+                return Python::attach(|py| {
+                    e.restore(py);
+                    if let Some(exc) = PyErr::take(py) {
+                        let exc_value = exc.value(py);
+                        error::handle_python_exception(
+                            py,
+                            exc_value,
+                            &path_clone,
+                            &method_clone,
+                            state.debug,
+                        )
+                    } else {
+                        error::build_error_response(
+                            py,
+                            500,
+                            "Sync inline handler error".to_string(),
+                            vec![],
+                            None,
+                            state.debug,
+                        )
+                    }
+                });
+            }
+        }
+    } else {
+        // SYNC SPAWN_BLOCKING PATH: Offload to thread pool to avoid blocking async runtime
+        let result = tokio::task::spawn_blocking(move || {
+            Python::attach(|py| -> PyResult<_> {
+                let dispatch = state.dispatch.clone_ref(py);
+                let handler = route_handler.clone_ref(py);
+
+                // Create context dict only if auth context is present
+                let context = if let Some(ref auth) = auth_ctx {
+                    let ctx_dict = PyDict::new(py);
+                    let ctx_py = ctx_dict.unbind();
+                    populate_auth_context(&ctx_py, auth, py);
+                    Some(ctx_py)
+                } else {
+                    None
+                };
+
+                let request = PyRequest {
+                    method,
+                    path,
+                    body: body.to_vec(),
+                    path_params,
+                    query_params,
+                    headers,
+                    cookies,
+                    context,
+                };
+                let request_obj = Py::new(py, request)?;
+
+                // Call dispatch
+                let result = dispatch.call1(py, (handler, request_obj, handler_id))?;
+                Ok(result)
+            })
+        })
+        .await;
+
+        match result {
+            Ok(Ok(result_obj)) => {
+                // Process result
+                let fast_tuple: Option<(u16, Vec<(String, String)>, Py<PyAny>, *const u8, usize)> =
+                    Python::attach(|py| {
+                        let obj = result_obj.bind(py);
+                        let tuple = obj.downcast::<PyTuple>().ok()?;
+                        if tuple.len() != 3 {
+                            return None;
+                        }
+
+                        let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
+                        let resp_headers: Vec<(String, String)> = tuple
+                            .get_item(1)
+                            .ok()?
+                            .extract::<Vec<(String, String)>>()
+                            .ok()?;
+
+                        let body_obj = match tuple.get_item(2) {
+                            Ok(v) => v,
+                            Err(_) => return None,
+                        };
+                        if let Ok(pybytes) = body_obj.downcast::<PyBytes>() {
+                            let slice = pybytes.as_bytes();
+                            let len = slice.len();
+                            let ptr = slice.as_ptr();
+                            let owner: Py<PyAny> = body_obj.unbind();
+                            Some((status_code, resp_headers, owner, ptr, len))
+                        } else {
+                            None
+                        }
+                    });
+
+                if let Some((status_code, resp_headers, body_owner, body_ptr, body_len)) = fast_tuple {
+                    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+                    let mut builder = HttpResponse::build(status);
+                    for (k, v) in resp_headers {
+                        builder.append_header((k, v));
+                    }
+                    if skip_compression {
+                        builder.append_header(("Content-Encoding", "identity"));
+                    }
+
+                    let mut response = if is_head_request {
+                        builder.body(Vec::<u8>::new())
+                    } else {
+                        let mut body_vec = Vec::<u8>::with_capacity(body_len);
+                        unsafe {
+                            body_vec.set_len(body_len);
+                            std::ptr::copy_nonoverlapping(
+                                body_ptr,
+                                body_vec.as_mut_ptr(),
+                                body_len,
+                            );
+                        }
+                        let _ = Python::attach(|_| drop(body_owner));
+                        builder.body(body_vec)
+                    };
+
+                    if let Some(ref route_meta) = route_metadata {
+                        if let Some(ref cors_cfg) = route_meta.cors_config {
+                            let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+                            let _ = add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
+                        }
+                    }
+
+                    return response;
+                } else {
+                    return Python::attach(|py| {
+                        error::build_error_response(
+                            py,
+                            500,
+                            "Sync handler returned unsupported response type".to_string(),
+                            vec![],
+                            None,
+                            state.debug,
+                        )
+                    });
+                }
+            }
+            Ok(Err(e)) | Err(_) => {
+                return Python::attach(|py| {
+                    if let Ok(Err(e)) = result {
+                        e.restore(py);
+                        if let Some(exc) = PyErr::take(py) {
+                            let exc_value = exc.value(py);
+                            error::handle_python_exception(
+                                py,
+                                exc_value,
+                                &path_clone,
+                                &method_clone,
+                                state.debug,
+                            )
+                        } else {
+                            error::build_error_response(
+                                py,
+                                500,
+                                "Sync spawn_blocking handler error".to_string(),
+                                vec![],
+                                None,
+                                state.debug,
+                            )
+                        }
+                    } else {
+                        error::build_error_response(
+                            py,
+                            500,
+                            "Spawn blocking task failed".to_string(),
+                            vec![],
+                            None,
+                            state.debug,
+                        )
+                    }
+                });
+            }
         }
     }
 }

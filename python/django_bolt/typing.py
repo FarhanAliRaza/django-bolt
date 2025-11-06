@@ -70,6 +70,13 @@ class HandlerMetadata(TypedDict, total=False):
     needs_form_parsing: bool
     """Whether this handler needs form/multipart parsing (Form/File params)"""
 
+    # Sync/async handler metadata
+    is_async: bool
+    """Whether handler is async (coroutine function)"""
+
+    inline: bool
+    """For sync handlers: whether to call inline (True) or use spawn_blocking (False)"""
+
     # OpenAPI documentation metadata
     openapi_tags: List[str]
     """OpenAPI tags for grouping endpoints"""

@@ -312,8 +312,9 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
+        inline: bool = True,
     ):
-        return self._route_decorator("GET", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
+        return self._route_decorator("GET", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, inline=inline)
 
     def post(
         self,
@@ -326,8 +327,9 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
+        inline: bool = True,
     ):
-        return self._route_decorator("POST", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
+        return self._route_decorator("POST", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, inline=inline)
 
     def put(
         self,
@@ -340,8 +342,9 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
+        inline: bool = True,
     ):
-        return self._route_decorator("PUT", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
+        return self._route_decorator("PUT", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, inline=inline)
 
     def patch(
         self,
@@ -354,8 +357,9 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
+        inline: bool = True,
     ):
-        return self._route_decorator("PATCH", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
+        return self._route_decorator("PATCH", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, inline=inline)
 
     def delete(
         self,
@@ -368,8 +372,9 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
+        inline: bool = True,
     ):
-        return self._route_decorator("DELETE", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
+        return self._route_decorator("DELETE", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, inline=inline)
 
     def head(
         self,
@@ -382,8 +387,9 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
+        inline: bool = True,
     ):
-        return self._route_decorator("HEAD", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
+        return self._route_decorator("HEAD", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, inline=inline)
 
     def options(
         self,
@@ -396,8 +402,9 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
+        inline: bool = True,
     ):
-        return self._route_decorator("OPTIONS", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
+        return self._route_decorator("OPTIONS", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, inline=inline)
 
     def view(
         self,
@@ -734,11 +741,11 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
+        inline: bool = True,
     ):
         def decorator(fn: Callable):
-            # Enforce async handlers
-            if not inspect.iscoroutinefunction(fn):
-                raise TypeError(f"Handler {fn.__name__} must be async. Use 'async def' instead of 'def'")
+            # Detect if handler is async or sync
+            is_async = inspect.iscoroutinefunction(fn)
 
             handler_id = self._next_handler_id
             self._next_handler_id += 1
@@ -751,6 +758,9 @@ class BoltAPI:
 
             # Pre-compile lightweight binder for this handler with HTTP method validation
             meta = self._compile_binder(fn, method, full_path)
+            # Store sync/async metadata
+            meta["is_async"] = is_async
+            meta["inline"] = inline
             # Allow explicit response model override
             if response_model is not None:
                 meta["response_type"] = response_model
@@ -1016,13 +1026,22 @@ class BoltAPI:
                 meta = self._compile_binder(handler)
                 self._handler_meta[handler] = meta
 
+            # Determine if handler is async (default to True for backward compatibility)
+            is_async = meta.get("is_async", True)
+
             # Fast path for request-only handlers
             if meta.get("mode") == "request_only":
-                result = await handler(request)
+                if is_async:
+                    result = await handler(request)
+                else:
+                    result = handler(request)
             else:
                 # Build handler arguments
                 args, kwargs = await self._build_handler_arguments(meta, request)
-                result = await handler(*args, **kwargs)
+                if is_async:
+                    result = await handler(*args, **kwargs)
+                else:
+                    result = handler(*args, **kwargs)
 
             # Serialize response
             response = await serialize_response(result, meta)

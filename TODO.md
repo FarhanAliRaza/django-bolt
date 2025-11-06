@@ -47,6 +47,8 @@ Pagination helpers
 ⚠️ with broken settings it was not able to find api from root folder
 ✅ If api folder has error it does not discover the apis - FIXED (Now crashes with descriptive error instead of silently ignoring)
 ⚠️ Msgspec based serializer and stuff
+⚠️ Fix streaming after 200 concurrent requests
+
 ✅ Larger json has some GIL contention issue have done alot of investigation. Serialization hold gil when moved serialization to rust it improved but not that much .. Under large concurrency i think it happens . Have to investigate more. (Fixeed using batching gil, reuse event loop, copy memory outside of the gil)
 
 ## Known Limitations (BOTH Function & Class-Based)

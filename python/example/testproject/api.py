@@ -254,8 +254,9 @@ async def collected_plain():
 @no_compress
 async def sse():
     def gen():
-        for i in range(3):
-            yield f"data: {i}\n\n"
+        while True:
+            time.sleep(1)
+            yield f"data: {time.time()}\n\n"
     return StreamingResponse(gen, media_type="text/event-stream")
 
 
@@ -264,8 +265,9 @@ async def sse():
 def sse_sync():
     """Sync version: Server-Sent Events."""
     def gen():
-        for i in range(3):
-            yield f"data: {i}\n\n"
+        while True:
+            time.sleep(2)
+            yield f"data: {time.time()}\n\n"
     return StreamingResponse(gen, media_type="text/event-stream")
 
 

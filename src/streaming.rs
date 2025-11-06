@@ -51,16 +51,10 @@ pub fn convert_python_chunk(value: &Bound<'_, PyAny>) -> Option<Bytes> {
     None
 }
 
+/// Create a stream with default batch sizes from environment
 pub fn create_python_stream(
     content: Py<PyAny>,
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
-    let debug_timing = std::env::var("DJANGO_BOLT_DEBUG_TIMING").is_ok();
-
-    let channel_capacity: usize = std::env::var("DJANGO_BOLT_STREAM_CHANNEL_CAPACITY")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(32);
     let batch_size: usize = std::env::var("DJANGO_BOLT_STREAM_BATCH_SIZE")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
@@ -71,6 +65,29 @@ pub fn create_python_stream(
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
         .unwrap_or(5);
+    create_python_stream_with_config(content, batch_size, sync_batch_size)
+}
+
+/// Create a stream for SSE that sends items immediately (batch_size=1)
+pub fn create_sse_stream(
+    content: Py<PyAny>,
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
+    create_python_stream_with_config(content, 1, 1)
+}
+
+/// Internal function with configurable batch sizes
+fn create_python_stream_with_config(
+    content: Py<PyAny>,
+    async_batch_size: usize,
+    sync_batch_size: usize,
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
+    let debug_timing = std::env::var("DJANGO_BOLT_DEBUG_TIMING").is_ok();
+
+    let channel_capacity: usize = std::env::var("DJANGO_BOLT_STREAM_CHANNEL_CAPACITY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(32);
     let fast_path_threshold: usize = std::env::var("DJANGO_BOLT_STREAM_FAST_PATH_THRESHOLD")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
@@ -101,7 +118,7 @@ pub fn create_python_stream(
             "[TIMING] Iterator resolution: {:?}, is_async={}, batch_size={}, fast_path_threshold={}",
             start.elapsed(),
             is_async_iter,
-            if is_async_iter { batch_size } else { sync_batch_size },
+            if is_async_iter { async_batch_size } else { sync_batch_size },
             fast_path_threshold
         );
     }
@@ -112,7 +129,7 @@ pub fn create_python_stream(
 
     if is_async_final {
         let debug_async = debug_timing;
-        let async_batch_size = batch_size;
+        let batch_sz = async_batch_size;
         let fast_path = fast_path_threshold;
         tokio::spawn(async move {
             use futures_util::future::join_all;

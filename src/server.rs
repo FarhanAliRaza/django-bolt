@@ -73,7 +73,18 @@ pub fn start_server_async(
         ));
     }
 
-    pyo3_async_runtimes::tokio::init(tokio::runtime::Builder::new_multi_thread());
+    // Configure tokio runtime with adequate blocking thread pool for concurrent streaming
+    // Default is 512, but with concurrent SSE clients doing blocking operations (time.sleep),
+    // we need enough threads to handle simultaneous blocking tasks
+    let blocking_threads = std::env::var("DJANGO_BOLT_BLOCKING_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(1024); // Increased default to 1024 for better concurrent streaming support
+
+    let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
+    runtime_builder.max_blocking_threads(blocking_threads);
+    pyo3_async_runtimes::tokio::init(runtime_builder);
 
     let loop_obj: Py<PyAny> = {
         // Try to use uvloop if available (2-4x faster than asyncio)

@@ -219,19 +219,11 @@ pub fn create_sse_response(
 ) -> Result<actix_web::HttpResponse, actix_web::Error> {
     use actix_web::HttpResponse;
 
-    let mut stream = PythonDirectStream::new(content);
+    let stream = PythonDirectStream::new(content);
 
-    // Try to collect small responses
-    if let Some(body) = stream.try_collect_small() {
-        // Small response - send as single body
-        return Ok(HttpResponse::Ok()
-            .content_type("text/event-stream")
-            .append_header(("Cache-Control", "no-cache"))
-            .append_header(("X-Accel-Buffering", "no"))
-            .body(body));
-    }
-
-    // Large response - use streaming
+    // SSE is always streaming - never try to collect small
+    // Collecting can cause infinite loops on generators with `while True`
+    // SSE is fundamentally a streaming protocol, buffering defeats the purpose
     Ok(HttpResponse::Ok()
         .content_type("text/event-stream")
         .append_header(("Cache-Control", "no-cache"))

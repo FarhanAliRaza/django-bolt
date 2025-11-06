@@ -17,7 +17,7 @@ use crate::middleware::auth::populate_auth_context;
 use crate::request::PyRequest;
 use crate::router::parse_query_string;
 use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
-use crate::streaming::create_python_stream;
+use crate::streaming::{create_python_stream, create_sse_stream};
 use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
 
 // Reuse the global Python asyncio event loop created at server startup (TASK_LOCALS)
@@ -810,8 +810,10 @@ pub async fn handle_request(
                                     py.import("django_bolt.async_collector").ok()?;
                                 let collector_class =
                                     collector_module.getattr("AsyncToSyncCollector").ok()?;
+                                // SSE: batch_size=1, timeout=5000ms to allow slow generators
+                                // Don't wait for full batch - send items immediately
                                 collector_class
-                                    .call1((obj.clone(), 5, 1))
+                                    .call1((obj.clone(), 1, 5000))
                                     .ok()
                                     .map(|w| w.unbind())
                             })();
@@ -820,47 +822,21 @@ pub async fn handle_request(
                         if let Some(w) = wrapped_content {
                             final_content_obj = w;
                         }
-                        if is_async_sse {
-                            builder.append_header(("X-Accel-Buffering", "no"));
-                            builder.append_header((
-                                "Cache-Control",
-                                "no-cache, no-store, must-revalidate",
-                            ));
-                            builder.append_header(("Pragma", "no-cache"));
-                            builder.append_header(("Expires", "0"));
-                            if skip_compression {
-                                builder.append_header(("Content-Encoding", "identity"));
-                            }
-                            builder.content_type("text/event-stream");
-                            return builder.streaming(create_python_stream(final_content_obj));
-                        } else {
-                            match direct_stream::create_sse_response(final_content_obj) {
-                                Ok(mut resp) => {
-                                    if skip_compression {
-                                        if let Ok(val) = HeaderValue::try_from("identity") {
-                                            resp.headers_mut().insert(
-                                                actix_web::http::header::CONTENT_ENCODING,
-                                                val,
-                                            );
-                                        }
-                                    }
-                                    return resp;
-                                }
-                                Err(_) => {
-                                    builder.append_header(("X-Accel-Buffering", "no"));
-                                    builder.append_header((
-                                        "Cache-Control",
-                                        "no-cache, no-store, must-revalidate",
-                                    ));
-                                    builder.append_header(("Pragma", "no-cache"));
-                                    builder.append_header(("Expires", "0"));
-                                    if skip_compression {
-                                        builder.append_header(("Content-Encoding", "identity"));
-                                    }
-                                    return builder.content_type("text/event-stream").body("");
-                                }
-                            }
+                        // Both async and sync generators must use create_sse_stream
+                        // create_sse_stream uses batch_size=1 to stream items immediately
+                        // This properly handles blocking with spawn_blocking for sync iterators
+                        builder.append_header(("X-Accel-Buffering", "no"));
+                        builder.append_header((
+                            "Cache-Control",
+                            "no-cache, no-store, must-revalidate",
+                        ));
+                        builder.append_header(("Pragma", "no-cache"));
+                        builder.append_header(("Expires", "0"));
+                        if skip_compression {
+                            builder.append_header(("Content-Encoding", "identity"));
                         }
+                        builder.content_type("text/event-stream");
+                        return builder.streaming(create_sse_stream(final_content_obj));
                     } else {
                         // HEAD requests must have empty body per RFC 7231
                         if is_head_request {
@@ -885,8 +861,10 @@ pub async fn handle_request(
                                     py.import("django_bolt.async_collector").ok()?;
                                 let collector_class =
                                     collector_module.getattr("AsyncToSyncCollector").ok()?;
+                                // General streaming: batch_size=20, timeout=5000ms
+                                // Allows slow generators while still batching for efficiency
                                 collector_class
-                                    .call1((obj.clone(), 20, 2))
+                                    .call1((obj.clone(), 20, 5000))
                                     .ok()
                                     .map(|w| w.unbind())
                             })();

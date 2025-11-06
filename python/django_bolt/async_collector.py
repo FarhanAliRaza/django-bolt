@@ -17,43 +17,52 @@ def batch_async(
     loop: Optional[asyncio.AbstractEventLoop] = None,
 ) -> Iterator[List[X]]:
     """
-    Batch an async iterable synchronously without timeouts for minimal latency.
-    
-    Optimized for low-latency streaming:
-    - No timeout overhead for immediate async generators
-    - Direct async iteration for maximum speed
-    - Simplified control flow
-    
+    Batch an async iterable with timeout-based flushing for low-latency streaming.
+
+    Optimized for streaming scenarios:
+    - Collects items up to batch_size OR timeout, whichever comes first
+    - Ensures items are sent as soon as available (no waiting for full batch)
+    - Minimal latency for SSE and real-time streaming
+
     Args:
         aib: The underlying source async iterable of items
-        timeout: Ignored in this optimized version
+        timeout: Maximum time to wait for a batch to fill (timedelta)
         batch_size: Maximum number of items to yield in a batch
         loop: Custom asyncio run loop to use, if any
-        
+
     Yields:
-        The next gathered batch of items
+        The next gathered batch of items (may be partial if timeout expires)
     """
     # Ensure that we have the stateful iterator of the source
     ait = aib.__aiter__()
-    
+
     loop = loop if loop is not None else asyncio.new_event_loop()
-    
-    async def get_next_batch():
+    timeout_seconds = timeout.total_seconds()
+
+    async def get_next_batch_with_timeout():
         batch = []
-        # Gather items greedily up to batch_size
-        # This is optimal for small iterators (SSE with 3-5 chunks)
-        for _ in range(batch_size):
+        # Try to collect items, but flush on timeout for low latency
+        for i in range(batch_size):
             try:
-                next_item = await ait.__anext__()
+                # Wait for the next item with timeout
+                # If timeout expires, return partial batch
+                next_item = await asyncio.wait_for(
+                    ait.__anext__(),
+                    timeout=timeout_seconds
+                )
                 batch.append(next_item)
+            except asyncio.TimeoutError:
+                # Timeout reached - flush partial batch
+                # This is critical for streaming: don't wait for full batch
+                break
             except StopAsyncIteration:
                 # End of iterator
                 break
         return batch
-    
+
     while True:
-        # Direct execution without timeout wrapper for minimal overhead
-        batch = loop.run_until_complete(get_next_batch())
+        # Execute with timeout wrapper to flush partial batches
+        batch = loop.run_until_complete(get_next_batch_with_timeout())
         if not batch:
             return
         yield batch

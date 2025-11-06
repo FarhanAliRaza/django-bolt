@@ -71,43 +71,43 @@ echo ""
 echo "## Streaming and SSE Performance"
 
 # Check if hey is available
-HEY_BIN=""
-if command -v hey &> /dev/null; then
-    HEY_BIN="hey"
-elif [ -f "$HOME/go/bin/hey" ]; then
-    HEY_BIN="$HOME/go/bin/hey"
-elif [ -f "$HOME/.local/bin/hey" ]; then
-    HEY_BIN="$HOME/.local/bin/hey"
-fi
+# HEY_BIN=""
+# if command -v hey &> /dev/null; then
+#     HEY_BIN="hey"
+# elif [ -f "$HOME/go/bin/hey" ]; then
+#     HEY_BIN="$HOME/go/bin/hey"
+# elif [ -f "$HOME/.local/bin/hey" ]; then
+#     HEY_BIN="$HOME/.local/bin/hey"
+# fi
 
-if [ -n "$HEY_BIN" ]; then
-    printf "### Streaming Plain Text (Async) (/stream)\n"
-    timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C http://$HOST:$PORT/stream 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(stream timed out after ${HEY_TIMEOUT}s)"
+# if [ -n "$HEY_BIN" ]; then
+#     printf "### Streaming Plain Text (Async) (/stream)\n"
+#     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C http://$HOST:$PORT/stream 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(stream timed out after ${HEY_TIMEOUT}s)"
 
-    printf "### Streaming Plain Text (Sync) (/sync-stream)\n"
-    timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C http://$HOST:$PORT/sync-stream 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(sync-stream timed out after ${HEY_TIMEOUT}s)"
+#     printf "### Streaming Plain Text (Sync) (/sync-stream)\n"
+#     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C http://$HOST:$PORT/sync-stream 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(sync-stream timed out after ${HEY_TIMEOUT}s)"
 
-    printf "### Server-Sent Events (Async) (/sse)\n"
-    timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Accept: text/event-stream" http://$HOST:$PORT/sse 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(sse timed out after ${HEY_TIMEOUT}s)"
+#     printf "### Server-Sent Events (Async) (/sse)\n"
+#     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Accept: text/event-stream" http://$HOST:$PORT/sse 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(sse timed out after ${HEY_TIMEOUT}s)"
 
-    printf "### Server-Sent Events (Sync) (/sync-sse)\n"
-    timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Accept: text/event-stream" http://$HOST:$PORT/sync-sse 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(sync-sse timed out after ${HEY_TIMEOUT}s)"
+#     printf "### Server-Sent Events (Sync) (/sync-sse)\n"
+#     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Accept: text/event-stream" http://$HOST:$PORT/sync-sse 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(sync-sse timed out after ${HEY_TIMEOUT}s)"
 
-    printf "### Server-Sent Events (Async Generator) (/sse-async)\n"
-    timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Accept: text/event-stream" http://$HOST:$PORT/sse-async 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(sse-async timed out after ${HEY_TIMEOUT}s)"
+#     printf "### Server-Sent Events (Async Generator) (/sse-async)\n"
+#     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Accept: text/event-stream" http://$HOST:$PORT/sse-async 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(sse-async timed out after ${HEY_TIMEOUT}s)"
 
-    printf "### OpenAI Chat Completions (stream) (/v1/chat/completions)\n"
-    BODY_STREAM='{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}],"stream":true,"n_chunks":50,"token":" hi","delay_ms":0}'
-    echo "$BODY_STREAM" > /tmp/bolt_chat_stream.json
-    timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Content-Type: application/json" -m POST -D /tmp/bolt_chat_stream.json http://$HOST:$PORT/v1/chat/completions 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Bytes In|Bytes Out|Status code distribution:)" | head -15 || echo "(chat stream timed out after ${HEY_TIMEOUT}s)"
+#     printf "### OpenAI Chat Completions (stream) (/v1/chat/completions)\n"
+#     BODY_STREAM='{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}],"stream":true,"n_chunks":50,"token":" hi","delay_ms":0}'
+#     echo "$BODY_STREAM" > /tmp/bolt_chat_stream.json
+#     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Content-Type: application/json" -m POST -D /tmp/bolt_chat_stream.json http://$HOST:$PORT/v1/chat/completions 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Bytes In|Bytes Out|Status code distribution:)" | head -15 || echo "(chat stream timed out after ${HEY_TIMEOUT}s)"
 
-    printf "### OpenAI Chat Completions (async stream) (/v1/chat/completions-async)\n"
-    BODY_STREAM_ASYNC='{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}],"stream":true,"n_chunks":50,"token":" hi","delay_ms":0}'
-    echo "$BODY_STREAM_ASYNC" > /tmp/bolt_chat_stream_async.json
-    timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Content-Type: application/json" -m POST -D /tmp/bolt_chat_stream_async.json http://$HOST:$PORT/v1/chat/completions-async 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Bytes In|Bytes Out|Status code distribution:)" | head -15 || echo "(chat async stream timed out after ${HEY_TIMEOUT}s)"
-else
-    echo "hey not installed. Run: ./scripts/install_hey.sh"
-fi
+#     printf "### OpenAI Chat Completions (async stream) (/v1/chat/completions-async)\n"
+#     BODY_STREAM_ASYNC='{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}],"stream":true,"n_chunks":50,"token":" hi","delay_ms":0}'
+#     echo "$BODY_STREAM_ASYNC" > /tmp/bolt_chat_stream_async.json
+#     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Content-Type: application/json" -m POST -D /tmp/bolt_chat_stream_async.json http://$HOST:$PORT/v1/chat/completions-async 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Bytes In|Bytes Out|Status code distribution:)" | head -15 || echo "(chat async stream timed out after ${HEY_TIMEOUT}s)"
+# else
+#     echo "hey not installed. Run: ./scripts/install_hey.sh"
+# fi
 
 # Additional endpoint: GET /items/{item_id}
 echo ""

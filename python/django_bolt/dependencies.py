@@ -53,13 +53,25 @@ async def resolve_dependency(
         dep_meta = compile_binder(dep_fn, http_method, path)
         handler_meta[dep_fn] = dep_meta
 
+    # Check if dependency is async or sync
+    is_async = inspect.iscoroutinefunction(dep_fn)
+
     if dep_meta.get("mode") == "request_only":
-        value = await dep_fn(request)
+        if is_async:
+            value = await dep_fn(request)
+        else:
+            value = dep_fn(request)
     else:
-        value = await call_dependency(
-            dep_fn, dep_meta, request, params_map,
-            query_map, headers_map, cookies_map
-        )
+        if is_async:
+            value = await call_dependency(
+                dep_fn, dep_meta, request, params_map,
+                query_map, headers_map, cookies_map
+            )
+        else:
+            value = call_dependency_sync(
+                dep_fn, dep_meta, request, params_map,
+                query_map, headers_map, cookies_map
+            )
 
     if depends_marker.use_cache:
         dep_cache[dep_fn] = value
@@ -76,7 +88,7 @@ async def call_dependency(
     headers_map: Dict[str, str],
     cookies_map: Dict[str, str]
 ) -> Any:
-    """Call a dependency function with resolved parameters."""
+    """Call an async dependency function with resolved parameters."""
     dep_args: List[Any] = []
     dep_kwargs: Dict[str, Any] = {}
 
@@ -93,6 +105,34 @@ async def call_dependency(
             dep_kwargs[field.name] = dval
 
     return await dep_fn(*dep_args, **dep_kwargs)
+
+
+def call_dependency_sync(
+    dep_fn: Callable,
+    dep_meta: Dict[str, Any],
+    request: Dict[str, Any],
+    params_map: Dict[str, Any],
+    query_map: Dict[str, Any],
+    headers_map: Dict[str, str],
+    cookies_map: Dict[str, str]
+) -> Any:
+    """Call a sync dependency function with resolved parameters."""
+    dep_args: List[Any] = []
+    dep_kwargs: Dict[str, Any] = {}
+
+    # Use FieldDefinition objects directly
+    for field in dep_meta["fields"]:
+        if field.source == "request":
+            dval = request
+        else:
+            dval = extract_dependency_value(field, params_map, query_map, headers_map, cookies_map)
+
+        if field.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            dep_args.append(dval)
+        else:
+            dep_kwargs[field.name] = dval
+
+    return dep_fn(*dep_args, **dep_kwargs)
 
 
 def extract_dependency_value(

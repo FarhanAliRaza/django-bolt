@@ -33,6 +33,28 @@ from django_bolt.auth.guards import IsAuthenticated
 from django_bolt.auth.backends import JWTAuthentication
 
 
+# --- Schema Definitions ---
+
+class CreateUserRequest(msgspec.Struct):
+    username: str
+    email: str
+
+
+class ItemSchema(msgspec.Struct):
+    name: str
+    price: float
+
+
+class UserSchema(msgspec.Struct):
+    name: str
+    email: str
+
+
+class InputSchema(msgspec.Struct):
+    name: str
+    age: int
+
+
 # --- Test Fixtures ---
 
 @pytest.fixture
@@ -139,10 +161,6 @@ def test_sync_api_view_query_parameters(api):
 
 def test_sync_api_view_request_body(api):
     """Test request body parsing in sync class-based views."""
-    class CreateUserRequest(msgspec.Struct):
-        username: str
-        email: str
-
     @api.view("/users")
     class UserCreateView(APIView):
         def post(self, request, data: CreateUserRequest) -> dict:
@@ -166,10 +184,6 @@ def test_sync_api_view_request_body(api):
 
 def test_sync_api_view_invalid_body(api):
     """Test validation error for invalid sync request body."""
-    class CreateUserRequest(msgspec.Struct):
-        username: str
-        email: str
-
     @api.view("/users")
     class UserCreateView(APIView):
         def post(self, request, data: CreateUserRequest) -> dict:
@@ -308,10 +322,6 @@ def test_sync_list_mixin(api):
 
 def test_sync_create_mixin(api):
     """Test CreateMixin with sync handler (data validation)."""
-    class ItemSchema(msgspec.Struct):
-        name: str
-        price: float
-
     @api.view("/items")
     class ItemCreateView(APIView):
         def post(self, request, data: ItemSchema) -> dict:
@@ -391,10 +401,6 @@ def test_sync_viewset_with_path_params(api):
 
 def test_sync_viewset_with_data_validation(api):
     """Test sync ViewSet with POST data validation."""
-    class UserSchema(msgspec.Struct):
-        name: str
-        email: str
-
     @api.view("/users")
     class UserViewSet(ViewSet):
         def post(self, request, data: UserSchema) -> dict:
@@ -469,10 +475,6 @@ def test_sync_and_async_same_response(api):
 
 def test_sync_and_async_same_validation(api):
     """Test that sync and async handlers have same validation."""
-    class InputSchema(msgspec.Struct):
-        name: str
-        age: int
-
     @api.view("/sync")
     class SyncView(APIView):
         def post(self, request, data: InputSchema) -> dict:

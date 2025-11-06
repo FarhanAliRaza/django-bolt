@@ -185,6 +185,93 @@ fn add_cors_preflight_headers(response: &mut HttpResponse, cors_config: &CorsCon
     );
 }
 
+/// Extract fast tuple from Python handler result (status, headers, body as bytes)
+/// Returns: (status_code, resp_headers, body_owner, body_ptr, body_len) or None if not a proper tuple
+fn extract_fast_tuple(result_obj: &Py<PyAny>) -> Option<(u16, Vec<(String, String)>, Py<PyAny>, *const u8, usize)> {
+    Python::attach(|py| {
+        let obj = result_obj.bind(py);
+        let tuple = obj.downcast::<PyTuple>().ok()?;
+        if tuple.len() != 3 {
+            return None;
+        }
+
+        // 0: status code
+        let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
+
+        // 1: headers
+        let resp_headers: Vec<(String, String)> = tuple
+            .get_item(1)
+            .ok()?
+            .extract::<Vec<(String, String)>>()
+            .ok()?;
+
+        // 2: body (must be bytes)
+        let body_obj = match tuple.get_item(2) {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
+        if let Ok(pybytes) = body_obj.downcast::<PyBytes>() {
+            let slice = pybytes.as_bytes();
+            let len = slice.len();
+            let ptr = slice.as_ptr();
+            let owner: Py<PyAny> = body_obj.unbind();
+            Some((status_code, resp_headers, owner, ptr, len))
+        } else {
+            None
+        }
+    })
+}
+
+/// Build HTTP response from extracted tuple data, applying compression and CORS headers
+/// This is the common response building logic shared across async and sync paths
+fn build_tuple_response(
+    status_code: u16,
+    resp_headers: Vec<(String, String)>,
+    body_owner: Py<PyAny>,
+    body_ptr: *const u8,
+    body_len: usize,
+    skip_compression: bool,
+    is_head_request: bool,
+    route_metadata: &Option<crate::metadata::RouteMetadata>,
+    req: &HttpRequest,
+    state: &web::Data<Arc<AppState>>,
+) -> HttpResponse {
+    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+    let mut builder = HttpResponse::build(status);
+    for (k, v) in resp_headers {
+        builder.append_header((k, v));
+    }
+    if skip_compression {
+        builder.append_header(("Content-Encoding", "identity"));
+    }
+
+    let mut response = if is_head_request {
+        builder.body(Vec::<u8>::new())
+    } else {
+        let mut body_vec = Vec::<u8>::with_capacity(body_len);
+        unsafe {
+            body_vec.set_len(body_len);
+            std::ptr::copy_nonoverlapping(
+                body_ptr,
+                body_vec.as_mut_ptr(),
+                body_len,
+            );
+        }
+        let _ = Python::attach(|_| drop(body_owner));
+        builder.body(body_vec)
+    };
+
+    // Add CORS headers if configured (NO GIL - uses Rust-native config)
+    if let Some(ref route_meta) = route_metadata {
+        if let Some(ref cors_cfg) = route_meta.cors_config {
+            let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+            let _ = add_cors_headers_rust(&mut response, origin, cors_cfg, state);
+        }
+    }
+
+    response
+}
+
 pub async fn handle_request(
     req: HttpRequest,
     body: web::Bytes,
@@ -1023,71 +1110,20 @@ pub async fn handle_request(
 
         match result_obj {
             Ok(result) => {
-                // Process result (same as async path)
-                let fast_tuple: Option<(u16, Vec<(String, String)>, Py<PyAny>, *const u8, usize)> =
-                    Python::attach(|py| {
-                        let obj = result.bind(py);
-                        let tuple = obj.downcast::<PyTuple>().ok()?;
-                        if tuple.len() != 3 {
-                            return None;
-                        }
-
-                        let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
-                        let resp_headers: Vec<(String, String)> = tuple
-                            .get_item(1)
-                            .ok()?
-                            .extract::<Vec<(String, String)>>()
-                            .ok()?;
-
-                        let body_obj = match tuple.get_item(2) {
-                            Ok(v) => v,
-                            Err(_) => return None,
-                        };
-                        if let Ok(pybytes) = body_obj.downcast::<PyBytes>() {
-                            let slice = pybytes.as_bytes();
-                            let len = slice.len();
-                            let ptr = slice.as_ptr();
-                            let owner: Py<PyAny> = body_obj.unbind();
-                            Some((status_code, resp_headers, owner, ptr, len))
-                        } else {
-                            None
-                        }
-                    });
-
-                if let Some((status_code, resp_headers, body_owner, body_ptr, body_len)) = fast_tuple {
-                    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
-                    let mut builder = HttpResponse::build(status);
-                    for (k, v) in resp_headers {
-                        builder.append_header((k, v));
-                    }
-                    if skip_compression {
-                        builder.append_header(("Content-Encoding", "identity"));
-                    }
-
-                    let mut response = if is_head_request {
-                        builder.body(Vec::<u8>::new())
-                    } else {
-                        let mut body_vec = Vec::<u8>::with_capacity(body_len);
-                        unsafe {
-                            body_vec.set_len(body_len);
-                            std::ptr::copy_nonoverlapping(
-                                body_ptr,
-                                body_vec.as_mut_ptr(),
-                                body_len,
-                            );
-                        }
-                        let _ = Python::attach(|_| drop(body_owner));
-                        builder.body(body_vec)
-                    };
-
-                    if let Some(ref route_meta) = route_metadata {
-                        if let Some(ref cors_cfg) = route_meta.cors_config {
-                            let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-                            let _ = add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
-                        }
-                    }
-
-                    return response;
+                // Process result using helper function
+                if let Some((status_code, resp_headers, body_owner, body_ptr, body_len)) = extract_fast_tuple(&result) {
+                    return build_tuple_response(
+                        status_code,
+                        resp_headers,
+                        body_owner,
+                        body_ptr,
+                        body_len,
+                        skip_compression,
+                        is_head_request,
+                        &route_metadata,
+                        &req,
+                        &state,
+                    );
                 } else {
                     return Python::attach(|py| {
                         error::build_error_response(
@@ -1128,9 +1164,11 @@ pub async fn handle_request(
         }
     } else {
         // SYNC SPAWN_BLOCKING PATH: Offload to thread pool to avoid blocking async runtime
+        // Clone state before moving into closure
+        let state_clone = state.clone();
         let result = tokio::task::spawn_blocking(move || {
             Python::attach(|py| -> PyResult<_> {
-                let dispatch = state.dispatch.clone_ref(py);
+                let dispatch = state_clone.dispatch.clone_ref(py);
                 let handler = route_handler.clone_ref(py);
 
                 // Create context dict only if auth context is present
@@ -1164,71 +1202,20 @@ pub async fn handle_request(
 
         match result {
             Ok(Ok(result_obj)) => {
-                // Process result
-                let fast_tuple: Option<(u16, Vec<(String, String)>, Py<PyAny>, *const u8, usize)> =
-                    Python::attach(|py| {
-                        let obj = result_obj.bind(py);
-                        let tuple = obj.downcast::<PyTuple>().ok()?;
-                        if tuple.len() != 3 {
-                            return None;
-                        }
-
-                        let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
-                        let resp_headers: Vec<(String, String)> = tuple
-                            .get_item(1)
-                            .ok()?
-                            .extract::<Vec<(String, String)>>()
-                            .ok()?;
-
-                        let body_obj = match tuple.get_item(2) {
-                            Ok(v) => v,
-                            Err(_) => return None,
-                        };
-                        if let Ok(pybytes) = body_obj.downcast::<PyBytes>() {
-                            let slice = pybytes.as_bytes();
-                            let len = slice.len();
-                            let ptr = slice.as_ptr();
-                            let owner: Py<PyAny> = body_obj.unbind();
-                            Some((status_code, resp_headers, owner, ptr, len))
-                        } else {
-                            None
-                        }
-                    });
-
-                if let Some((status_code, resp_headers, body_owner, body_ptr, body_len)) = fast_tuple {
-                    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
-                    let mut builder = HttpResponse::build(status);
-                    for (k, v) in resp_headers {
-                        builder.append_header((k, v));
-                    }
-                    if skip_compression {
-                        builder.append_header(("Content-Encoding", "identity"));
-                    }
-
-                    let mut response = if is_head_request {
-                        builder.body(Vec::<u8>::new())
-                    } else {
-                        let mut body_vec = Vec::<u8>::with_capacity(body_len);
-                        unsafe {
-                            body_vec.set_len(body_len);
-                            std::ptr::copy_nonoverlapping(
-                                body_ptr,
-                                body_vec.as_mut_ptr(),
-                                body_len,
-                            );
-                        }
-                        let _ = Python::attach(|_| drop(body_owner));
-                        builder.body(body_vec)
-                    };
-
-                    if let Some(ref route_meta) = route_metadata {
-                        if let Some(ref cors_cfg) = route_meta.cors_config {
-                            let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-                            let _ = add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
-                        }
-                    }
-
-                    return response;
+                // Process result using helper function
+                if let Some((status_code, resp_headers, body_owner, body_ptr, body_len)) = extract_fast_tuple(&result_obj) {
+                    return build_tuple_response(
+                        status_code,
+                        resp_headers,
+                        body_owner,
+                        body_ptr,
+                        body_len,
+                        skip_compression,
+                        is_head_request,
+                        &route_metadata,
+                        &req,
+                        &state,
+                    );
                 } else {
                     return Python::attach(|py| {
                         error::build_error_response(
@@ -1242,39 +1229,40 @@ pub async fn handle_request(
                     });
                 }
             }
-            Ok(Err(e)) | Err(_) => {
+            Ok(Err(err)) => {
                 return Python::attach(|py| {
-                    if let Ok(Err(e)) = result {
-                        e.restore(py);
-                        if let Some(exc) = PyErr::take(py) {
-                            let exc_value = exc.value(py);
-                            error::handle_python_exception(
-                                py,
-                                exc_value,
-                                &path_clone,
-                                &method_clone,
-                                state.debug,
-                            )
-                        } else {
-                            error::build_error_response(
-                                py,
-                                500,
-                                "Sync spawn_blocking handler error".to_string(),
-                                vec![],
-                                None,
-                                state.debug,
-                            )
-                        }
+                    err.restore(py);
+                    if let Some(exc) = PyErr::take(py) {
+                        let exc_value = exc.value(py);
+                        error::handle_python_exception(
+                            py,
+                            exc_value,
+                            &path_clone,
+                            &method_clone,
+                            state.debug,
+                        )
                     } else {
                         error::build_error_response(
                             py,
                             500,
-                            "Spawn blocking task failed".to_string(),
+                            "Sync spawn_blocking handler error".to_string(),
                             vec![],
                             None,
                             state.debug,
                         )
                     }
+                });
+            }
+            Err(_) => {
+                return Python::attach(|py| {
+                    error::build_error_response(
+                        py,
+                        500,
+                        "Spawn blocking task failed".to_string(),
+                        vec![],
+                        None,
+                        state.debug,
+                    )
                 });
             }
         }

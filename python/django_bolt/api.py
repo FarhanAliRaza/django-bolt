@@ -312,7 +312,7 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        inline: bool = True,
+        inline: bool = False, # inline function without spawn_blocking
     ):
         return self._route_decorator("GET", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, inline=inline)
 
@@ -327,7 +327,7 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        inline: bool = True,
+        inline: bool = False,
     ):
         return self._route_decorator("POST", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, inline=inline)
 
@@ -342,7 +342,7 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        inline: bool = True,
+        inline: bool = False,
     ):
         return self._route_decorator("PUT", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, inline=inline)
 
@@ -357,7 +357,7 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        inline: bool = True,
+        inline: bool = False,
     ):
         return self._route_decorator("PATCH", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, inline=inline)
 
@@ -372,7 +372,7 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        inline: bool = True,
+        inline: bool = False,
     ):
         return self._route_decorator("DELETE", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, inline=inline)
 
@@ -387,7 +387,7 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        inline: bool = True,
+        inline: bool = False,
     ):
         return self._route_decorator("HEAD", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, inline=inline)
 
@@ -402,7 +402,7 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        inline: bool = True,
+        inline: bool = False,
     ):
         return self._route_decorator("OPTIONS", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, inline=inline)
 
@@ -413,7 +413,8 @@ class BoltAPI:
         methods: Optional[List[str]] = None,
         guards: Optional[List[Any]] = None,
         auth: Optional[List[Any]] = None,
-        status_code: Optional[int] = None
+        status_code: Optional[int] = None,
+        inline: bool = False
     ):
         """
         Register a class-based view as a decorator.
@@ -434,6 +435,7 @@ class BoltAPI:
             guards: Optional per-route guard overrides (merged with class-level guards)
             auth: Optional per-route auth overrides (merged with class-level auth)
             status_code: Optional per-route status code override
+            inline: Whether to execute sync handlers inline (default: False, uses spawn_blocking)
 
         Returns:
             Decorator function that registers the view class
@@ -497,7 +499,8 @@ class BoltAPI:
                     response_model=None,  # Use method's return annotation
                     status_code=merged_status_code,
                     guards=merged_guards,
-                    auth=merged_auth
+                    auth=merged_auth,
+                    inline=inline
                 )
 
                 # Apply decorator to register the handler
@@ -741,7 +744,7 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        inline: bool = True,
+        inline: bool = False,
     ):
         def decorator(fn: Callable):
             # Detect if handler is async or sync

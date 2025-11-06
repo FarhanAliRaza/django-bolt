@@ -82,6 +82,14 @@ async def read_root():
     """
     return {"message": "Hello World"}
 
+@api.get("/sync",inline=True, tags=["root"], summary="summary", description="description")
+@cors()  # Uses global CORS_ALLOWED_ORIGINS from Django settings
+def read_root():
+    """
+    Endpoint that returns a simple "Hello World" dictionary.
+    """
+    return {"message": "Hello World"}
+
 
 @api.get("/10k-json")
 async def read_10k():

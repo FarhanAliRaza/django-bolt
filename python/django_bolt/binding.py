@@ -367,6 +367,15 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
     Returns:
         Coerced value
     """
+    # Fast path: if annotation is a primitive type (dict, list, str, int, etc.),
+    # just return the value without validation. Validation only makes sense for
+    # structured types like msgspec.Struct or parameterized generics.
+    # Handle both the actual type AND string annotations (PEP 563)
+    if annotation in (dict, list, str, int, float, bool, bytes, bytearray, type(None)) or \
+       annotation in ('dict', 'list', 'str', 'int', 'float', 'bool', 'bytes', 'bytearray', 'None'):
+        # These are primitive types - no validation needed, return as-is
+        return value
+
     # Use pre-computed type information if available
     if meta and "response_field_names" in meta:
         # This is a list[Struct] response - use pre-computed field names

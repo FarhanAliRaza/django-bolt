@@ -163,7 +163,7 @@ def test_header_parameter_extraction(api):
 
         # Missing required header
         response = client.get("/protected")
-        assert response.status_code == 500  # ValueError raises 500
+        assert response.status_code == 400  # Missing required header returns 400
 
 
 def test_cookie_parameter_extraction(api):
@@ -189,7 +189,7 @@ def test_cookie_parameter_extraction(api):
 
         # Missing required cookie
         response = client.get("/session")
-        assert response.status_code == 500  # ValueError raises 500
+        assert response.status_code == 400  # Missing required cookie returns 400
 
 
 def test_mixed_parameter_sources(api):

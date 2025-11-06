@@ -347,9 +347,9 @@ pub async fn handle_request(
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
 
-    // Single GIL acquisition for all Python operations
+    // Unified handler path: all handlers (async/sync inline/sync spawn_blocking) return coroutines from _dispatch
+    // The handler type (is_async, inline) only matters in Python, not in Rust
     let fut = match Python::attach(|py| -> PyResult<_> {
-        // Clone Python objects
         let dispatch = state.dispatch.clone_ref(py);
         let handler = route_handler.clone_ref(py);
 
@@ -380,15 +380,13 @@ pub async fn handle_request(
             pyo3::exceptions::PyRuntimeError::new_err("Asyncio loop not initialized")
         })?;
 
-        // Pass handler_id to dispatch so it can lookup the original API instance
+        // Call dispatch (always returns a coroutine since _dispatch is async)
         let coroutine = dispatch.call1(py, (handler, request_obj, handler_id))?;
         pyo3_async_runtimes::into_future_with_locals(locals, coroutine.into_bound(py))
     }) {
         Ok(f) => f,
         Err(e) => {
-            // Use new error handler
             return Python::attach(|py| {
-                // Convert PyErr to exception instance
                 e.restore(py);
                 if let Some(exc) = PyErr::take(py) {
                     let exc_value = exc.value(py);
@@ -923,13 +921,13 @@ pub async fn handle_request(
                 } else {
                     return Python::attach(|py| {
                         error::build_error_response(
-                            py,
-                            500,
-                            "Handler returned unsupported response type (expected tuple or StreamingResponse)".to_string(),
-                            vec![],
-                            None,
-                            state.debug,
-                        )
+                        py,
+                        500,
+                        "Handler returned unsupported response type (expected tuple or StreamingResponse)".to_string(),
+                        vec![],
+                        None,
+                        state.debug,
+                    )
                     });
                 }
             }

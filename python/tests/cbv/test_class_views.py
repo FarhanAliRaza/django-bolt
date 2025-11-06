@@ -417,18 +417,6 @@ async def test_bolt_viewset_get_object_not_found():
 # --- Edge Cases and Validation ---
 
 
-def test_bolt_api_view_non_async_handler_raises():
-    """Test that non-async handlers raise TypeError."""
-
-    api = BoltAPI()
-
-    with pytest.raises(TypeError) as exc_info:
-        @api.view("/bad")
-        class BadView(APIView):
-            def get(self, request):  # NOT async
-                return {"bad": True}
-
-    assert "must be async" in str(exc_info.value)
 
 
 def test_bolt_api_view_non_subclass_raises():

@@ -159,7 +159,7 @@ class TestClient(httpx.Client):
         api: BoltAPI,
         base_url: str = "http://testserver.local",
         raise_server_exceptions: bool = True,
-        use_http_layer: bool = False,
+        use_http_layer: bool = True,
         cors_allowed_origins: list[str] | None = None,
         read_django_settings: bool = True,
         **kwargs: Any,

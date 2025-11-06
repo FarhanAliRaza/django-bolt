@@ -4,6 +4,7 @@ import inspect
 import logging
 import msgspec
 import re
+import sys
 import time
 from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Annotated, get_type_hints
 
@@ -108,14 +109,14 @@ def extract_parameter_value(
     if source == "path":
         if key in params_map:
             return convert_primitive(str(params_map[key]), annotation), body_obj, body_loaded
-        raise ValueError(f"Missing required path parameter: {key}")
+        raise HTTPException(status_code=400, detail=f"Missing required path parameter: {key}")
 
     elif source == "query":
         if key in query_map:
             return convert_primitive(str(query_map[key]), annotation), body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
-        raise ValueError(f"Missing required query parameter: {key}")
+        raise HTTPException(status_code=400, detail=f"Missing required query parameter: {key}")
 
     elif source == "header":
         lower_key = key.lower()
@@ -123,21 +124,21 @@ def extract_parameter_value(
             return convert_primitive(str(headers_map[lower_key]), annotation), body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
-        raise ValueError(f"Missing required header: {key}")
+        raise HTTPException(status_code=400, detail=f"Missing required header: {key}")
 
     elif source == "cookie":
         if key in cookies_map:
             return convert_primitive(str(cookies_map[key]), annotation), body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
-        raise ValueError(f"Missing required cookie: {key}")
+        raise HTTPException(status_code=400, detail=f"Missing required cookie: {key}")
 
     elif source == "form":
         if key in form_map:
             return convert_primitive(str(form_map[key]), annotation), body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
-        raise ValueError(f"Missing required form field: {key}")
+        raise HTTPException(status_code=400, detail=f"Missing required form field: {key}")
 
     elif source == "file":
         if key in files_map:
@@ -167,7 +168,7 @@ def extract_parameter_value(
                 return file_info, body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
-        raise ValueError(f"Missing required file: {key}")
+        raise HTTPException(status_code=400, detail=f"Missing required file: {key}")
 
     elif source == "body":
         # Handle body parameter
@@ -175,7 +176,7 @@ def extract_parameter_value(
             if not body_loaded:
                 body_bytes: bytes = request["body"]
                 if is_msgspec_struct(meta["body_struct_type"]):
-                
+
                     decoder = get_msgspec_decoder(meta["body_struct_type"])
                     try:
                         value = decoder.decode(body_bytes)
@@ -191,7 +192,7 @@ def extract_parameter_value(
                             body=body_bytes,
                         ) from e
                 else:
-                    
+
                     try:
                         value = msgspec.json.decode(body_bytes, type=meta["body_struct_type"])
                     except msgspec.ValidationError:
@@ -211,13 +212,13 @@ def extract_parameter_value(
         else:
             if field.is_optional:
                 return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
-            raise ValueError(f"Missing required parameter: {name}")
+            raise HTTPException(status_code=400, detail=f"Missing required parameter: {name}")
 
     else:
         # Unknown source
         if field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
-        raise ValueError(f"Missing required parameter: {name}")
+        raise HTTPException(status_code=400, detail=f"Missing required parameter: {name}")
 
 class BoltAPI:
     def __init__(
@@ -406,7 +407,7 @@ class BoltAPI:
         methods: Optional[List[str]] = None,
         guards: Optional[List[Any]] = None,
         auth: Optional[List[Any]] = None,
-        status_code: Optional[int] = None
+        status_code: Optional[int] = None,
     ):
         """
         Register a class-based view as a decorator.
@@ -490,7 +491,7 @@ class BoltAPI:
                     response_model=None,  # Use method's return annotation
                     status_code=merged_status_code,
                     guards=merged_guards,
-                    auth=merged_auth
+                    auth=merged_auth,
                 )
 
                 # Apply decorator to register the handler
@@ -736,9 +737,8 @@ class BoltAPI:
         description: Optional[str] = None,
     ):
         def decorator(fn: Callable):
-            # Enforce async handlers
-            if not inspect.iscoroutinefunction(fn):
-                raise TypeError(f"Handler {fn.__name__} must be async. Use 'async def' instead of 'def'")
+            # Detect if handler is async or sync
+            is_async = inspect.iscoroutinefunction(fn)
 
             handler_id = self._next_handler_id
             self._next_handler_id += 1
@@ -751,6 +751,8 @@ class BoltAPI:
 
             # Pre-compile lightweight binder for this handler with HTTP method validation
             meta = self._compile_binder(fn, method, full_path)
+            # Store sync/async metadata
+            meta["is_async"] = is_async
             # Allow explicit response model override
             if response_model is not None:
                 meta["response_type"] = response_model
@@ -800,7 +802,11 @@ class BoltAPI:
             TypeError: If GET/HEAD/DELETE/OPTIONS handlers have body parameters
         """
         sig = inspect.signature(fn)
-        type_hints = get_type_hints(fn, include_extras=True)
+        # Get the correct namespace for resolving string annotations (from __future__ import annotations)
+        # Use fn.__module__ to get the module where annotations were defined (especially important for
+        # class-based views where the handler wrapper is created in views.py but annotations come from user's module)
+        globalns = sys.modules.get(fn.__module__, {}).__dict__ if fn.__module__ else {}
+        type_hints = get_type_hints(fn, globalns=globalns, include_extras=True)
 
         # Extract path parameters from route pattern
         path_params = _extract_path_params(path)
@@ -1016,13 +1022,22 @@ class BoltAPI:
                 meta = self._compile_binder(handler)
                 self._handler_meta[handler] = meta
 
+            # Determine if handler is async (default to True for backward compatibility)
+            is_async = meta.get("is_async", True)
+
             # Fast path for request-only handlers
             if meta.get("mode") == "request_only":
-                result = await handler(request)
+                if is_async:
+                    result = await handler(request)
+                else:
+                    result = handler(request)
             else:
                 # Build handler arguments
                 args, kwargs = await self._build_handler_arguments(meta, request)
-                result = await handler(*args, **kwargs)
+                if is_async:
+                    result = await handler(*args, **kwargs)
+                else:
+                    result = handler(*args, **kwargs)
 
             # Serialize response
             response = await serialize_response(result, meta)

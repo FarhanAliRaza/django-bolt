@@ -58,13 +58,14 @@ class APIView:
         3. Preserves the method signature for parameter extraction and dependency injection
         4. Attaches class-level metadata (guards, auth) for middleware compilation
         5. Maps DRF-style action names (list, retrieve, etc.) to HTTP methods
+        6. Supports both sync and async handler methods
 
         Args:
             method: HTTP method name (lowercase, e.g., "get", "post")
             action: Optional action name for DRF-style methods (e.g., "list", "retrieve")
 
         Returns:
-            Async handler function compatible with BoltAPI routing
+            Handler function compatible with BoltAPI routing (sync or async)
 
         Raises:
             ValueError: If method is not supported by this view
@@ -97,12 +98,9 @@ class APIView:
                 f"View class {cls.__name__} does not implement method '{action or method_lower}'"
             )
 
-        # Validate that handler is async
-        if not inspect.iscoroutinefunction(method_handler):
-            raise TypeError(
-                f"Handler {cls.__name__}.{action_name} must be async. "
-                f"Use 'async def' instead of 'def'"
-            )
+        # Handlers can be sync or async
+        # Sync handlers will be executed via spawn_blocking or inline mode
+        # This is determined at registration time based on the 'inline' parameter
 
         # Create wrapper that preserves signature for parameter extraction
         # The wrapper's signature matches the method handler (excluding 'self')
@@ -123,17 +121,33 @@ class APIView:
         # Bind the method once to eliminate lookup overhead
         bound_method = method_handler.__get__(view_instance, cls)
 
-        # Create pure functional handler that calls bound method directly
-        async def view_handler(*args, **kwargs):
-            """Auto-generated view handler that calls bound method directly."""
-            # Inject request object into view instance for pagination/filtering
-            # Request is typically the first positional arg or named 'request'
-            if args and isinstance(args[0], dict) and 'method' in args[0]:
-                view_instance.request = args[0]
-            elif 'request' in kwargs:
-                view_instance.request = kwargs['request']
+        # Create handler wrapper based on whether method is async or sync
+        is_async_method = inspect.iscoroutinefunction(method_handler)
 
-            return await bound_method(*args, **kwargs)
+        if is_async_method:
+            # Create async wrapper for async methods
+            async def view_handler(*args, **kwargs):
+                """Auto-generated async view handler that calls bound method directly."""
+                # Inject request object into view instance for pagination/filtering
+                # Request is typically the first positional arg or named 'request'
+                if args and isinstance(args[0], dict) and 'method' in args[0]:
+                    view_instance.request = args[0]
+                elif 'request' in kwargs:
+                    view_instance.request = kwargs['request']
+
+                return await bound_method(*args, **kwargs)
+        else:
+            # Create sync wrapper for sync methods
+            def view_handler(*args, **kwargs):
+                """Auto-generated sync view handler that calls bound method directly."""
+                # Inject request object into view instance for pagination/filtering
+                # Request is typically the first positional arg or named 'request'
+                if args and isinstance(args[0], dict) and 'method' in args[0]:
+                    view_instance.request = args[0]
+                elif 'request' in kwargs:
+                    view_instance.request = kwargs['request']
+
+                return bound_method(*args, **kwargs)
 
         # Attach the signature (for parameter extraction)
         view_handler.__signature__ = new_sig

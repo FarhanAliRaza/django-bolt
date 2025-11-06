@@ -26,7 +26,7 @@ Modern frameworks like Litestar use **in-memory testing** that directly invokes 
 
 Django-Bolt test client supports **two modes** for different testing scenarios:
 
-### Fast Mode (Default)
+### HTTP Layer Mode (Default)
 **Best for**: Unit tests, handler logic, parameter extraction
 
 - Routes through: Rust routing � auth � guards � handler dispatch

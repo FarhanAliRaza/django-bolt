@@ -61,10 +61,52 @@ async def list_full_10() -> List[UserFull]:
     return User.objects.only("id", "username", "email", "first_name", "last_name", "is_active")[:10]
 
 
+@api.get("/sync-full10")
+def list_full_10_sync() -> List[UserFull]:
+    # Optimized: only fetch needed fields instead of all()
+    return User.objects.only("id", "username", "email", "first_name", "last_name", "is_active")[:10]
+
+
+@api.get("/sync-mini10")
+def list_mini_10_sync() -> List[UserMini]:
+    # Already optimized: only() fetches just id and username
+    return User.objects.only("id", "username")[:10]
+
+
+
 @api.get("/mini10")
 async def list_mini_10() -> List[UserMini]:
     # Already optimized: only() fetches just id and username
     return User.objects.only("id", "username")[:10]
+
+
+@api.post("/seed")
+async def seed_users(count: int = 1000) -> dict:
+    """Create test users for benchmarking."""
+    # Delete existing users first
+    await User.objects.all().adelete()
+
+    # Create users in bulk for performance
+    users_to_create = [
+        User(
+            username=f"user{i}",
+            email=f"user{i}@example.com",
+            first_name=f"First{i}",
+            last_name=f"Last{i}",
+            is_active=True
+        )
+        for i in range(count)
+    ]
+
+    created_users = await User.objects.abulk_create(users_to_create)
+    return {"created": len(created_users), "count": count}
+
+
+@api.post("/delete")
+async def delete_all_users() -> dict:
+    """Delete all users (for cleanup after benchmarking)."""
+    count, _ = await User.objects.all().adelete()
+    return {"deleted": count}
 
 
 

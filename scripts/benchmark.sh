@@ -39,8 +39,11 @@ ab -k -c $C -n $N http://$HOST:$PORT/ 2>/dev/null | grep -E "(Requests per secon
 echo ""
 echo "## 10kb JSON Response Performance"
 
-printf "### 10kb JSON  (/10k-json)\n"
+printf "### 10kb JSON (Async) (/10k-json)\n"
 ab -k -c $C -n $N http://$HOST:$PORT/10k-json 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
+printf "### 10kb JSON (Sync) (/sync-10k-json)\n"
+ab -k -c $C -n $N http://$HOST:$PORT/sync-10k-json 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
 echo ""
 echo "## Response Type Endpoints"
@@ -78,13 +81,19 @@ elif [ -f "$HOME/.local/bin/hey" ]; then
 fi
 
 if [ -n "$HEY_BIN" ]; then
-    printf "### Streaming Plain Text (/stream)\n"
+    printf "### Streaming Plain Text (Async) (/stream)\n"
     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C http://$HOST:$PORT/stream 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(stream timed out after ${HEY_TIMEOUT}s)"
-    
-    printf "### Server-Sent Events (/sse)\n"
+
+    printf "### Streaming Plain Text (Sync) (/sync-stream)\n"
+    timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C http://$HOST:$PORT/sync-stream 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(sync-stream timed out after ${HEY_TIMEOUT}s)"
+
+    printf "### Server-Sent Events (Async) (/sse)\n"
     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Accept: text/event-stream" http://$HOST:$PORT/sse 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(sse timed out after ${HEY_TIMEOUT}s)"
 
-    printf "### Server-Sent Events (async) (/sse-async)\n"
+    printf "### Server-Sent Events (Sync) (/sync-sse)\n"
+    timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Accept: text/event-stream" http://$HOST:$PORT/sync-sse 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(sync-sse timed out after ${HEY_TIMEOUT}s)"
+
+    printf "### Server-Sent Events (Async Generator) (/sse-async)\n"
     timeout "$HEY_TIMEOUT" $HEY_BIN -n $N -c $C -H "Accept: text/event-stream" http://$HOST:$PORT/sse-async 2>&1 | grep -E "(Requests/sec:|Total:|Fastest:|Slowest:|Average:|Status code distribution:)" | head -10 || echo "(sse-async timed out after ${HEY_TIMEOUT}s)"
 
     printf "### OpenAI Chat Completions (stream) (/v1/chat/completions)\n"
@@ -142,11 +151,39 @@ if [ "$UCODE" != "200" ]; then
   exit 1
 fi
 
-echo "### Users Full10 (/users/full10)"
+# Seed users for benchmarking (create 1000 test users)
+echo "Seeding 1000 users for benchmark..."
+SEED_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://$HOST:$PORT/users/seed?count=1000)
+if [ "$SEED_CODE" != "200" ]; then
+  echo "Warning: Failed to seed users (got $SEED_CODE), benchmarking with empty database" >&2
+else
+  echo "Successfully seeded users"
+
+  # Validate users exist by checking /users/full10
+  USERS_RESPONSE=$(curl -s http://$HOST:$PORT/users/full10)
+  USER_COUNT=$(echo "$USERS_RESPONSE" | grep -o '"id"' | wc -l)
+  if [ "$USER_COUNT" -eq 0 ]; then
+    echo "Warning: No users found after seeding, benchmarking with empty database" >&2
+  else
+    echo "Validated: $USER_COUNT users exist in database"
+  fi
+fi
+
+echo "### Users Full10 (Async) (/users/full10)"
 ab -k -c $C -n $N http://$HOST:$PORT/users/full10 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
-echo "### Users Mini10 (/users/mini10)"
+echo "### Users Full10 (Sync) (/users/sync-full10)"
+ab -k -c $C -n $N http://$HOST:$PORT/users/sync-full10 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
+echo "### Users Mini10 (Async) (/users/mini10)"
 ab -k -c $C -n $N http://$HOST:$PORT/users/mini10 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
+echo "### Users Mini10 (Sync) (/users/sync-mini10)"
+ab -k -c $C -n $N http://$HOST:$PORT/users/sync-mini10 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
+# Clean up: delete all users
+echo "Cleaning up test users..."
+curl -s -X POST http://$HOST:$PORT/users/delete >/dev/null 2>&1
 
 kill -TERM -$SERVER_PID 2>/dev/null || true
 pkill -TERM -f "manage.py runbolt --host $HOST --port $PORT" 2>/dev/null || true
@@ -231,6 +268,24 @@ fi
 echo ""
 echo "## ORM Performance with CBV"
 
+# Seed users for CBV benchmarking
+echo "Seeding 1000 users for CBV benchmark..."
+SEED_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://$HOST:$PORT/users/seed?count=1000)
+if [ "$SEED_CODE" != "200" ]; then
+  echo "Warning: Failed to seed users (got $SEED_CODE), benchmarking with empty database" >&2
+else
+  echo "Successfully seeded users"
+
+  # Validate users exist by checking /users/cbv-mini10
+  USERS_RESPONSE=$(curl -s http://$HOST:$PORT/users/cbv-mini10)
+  USER_COUNT=$(echo "$USERS_RESPONSE" | grep -o '"id"' | wc -l)
+  if [ "$USER_COUNT" -eq 0 ]; then
+    echo "Warning: No users found after seeding, benchmarking with empty database" >&2
+  else
+    echo "Validated: $USER_COUNT users exist in database"
+  fi
+fi
+
 # Sanity check
 UCODE=$(curl -s -o /dev/null -w '%{http_code}' http://$HOST:$PORT/users/cbv-mini10)
 if [ "$UCODE" != "200" ]; then
@@ -240,6 +295,9 @@ else
   ab -k -c $C -n $N http://$HOST:$PORT/users/cbv-mini10 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 fi
 
+# Clean up: delete all users
+echo "Cleaning up test users..."
+curl -s -X POST http://$HOST:$PORT/users/delete >/dev/null 2>&1
 
 echo ""
 

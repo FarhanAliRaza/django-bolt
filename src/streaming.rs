@@ -314,6 +314,22 @@ fn create_python_stream_with_config(
                             });
                             if let Some(bytes) = bytes_opt {
                                 if tx.send(Ok(bytes)).await.is_err() {
+                                    // Client disconnected - close the async generator to run cleanup code
+                                    let close_result = Python::attach(|py| {
+                                        let iter_bound = async_iter.bind(py);
+                                        if iter_bound.hasattr("aclose").unwrap_or(false) {
+                                            if let Ok(awaitable) = iter_bound.call_method0("aclose") {
+                                                if let Some(locals) = TASK_LOCALS.get() {
+                                                    return pyo3_async_runtimes::into_future_with_locals(locals, awaitable).ok();
+                                                }
+                                            }
+                                        }
+                                        None
+                                    });
+                                    // Await the cleanup if we got a future
+                                    if let Some(close_future) = close_result {
+                                        let _ = close_future.await;
+                                    }
                                     exhausted = true;
                                     break;
                                 }
@@ -346,6 +362,22 @@ fn create_python_stream_with_config(
                     total_send_time += elapsed;
                 }
                 batch_count += 1;
+            }
+
+            // Ensure async generator cleanup runs
+            let close_result = Python::attach(|py| {
+                let iter_bound = async_iter.bind(py);
+                if iter_bound.hasattr("aclose").unwrap_or(false) {
+                    if let Ok(awaitable) = iter_bound.call_method0("aclose") {
+                        if let Some(locals) = TASK_LOCALS.get() {
+                            return pyo3_async_runtimes::into_future_with_locals(locals, awaitable).ok();
+                        }
+                    }
+                }
+                None
+            });
+            if let Some(close_future) = close_result {
+                let _ = close_future.await;
             }
 
             if let Some(start) = task_start {
@@ -433,6 +465,12 @@ fn create_python_stream_with_config(
                 };
                 for bytes in batch_buffer.drain(..) {
                     if tx.blocking_send(Ok(bytes)).is_err() {
+                        // Client disconnected - close the generator to run cleanup code
+                        if let Some(ref iter) = iterator {
+                            Python::attach(|py| {
+                                let _ = iter.bind(py).call_method0("close");
+                            });
+                        }
                         exhausted = true;
                         break;
                     }
@@ -446,6 +484,14 @@ fn create_python_stream_with_config(
                     break;
                 }
             }
+
+            // Ensure sync generator cleanup runs
+            if let Some(ref iter) = iterator {
+                Python::attach(|py| {
+                    let _ = iter.bind(py).call_method0("close");
+                });
+            }
+
             if let Some(start) = task_start {
                 let total = start.elapsed();
                 eprintln!("[TIMING] Sync streaming complete (OPTIMIZED):");

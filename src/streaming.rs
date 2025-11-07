@@ -389,8 +389,6 @@ fn create_python_stream_with_config(
 
         // Increment active thread counter
         ACTIVE_SYNC_STREAMING_THREADS.fetch_add(1, Ordering::Relaxed);
-        let current_count = ACTIVE_SYNC_STREAMING_THREADS.load(Ordering::Relaxed);
-        eprintln!("[SSE INFO] Spawning sync streaming thread (active: {})", current_count);
 
         // Use Builder::new() to get a Result on thread spawn failure
         match std::thread::Builder::new()
@@ -506,8 +504,6 @@ fn create_python_stream_with_config(
             }
             // Decrement thread counter when thread finishes
             ACTIVE_SYNC_STREAMING_THREADS.fetch_sub(1, Ordering::Relaxed);
-            let remaining = ACTIVE_SYNC_STREAMING_THREADS.load(Ordering::Relaxed);
-            eprintln!("[SSE INFO] Sync streaming thread closed (remaining: {})", remaining);
         }) {
             Ok(_) => {
                 // Thread spawned successfully, SSE will start streaming

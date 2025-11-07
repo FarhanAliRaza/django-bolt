@@ -207,3 +207,5 @@ else:
         "root": {"handlers": ["console"], "level": "INFO"},
     }
     
+    
+BOLT_MAX_SYNC_STREAMING_THREADS = 10000

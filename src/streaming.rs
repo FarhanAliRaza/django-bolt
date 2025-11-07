@@ -5,8 +5,9 @@ use pyo3::types::{PyByteArray, PyBytes, PyMemoryView, PyString};
 use std::pin::Pin;
 use std::time::Instant;
 use tokio::sync::mpsc;
+use std::sync::atomic::Ordering;
 
-use crate::state::TASK_LOCALS;
+use crate::state::{TASK_LOCALS, ACTIVE_SYNC_STREAMING_THREADS, get_max_sync_streaming_threads};
 // Streaming uses direct_stream only in higher-level handler; not directly here
 
 // Buffer pool imports removed (unused)
@@ -113,15 +114,6 @@ fn create_python_stream_with_config(
         (target, has_async)
     });
 
-    if let Some(start) = resolve_start {
-        eprintln!(
-            "[TIMING] Iterator resolution: {:?}, is_async={}, batch_size={}, fast_path_threshold={}",
-            start.elapsed(),
-            is_async_iter,
-            if is_async_iter { async_batch_size } else { sync_batch_size },
-            fast_path_threshold
-        );
-    }
 
     let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(channel_capacity);
     let resolved_target_final = Python::attach(|py| resolved_target.clone_ref(py));
@@ -129,7 +121,7 @@ fn create_python_stream_with_config(
 
     if is_async_final {
         let debug_async = debug_timing;
-        let batch_sz = async_batch_size;
+        let _batch_sz = async_batch_size;
         let fast_path = fast_path_threshold;
         tokio::spawn(async move {
             use futures_util::future::join_all;
@@ -158,14 +150,6 @@ fn create_python_stream_with_config(
 
             let async_iter: Option<Py<PyAny>> = Python::attach(|py| {
                 let b = resolved_target_final.bind(py);
-                if debug_async {
-                    eprintln!(
-                        "[DEBUG] Checking async iterator: has __aiter__={}, has __anext__={}, is_optimized={}",
-                        b.hasattr("__aiter__").unwrap_or(false),
-                        b.hasattr("__anext__").unwrap_or(false),
-                        is_optimized_batcher
-                    );
-                }
                 if b.hasattr("__aiter__").unwrap_or(false) {
                     match b.call_method0("__aiter__") {
                         Ok(it) => Some(it.unbind()),
@@ -178,12 +162,6 @@ fn create_python_stream_with_config(
                 }
             });
 
-            if let Some(start) = init_start {
-                eprintln!(
-                    "[TIMING] Async iterator initialization: {:?}",
-                    start.elapsed()
-                );
-            }
 
             if async_iter.is_none() {
                 let _ = tx
@@ -247,15 +225,6 @@ fn create_python_stream_with_config(
                     }
                 });
 
-                if let Some(start) = batch_start {
-                    eprintln!(
-                        "[TIMING] Batch {} future collection ({} futures, target={}): {:?}",
-                        batch_count,
-                        batch_futures.len(),
-                        current_batch_size,
-                        start.elapsed()
-                    );
-                }
 
                 if batch_futures.len() < current_batch_size / 2 {
                     consecutive_small_batches += 1;
@@ -280,15 +249,6 @@ fn create_python_stream_with_config(
                     None
                 };
                 let results = join_all(batch_futures.drain(..)).await;
-                if let Some(start) = await_start {
-                    eprintln!(
-                        "[TIMING] Batch {} await ({} futures): {:?}",
-                        batch_count,
-                        results.len(),
-                        start.elapsed()
-                    );
-                    total_await_time += start.elapsed();
-                }
 
                 let convert_start = if debug_async {
                     Some(Instant::now())
@@ -314,6 +274,28 @@ fn create_python_stream_with_config(
                             });
                             if let Some(bytes) = bytes_opt {
                                 if tx.send(Ok(bytes)).await.is_err() {
+                                    // Client disconnected - close the async generator to run cleanup code
+                                    let close_result = Python::attach(|py| {
+                                        let iter_bound = async_iter.bind(py);
+                                        if iter_bound.hasattr("aclose").unwrap_or(false) {
+                                            if let Ok(awaitable) = iter_bound.call_method0("aclose") {
+                                                if let Some(locals) = TASK_LOCALS.get() {
+                                                    return pyo3_async_runtimes::into_future_with_locals(locals, awaitable).ok();
+                                                } else {
+                                                    eprintln!("[SSE WARNING] Unable to get task locals for async generator cleanup on disconnect");
+                                                }
+                                            } else {
+                                                eprintln!("[SSE WARNING] Failed to call aclose() on async generator during disconnect cleanup");
+                                            }
+                                        }
+                                        None
+                                    });
+                                    // Await the cleanup if we got a future
+                                    if let Some(close_future) = close_result {
+                                        if let Err(e) = close_future.await {
+                                            eprintln!("[SSE WARNING] Error during async generator cleanup on client disconnect: {}", e);
+                                        }
+                                    }
                                     exhausted = true;
                                     break;
                                 }
@@ -334,35 +316,84 @@ fn create_python_stream_with_config(
                 if got_stop_iteration {
                     exhausted = true;
                 }
-                if let Some(start) = convert_start {
-                    eprintln!(
-                        "[TIMING] Batch {} convert & send ({} chunks): {:?}",
-                        batch_count,
-                        send_count,
-                        start.elapsed()
-                    );
-                    let elapsed = start.elapsed();
-                    total_gil_time += elapsed;
-                    total_send_time += elapsed;
-                }
                 batch_count += 1;
             }
 
-            if let Some(start) = task_start {
-                let total = start.elapsed();
-                eprintln!("[TIMING] Async streaming complete (OPTIMIZED):");
-                eprintln!("  Total time: {:?}", total);
-                eprintln!("  Chunks sent: {}", chunk_count);
-                eprintln!("  Batches processed: {}", batch_count);
-                eprintln!("  Await time: {:?}", total_await_time);
-                eprintln!("  Send time: {:?}", total_send_time);
-                eprintln!("  GIL time: {:?}", total_gil_time);
+            // Ensure async generator cleanup runs
+            let close_result = Python::attach(|py| {
+                let iter_bound = async_iter.bind(py);
+                if iter_bound.hasattr("aclose").unwrap_or(false) {
+                    if let Ok(awaitable) = iter_bound.call_method0("aclose") {
+                        if let Some(locals) = TASK_LOCALS.get() {
+                            return pyo3_async_runtimes::into_future_with_locals(locals, awaitable).ok();
+                        } else {
+                            eprintln!("[SSE WARNING] Unable to get task locals for async generator cleanup at end of stream");
+                        }
+                    } else {
+                        eprintln!("[SSE WARNING] Failed to call aclose() on async generator at end of stream cleanup");
+                    }
+                }
+                None
+            });
+            if let Some(close_future) = close_result {
+                if let Err(e) = close_future.await {
+                    eprintln!("[SSE WARNING] Error during async generator cleanup at end of stream: {}", e);
+                }
+            }
+
+        });
+
+        // Async streaming successful, return stream
+        let s = stream::unfold(rx, |mut rx| async move {
+            match rx.recv().await {
+                Some(item) => Some((item, rx)),
+                None => None,
             }
         });
+        return Box::pin(s);
     } else {
         let debug_sync = debug_timing;
         let sync_batch = sync_batch_size;
-        tokio::task::spawn_blocking(move || {
+
+        // OPTION 3: Use std::thread::spawn() instead of spawn_blocking()
+        // This avoids Tokio's blocking thread pool limit entirely
+        // Each sync SSE connection runs on its own dedicated OS thread
+
+        // Make tx cloneable for the spawn failure case
+        let tx_for_spawn = tx.clone();
+
+        // Check connection limits to prevent thread exhaustion DoS
+        let max_threads = get_max_sync_streaming_threads();
+        let current_threads = ACTIVE_SYNC_STREAMING_THREADS.load(Ordering::Relaxed);
+
+        if current_threads >= max_threads {
+            eprintln!("[SSE WARNING] Sync streaming thread limit reached: {} >= {}", current_threads, max_threads);
+            // Spawn async task to send retry directive (can't use blocking_send from runtime)
+            tokio::spawn({
+                let tx_clone = tx.clone();
+                async move {
+                    // RFC 6553 Server-Sent Events: send retry directive before closing
+                    let retry_directive = b"retry: 30000\n\n";
+                    let _ = tx_clone.send(Ok(Bytes::from_static(retry_directive))).await;
+                }
+            });
+            drop(tx);
+            let s = stream::unfold(rx, |mut rx| async move {
+                match rx.recv().await {
+                    Some(item) => Some((item, rx)),
+                    None => None,
+                }
+            });
+            return Box::pin(s);
+        }
+
+        // Increment active thread counter
+        ACTIVE_SYNC_STREAMING_THREADS.fetch_add(1, Ordering::Relaxed);
+
+        // Use Builder::new() to get a Result on thread spawn failure
+        match std::thread::Builder::new()
+            .name("sync-sse-generator".to_string())
+            .spawn(move || {
             let mut iterator: Option<Py<PyAny>> = None;
             let mut chunk_count = 0u32;
             let mut batch_count = 0u32;
@@ -374,6 +405,8 @@ fn create_python_stream_with_config(
                 None
             };
             let mut batch_buffer = Vec::with_capacity(sync_batch);
+            let mut exhausted = false;
+
             loop {
                 let gil_start = if debug_sync {
                     Some(Instant::now())
@@ -381,7 +414,7 @@ fn create_python_stream_with_config(
                     None
                 };
                 batch_buffer.clear();
-                let exhausted = Python::attach(|py| {
+                let python_exhausted = Python::attach(|py| {
                     if iterator.is_none() {
                         let iter_target = resolved_target_final.clone_ref(py);
                         let bound = iter_target.bind(py);
@@ -416,6 +449,9 @@ fn create_python_stream_with_config(
                     }
                     false
                 });
+                if python_exhausted {
+                    exhausted = true;
+                }
                 if let Some(start) = gil_start {
                     total_gil_time += start.elapsed();
                 }
@@ -428,7 +464,20 @@ fn create_python_stream_with_config(
                     None
                 };
                 for bytes in batch_buffer.drain(..) {
+                    // Use blocking_send which works from non-async context
                     if tx.blocking_send(Ok(bytes)).is_err() {
+                        // Client disconnected - close the generator to run cleanup code
+                        if let Some(ref iter) = iterator {
+                            Python::attach(|py| {
+                                match iter.bind(py).call_method0("close") {
+                                    Ok(_) => {},
+                                    Err(e) => {
+                                        eprintln!("[SSE WARNING] Error during sync generator cleanup on client disconnect: {}", e);
+                                    }
+                                }
+                            });
+                        }
+                        exhausted = true;
                         break;
                     }
                     chunk_count += 1;
@@ -441,23 +490,48 @@ fn create_python_stream_with_config(
                     break;
                 }
             }
-            if let Some(start) = task_start {
-                let total = start.elapsed();
-                eprintln!("[TIMING] Sync streaming complete (OPTIMIZED):");
-                eprintln!("  Total time: {:?}", total);
-                eprintln!("  Chunks sent: {}", chunk_count);
-                eprintln!("  Batches processed: {}", batch_count);
-                eprintln!("  GIL time: {:?}", total_gil_time);
-                eprintln!("  Send time: {:?}", total_send_time);
+
+            // Ensure sync generator cleanup runs
+            if let Some(ref iter) = iterator {
+                Python::attach(|py| {
+                    match iter.bind(py).call_method0("close") {
+                        Ok(_) => {},
+                        Err(e) => {
+                            eprintln!("[SSE WARNING] Error during sync generator cleanup at end of stream: {}", e);
+                        }
+                    }
+                });
+            }
+            // Decrement thread counter when thread finishes
+            ACTIVE_SYNC_STREAMING_THREADS.fetch_sub(1, Ordering::Relaxed);
+        }) {
+            Ok(_) => {
+                // Thread spawned successfully, SSE will start streaming
+            }
+            Err(e) => {
+                eprintln!("[SSE ERROR] Failed to spawn sync streaming thread: {}", e);
+                // Decrement counter since thread spawn failed
+                ACTIVE_SYNC_STREAMING_THREADS.fetch_sub(1, Ordering::Relaxed);
+                // Spawn async task to send retry directive (can't use blocking_send from runtime)
+                tokio::spawn({
+                    let tx_clone = tx_for_spawn.clone();
+                    async move {
+                        // RFC 6553 Server-Sent Events: send retry directive before closing
+                        let retry_directive = b"retry: 30000\n\n";
+                        let _ = tx_clone.send(Ok(Bytes::from_static(retry_directive))).await;
+                    }
+                });
+                drop(tx_for_spawn);
+            }
+        }
+
+        // Create simple stream without error state in closure (keeps Stream trait bounds clean)
+        let s = stream::unfold(rx, |mut rx| async move {
+            match rx.recv().await {
+                Some(item) => Some((item, rx)),
+                None => None,
             }
         });
+        Box::pin(s)
     }
-
-    let s = stream::unfold(rx, |mut rx| async move {
-        match rx.recv().await {
-            Some(item) => Some((item, rx)),
-            None => None,
-        }
-    });
-    Box::pin(s)
 }

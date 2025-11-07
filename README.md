@@ -85,24 +85,40 @@ python manage.py runbolt --processes 8 #for deployment (depends on your cpu core
 
 ## 📊 Performance Benchmarks
 
-> **⚠️ Disclaimer:** Django-Bolt is a **feature-incomplete framework** currently in development. Benchmarks were run on a Ryzen 5600G with 16GB RAM (8 processes × 1 worker, C=100 N=10000) on localhost. Performance will vary significantly based on hardware, OS, configuration, and workload.
+> **⚠️ Disclaimer:** Django-Bolt is a **feature-incomplete framework** currently in development. Benchmarks were run on a Ryzen 5600G with 16GB RAM (8 processes × 1 worker, C=100 N=10,000) on localhost. Performance will vary significantly based on hardware, OS, configuration, and workload.
 >
 > **📁 Resources:** Example project available at [python/example/](python/example/). Run benchmarks with `make save-bench` or see [scripts/benchmark.sh](scripts/benchmark.sh).
 
-| Endpoint Type              | Requests/sec    |
-| -------------------------- | --------------- |
-| Root endpoint              | **~85,000 RPS** |
-| JSON parsing/validation    | **~80,000 RPS** |
-| Path + Query params        | **~83,500 RPS** |
-| HTML/Redirect responses    | **~86,000 RPS** |
-| Form data handling         | **~68,000 RPS** |
-| ORM reads (SQLite, 10 rec) | **~15,000 RPS** |
+### Standard Endpoints
+
+| Endpoint Type                  | Requests/sec     |
+| ------------------------------ | ---------------- |
+| Root endpoint                  | **~100,000 RPS** |
+| JSON parsing/validation (10kb) | **~83,700 RPS**  |
+| Path + Query parameters        | **~85,300 RPS**  |
+| HTML response                  | **~100,600 RPS** |
+| Redirect response              | **~96,300 RPS**  |
+| Form data handling             | **~76,800 RPS**  |
+| ORM reads (SQLite, 10 records) | **~13,000 RPS**  |
+
+### Streaming Performance (Async)
+
+**Server-Sent Events (SSE) with 10,000 concurrent clients (60 Second load time):**
+
+- **Total Throughput:** 9,489 messages/sec
+- **Successful Connections:** 10,000 (100%)
+- **Avg Messages per Client:** 57.3 messages
+- **Data Transfer:** 14.06 MB across test
+- **CPU Usage:** 11.9% average during test (peak: 101.9%)
+- **Memory Usage:** 236.1 MB
+
+> **Note:** Async streaming is recommended for high-concurrency scenarios (10k+ concurrent connections). It has no thread limits and can handle sustained load efficiently. For sync streaming details and thread limit configuration, see [docs/RESPONSES.md](docs/RESPONSES.md).
 
 **Why so fast?**
 
-- HTTP Parsing and Reponse is handled Actix-rs framework(One of the fastest in the world)
+- HTTP Parsing and Response is handled by Actix-rs framework (one of the fastest in the world)
 - Request routing uses matchit (zero-copy path matching)
-- JSON serialization with msgspec
+- JSON serialization with msgspec (5-10x faster than stdlib)
 
 ---
 

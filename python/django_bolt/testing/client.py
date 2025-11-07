@@ -3,10 +3,11 @@
 This version uses the test_state.rs infrastructure which provides:
 - Per-instance routers (no global state conflicts)
 - Per-instance event loops (proper async handling)
+- Streaming response support via stream=True parameter
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 from httpx import Response
@@ -227,3 +228,124 @@ class TestClient(httpx.Client):
         except:
             pass
         return super().__exit__(*args)
+
+    # Override HTTP methods to support stream=True
+    def _add_streaming_methods(self, response: Response) -> Response:
+        """Add iter_content() and iter_lines() methods to response."""
+        response._iter_content = lambda chunk_size=1024, decode_unicode=False: self._iter_response_content(
+            response.content, chunk_size, decode_unicode
+        )
+        response.iter_content = response._iter_content  # type: ignore
+
+        response._iter_lines = lambda decode_unicode=True: self._iter_response_lines(
+            response.content, decode_unicode
+        )
+        response.iter_lines = response._iter_lines  # type: ignore
+
+        return response
+
+    def get(self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any) -> Response:
+        """GET request with optional streaming support."""
+        response = super().get(url, **kwargs)
+        if stream:
+            response = self._add_streaming_methods(response)
+        return response
+
+    def post(self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any) -> Response:
+        """POST request with optional streaming support."""
+        response = super().post(url, **kwargs)
+        if stream:
+            response = self._add_streaming_methods(response)
+        return response
+
+    def put(self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any) -> Response:
+        """PUT request with optional streaming support."""
+        response = super().put(url, **kwargs)
+        if stream:
+            response = self._add_streaming_methods(response)
+        return response
+
+    def patch(self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any) -> Response:
+        """PATCH request with optional streaming support."""
+        response = super().patch(url, **kwargs)
+        if stream:
+            response = self._add_streaming_methods(response)
+        return response
+
+    def delete(self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any) -> Response:
+        """DELETE request with optional streaming support."""
+        response = super().delete(url, **kwargs)
+        if stream:
+            response = self._add_streaming_methods(response)
+        return response
+
+    def head(self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any) -> Response:
+        """HEAD request with optional streaming support."""
+        response = super().head(url, **kwargs)
+        if stream:
+            response = self._add_streaming_methods(response)
+        return response
+
+    def options(self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any) -> Response:
+        """OPTIONS request with optional streaming support."""
+        response = super().options(url, **kwargs)
+        if stream:
+            response = self._add_streaming_methods(response)
+        return response
+
+    @staticmethod
+    def _iter_response_content(
+        content: bytes, chunk_size: int = 1024, decode_unicode: bool = False
+    ) -> Iterator[str | bytes]:
+        """Iterate over response content in chunks.
+
+        Args:
+            content: Full response content
+            chunk_size: Size of each chunk in bytes
+            decode_unicode: If True, decode bytes to string using utf-8
+
+        Yields:
+            Chunks of response content
+        """
+        pos = 0
+        while pos < len(content):
+            chunk = content[pos : pos + chunk_size]
+            pos += chunk_size
+
+            if decode_unicode:
+                yield chunk.decode("utf-8")
+            else:
+                yield chunk
+
+    @staticmethod
+    def _iter_response_lines(content: bytes, decode_unicode: bool = True) -> Iterator[str]:
+        """Iterate over response content line by line.
+
+        Args:
+            content: Full response content
+            decode_unicode: If True, decode bytes to string (default True)
+
+        Yields:
+            Lines from the response
+        """
+        buffer = b"" if not decode_unicode else ""
+
+        for chunk in TestClient._iter_response_content(content, chunk_size=8192, decode_unicode=decode_unicode):
+            if chunk:
+                buffer += chunk
+
+                # Split on newlines
+                if isinstance(buffer, bytes):
+                    lines = buffer.split(b"\n")
+                else:
+                    lines = buffer.split("\n")
+
+                # Yield all complete lines, keep incomplete line in buffer
+                for line in lines[:-1]:
+                    yield line if isinstance(line, str) else line.decode("utf-8")
+
+                buffer = lines[-1]
+
+        # Yield any remaining data in buffer
+        if buffer:
+            yield buffer if isinstance(buffer, str) else buffer.decode("utf-8")

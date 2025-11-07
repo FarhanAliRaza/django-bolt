@@ -9,7 +9,6 @@ use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
-use crate::direct_stream;
 use crate::error;
 use crate::metadata::CorsConfig;
 use crate::middleware;
@@ -795,36 +794,7 @@ pub async fn handle_request(
                             return builder.body(Vec::<u8>::new());
                         }
 
-                        let mut final_content_obj = content_obj;
-                        // Combine async check and wrapping into single GIL acquisition
-                        let (is_async_sse, wrapped_content) = Python::attach(|py| {
-                            let obj = final_content_obj.bind(py);
-                            let has_async = obj.hasattr("__aiter__").unwrap_or(false)
-                                || obj.hasattr("__anext__").unwrap_or(false);
-                            if !has_async {
-                                return (false, None);
-                            }
-                            // Try to wrap async iterator
-                            let wrapped = (|| -> Option<Py<PyAny>> {
-                                let collector_module =
-                                    py.import("django_bolt.async_collector").ok()?;
-                                let collector_class =
-                                    collector_module.getattr("AsyncToSyncCollector").ok()?;
-                                // SSE: batch_size=1, timeout=5000ms to allow slow generators
-                                // Don't wait for full batch - send items immediately
-                                collector_class
-                                    .call1((obj.clone(), 1, 5000))
-                                    .ok()
-                                    .map(|w| w.unbind())
-                            })();
-                            (wrapped.is_none(), wrapped)
-                        });
-                        if let Some(w) = wrapped_content {
-                            final_content_obj = w;
-                        }
-                        // Both async and sync generators must use create_sse_stream
-                        // create_sse_stream uses batch_size=1 to stream items immediately
-                        // This properly handles blocking with spawn_blocking for sync iterators
+                        let final_content_obj = content_obj;
                         builder.append_header(("X-Accel-Buffering", "no"));
                         builder.append_header((
                             "Cache-Control",
@@ -836,7 +806,9 @@ pub async fn handle_request(
                             builder.append_header(("Content-Encoding", "identity"));
                         }
                         builder.content_type("text/event-stream");
-                        return builder.streaming(create_sse_stream(final_content_obj));
+
+                        let stream = create_sse_stream(final_content_obj);
+                        return builder.streaming(stream);
                     } else {
                         // HEAD requests must have empty body per RFC 7231
                         if is_head_request {
@@ -846,55 +818,13 @@ pub async fn handle_request(
                             return builder.body(Vec::<u8>::new());
                         }
 
-                        let mut final_content = content_obj;
-                        // Combine async check and wrapping into single GIL acquisition
-                        let (needs_async_stream, wrapped_content) = Python::attach(|py| {
-                            let obj = final_content.bind(py);
-                            let has_async = obj.hasattr("__aiter__").unwrap_or(false)
-                                || obj.hasattr("__anext__").unwrap_or(false);
-                            if !has_async {
-                                return (false, None);
-                            }
-                            // Try to wrap async iterator
-                            let wrapped = (|| -> Option<Py<PyAny>> {
-                                let collector_module =
-                                    py.import("django_bolt.async_collector").ok()?;
-                                let collector_class =
-                                    collector_module.getattr("AsyncToSyncCollector").ok()?;
-                                // General streaming: batch_size=20, timeout=5000ms
-                                // Allows slow generators while still batching for efficiency
-                                collector_class
-                                    .call1((obj.clone(), 20, 5000))
-                                    .ok()
-                                    .map(|w| w.unbind())
-                            })();
-                            (wrapped.is_none(), wrapped)
-                        });
-
-                        if needs_async_stream {
-                            if skip_compression {
-                                builder.append_header(("Content-Encoding", "identity"));
-                            }
-                            let stream = create_python_stream(final_content);
-                            return builder.streaming(stream);
+                        let final_content = content_obj;
+                        // Use unified streaming for all streaming responses (sync and async)
+                        if skip_compression {
+                            builder.append_header(("Content-Encoding", "identity"));
                         }
-
-                        if let Some(w) = wrapped_content {
-                            final_content = w;
-                        }
-                        {
-                            let mut direct = direct_stream::PythonDirectStream::new(final_content);
-                            if let Some(body) = direct.try_collect_small() {
-                                if skip_compression {
-                                    builder.append_header(("Content-Encoding", "identity"));
-                                }
-                                return builder.body(body);
-                            }
-                            if skip_compression {
-                                builder.append_header(("Content-Encoding", "identity"));
-                            }
-                            return builder.streaming(Box::pin(direct));
-                        }
+                        let stream = create_python_stream(final_content);
+                        return builder.streaming(stream);
                     }
                 } else {
                     return Python::attach(|py| {

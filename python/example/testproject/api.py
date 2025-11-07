@@ -226,19 +226,10 @@ async def file_static():
     return FileResponse("/path/to/nonexistent/file.txt", filename="asdfasd.py")
 
 # ==== Streaming endpoints for benchmarks ====
+#TODO: Add proper api for streaming files 
 @api.get("/stream")
 @no_compress
 async def stream_plain():
-    def gen():
-        for i in range(100):
-            yield "x"
-    return StreamingResponse(gen(), media_type="text/plain")
-
-
-@api.get("/sync-stream")
-@no_compress
-def stream_plain_sync():
-    """Sync version: Stream plain text."""
     def gen():
         for i in range(100):
             yield "x"

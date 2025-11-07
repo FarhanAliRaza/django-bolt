@@ -374,6 +374,7 @@ fn create_python_stream_with_config(
                 None
             };
             let mut batch_buffer = Vec::with_capacity(sync_batch);
+            let mut exhausted = false;
             loop {
                 let gil_start = if debug_sync {
                     Some(Instant::now())
@@ -381,7 +382,7 @@ fn create_python_stream_with_config(
                     None
                 };
                 batch_buffer.clear();
-                let exhausted = Python::attach(|py| {
+                let python_exhausted = Python::attach(|py| {
                     if iterator.is_none() {
                         let iter_target = resolved_target_final.clone_ref(py);
                         let bound = iter_target.bind(py);
@@ -416,6 +417,9 @@ fn create_python_stream_with_config(
                     }
                     false
                 });
+                if python_exhausted {
+                    exhausted = true;
+                }
                 if let Some(start) = gil_start {
                     total_gil_time += start.elapsed();
                 }
@@ -429,6 +433,7 @@ fn create_python_stream_with_config(
                 };
                 for bytes in batch_buffer.drain(..) {
                     if tx.blocking_send(Ok(bytes)).is_err() {
+                        exhausted = true;
                         break;
                     }
                     chunk_count += 1;

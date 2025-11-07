@@ -24,13 +24,15 @@ pip install django-bolt
 ```python
 # myproject/api.py
 from django_bolt import BoltAPI
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 import msgspec
+
+User = get_user_model()
 
 api = BoltAPI()
 
 class UserSchema(msgspec.Struct):
-    id: str
+    id: int
     username: str
 
 
@@ -39,6 +41,15 @@ async def get_user(user_id: int) -> UserSchema: # 🎉 Reponse is type validated
     user = await User.objects.aget(id=user_id) # 🤯 Yes and Django orm works without any setup
     return {"id": user.id, "username": user.username} # or you could just return the queryset
 
+```
+
+```python
+# myproject/settings.py
+INSTALLED_APPS = [
+    ...
+    "django_bolt"
+    ...
+]
 ```
 
 ```bash

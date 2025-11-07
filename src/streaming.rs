@@ -5,8 +5,9 @@ use pyo3::types::{PyByteArray, PyBytes, PyMemoryView, PyString};
 use std::pin::Pin;
 use std::time::Instant;
 use tokio::sync::mpsc;
+use std::sync::atomic::Ordering;
 
-use crate::state::TASK_LOCALS;
+use crate::state::{TASK_LOCALS, ACTIVE_SYNC_STREAMING_THREADS, get_max_sync_streaming_threads};
 // Streaming uses direct_stream only in higher-level handler; not directly here
 
 // Buffer pool imports removed (unused)
@@ -280,14 +281,20 @@ fn create_python_stream_with_config(
                                             if let Ok(awaitable) = iter_bound.call_method0("aclose") {
                                                 if let Some(locals) = TASK_LOCALS.get() {
                                                     return pyo3_async_runtimes::into_future_with_locals(locals, awaitable).ok();
+                                                } else {
+                                                    eprintln!("[SSE WARNING] Unable to get task locals for async generator cleanup on disconnect");
                                                 }
+                                            } else {
+                                                eprintln!("[SSE WARNING] Failed to call aclose() on async generator during disconnect cleanup");
                                             }
                                         }
                                         None
                                     });
                                     // Await the cleanup if we got a future
                                     if let Some(close_future) = close_result {
-                                        let _ = close_future.await;
+                                        if let Err(e) = close_future.await {
+                                            eprintln!("[SSE WARNING] Error during async generator cleanup on client disconnect: {}", e);
+                                        }
                                     }
                                     exhausted = true;
                                     break;
@@ -319,13 +326,19 @@ fn create_python_stream_with_config(
                     if let Ok(awaitable) = iter_bound.call_method0("aclose") {
                         if let Some(locals) = TASK_LOCALS.get() {
                             return pyo3_async_runtimes::into_future_with_locals(locals, awaitable).ok();
+                        } else {
+                            eprintln!("[SSE WARNING] Unable to get task locals for async generator cleanup at end of stream");
                         }
+                    } else {
+                        eprintln!("[SSE WARNING] Failed to call aclose() on async generator at end of stream cleanup");
                     }
                 }
                 None
             });
             if let Some(close_future) = close_result {
-                let _ = close_future.await;
+                if let Err(e) = close_future.await {
+                    eprintln!("[SSE WARNING] Error during async generator cleanup at end of stream: {}", e);
+                }
             }
 
         });
@@ -348,6 +361,36 @@ fn create_python_stream_with_config(
 
         // Make tx cloneable for the spawn failure case
         let tx_for_spawn = tx.clone();
+
+        // Check connection limits to prevent thread exhaustion DoS
+        let max_threads = get_max_sync_streaming_threads();
+        let current_threads = ACTIVE_SYNC_STREAMING_THREADS.load(Ordering::Relaxed);
+
+        if current_threads >= max_threads {
+            eprintln!("[SSE WARNING] Sync streaming thread limit reached: {} >= {}", current_threads, max_threads);
+            // Spawn async task to send retry directive (can't use blocking_send from runtime)
+            tokio::spawn({
+                let tx_clone = tx.clone();
+                async move {
+                    // RFC 6553 Server-Sent Events: send retry directive before closing
+                    let retry_directive = b"retry: 30000\n\n";
+                    let _ = tx_clone.send(Ok(Bytes::from_static(retry_directive))).await;
+                }
+            });
+            drop(tx);
+            let s = stream::unfold(rx, |mut rx| async move {
+                match rx.recv().await {
+                    Some(item) => Some((item, rx)),
+                    None => None,
+                }
+            });
+            return Box::pin(s);
+        }
+
+        // Increment active thread counter
+        ACTIVE_SYNC_STREAMING_THREADS.fetch_add(1, Ordering::Relaxed);
+        let current_count = ACTIVE_SYNC_STREAMING_THREADS.load(Ordering::Relaxed);
+        eprintln!("[SSE INFO] Spawning sync streaming thread (active: {})", current_count);
 
         // Use Builder::new() to get a Result on thread spawn failure
         match std::thread::Builder::new()
@@ -428,7 +471,12 @@ fn create_python_stream_with_config(
                         // Client disconnected - close the generator to run cleanup code
                         if let Some(ref iter) = iterator {
                             Python::attach(|py| {
-                                let _ = iter.bind(py).call_method0("close");
+                                match iter.bind(py).call_method0("close") {
+                                    Ok(_) => {},
+                                    Err(e) => {
+                                        eprintln!("[SSE WARNING] Error during sync generator cleanup on client disconnect: {}", e);
+                                    }
+                                }
                             });
                         }
                         exhausted = true;
@@ -448,20 +496,35 @@ fn create_python_stream_with_config(
             // Ensure sync generator cleanup runs
             if let Some(ref iter) = iterator {
                 Python::attach(|py| {
-                    let _ = iter.bind(py).call_method0("close");
+                    match iter.bind(py).call_method0("close") {
+                        Ok(_) => {},
+                        Err(e) => {
+                            eprintln!("[SSE WARNING] Error during sync generator cleanup at end of stream: {}", e);
+                        }
+                    }
                 });
             }
+            // Decrement thread counter when thread finishes
+            ACTIVE_SYNC_STREAMING_THREADS.fetch_sub(1, Ordering::Relaxed);
+            let remaining = ACTIVE_SYNC_STREAMING_THREADS.load(Ordering::Relaxed);
+            eprintln!("[SSE INFO] Sync streaming thread closed (remaining: {})", remaining);
         }) {
             Ok(_) => {
                 // Thread spawned successfully, SSE will start streaming
             }
             Err(e) => {
-                eprintln!("[SSE ERROR] Failed to spawn sync generator thread: {}", e);
-                // RFC 6553 Server-Sent Events: send retry directive before closing
-                // This tells the client to wait before attempting to reconnect
-                // retry value is in milliseconds (30 seconds)
-                let retry_directive = b"retry: 30000\n\n";
-                let _ = tx_for_spawn.blocking_send(Ok(Bytes::from_static(retry_directive)));
+                eprintln!("[SSE ERROR] Failed to spawn sync streaming thread: {}", e);
+                // Decrement counter since thread spawn failed
+                ACTIVE_SYNC_STREAMING_THREADS.fetch_sub(1, Ordering::Relaxed);
+                // Spawn async task to send retry directive (can't use blocking_send from runtime)
+                tokio::spawn({
+                    let tx_clone = tx_for_spawn.clone();
+                    async move {
+                        // RFC 6553 Server-Sent Events: send retry directive before closing
+                        let retry_directive = b"retry: 30000\n\n";
+                        let _ = tx_clone.send(Ok(Bytes::from_static(retry_directive))).await;
+                    }
+                });
                 drop(tx_for_spawn);
             }
         }

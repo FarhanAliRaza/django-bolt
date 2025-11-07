@@ -13,6 +13,11 @@ Django-Bolt includes comprehensive security features to protect your API endpoin
 - [Authorization & Guards](#authorization--guards)
 - [CORS Security](#cors-security)
 - [Rate Limiting](#rate-limiting)
+- [Server-Sent Events (SSE) Security](#server-sent-events-sse-security)
+  - [Thread Resource Model](#thread-resource-model)
+  - [Thread Exhaustion Prevention](#thread-exhaustion-prevention)
+  - [Generator Cleanup Errors](#generator-cleanup-errors)
+  - [Security Best Practices for SSE](#security-best-practices-for-sse)
 - [File Serving Security](#file-serving-security)
 - [Input Validation](#input-validation)
 - [Security Best Practices](#security-best-practices)
@@ -499,6 +504,293 @@ async def search(query: str): ...
 
 ---
 
+## Server-Sent Events (SSE) Security
+
+Server-Sent Events (SSE) provides long-lived connections for streaming responses. This introduces unique security and resource management considerations.
+
+### Thread Resource Model
+
+SSE connections use dedicated OS threads for streaming:
+
+- **Async SSE**: Uses Tokio async tasks (lightweight, many connections supported)
+- **Sync SSE**: Uses dedicated OS threads (one thread per connection)
+  - Each sync generator runs on its own OS thread to avoid blocking Tokio's thread pool
+  - This prevents SSE connections from starving other blocking operations in your app
+
+### Thread Exhaustion Prevention
+
+**Problem**: A malicious client could open thousands of SSE connections, exhausting OS thread resources and preventing the server from handling other requests.
+
+**Solution**: Django-Bolt provides connection limiting.
+
+#### Configuration
+
+Can be configured via Django settings or environment variable (env var takes precedence):
+
+```python
+# settings.py - Django Setting (default: 1000)
+# NOTE: Setting name is BOLT_* (without DJANGO_ prefix)
+BOLT_MAX_SYNC_STREAMING_THREADS = 1000
+```
+
+Or via environment variable:
+
+```bash
+# Environment variable (without DJANGO_ prefix would also work but convention uses it)
+export DJANGO_BOLT_MAX_SYNC_STREAMING_THREADS=1000
+```
+
+**IMPORTANT: Django Setting vs Environment Variable Names**
+
+| Type | Variable Name | Example |
+|------|---------------|---------|
+| **Django Setting** | `BOLT_MAX_SYNC_STREAMING_THREADS` | `BOLT_MAX_SYNC_STREAMING_THREADS = 1000` |
+| **Environment Variable** | `DJANGO_BOLT_MAX_SYNC_STREAMING_THREADS` | `export DJANGO_BOLT_MAX_SYNC_STREAMING_THREADS=1000` |
+
+**Precedence** (first match wins):
+1. Environment variable: `DJANGO_BOLT_MAX_SYNC_STREAMING_THREADS`
+2. Django setting: `BOLT_MAX_SYNC_STREAMING_THREADS` (no `DJANGO_` prefix!)
+3. Default: 1000
+
+#### How It Works
+
+1. **Check limit before spawning thread**: When a sync SSE request arrives, the server checks current active connections
+2. **Reject if limit exceeded**: If limit is reached, server sends SSE retry directive (RFC 6553)
+3. **Track active connections**: Counter increments when thread spawns, decrements when thread exits
+4. **No per-request overhead**: Uses atomic counters (lock-free)
+
+#### Example
+
+```python
+# settings.py
+BOLT_MAX_SYNC_STREAMING_THREADS = 500  # Limit to 500 concurrent threads (default: 1000)
+
+@api.get("/stream/events")
+async def stream_events():
+    """SSE endpoint limited to 500 concurrent streaming threads."""
+    async def gen():
+        for i in range(100):
+            yield f"data: event-{i}\n\n"
+            await asyncio.sleep(0.1)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+```
+
+Server logs:
+```
+[SSE INFO] Spawning sync streaming thread (active: 42)
+[SSE INFO] Sync streaming thread closed (remaining: 41)
+[SSE WARNING] Sync streaming thread limit reached: 500 >= 500
+```
+
+#### Recommended Limits
+
+- **Small apps** (< 100 concurrent users): 500-1000 connections
+- **Medium apps** (100-1000 concurrent users): 2000-5000 connections
+- **Large apps** (1000+ concurrent users): 5000+ connections, use load balancing
+
+### Generator Cleanup Errors
+
+SSE generators must be properly cleaned up when clients disconnect to prevent resource leaks.
+
+#### Error Logging
+
+Django-Bolt logs all cleanup errors to stderr:
+
+```
+[SSE WARNING] Error during sync generator cleanup on client disconnect: <error>
+[SSE WARNING] Error during sync generator cleanup at end of stream: <error>
+[SSE WARNING] Unable to get task locals for async generator cleanup on disconnect
+[SSE ERROR] Failed to spawn sync generator thread: <error>
+```
+
+**Note**: These errors should never occur in normal operation. If you see them, they indicate:
+1. A problem in your generator's cleanup code (finally block)
+2. System resource exhaustion (thread limit hit)
+3. Python runtime errors in generator cleanup
+
+#### Example - Generator with Cleanup
+
+```python
+import asyncio
+from django_bolt import BoltAPI, StreamingResponse
+
+api = BoltAPI()
+
+@api.get("/stream/with-cleanup")
+async def stream_with_cleanup():
+    """SSE with proper resource cleanup."""
+    async def gen():
+        db_connection = None
+        try:
+            # Setup
+            db_connection = await get_db_connection()
+
+            # Stream events
+            for i in range(100):
+                event = await db_connection.fetch_one()
+                yield f"data: {event}\n\n"
+                await asyncio.sleep(0.1)
+
+        finally:
+            # Cleanup (runs even if client disconnects)
+            if db_connection:
+                await db_connection.close()
+                print("Database connection closed")
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+```
+
+When client disconnects:
+```
+[SSE INFO] Spawning sync SSE connection (active: 5)
+Database connection closed
+[SSE INFO] Sync SSE connection closed (remaining: 4)
+```
+
+### Security Best Practices for SSE
+
+**1. Set appropriate sync streaming thread limits**
+
+```python
+# settings.py (Django Setting - without DJANGO_ prefix)
+BOLT_MAX_SYNC_STREAMING_THREADS = 500
+
+# Or via environment variable (with DJANGO_ prefix)
+export DJANGO_BOLT_MAX_SYNC_STREAMING_THREADS=500
+```
+
+**2. Add authentication to SSE endpoints**
+
+```python
+from django_bolt.auth import JWTAuthentication, IsAuthenticated
+
+jwt_auth = JWTAuthentication()
+
+@api.get("/stream", auth=[jwt_auth], guards=[IsAuthenticated()])
+async def stream_events(request):
+    # Only authenticated users can stream
+    auth = request.get("auth", {})
+    user_id = auth.get("user_id")
+
+    async def gen():
+        async for event in get_user_events(user_id):
+            yield f"data: {event}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+```
+
+**3. Implement per-user rate limiting**
+
+```python
+from django_bolt.middleware import rate_limit
+
+@api.get("/stream")
+@rate_limit(rps=10, burst=20, key="user_id")  # 10 streams per user per second
+async def stream_user_data(request):
+    # User can open multiple connections but is rate-limited
+    async def gen():
+        async for event in get_events():
+            yield f"data: {event}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+```
+
+**4. Implement request timeouts**
+
+```python
+import asyncio
+
+@api.get("/stream")
+async def stream_events():
+    async def gen():
+        try:
+            for i in range(1000):
+                yield f"data: {i}\n\n"
+                await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            # Client disconnected, cleanup happens in finally block
+            raise
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+```
+
+**5. Monitor active streaming threads**
+
+```python
+from django_bolt.state import ACTIVE_SYNC_STREAMING_THREADS, get_max_sync_streaming_threads
+import logging
+from datetime import datetime
+
+logger = logging.getLogger("sse")
+
+@api.get("/status")
+async def streaming_status(request):
+    """Get sync streaming thread statistics."""
+    active = ACTIVE_SYNC_STREAMING_THREADS.load(Ordering::Relaxed)
+    max_threads = get_max_sync_streaming_threads()
+    return {
+        "active_sync_streaming_threads": active,
+        "max_sync_streaming_threads": max_threads,
+        "utilization_percent": (active / max_threads * 100) if max_threads > 0 else 0,
+        "timestamp": datetime.now().isoformat()
+    }
+```
+
+### Configuration Variables
+
+**Django Settings** (in `settings.py` - use `BOLT_*` prefix without `DJANGO_`):
+```python
+# Maximum concurrent sync streaming threads (default: 1000)
+BOLT_MAX_SYNC_STREAMING_THREADS = 1000
+```
+
+**Environment Variables** (override Django settings):
+```bash
+# Maximum concurrent sync streaming threads (default: 1000)
+export DJANGO_BOLT_MAX_SYNC_STREAMING_THREADS=1000
+
+# Stream batch size for regular streaming (async)
+export DJANGO_BOLT_STREAM_BATCH_SIZE=20
+
+# Stream batch size for SSE (sync)
+export DJANGO_BOLT_STREAM_SYNC_BATCH_SIZE=5
+
+# Channel capacity for streaming responses
+export DJANGO_BOLT_STREAM_CHANNEL_CAPACITY=32
+```
+
+### Monitoring and Alerts
+
+```python
+# Example: Alert if too many streaming threads
+from django_bolt.state import ACTIVE_SYNC_STREAMING_THREADS, get_max_sync_streaming_threads
+import logging
+import asyncio
+
+logger = logging.getLogger("django_bolt")
+
+async def check_streaming_health():
+    """Background task to monitor sync streaming threads."""
+    max_threads = get_max_sync_streaming_threads()
+    active = ACTIVE_SYNC_STREAMING_THREADS.load(Ordering::Relaxed)
+
+    if active >= max_threads * 0.9:  # 90% of limit
+        logger.warning(f"Sync streaming thread limit approaching: {active}/{max_threads}")
+        # Consider rejecting new connections or alerting ops
+
+    if active >= max_threads:
+        logger.error(f"Sync streaming thread limit reached: {active}/{max_threads}")
+
+# Run periodically
+async def monitor_loop():
+    while True:
+        await check_streaming_health()
+        await asyncio.sleep(10)  # Check every 10 seconds
+```
+
+---
+
 ## File Serving Security
 
 Django-Bolt provides secure file serving with path traversal protection.
@@ -965,6 +1257,13 @@ Before deploying to production:
 - [ ] Error messages don't expose sensitive information
 - [ ] Logging configured for security events
 - [ ] Dependencies up to date
+- [ ] If using SSE/Streaming:
+  - [ ] `BOLT_MAX_SYNC_STREAMING_THREADS` configured (thread exhaustion protection, default: 1000)
+  - [ ] Authentication enabled on streaming endpoints
+  - [ ] Generator cleanup errors are monitored (log stderr for `[SSE WARNING]`)
+  - [ ] Rate limiting applied to streaming endpoints
+  - [ ] Thread utilization monitoring/alerts configured
+  - [ ] Reviewed SECURITY.md - Server-Sent Events section
 
 ---
 

@@ -69,7 +69,7 @@ ab -k -c $C -n $N http://$HOST:$PORT/file-static 2>/dev/null | grep -E "(Request
 # Streaming and SSE tests using hey (better than ab for streaming)
 echo ""
 echo "## Streaming and SSE Performance"
-
+echo "SEE STREAMING_BENCHMARK_DEV.md"
 # Check if hey is available
 # HEY_BIN=""
 # if command -v hey &> /dev/null; then

@@ -806,7 +806,9 @@ pub async fn handle_request(
                             builder.append_header(("Content-Encoding", "identity"));
                         }
                         builder.content_type("text/event-stream");
-                        return builder.streaming(create_sse_stream(final_content_obj));
+
+                        let stream = create_sse_stream(final_content_obj);
+                        return builder.streaming(stream);
                     } else {
                         // HEAD requests must have empty body per RFC 7231
                         if is_head_request {

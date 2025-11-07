@@ -76,7 +76,7 @@ def api():
             for i in range(5):
                 yield f"data: sync-message-{i}\n\n"
                 time.sleep(0.01)
-        return StreamingResponse(gen, media_type="text/event-stream")
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     @api.get("/sse-sync-sse-format")
     async def sse_sync_sse_format():
@@ -85,7 +85,7 @@ def api():
             for i in range(3):
                 yield f"event: tick\nid: {i}\ndata: {i}\n\n"
                 time.sleep(0.01)
-        return StreamingResponse(gen, media_type="text/event-stream")
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     # ==================== High-frequency Endpoints ====================
 
@@ -105,7 +105,7 @@ def api():
             for i in range(20):
                 yield f"data: {i}\n\n"
                 time.sleep(0.05)
-        return StreamingResponse(gen, media_type="text/event-stream")
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     # ==================== Endpoints with Cleanup Tracking ====================
 
@@ -139,7 +139,7 @@ def api():
             # Send end marker to verify generator completed
             yield "data: END\n\n"
 
-        return StreamingResponse(gen, media_type="text/event-stream")
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     return api
 

@@ -768,10 +768,15 @@ pub async fn handle_request(
                         Ok(c) => c.unbind(),
                         Err(_) => return None,
                     };
-                    Some((status_code, headers, media_type, content_obj))
+                    // Extract pre-computed is_async_generator metadata (detected at StreamingResponse instantiation)
+                    let is_async_generator: bool = obj
+                        .getattr("is_async_generator")
+                        .and_then(|v| v.extract())
+                        .unwrap_or(false);
+                    Some((status_code, headers, media_type, content_obj, is_async_generator))
                 });
 
-                if let Some((status_code, headers, media_type, content_obj)) = streaming {
+                if let Some((status_code, headers, media_type, content_obj, is_async_generator)) = streaming {
                     let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
                     let mut builder = HttpResponse::build(status);
                     for (k, v) in headers {
@@ -807,7 +812,7 @@ pub async fn handle_request(
                         }
                         builder.content_type("text/event-stream");
 
-                        let stream = create_sse_stream(final_content_obj);
+                        let stream = create_sse_stream(final_content_obj, is_async_generator);
                         return builder.streaming(stream);
                     } else {
                         // HEAD requests must have empty body per RFC 7231
@@ -823,7 +828,7 @@ pub async fn handle_request(
                         if skip_compression {
                             builder.append_header(("Content-Encoding", "identity"));
                         }
-                        let stream = create_python_stream(final_content);
+                        let stream = create_python_stream(final_content, is_async_generator);
                         return builder.streaming(stream);
                     }
                 } else {

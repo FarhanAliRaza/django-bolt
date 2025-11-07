@@ -1,4 +1,5 @@
 import msgspec
+import inspect
 from typing import Any, Dict, Optional, List
 from pathlib import Path
 from . import _json
@@ -206,10 +207,37 @@ class StreamingResponse:
         media_type: Optional[str] = None,
         headers: Optional[Dict[str, str]] = None,
     ):
-        # content can be an iterator/generator, iterable, or a callable returning an iterator
+
+        # Validate that content is already a called generator/iterator, not a callable
+        if callable(content):
+            if inspect.isasyncgenfunction(content) or inspect.isgeneratorfunction(content):
+                raise TypeError(
+                    f"StreamingResponse requires a generator instance, not a generator function. "
+                    f"Call your generator function with parentheses: StreamingResponse(gen(), ...) "
+                    f"not StreamingResponse(gen, ...)"
+                )
+            # If it's some other callable (not a generator function), raise an error
+            raise TypeError(
+                f"StreamingResponse content must be a generator instance (e.g., gen() or agen()), "
+                f"not a callable. Received: {type(content).__name__}"
+            )
+
         self.content = content
         self.status_code = status_code
         self.media_type = media_type or "application/octet-stream"
         self.headers = headers or {}
-        # do not enforce type of content here; Rust side will adapt common iterator/callable patterns
+
+        # Detect generator type at instantiation time (once per request, not per chunk)
+        # This avoids repeated Python inspect calls in Rust streaming loop
+        self.is_async_generator = False
+
+        if hasattr(content, '__aiter__') or hasattr(content, '__anext__'):
+            # Async generator instance
+            self.is_async_generator = True
+        elif not (hasattr(content, '__iter__') or hasattr(content, '__next__')):
+            # Not a generator/iterator
+            raise TypeError(
+                f"StreamingResponse content must be a generator instance. "
+                f"Received type: {type(content).__name__}"
+            )
 

@@ -542,12 +542,13 @@ export DJANGO_BOLT_MAX_SYNC_STREAMING_THREADS=1000
 
 **IMPORTANT: Django Setting vs Environment Variable Names**
 
-| Type | Variable Name | Example |
-|------|---------------|---------|
-| **Django Setting** | `BOLT_MAX_SYNC_STREAMING_THREADS` | `BOLT_MAX_SYNC_STREAMING_THREADS = 1000` |
+| Type                     | Variable Name                            | Example                                              |
+| ------------------------ | ---------------------------------------- | ---------------------------------------------------- |
+| **Django Setting**       | `BOLT_MAX_SYNC_STREAMING_THREADS`        | `BOLT_MAX_SYNC_STREAMING_THREADS = 1000`             |
 | **Environment Variable** | `DJANGO_BOLT_MAX_SYNC_STREAMING_THREADS` | `export DJANGO_BOLT_MAX_SYNC_STREAMING_THREADS=1000` |
 
 **Precedence** (first match wins):
+
 1. Environment variable: `DJANGO_BOLT_MAX_SYNC_STREAMING_THREADS`
 2. Django setting: `BOLT_MAX_SYNC_STREAMING_THREADS` (no `DJANGO_` prefix!)
 3. Default: 1000
@@ -568,7 +569,7 @@ BOLT_MAX_SYNC_STREAMING_THREADS = 500  # Limit to 500 concurrent threads (defaul
 @api.get("/stream/events")
 async def stream_events():
     """SSE endpoint limited to 500 concurrent streaming threads."""
-    async def gen():
+    def gen():
         for i in range(100):
             yield f"data: event-{i}\n\n"
             await asyncio.sleep(0.1)
@@ -577,6 +578,7 @@ async def stream_events():
 ```
 
 Server logs:
+
 ```
 [SSE INFO] Spawning sync streaming thread (active: 42)
 [SSE INFO] Sync streaming thread closed (remaining: 41)
@@ -605,6 +607,7 @@ Django-Bolt logs all cleanup errors to stderr:
 ```
 
 **Note**: These errors should never occur in normal operation. If you see them, they indicate:
+
 1. A problem in your generator's cleanup code (finally block)
 2. System resource exhaustion (thread limit hit)
 3. Python runtime errors in generator cleanup
@@ -642,6 +645,7 @@ async def stream_with_cleanup():
 ```
 
 When client disconnects:
+
 ```
 [SSE INFO] Spawning sync SSE connection (active: 5)
 Database connection closed
@@ -740,12 +744,14 @@ async def streaming_status(request):
 ### Configuration Variables
 
 **Django Settings** (in `settings.py` - use `BOLT_*` prefix without `DJANGO_`):
+
 ```python
 # Maximum concurrent sync streaming threads (default: 1000)
 BOLT_MAX_SYNC_STREAMING_THREADS = 1000
 ```
 
 **Environment Variables** (override Django settings):
+
 ```bash
 # Maximum concurrent sync streaming threads (default: 1000)
 export DJANGO_BOLT_MAX_SYNC_STREAMING_THREADS=1000

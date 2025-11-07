@@ -164,14 +164,14 @@ def api():
         def gen():
             for i in range(3):
                 yield f"p{i},"
-        return StreamingResponse(gen, media_type="text/plain")
+        return StreamingResponse(gen(), media_type="text/plain")
 
     @api.get("/stream-bytes")
     async def stream_bytes():
         def gen():
             for i in range(2):
                 yield str(i).encode()
-        return StreamingResponse(gen)
+        return StreamingResponse(gen())
 
     @api.get("/sse")
     async def stream_sse():
@@ -179,7 +179,7 @@ def api():
             yield "event: message\ndata: hello\n\n"
             yield "data: 1\n\n"
             yield ": comment\n\n"
-        return StreamingResponse(gen, media_type="text/event-stream")
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     @api.get("/stream-async")
     async def stream_async():
@@ -519,6 +519,50 @@ def test_async_bridge_endpoints_work(client):
     text = response.content.decode()
     assert "data: 0" in text, f"Expected SSE data not found in response: {text[:100]}"
     assert "data: 1" in text, f"Expected SSE data not found in response: {text[:100]}"
+
+
+def test_streaming_requires_generator_instance():
+    """Test that StreamingResponse requires a generator instance, not a function.
+
+    Both sync and async generators must be called with () before passing to StreamingResponse.
+    This standardizes the API and ensures proper async/sync detection at instantiation time.
+    """
+    # Test 1: Sync generator function without () should raise TypeError
+    def gen():
+        yield "data"
+
+    with pytest.raises(TypeError, match="Call your generator function with parentheses"):
+        StreamingResponse(gen, media_type="text/plain")
+
+    # Test 2: Async generator function without () should raise TypeError
+    async def agen():
+        yield "data"
+
+    with pytest.raises(TypeError, match="Call your generator function with parentheses"):
+        StreamingResponse(agen, media_type="text/event-stream")
+
+    # Test 3: Non-generator callable should also raise TypeError
+    def not_a_generator():
+        return "data"
+
+    with pytest.raises(TypeError, match="content must be a generator instance"):
+        StreamingResponse(not_a_generator, media_type="text/plain")
+
+    # Test 4: Valid sync generator with () should work
+    def gen2():
+        for i in range(2):
+            yield f"item{i},"
+
+    response = StreamingResponse(gen2(), media_type="text/plain")
+    assert response.is_async_generator is False
+
+    # Test 5: Valid async generator with () should work
+    async def agen2():
+        for i in range(2):
+            yield f"data: {i}\n\n"
+
+    response2 = StreamingResponse(agen2(), media_type="text/event-stream")
+    assert response2.is_async_generator is True
 
 
 def test_form_and_file(client):

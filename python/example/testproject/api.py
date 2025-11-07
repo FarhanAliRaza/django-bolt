@@ -232,7 +232,7 @@ async def stream_plain():
     def gen():
         for i in range(100):
             yield "x"
-    return StreamingResponse(gen, media_type="text/plain")
+    return StreamingResponse(gen(), media_type="text/plain")
 
 
 @api.get("/sync-stream")
@@ -242,7 +242,7 @@ def stream_plain_sync():
     def gen():
         for i in range(100):
             yield "x"
-    return StreamingResponse(gen, media_type="text/plain")
+    return StreamingResponse(gen(), media_type="text/plain")
 
 
 @api.get("/collected")
@@ -268,7 +268,7 @@ def sse_sync():
         while True:
             time.sleep(1)
             yield f"data: {time.time()}\n\n"
-    return StreamingResponse(gen, media_type="text/event-stream")
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 # ==== OpenAI-style Chat Completions (streaming/non-streaming) ====
@@ -637,7 +637,7 @@ class StreamViewSet(ViewSet):
         def gen():
             for i in range(100):
                 yield "x"
-        return StreamingResponse(gen, media_type="text/plain")
+        return StreamingResponse(gen(), media_type="text/plain")
 
 
 @api.view("/cbv-sse")
@@ -650,7 +650,7 @@ class SSEViewSet(ViewSet):
         def gen():
             for i in range(3):
                 yield f"data: {i}\n\n"
-        return StreamingResponse(gen, media_type="text/event-stream")
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @api.view("/cbv-chat-completions")

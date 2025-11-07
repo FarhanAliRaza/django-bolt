@@ -3,7 +3,6 @@ use futures_util::{stream, Stream};
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyMemoryView, PyString};
 use std::pin::Pin;
-use std::time::Instant;
 use tokio::sync::mpsc;
 use std::sync::atomic::Ordering;
 
@@ -55,6 +54,7 @@ pub fn convert_python_chunk(value: &Bound<'_, PyAny>) -> Option<Bytes> {
 /// Create a stream with default batch sizes from environment
 pub fn create_python_stream(
     content: Py<PyAny>,
+    is_async_generator: bool,
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
     let batch_size: usize = std::env::var("DJANGO_BOLT_STREAM_BATCH_SIZE")
         .ok()
@@ -66,14 +66,15 @@ pub fn create_python_stream(
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
         .unwrap_or(5);
-    create_python_stream_with_config(content, batch_size, sync_batch_size)
+    create_python_stream_with_config(content, batch_size, sync_batch_size, is_async_generator)
 }
 
 /// Create a stream for SSE that sends items immediately (batch_size=1)
 pub fn create_sse_stream(
     content: Py<PyAny>,
+    is_async_generator: bool,
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
-    create_python_stream_with_config(content, 1, 1)
+    create_python_stream_with_config(content, 1, 1, is_async_generator)
 }
 
 /// Internal function with configurable batch sizes
@@ -81,9 +82,8 @@ fn create_python_stream_with_config(
     content: Py<PyAny>,
     async_batch_size: usize,
     sync_batch_size: usize,
+    is_async_from_metadata: bool,
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
-    let debug_timing = std::env::var("DJANGO_BOLT_DEBUG_TIMING").is_ok();
-
     let channel_capacity: usize = std::env::var("DJANGO_BOLT_STREAM_CHANNEL_CAPACITY")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
@@ -94,25 +94,11 @@ fn create_python_stream_with_config(
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
         .unwrap_or(10);
-
-    let resolve_start = if debug_timing {
-        Some(Instant::now())
-    } else {
-        None
-    };
-    let (resolved_target, is_async_iter) = Python::attach(|py| {
-        let mut target = content.clone_ref(py);
-        let obj = content.bind(py);
-        if obj.is_callable() {
-            if let Ok(new_obj) = obj.call0() {
-                target = new_obj.unbind();
-            }
-        }
-        let b = target.bind(py);
-        let has_async =
-            b.hasattr("__aiter__").unwrap_or(false) || b.hasattr("__anext__").unwrap_or(false);
-        (target, has_async)
-    });
+    // Note: content is guaranteed to be a generator instance (not a callable)
+    // because StreamingResponse validates this in Python at instantiation time.
+    // The is_async_generator flag was pre-computed from Python's inspect.
+    let resolved_target = Python::attach(|py| content.clone_ref(py));
+    let is_async_iter = is_async_from_metadata;
 
 
     let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(channel_capacity);
@@ -120,25 +106,9 @@ fn create_python_stream_with_config(
     let is_async_final = is_async_iter;
 
     if is_async_final {
-        let debug_async = debug_timing;
-        let _batch_sz = async_batch_size;
         let fast_path = fast_path_threshold;
         tokio::spawn(async move {
             use futures_util::future::join_all;
-            let mut chunk_count = 0u32;
-            let mut total_gil_time = std::time::Duration::ZERO;
-            let mut total_await_time = std::time::Duration::ZERO;
-            let mut total_send_time = std::time::Duration::ZERO;
-            let task_start = if debug_async {
-                Some(Instant::now())
-            } else {
-                None
-            };
-            let init_start = if debug_async {
-                Some(Instant::now())
-            } else {
-                None
-            };
 
             let is_optimized_batcher = Python::attach(|py| {
                 if let Ok(name) = resolved_target_final.bind(py).get_type().name() {
@@ -176,16 +146,10 @@ fn create_python_stream_with_config(
 
             let mut exhausted = false;
             let mut batch_futures = Vec::with_capacity(async_batch_size);
-            let mut batch_count = 0usize;
             let mut consecutive_small_batches = 0u8;
             let mut current_batch_size = std::cmp::min(async_batch_size, fast_path);
 
             while !exhausted {
-                let batch_start = if debug_async {
-                    Some(Instant::now())
-                } else {
-                    None
-                };
                 batch_futures.clear();
                 Python::attach(|py| {
                     // Reuse the global event loop locals initialized at server startup
@@ -243,19 +207,8 @@ fn create_python_stream_with_config(
                     break;
                 }
 
-                let await_start = if debug_async {
-                    Some(Instant::now())
-                } else {
-                    None
-                };
                 let results = join_all(batch_futures.drain(..)).await;
 
-                let convert_start = if debug_async {
-                    Some(Instant::now())
-                } else {
-                    None
-                };
-                let mut send_count = 0;
                 let mut got_stop_iteration = false;
                 for result in results {
                     match result {
@@ -299,8 +252,6 @@ fn create_python_stream_with_config(
                                     exhausted = true;
                                     break;
                                 }
-                                send_count += 1;
-                                chunk_count += 1;
                             }
                         }
                         Err(e) => {
@@ -316,7 +267,6 @@ fn create_python_stream_with_config(
                 if got_stop_iteration {
                     exhausted = true;
                 }
-                batch_count += 1;
             }
 
             // Ensure async generator cleanup runs
@@ -352,7 +302,6 @@ fn create_python_stream_with_config(
         });
         return Box::pin(s);
     } else {
-        let debug_sync = debug_timing;
         let sync_batch = sync_batch_size;
 
         // OPTION 3: Use std::thread::spawn() instead of spawn_blocking()
@@ -395,24 +344,10 @@ fn create_python_stream_with_config(
             .name("sync-sse-generator".to_string())
             .spawn(move || {
             let mut iterator: Option<Py<PyAny>> = None;
-            let mut chunk_count = 0u32;
-            let mut batch_count = 0u32;
-            let mut total_gil_time = std::time::Duration::ZERO;
-            let mut total_send_time = std::time::Duration::ZERO;
-            let task_start = if debug_sync {
-                Some(Instant::now())
-            } else {
-                None
-            };
             let mut batch_buffer = Vec::with_capacity(sync_batch);
             let mut exhausted = false;
 
             loop {
-                let gil_start = if debug_sync {
-                    Some(Instant::now())
-                } else {
-                    None
-                };
                 batch_buffer.clear();
                 let python_exhausted = Python::attach(|py| {
                     if iterator.is_none() {
@@ -452,17 +387,9 @@ fn create_python_stream_with_config(
                 if python_exhausted {
                     exhausted = true;
                 }
-                if let Some(start) = gil_start {
-                    total_gil_time += start.elapsed();
-                }
                 if batch_buffer.is_empty() && exhausted {
                     break;
                 }
-                let send_start = if debug_sync {
-                    Some(Instant::now())
-                } else {
-                    None
-                };
                 for bytes in batch_buffer.drain(..) {
                     // Use blocking_send which works from non-async context
                     if tx.blocking_send(Ok(bytes)).is_err() {
@@ -480,12 +407,7 @@ fn create_python_stream_with_config(
                         exhausted = true;
                         break;
                     }
-                    chunk_count += 1;
                 }
-                if let Some(start) = send_start {
-                    total_send_time += start.elapsed();
-                }
-                batch_count += 1;
                 if exhausted {
                     break;
                 }

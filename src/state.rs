@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use pyo3_async_runtimes::TaskLocals;
 use regex::Regex;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
 use crate::router::Router;
@@ -44,7 +44,7 @@ pub fn get_max_sync_streaming_threads() -> u64 {
     }
 
     // Check Django settings via Python
-    let limit = Python::with_gil(|py| {
+    let limit = Python::attach(|py| {
         if let Ok(django_module) = py.import("django.conf") {
             if let Ok(settings) = django_module.getattr("settings") {
                 if let Ok(limit_obj) = settings.getattr("BOLT_MAX_SYNC_STREAMING_THREADS") {

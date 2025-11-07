@@ -40,7 +40,8 @@ dependencies = [
     "msgspec>=0.18",
     "multipart>=1.3",
     "pyjwt>=2.10.1",
-    "typing-extensions>=4.5.0",
+    "typing-extensions>=4.5.0",  # required openapi docs
+    "pyyaml>=6.0", # required openapi docs
     "uvloop>=0.22.1; sys_platform != 'win32'"
 ]
 

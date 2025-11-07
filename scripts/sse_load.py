@@ -24,6 +24,7 @@ class SSELoadTest:
         self.results = []
         self.start_time = None
         self.process = psutil.Process(os.getpid())
+        self.cpu_samples = []  # Track CPU samples during test
 
     async def sse_client(self, client_id: int) -> dict:
         """Simulate one SSE client holding connection open"""
@@ -33,10 +34,10 @@ class SSELoadTest:
         error = None
 
         try:
-            print(f"    Client {client_id}: Connecting...", flush=True)
+            # print(f"    Client {client_id}: Connecting...", flush=True)
             async with aiohttp.ClientSession() as session:
                 async with session.get(self.url, timeout=aiohttp.ClientTimeout(total=None)) as resp:
-                    print(f"    Client {client_id}: Connected (status {resp.status})", flush=True)
+                    # print(f"    Client {client_id}: Connected (status {resp.status})", flush=True)
                     if resp.status != 200:
                         return {
                             "client_id": client_id,
@@ -89,12 +90,20 @@ class SSELoadTest:
         """Get current process resource usage"""
         try:
             mem_info = self.process.memory_info()
+            # Use interval=0 to get instantaneous CPU usage (non-blocking)
             return {
                 "memory_mb": mem_info.rss / 1024 / 1024,
-                "cpu_percent": self.process.cpu_percent(interval=0.1),
+                "cpu_percent": self.process.cpu_percent(interval=0),
             }
         except Exception:
             return {"memory_mb": 0, "cpu_percent": 0}
+
+    async def _sample_cpu_during_batch(self, duration: float) -> None:
+        """Sample CPU usage every 0.1s for the given duration"""
+        start = time.time()
+        while time.time() - start < duration:
+            self.cpu_samples.append(self.process.cpu_percent(interval=0))
+            await asyncio.sleep(0.1)
 
     async def run(self) -> None:
         """Run the load test"""
@@ -118,12 +127,18 @@ class SSELoadTest:
             # Launch in batches to avoid overwhelming the system
             tasks = [self.sse_client(j) for j in range(i, i + batch_size)]
             print(f"  Waiting for {len(tasks)} clients to connect and run for {self.duration}s...", flush=True)
-            batch_results = await asyncio.gather(*tasks)
+
+            # Run batch tasks and CPU sampling concurrently
+            batch_start = time.time()
+            batch_tasks = asyncio.gather(*tasks)
+            cpu_sampler = self._sample_cpu_during_batch(self.duration + 5)  # Sample until after clients finish
+
+            batch_results, _ = await asyncio.gather(batch_tasks, cpu_sampler)
             self.results.extend(batch_results)
 
             elapsed = time.time() - self.start_time
             sys_stats = self.get_system_stats()
-            print(f"  Batch complete ({elapsed:.1f}s, {sys_stats['memory_mb']:.1f}MB)\n")
+            print(f"  Batch complete ({elapsed:.1f}s, {sys_stats['memory_mb']:.1f}MB, CPU: {sys_stats['cpu_percent']:.1f}%)\n")
 
         total_time = time.time() - self.start_time
         print(f"\nTest completed in {total_time:.2f}s")
@@ -190,9 +205,13 @@ class SSELoadTest:
 
         # Resource usage
         sys_stats = self.get_system_stats()
+        avg_cpu = mean(self.cpu_samples) if self.cpu_samples else 0
         print("Resource Usage:")
         print(f"  Memory: {sys_stats['memory_mb']:.1f} MB")
-        print(f"  CPU: {sys_stats['cpu_percent']:.1f}%")
+        print(f"  CPU (current): {sys_stats['cpu_percent']:.1f}%")
+        if self.cpu_samples:
+            print(f"  CPU (avg during test): {avg_cpu:.1f}%")
+            print(f"  CPU (min/max during test): {min(self.cpu_samples):.1f}% / {max(self.cpu_samples):.1f}%")
 
         print()
         print(f"{'='*70}\n")

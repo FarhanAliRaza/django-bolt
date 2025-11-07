@@ -129,7 +129,7 @@ fn create_python_stream_with_config(
 
     if is_async_final {
         let debug_async = debug_timing;
-        let batch_sz = async_batch_size;
+        let _batch_sz = async_batch_size;
         let fast_path = fast_path_threshold;
         tokio::spawn(async move {
             use futures_util::future::join_all;

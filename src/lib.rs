@@ -1,6 +1,5 @@
 use pyo3::prelude::*;
 
-mod direct_stream;
 mod error;
 mod handler;
 mod json;

@@ -32,7 +32,7 @@ User = get_user_model()
 api = BoltAPI()
 
 class UserSchema(msgspec.Struct):
-    id: str
+    id: int
     username: str
 
 

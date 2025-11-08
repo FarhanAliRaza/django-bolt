@@ -79,6 +79,15 @@ from .openapi import (
     YamlRenderPlugin,
 )
 
+# Model Serializer module
+from .model_serializer import (
+    Serializer,
+    model_serializer,
+    quick_serializer,
+    Field,
+    SerializerConfig,
+)
+
 __all__ = [
     "BoltAPI",
     "Request",
@@ -142,6 +151,12 @@ __all__ = [
     "StoplightRenderPlugin",
     "JsonRenderPlugin",
     "YamlRenderPlugin",
+    # Model Serializer
+    "Serializer",
+    "model_serializer",
+    "quick_serializer",
+    "Field",
+    "SerializerConfig",
 ]
 
 default_app_config = 'django_bolt.apps.DjangoBoltConfig'

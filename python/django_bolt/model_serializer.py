@@ -49,6 +49,7 @@ import msgspec
 
 __all__ = [
     'Serializer',
+    'ModelSerializer',
     'model_serializer',
     'Field',
     'SerializerConfig',
@@ -426,12 +427,21 @@ def model_serializer(
     # Wrap standalone functions to work as instance methods
     if validators:
         for field_name, validator_func in validators.items():
-            # Create a wrapper that ignores self and calls the function
-            def make_validator(func):
-                def wrapper(self, value):
-                    return func(value)
-                return wrapper
-            namespace[f'validate_{field_name}'] = make_validator(validator_func)
+            # Check if function expects self parameter (is a method)
+            import inspect
+            sig = inspect.signature(validator_func)
+            params = list(sig.parameters.keys())
+
+            if len(params) >= 2 and params[0] == 'self':
+                # It's already a method (expects self), use it directly
+                namespace[f'validate_{field_name}'] = validator_func
+            else:
+                # It's a standalone function, wrap it
+                def make_validator(func):
+                    def wrapper(self, value):
+                        return func(value)
+                    return wrapper
+                namespace[f'validate_{field_name}'] = make_validator(validator_func)
 
     # Add transformations as transform_<field> methods
     # Wrap standalone functions to work as class methods
@@ -468,3 +478,112 @@ def quick_serializer(
         Generated serializer class
     """
     return model_serializer(model, fields=fields, exclude=exclude)
+
+
+def model_serializer_from_meta(cls):
+    """Decorator to create a ModelSerializer from a class with Meta configuration.
+
+    This decorator allows DRF-style serializer definition:
+
+    Example:
+        ```python
+        @model_serializer_from_meta
+        class UserSerializer:
+            class Meta:
+                model = User
+                fields = ['id', 'username', 'email']
+                read_only_fields = ['id']
+
+            # Add custom validation
+            def validate_email(self, value: str) -> str:
+                if '@' not in value:
+                    raise ValueError("Invalid email")
+                return value
+        ```
+
+    Args:
+        cls: Class with Meta configuration
+
+    Returns:
+        Generated Serializer class
+
+    Raises:
+        ValueError: If Meta is missing or invalid
+    """
+    # Get Meta class
+    if not hasattr(cls, 'Meta'):
+        raise ValueError(f"{cls.__name__} must define a Meta class")
+
+    meta = cls.Meta
+    model = getattr(meta, 'model', None)
+    if not model:
+        raise ValueError(f"{cls.__name__}.Meta must specify a 'model' attribute")
+
+    fields = getattr(meta, 'fields', '__all__')
+    exclude = getattr(meta, 'exclude', None)
+    read_only_fields = set(getattr(meta, 'read_only_fields', None) or [])
+    write_only_fields = set(getattr(meta, 'write_only_fields', None) or [])
+
+    # Collect validators and transforms from the class
+    # Note: These are unbound methods, so we need to handle them carefully
+    validators = {}
+    transforms = {}
+    for name, value in cls.__dict__.items():  # Use __dict__ to avoid inherited methods
+        if name.startswith('validate_') and callable(value):
+            field_name = name[9:]  # Remove 'validate_' prefix
+            # value is the raw function (not bound), so we can use it directly
+            validators[field_name] = value
+        elif name.startswith('transform_') and callable(value):
+            field_name = name[10:]  # Remove 'transform_' prefix
+            transforms[field_name] = value
+
+    # Create serializer using factory function
+    serializer_cls = model_serializer(
+        model,
+        fields=fields,
+        exclude=exclude,
+        name=cls.__name__,
+        validators=validators,
+        transforms=transforms,
+    )
+
+    # Add read-only/write-only metadata
+    serializer_cls._read_only_fields = read_only_fields
+    serializer_cls._write_only_fields = write_only_fields
+    serializer_cls._field_names = list(serializer_cls.__struct_fields__)
+
+    # Add helper methods
+    @classmethod
+    def get_write_serializer(serializer_cls):
+        """Get serializer for write operations (excludes read-only fields)."""
+        if not read_only_fields:
+            return None
+        write_fields = [f for f in serializer_cls._field_names if f not in read_only_fields]
+        return model_serializer(model, fields=write_fields, name=f"{cls.__name__}Write", validators=validators)
+
+    @classmethod
+    def get_read_serializer(serializer_cls):
+        """Get serializer for read operations (excludes write-only fields)."""
+        if not write_only_fields:
+            return None
+        read_fields = [f for f in serializer_cls._field_names if f not in write_only_fields]
+        return model_serializer(model, fields=read_fields, name=f"{cls.__name__}Read")
+
+    @classmethod
+    def is_field_read_only(serializer_cls, field_name: str) -> bool:
+        return field_name in read_only_fields
+
+    @classmethod
+    def is_field_write_only(serializer_cls, field_name: str) -> bool:
+        return field_name in write_only_fields
+
+    serializer_cls.get_write_serializer = get_write_serializer
+    serializer_cls.get_read_serializer = get_read_serializer
+    serializer_cls.is_field_read_only = is_field_read_only
+    serializer_cls.is_field_write_only = is_field_write_only
+
+    return serializer_cls
+
+
+# Convenience alias for the decorator
+ModelSerializer = model_serializer_from_meta

@@ -478,3 +478,28 @@ def test_readme_example():
     # Test validation
     with pytest.raises(ValueError, match="Email must end with @example.com"):
         UserSerializerWithValidation(id=1, username='test', email='test@other.com')
+
+
+def test_model_serializer_decorator():
+    """Test ModelSerializer as a decorator for Meta-based configuration."""
+    from django_bolt import ModelSerializer
+
+    @ModelSerializer
+    class ArticleSerializer:
+        class Meta:
+            model = Article
+            fields = ['id', 'title', 'content']
+
+        def validate_title(self, value: str) -> str:
+            if len(value) < 3:
+                raise ValueError("Title too short")
+            return value
+
+    # Verify it's a valid msgspec struct
+    assert hasattr(ArticleSerializer, '__struct_fields__')
+    assert 'id' in ArticleSerializer.__struct_fields__
+    assert 'title' in ArticleSerializer.__struct_fields__
+
+    # Test validation
+    with pytest.raises(ValueError, match="Title too short"):
+        ArticleSerializer(id=1, title="Hi", content="Content")

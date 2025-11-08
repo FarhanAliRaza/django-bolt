@@ -82,6 +82,7 @@ from .openapi import (
 # Model Serializer module
 from .model_serializer import (
     Serializer,
+    ModelSerializer,
     model_serializer,
     quick_serializer,
     Field,
@@ -153,6 +154,7 @@ __all__ = [
     "YamlRenderPlugin",
     # Model Serializer
     "Serializer",
+    "ModelSerializer",
     "model_serializer",
     "quick_serializer",
     "Field",

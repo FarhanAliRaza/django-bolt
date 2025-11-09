@@ -10,6 +10,7 @@ use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
 use crate::middleware::auth::AuthBackend;
+use crate::params::RouteParamMetadata;
 use crate::permissions::Guard;
 
 /// CORS configuration parsed at startup
@@ -201,6 +202,7 @@ pub struct RouteMetadata {
     pub skip: HashSet<String>,
     pub cors_config: Option<CorsConfig>,
     pub rate_limit_config: Option<RateLimitConfig>,
+    pub param_metadata: Option<RouteParamMetadata>,
 }
 
 impl RouteMetadata {
@@ -271,6 +273,7 @@ impl RouteMetadata {
             skip,
             cors_config,
             rate_limit_config,
+            param_metadata: None, // Will be set via separate API
         })
     }
 }

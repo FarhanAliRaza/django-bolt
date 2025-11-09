@@ -5,6 +5,7 @@ mod handler;
 mod json;
 mod metadata;
 mod middleware;
+mod params;
 mod permissions;
 mod request;
 mod router;

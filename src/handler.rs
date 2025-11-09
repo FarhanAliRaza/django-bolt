@@ -190,7 +190,7 @@ pub async fn handle_request(
     state: web::Data<Arc<AppState>>,
 ) -> HttpResponse {
     // Start timing at the very beginning of request handling
-    let start_time = std::time::Instant::now();
+    let _start_time = std::time::Instant::now();
 
     let method = req.method().as_str().to_string();
     let path = req.path().to_string();

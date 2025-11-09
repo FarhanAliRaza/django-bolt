@@ -320,6 +320,7 @@ pub fn handle_test_request_for(
         headers: header_map,
         cookies,
         context,
+        converted_params: None,  // Test requests don't use Rust conversion
     };
     let request_obj = Py::new(py, request)?;
 

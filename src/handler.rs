@@ -355,6 +355,24 @@ pub async fn handle_request(
         let dispatch = state.dispatch.clone_ref(py);
         let handler = route_handler.clone_ref(py);
 
+        // Convert parameters in Rust if we have metadata (hot path optimization)
+        let converted_params = if let Some(ref route_meta) = route_metadata {
+            if let Some(ref param_meta) = route_meta.param_metadata {
+                use crate::params::convert_params;
+                match convert_params(py, &path_params, &query_params, &headers, &cookies, param_meta) {
+                    Ok(params) => Some(params),
+                    Err(e) => {
+                        // Conversion error - return early with error response
+                        return Err(e);
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         // Create context dict only if auth context is present
         let context = if let Some(ref auth) = auth_ctx {
             let ctx_dict = PyDict::new(py);
@@ -374,6 +392,7 @@ pub async fn handle_request(
             headers,
             cookies,
             context,
+            converted_params,  // NEW: Pass Rust-converted params to Python
         };
         let request_obj = Py::new(py, request)?;
 

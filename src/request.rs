@@ -12,6 +12,7 @@ pub struct PyRequest {
     pub headers: AHashMap<String, String>,
     pub cookies: AHashMap<String, String>,
     pub context: Option<Py<PyDict>>, // Middleware context data
+    pub converted_params: Option<AHashMap<String, Py<PyAny>>>, // Rust-converted parameters
 }
 
 #[pymethods]
@@ -77,6 +78,16 @@ impl PyRequest {
                 Some(ctx) => ctx.clone_ref(py).into_any(),
                 None => default.unwrap_or_else(|| py.None()),
             },
+            "converted_params" => match &self.converted_params {
+                Some(params) => {
+                    let d = PyDict::new(py);
+                    for (k, v) in params {
+                        let _ = d.set_item(k, v.clone_ref(py));
+                    }
+                    d.into_any().unbind()
+                }
+                None => default.unwrap_or_else(|| py.None()),
+            },
             _ => default.unwrap_or_else(|| py.None()),
         }
     }
@@ -116,6 +127,16 @@ impl PyRequest {
             }
             "context" => Ok(match &self.context {
                 Some(ctx) => ctx.clone_ref(py).into_any(),
+                None => py.None(),
+            }),
+            "converted_params" => Ok(match &self.converted_params {
+                Some(params) => {
+                    let d = PyDict::new(py);
+                    for (k, v) in params {
+                        let _ = d.set_item(k, v.clone_ref(py));
+                    }
+                    d.into_any().unbind()
+                }
                 None => py.None(),
             }),
             _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),

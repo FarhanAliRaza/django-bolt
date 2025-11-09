@@ -105,9 +105,18 @@ def extract_parameter_value(
     alias = field.alias
     key = alias or name
 
+    # FAST PATH: Check if Rust already converted this parameter
+    # Rust converts simple types (path, query, header, cookie with int/float/str/bool)
+    if source in ("path", "query", "header", "cookie"):
+        converted_params = request.get("converted_params")
+        if converted_params is not None and key in converted_params:
+            # Use Rust-converted value (already typed correctly)
+            return converted_params[key], body_obj, body_loaded
+
     # Use cached unwrapped annotation (performance optimization)
     unwrapped_type = field.unwrapped_annotation
 
+    # SLOW PATH: Python conversion (for body/form/file/dependency or when Rust didn't convert)
     # Handle different sources
     if source == "path":
         if key in params_map:

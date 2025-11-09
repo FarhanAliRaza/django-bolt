@@ -788,11 +788,11 @@ class BoltAPI:
 
             self._handler_meta[fn] = meta
 
-            # Compile middleware metadata for this handler (including guards and auth)
+            # Compile middleware metadata for this handler (including guards, auth, and params)
             middleware_meta = compile_middleware_meta(
                 fn, method, full_path,
                 self.middleware, self.middleware_config,
-                guards=guards, auth=auth
+                guards=guards, auth=auth, handler_meta=meta
             )
             if middleware_meta:
                 self._handler_middleware[handler_id] = middleware_meta

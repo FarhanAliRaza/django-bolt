@@ -4,6 +4,70 @@ from ..auth.backends import get_default_authentication_classes
 from ..auth.guards import get_default_permission_classes
 
 
+def _python_type_to_param_type(field: Any) -> str:
+    """
+    Map Python type annotation to Rust ParamType enum.
+
+    Args:
+        field: FieldDefinition object with annotation property
+
+    Returns:
+        String matching Rust ParamType enum: "str", "int", "float", "bool", "any"
+    """
+    # Get the unwrapped annotation (Optional removed)
+    unwrapped = field.unwrapped_annotation
+
+    # Map to Rust ParamType
+    if unwrapped is str:
+        return "str"
+    elif unwrapped is int:
+        return "int"
+    elif unwrapped is float:
+        return "float"
+    elif unwrapped is bool:
+        return "bool"
+    else:
+        # Complex types, structs, etc. - Rust won't convert these
+        return "any"
+
+
+def _extract_param_metadata(handler_meta: Optional[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+    """
+    Extract parameter metadata from handler metadata for Rust conversion.
+
+    Args:
+        handler_meta: Handler metadata dict with 'fields' key containing FieldDefinition objects
+
+    Returns:
+        List of param metadata dicts or None if no simple params to convert
+    """
+    if not handler_meta or "fields" not in handler_meta:
+        return None
+
+    fields = handler_meta["fields"]
+    params = []
+
+    for field in fields:
+        # Only extract simple params that Rust can convert (path, query, header, cookie)
+        # Skip body, form, file, request, dependency - Python handles those
+        if field.source not in ("path", "query", "header", "cookie"):
+            continue
+
+        param_type = _python_type_to_param_type(field)
+
+        # Only include if it's a type Rust can actually convert
+        # (int, float, str, bool - though bool is TODO in Rust)
+        if param_type in ("int", "float", "str", "bool"):
+            params.append({
+                "name": field.alias or field.name,  # Use alias if present
+                "source": field.source,  # "path", "query", "header", "cookie"
+                "param_type": param_type,  # "str", "int", "float", "bool", "any"
+                "optional": field.is_optional,
+            })
+
+    return params if params else None
+
+
 def compile_middleware_meta(
     handler: Callable,
     method: str,
@@ -11,7 +75,8 @@ def compile_middleware_meta(
     global_middleware: List[Any],
     global_middleware_config: Dict[str, Any],
     guards: Optional[List[Any]] = None,
-    auth: Optional[List[Any]] = None
+    auth: Optional[List[Any]] = None,
+    handler_meta: Optional[Dict[str, Any]] = None  # NEW: accept handler metadata
 ) -> Optional[Dict[str, Any]]:
     """Compile middleware metadata for a handler, including guards and auth."""
     # Check for handler-specific middleware
@@ -114,6 +179,11 @@ def compile_middleware_meta(
 
     if guard_list:
         result['guards'] = guard_list
+
+    # Extract parameter metadata for Rust type conversion
+    params = _extract_param_metadata(handler_meta)
+    if params:
+        result['params'] = params
 
     return result
 

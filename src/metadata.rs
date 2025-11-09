@@ -267,13 +267,20 @@ impl RouteMetadata {
             }
         }
 
+        // Parse parameter metadata for Rust type conversion
+        let param_metadata = if let Ok(Some(params_list)) = py_meta.get_item("params") {
+            parse_param_metadata(&params_list, py)
+        } else {
+            None
+        };
+
         Ok(RouteMetadata {
             auth_backends,
             guards,
             skip,
             cors_config,
             rate_limit_config,
-            param_metadata: None, // Will be set via separate API
+            param_metadata,
         })
     }
 }
@@ -468,5 +475,58 @@ fn parse_guard(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Guard> {
             Some(Guard::HasAllPermissions(perms))
         }
         _ => None,
+    }
+}
+
+/// Parse parameter metadata from Python list
+fn parse_param_metadata(params_list: &Bound<'_, PyAny>, py: Python) -> Option<RouteParamMetadata> {
+    use crate::params::{ParamMetadata, ParamSource, ParamType};
+
+    // Extract list of param dicts
+    let params_vec: Vec<HashMap<String, Py<PyAny>>> = params_list.extract().ok()?;
+
+    let mut metadata = RouteParamMetadata::new();
+
+    for param_dict in params_vec {
+        // Extract required fields
+        let name = param_dict.get("name")?.extract::<String>(py).ok()?;
+        let source_str = param_dict.get("source")?.extract::<String>(py).ok()?;
+        let type_str = param_dict.get("param_type")?.extract::<String>(py).ok()?;
+        let optional = param_dict
+            .get("optional")
+            .and_then(|o| o.extract::<bool>(py).ok())
+            .unwrap_or(false);
+
+        // Parse source
+        let source = match source_str.as_str() {
+            "path" => ParamSource::Path,
+            "query" => ParamSource::Query,
+            "header" => ParamSource::Header,
+            "cookie" => ParamSource::Cookie,
+            _ => continue, // Skip unknown sources
+        };
+
+        // Parse type
+        let param_type = match type_str.as_str() {
+            "str" => ParamType::Str,
+            "int" => ParamType::Int,
+            "float" => ParamType::Float,
+            "bool" => ParamType::Bool,
+            "any" => ParamType::Any,
+            _ => continue, // Skip unknown types
+        };
+
+        metadata.add_param(ParamMetadata {
+            name,
+            source,
+            param_type,
+            optional,
+        });
+    }
+
+    if metadata.params.is_empty() {
+        None
+    } else {
+        Some(metadata)
     }
 }

@@ -568,11 +568,13 @@ Contributions welcome! Here's how:
 
 ### Areas That Need Help
 
-- Testing utilities and test client
+- Testing and fixing bugs
+- Serlialization layer
+- Add extension support (adding lifecycle events, making di comprehensive)
 - WebSocket support
-- OAuth2/OpenID Connect
-- API versioning
-- More examples and tutorials
+- Cleaning up code.
+- Adding django compatibility layer for views and middlewares 
+- More examples, tutorials, and docs.
 
 ---
 

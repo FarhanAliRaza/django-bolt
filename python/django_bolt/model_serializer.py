@@ -258,23 +258,16 @@ class Serializer(msgspec.Struct):
 
         for field_name in cls.__struct_fields__:
             # Check for computed field (get_<field> method)
+            # Supports @staticmethod, @classmethod, or plain function
             computed_method = f'get_{field_name}'
             if hasattr(cls, computed_method):
                 method = getattr(cls, computed_method)
                 if callable(method):
-                    # Call the computed method - it should accept (cls, instance)
-                    # But we need to check if it's a classmethod or instance method
-                    import inspect
-                    sig = inspect.signature(method)
-                    params = list(sig.parameters.keys())
-
-                    if len(params) == 1:
-                        # Classmethod or staticmethod: get_field(obj)
-                        data[field_name] = method(instance)
-                    else:
-                        # Would be instance method, but we can't call it on cls
-                        # So we'll treat it as classmethod-style
-                        data[field_name] = method(instance)
+                    # Call with instance - Python handles the rest via descriptor protocol
+                    # - @staticmethod def get_foo(obj): receives just (obj)
+                    # - @classmethod def get_foo(cls, obj): receives (cls, obj)
+                    # - def get_foo(obj): receives just (obj)
+                    data[field_name] = method(instance)
                     continue
 
             # Get source attribute name

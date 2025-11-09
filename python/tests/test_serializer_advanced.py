@@ -21,9 +21,9 @@ def test_computed_field_basic():
         title: str
         title_upper: str  # Computed field
 
-        @classmethod
-        def get_title_upper(cls, obj) -> str:
-            """Compute uppercase title."""
+        @staticmethod
+        def get_title_upper(obj) -> str:
+            """Compute uppercase title. No need for @classmethod!"""
             return obj.title.upper()
 
     # Create a mock object
@@ -203,8 +203,8 @@ def test_nested_and_computed_together():
         name: str
         name_upper: str  # Computed
 
-        @classmethod
-        def get_name_upper(cls, obj) -> str:
+        # Plain function - no decorator needed!
+        def get_name_upper(obj) -> str:
             return obj.name.upper()
 
     class BookSerializer(Serializer):
@@ -213,8 +213,8 @@ def test_nested_and_computed_together():
         author: AuthorSerializer  # Nested
         full_title: str  # Computed
 
-        @classmethod
-        def get_full_title(cls, obj) -> str:
+        @staticmethod
+        def get_full_title(obj) -> str:
             return f"{obj.title} by {obj.author.name}"
 
     # Create mock objects

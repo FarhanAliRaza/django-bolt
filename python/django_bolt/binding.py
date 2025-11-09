@@ -26,6 +26,10 @@ __all__ = [
 # Cache for msgspec decoders (performance optimization)
 _DECODER_CACHE: Dict[Any, msgspec.json.Decoder] = {}
 
+# Boolean conversion sets (performance optimization - O(1) lookup instead of O(n))
+_BOOL_TRUE_VALUES = frozenset(["1", "true", "t", "yes", "y", "on", "True", "TRUE", "Yes", "YES", "On", "ON"])
+_BOOL_FALSE_VALUES = frozenset(["0", "false", "f", "no", "n", "off", "False", "FALSE", "No", "NO", "Off", "OFF"])
+
 
 def get_msgspec_decoder(type_: Any) -> msgspec.json.Decoder:
     """Get or create a cached msgspec decoder for a type."""
@@ -34,18 +38,20 @@ def get_msgspec_decoder(type_: Any) -> msgspec.json.Decoder:
     return _DECODER_CACHE[type_]
 
 
-def convert_primitive(value: str, annotation: Any) -> Any:
+def convert_primitive(value: str, annotation: Any, unwrapped: Any = None) -> Any:
     """
     Convert string value to the appropriate type based on annotation.
 
     Args:
         value: Raw string value from request
         annotation: Target type annotation
+        unwrapped: Pre-unwrapped type (optional, avoids unwrap_optional call)
 
     Returns:
         Converted value
     """
-    tp = unwrap_optional(annotation)
+    # Use pre-unwrapped type if provided (performance optimization)
+    tp = unwrapped if unwrapped is not None else unwrap_optional(annotation)
 
     if tp is str or tp is Any or tp is None or tp is inspect._empty:
         return value
@@ -65,11 +71,12 @@ def convert_primitive(value: str, annotation: Any) -> Any:
             raise HTTPException(422, detail=f"Invalid float value: '{value}'")
 
     if tp is bool:
-        v = value.lower()
-        if v in ("1", "true", "t", "yes", "y", "on"):
+        # Check against frozenset for O(1) lookup (avoids .lower() allocation in common case)
+        if value in _BOOL_TRUE_VALUES:
             return True
-        if v in ("0", "false", "f", "no", "n", "off"):
+        if value in _BOOL_FALSE_VALUES:
             return False
+        # Fallback to any non-empty string as True
         return bool(value)
 
     # Fallback: try msgspec decode for JSON in value
@@ -379,13 +386,19 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
     # Use pre-computed type information if available
     if meta and "response_field_names" in meta:
         # This is a list[Struct] response - use pre-computed field names
-        origin = get_origin(annotation)
+        # Use cached origin/args if available (avoid get_origin/get_args on every request)
+        origin = meta.get("response_origin") if meta else None
+        if origin is None:
+            origin = get_origin(annotation)
 
         # Handle List[T]
         if origin in (list, List):
             # Check if value is actually a list/iterable
             if not isinstance(value, (list, tuple)) and value is not None:
-                args = get_args(annotation)
+                # Use cached args if available
+                args = meta.get("response_args") if meta else None
+                if args is None:
+                    args = get_args(annotation)
                 elem_name = args[0].__name__ if args else 'Any'
                 raise TypeError(
                     f"Response type mismatch: expected list[{elem_name}], "

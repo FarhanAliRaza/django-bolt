@@ -53,8 +53,8 @@ async def resolve_dependency(
         dep_meta = compile_binder(dep_fn, http_method, path)
         handler_meta[dep_fn] = dep_meta
 
-    # Check if dependency is async or sync
-    is_async = inspect.iscoroutinefunction(dep_fn)
+    # Check if dependency is async or sync (cached in metadata for performance)
+    is_async = dep_meta.get("is_async", True)
 
     if dep_meta.get("mode") == "request_only":
         if is_async:
@@ -155,20 +155,22 @@ def extract_dependency_value(
         Extracted and converted parameter value
     """
     key = field.alias or field.name
+    # Use cached unwrapped annotation (performance optimization)
+    unwrapped_type = field.unwrapped_annotation
 
     if key in params_map:
-        return convert_primitive(str(params_map[key]), field.annotation)
+        return convert_primitive(str(params_map[key]), field.annotation, unwrapped_type)
     elif key in query_map:
-        return convert_primitive(str(query_map[key]), field.annotation)
+        return convert_primitive(str(query_map[key]), field.annotation, unwrapped_type)
     elif field.source == "header":
         raw = headers_map.get(key.lower())
         if raw is None:
             raise ValueError(f"Missing required header: {key}")
-        return convert_primitive(str(raw), field.annotation)
+        return convert_primitive(str(raw), field.annotation, unwrapped_type)
     elif field.source == "cookie":
         raw = cookies_map.get(key)
         if raw is None:
             raise ValueError(f"Missing required cookie: {key}")
-        return convert_primitive(str(raw), field.annotation)
+        return convert_primitive(str(raw), field.annotation, unwrapped_type)
     else:
         return None

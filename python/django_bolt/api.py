@@ -105,15 +105,18 @@ def extract_parameter_value(
     alias = field.alias
     key = alias or name
 
+    # Use cached unwrapped annotation (performance optimization)
+    unwrapped_type = field.unwrapped_annotation
+
     # Handle different sources
     if source == "path":
         if key in params_map:
-            return convert_primitive(str(params_map[key]), annotation), body_obj, body_loaded
+            return convert_primitive(str(params_map[key]), annotation, unwrapped_type), body_obj, body_loaded
         raise HTTPException(status_code=400, detail=f"Missing required path parameter: {key}")
 
     elif source == "query":
         if key in query_map:
-            return convert_primitive(str(query_map[key]), annotation), body_obj, body_loaded
+            return convert_primitive(str(query_map[key]), annotation, unwrapped_type), body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise HTTPException(status_code=400, detail=f"Missing required query parameter: {key}")
@@ -121,21 +124,21 @@ def extract_parameter_value(
     elif source == "header":
         lower_key = key.lower()
         if lower_key in headers_map:
-            return convert_primitive(str(headers_map[lower_key]), annotation), body_obj, body_loaded
+            return convert_primitive(str(headers_map[lower_key]), annotation, unwrapped_type), body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise HTTPException(status_code=400, detail=f"Missing required header: {key}")
 
     elif source == "cookie":
         if key in cookies_map:
-            return convert_primitive(str(cookies_map[key]), annotation), body_obj, body_loaded
+            return convert_primitive(str(cookies_map[key]), annotation, unwrapped_type), body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise HTTPException(status_code=400, detail=f"Missing required cookie: {key}")
 
     elif source == "form":
         if key in form_map:
-            return convert_primitive(str(form_map[key]), annotation), body_obj, body_loaded
+            return convert_primitive(str(form_map[key]), annotation, unwrapped_type), body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise HTTPException(status_code=400, detail=f"Missing required form field: {key}")
@@ -765,6 +768,24 @@ class BoltAPI:
                 meta["openapi_summary"] = summary
             if description is not None:
                 meta["openapi_description"] = description
+
+            # Pre-compute logging flags (avoid runtime checks on every request)
+            if self._logging_middleware:
+                meta["logging_enabled"] = True
+                # Pre-check if we should time requests
+                should_time = False
+                try:
+                    if self._logging_middleware.logger.isEnabledFor(logging.INFO):
+                        should_time = True
+                except Exception:
+                    pass
+                if not should_time:
+                    should_time = bool(getattr(self._logging_middleware.config, 'min_duration_ms', None))
+                meta["should_time_request"] = should_time
+            else:
+                meta["logging_enabled"] = False
+                meta["should_time_request"] = False
+
             self._handler_meta[fn] = meta
 
             # Compile middleware metadata for this handler (including guards and auth)
@@ -822,6 +843,8 @@ class BoltAPI:
         params = list(sig.parameters.values())
         if len(params) == 1 and params[0].name in {"request", "req"}:
             meta["mode"] = "request_only"
+            # Set is_async even for request-only handlers (needed for dependencies)
+            meta["is_async"] = inspect.iscoroutinefunction(fn)
             return meta
 
         # Parse each parameter into FieldDefinition
@@ -907,6 +930,21 @@ class BoltAPI:
         needs_form_parsing = any(f.source in ("form", "file") for f in field_definitions)
         meta["needs_form_parsing"] = needs_form_parsing
 
+        # Performance: Cache is_async check for dependencies
+        # This avoids calling inspect.iscoroutinefunction() on every request
+        meta["is_async"] = inspect.iscoroutinefunction(fn)
+
+        # Performance: Pre-compute response type origin/args if available
+        # This avoids calling get_origin()/get_args() on every request
+        if "response_type" in meta:
+            resp_type = meta["response_type"]
+            resp_origin = get_origin(resp_type)
+            if resp_origin is not None:
+                meta["response_origin"] = resp_origin
+                resp_args = get_args(resp_type)
+                if resp_args:
+                    meta["response_args"] = resp_args
+
         return meta
 
     async def _build_handler_arguments(self, meta: HandlerMetadata, request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
@@ -988,6 +1026,12 @@ class BoltAPI:
             request: The request dictionary
             handler_id: Handler ID to lookup original API (for merged APIs)
         """
+        # Get handler metadata first (needed for pre-computed flags)
+        meta = self._handler_meta.get(handler)
+        if meta is None:
+            meta = self._compile_binder(handler)
+            self._handler_meta[handler] = meta
+
         # For merged APIs, use the original API's logging middleware
         # This preserves per-API logging, auth, and middleware config (Litestar-style)
         logging_middleware = self._logging_middleware
@@ -996,31 +1040,17 @@ class BoltAPI:
             if original_api and original_api._logging_middleware:
                 logging_middleware = original_api._logging_middleware
 
-        # Start timing only if we might log
+        # Start timing only if we should (use pre-computed flag if available)
         start_time = None
-        if logging_middleware:
-            # Determine if INFO logs are enabled or a slow-only threshold exists
-            logger = logging_middleware.logger
-            should_time = False
-            try:
-                if logger.isEnabledFor(logging.INFO):
-                    should_time = True
-            except Exception:
-                pass
-            if not should_time:
-                # If slow-only is configured, we still need timing
-                should_time = bool(getattr(logging_middleware.config, 'min_duration_ms', None))
-            if should_time:
-                start_time = time.time()
+        should_time = meta.get("should_time_request", False)
+        if should_time:
+            start_time = time.time()
 
-            # Log request if logging enabled (DEBUG-level guard happens inside)
+        # Log request if logging enabled
+        if logging_middleware:
             logging_middleware.log_request(request)
 
         try:
-            meta = self._handler_meta.get(handler)
-            if meta is None:
-                meta = self._compile_binder(handler)
-                self._handler_meta[handler] = meta
 
             # Determine if handler is async (default to True for backward compatibility)
             is_async = meta.get("is_async", True)

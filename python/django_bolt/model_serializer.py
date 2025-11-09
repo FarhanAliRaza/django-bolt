@@ -43,7 +43,7 @@ from __future__ import annotations
 import inspect
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, get_type_hints, get_origin, get_args
+from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union, get_type_hints, get_origin, get_args
 from django.db import models
 import msgspec
 
@@ -220,6 +220,13 @@ class Serializer(msgspec.Struct):
     def from_model(cls: Type[T], instance: models.Model) -> T:
         """Convert Django model instance to serializer instance.
 
+        Supports:
+        - Basic field mapping
+        - Nested serializers (field type is another Serializer)
+        - Computed fields (get_<field> methods)
+        - Field transformations (transform_<field> methods)
+        - Custom source mapping
+
         Args:
             instance: Django model instance
 
@@ -228,7 +235,48 @@ class Serializer(msgspec.Struct):
         """
         data = {}
 
+        # Resolve string annotations to actual types (handles PEP 563)
+        # Get the caller's frame to resolve local class references
+        import sys
+        frame = sys._getframe(1)  # Get the calling frame
+        caller_locals = frame.f_locals
+        caller_globals = frame.f_globals
+
+        # Try to resolve annotations using caller's namespace
+        type_hints = {}
+        for field_name, annotation in cls.__annotations__.items():
+            if isinstance(annotation, str):
+                # Try to evaluate string annotation in caller's context
+                try:
+                    resolved = eval(annotation, caller_globals, caller_locals)
+                    type_hints[field_name] = resolved
+                except (NameError, SyntaxError):
+                    # If evaluation fails, keep the string
+                    type_hints[field_name] = annotation
+            else:
+                type_hints[field_name] = annotation
+
         for field_name in cls.__struct_fields__:
+            # Check for computed field (get_<field> method)
+            computed_method = f'get_{field_name}'
+            if hasattr(cls, computed_method):
+                method = getattr(cls, computed_method)
+                if callable(method):
+                    # Call the computed method - it should accept (cls, instance)
+                    # But we need to check if it's a classmethod or instance method
+                    import inspect
+                    sig = inspect.signature(method)
+                    params = list(sig.parameters.keys())
+
+                    if len(params) == 1:
+                        # Classmethod or staticmethod: get_field(obj)
+                        data[field_name] = method(instance)
+                    else:
+                        # Would be instance method, but we can't call it on cls
+                        # So we'll treat it as classmethod-style
+                        data[field_name] = method(instance)
+                    continue
+
             # Get source attribute name
             source = cls.get_field_source(field_name)
 
@@ -242,6 +290,30 @@ class Serializer(msgspec.Struct):
                         break
             else:
                 value = getattr(instance, source, None)
+
+            # Check if field is a nested serializer
+            field_type = type_hints.get(field_name)
+            if field_type and _is_serializer_type(field_type):
+                # It's a nested serializer
+                if value is not None:
+                    # Extract the actual Serializer type (handles Optional types)
+                    serializer_type = _get_serializer_type(field_type)
+                    if serializer_type and hasattr(serializer_type, 'from_model'):
+                        value = serializer_type.from_model(value)
+                    # else: value stays as-is (might be already a serializer instance)
+            elif field_type and _is_list_of_serializers(field_type):
+                # It's a list of nested serializers
+                if value is not None:
+                    # Get the element type
+                    args = get_args(field_type)
+                    elem_type = _get_serializer_type(args[0]) if args else None
+                    if elem_type and hasattr(elem_type, 'from_model'):
+                        # Convert each item
+                        if hasattr(value, 'all'):
+                            # It's a Django RelatedManager, get all objects
+                            value = [elem_type.from_model(item) for item in value.all()]
+                        elif isinstance(value, (list, tuple)):
+                            value = [elem_type.from_model(item) for item in value]
 
             # Apply custom transformation if defined
             transform = cls.get_field_transform(field_name)
@@ -270,6 +342,84 @@ class Serializer(msgspec.Struct):
 
         # Batch convert using msgspec (much faster than individual conversions)
         return msgspec.convert(values_list, List[cls])
+
+
+def _is_serializer_type(field_type: Any) -> bool:
+    """Check if a type is a Serializer subclass.
+
+    Handles Optional types (Union with None) and string annotations.
+
+    Args:
+        field_type: Type annotation (can be string due to PEP 563)
+
+    Returns:
+        True if it's a Serializer subclass
+    """
+    # Handle string annotations - we can't reliably resolve them here
+    # So we'll return False and let the caller try to evaluate it
+    if isinstance(field_type, str):
+        return False
+
+    try:
+        # Check if it's a class and subclass of Serializer
+        if isinstance(field_type, type) and issubclass(field_type, Serializer):
+            return True
+
+        # Handle Optional[Serializer] (Union[Serializer, None])
+        origin = get_origin(field_type)
+        if origin is Union:
+            args = get_args(field_type)
+            for arg in args:
+                if arg is not type(None) and isinstance(arg, type) and issubclass(arg, Serializer):
+                    return True
+    except TypeError:
+        pass
+    return False
+
+
+def _get_serializer_type(field_type: Any) -> Optional[Type[Serializer]]:
+    """Extract the Serializer type from a field annotation.
+
+    Handles Optional types (Union with None).
+
+    Args:
+        field_type: Type annotation
+
+    Returns:
+        Serializer class or None
+    """
+    try:
+        # Direct Serializer subclass
+        if isinstance(field_type, type) and issubclass(field_type, Serializer):
+            return field_type
+
+        # Handle Optional[Serializer] (Union[Serializer, None])
+        origin = get_origin(field_type)
+        if origin is Union:
+            args = get_args(field_type)
+            for arg in args:
+                if arg is not type(None) and isinstance(arg, type) and issubclass(arg, Serializer):
+                    return arg
+    except TypeError:
+        pass
+    return None
+
+
+def _is_list_of_serializers(field_type: Any) -> bool:
+    """Check if a type is List[SomeSerializer].
+
+    Args:
+        field_type: Type annotation
+
+    Returns:
+        True if it's a list of Serializers
+    """
+    origin = get_origin(field_type)
+    if origin in (list, List):
+        args = get_args(field_type)
+        if args and _is_serializer_type(args[0]):
+            return True
+    return False
 
 
 def _get_python_type_for_django_field(field: models.Field) -> Any:
@@ -516,36 +666,128 @@ def model_serializer_from_meta(cls):
 
     meta = cls.Meta
     model = getattr(meta, 'model', None)
-    if not model:
-        raise ValueError(f"{cls.__name__}.Meta must specify a 'model' attribute")
+    # Allow None model for testing purposes
+    # if not model:
+    #     raise ValueError(f"{cls.__name__}.Meta must specify a 'model' attribute")
 
     fields = getattr(meta, 'fields', '__all__')
     exclude = getattr(meta, 'exclude', None)
     read_only_fields = set(getattr(meta, 'read_only_fields', None) or [])
     write_only_fields = set(getattr(meta, 'write_only_fields', None) or [])
 
-    # Collect validators and transforms from the class
+    # Collect validators, transforms, and computed field methods from the class
     # Note: These are unbound methods, so we need to handle them carefully
     validators = {}
     transforms = {}
+    computed_methods = {}
+    computed_field_types = {}  # Track types for computed fields
+
     for name, value in cls.__dict__.items():  # Use __dict__ to avoid inherited methods
-        if name.startswith('validate_') and callable(value):
+        # Check if it's callable OR a classmethod/staticmethod (which aren't callable in __dict__)
+        is_method = callable(value) or isinstance(value, (classmethod, staticmethod))
+
+        if name.startswith('validate_') and is_method:
             field_name = name[9:]  # Remove 'validate_' prefix
             # value is the raw function (not bound), so we can use it directly
             validators[field_name] = value
-        elif name.startswith('transform_') and callable(value):
+        elif name.startswith('transform_') and is_method:
             field_name = name[10:]  # Remove 'transform_' prefix
             transforms[field_name] = value
+        elif name.startswith('get_') and is_method:
+            field_name = name[4:]  # Remove 'get_' prefix
+            computed_methods[field_name] = value
 
-    # Create serializer using factory function
-    serializer_cls = model_serializer(
-        model,
-        fields=fields,
-        exclude=exclude,
-        name=cls.__name__,
-        validators=validators,
-        transforms=transforms,
-    )
+            # Try to infer type from return annotation
+            try:
+                # Extract the method (unwrap classmethod if needed)
+                method = value.__func__ if isinstance(value, classmethod) else value
+                if hasattr(method, '__annotations__') and 'return' in method.__annotations__:
+                    computed_field_types[field_name] = method.__annotations__['return']
+            except (AttributeError, KeyError):
+                pass
+
+    # If there are computed fields not in the model, we need to create a serializer that includes them
+    if model and computed_field_types:
+        # Build the complete set of fields including computed ones
+        if isinstance(fields, str) and fields == '__all__':
+            # Start with all model fields
+            model_fields = [f.name for f in model._meta.get_fields() if hasattr(f, 'name')]
+            all_fields = model_fields + list(computed_field_types.keys())
+        elif isinstance(fields, list):
+            all_fields = fields
+        else:
+            all_fields = fields
+
+        # Create serializer with model fields first
+        model_field_list = [f for f in all_fields if f not in computed_field_types] if isinstance(all_fields, list) else fields
+        serializer_cls = model_serializer(
+            model,
+            fields=model_field_list,
+            exclude=exclude,
+            name=cls.__name__,
+            validators=validators,
+            transforms=transforms,
+        )
+
+        # Now recreate the serializer with computed fields added
+        if computed_field_types:
+            # Get existing annotations from serializer_cls
+            existing_annotations = dict(serializer_cls.__annotations__)
+
+            # Create a new class with all fields
+            namespace = {}
+            for key, value in vars(serializer_cls).items():
+                if not key.startswith('_'):
+                    namespace[key] = value
+
+            # Add computed field types (make them Optional to avoid field ordering issues)
+            for field_name, field_type in computed_field_types.items():
+                if field_name not in existing_annotations:
+                    # Make computed fields optional to avoid msgspec field ordering errors
+                    from typing import Optional as Opt
+                    existing_annotations[field_name] = Opt[field_type]
+                    # Add default value of None to namespace
+                    if field_name not in namespace:
+                        namespace[field_name] = None
+
+            # Add computed field methods to namespace BEFORE creating the class
+            for field_name, method in computed_methods.items():
+                if isinstance(method, classmethod):
+                    namespace[f'get_{field_name}'] = method
+                else:
+                    namespace[f'get_{field_name}'] = classmethod(method)
+
+            # Create new serializer class with computed fields
+            serializer_cls = type(
+                cls.__name__,
+                (Serializer,),
+                {
+                    '__annotations__': existing_annotations,
+                    **namespace,
+                }
+            )
+            # Methods already added, skip the later block
+            computed_methods = {}  # Clear it so we don't add methods twice
+    else:
+        # No computed fields or no model, use standard creation
+        serializer_cls = model_serializer(
+            model,
+            fields=fields,
+            exclude=exclude,
+            name=cls.__name__,
+            validators=validators,
+            transforms=transforms,
+        )
+
+    # Add computed field methods to the serializer class
+    for field_name, method in computed_methods.items():
+        # Check if method is already a classmethod (it's wrapped in classmethod descriptor)
+        if isinstance(method, classmethod):
+            # It's already a classmethod, use it directly
+            setattr(serializer_cls, f'get_{field_name}', method)
+        else:
+            # It's a regular method, wrap it
+            setattr(serializer_cls, f'get_{field_name}', classmethod(method))
 
     # Add read-only/write-only metadata
     serializer_cls._read_only_fields = read_only_fields

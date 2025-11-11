@@ -249,8 +249,8 @@ def test_bolt_api_view_route_level_guard_override(api):
     middleware_meta = api._handler_middleware.get(handler_id)
     assert middleware_meta is not None
     assert len(middleware_meta["guards"]) == 1
-    # Should be is_admin (IsAdminUser's guard_name), not is_authenticated
-    assert middleware_meta["guards"][0]["type"] == "is_admin"
+    # Should be is_superuser (IsAdminUser's guard_name), not is_authenticated
+    assert middleware_meta["guards"][0]["type"] == "is_superuser"
 
 
 def test_bolt_api_view_class_level_auth(api):

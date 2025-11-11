@@ -450,7 +450,7 @@ fn parse_guard(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Guard> {
     match guard_type.as_str() {
         "allow_any" => Some(Guard::AllowAny),
         "is_authenticated" => Some(Guard::IsAuthenticated),
-        "is_admin" => Some(Guard::IsAdmin),
+        "is_superuser" => Some(Guard::IsSuperuser),
         "is_staff" => Some(Guard::IsStaff),
         "has_permission" => {
             let perm = dict.get("permission")?.extract::<String>(py).ok()?;

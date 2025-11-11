@@ -42,7 +42,7 @@ run-dev:
 test-py:
 	uv run --with pytest pytest python/tests -s -vv
 
-
+#   uv run --with pytest pytest python/tests/test_request_user.py -s -vv
 # Seed database with test data
 seed-data:
 	@echo "Seeding database..."

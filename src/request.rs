@@ -12,6 +12,8 @@ pub struct PyRequest {
     pub headers: AHashMap<String, String>,
     pub cookies: AHashMap<String, String>,
     pub context: Option<Py<PyDict>>, // Middleware context data
+    // None if no auth context or user not found
+    pub user: Option<Py<PyAny>>,
 }
 
 #[pymethods]
@@ -35,6 +37,22 @@ impl PyRequest {
     fn context<'py>(&self, py: Python<'py>) -> Py<PyAny> {
         match &self.context {
             Some(ctx) => ctx.clone_ref(py).into_any(),
+            None => py.None(),
+        }
+    }
+
+    /// Get the user object (LazyUser proxy set by Python's _dispatch).
+    ///
+    /// Returns a LazyUser proxy that loads the user from the database
+    /// on first access (no await needed in handler code).
+    ///
+    /// Returns:
+    /// - LazyUser proxy if authentication succeeded
+    /// - None if no auth context or authentication failed
+    #[getter]
+    fn user<'py>(&self, py: Python<'py>) -> Py<PyAny> {
+        match &self.user {
+            Some(user) => user.clone_ref(py),
             None => py.None(),
         }
     }
@@ -118,6 +136,17 @@ impl PyRequest {
                 Some(ctx) => ctx.clone_ref(py).into_any(),
                 None => py.None(),
             }),
+            _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
+        }
+    }
+
+    fn __setitem__(&mut self, key: &str, value: Py<PyAny>) -> PyResult<()> {
+        match key {
+            "user" => {
+                // Allow Python's _dispatch to set LazyUser proxy (loads user on first access)
+                self.user = Some(value);
+                Ok(())
+            }
             _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
         }
     }

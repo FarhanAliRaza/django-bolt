@@ -9,7 +9,7 @@ use crate::middleware::auth::AuthContext;
 pub enum Guard {
     AllowAny,
     IsAuthenticated,
-    IsAdmin,
+    IsSuperuser,
     IsStaff,
     HasPermission(String),
     HasAnyPermission(Vec<String>),
@@ -36,10 +36,10 @@ pub fn evaluate_guards(guards: &[Guard], auth_ctx: Option<&AuthContext>) -> Guar
                     return GuardResult::Unauthorized;
                 }
             }
-            Guard::IsAdmin => match auth_ctx {
+            Guard::IsSuperuser => match auth_ctx {
                 None => return GuardResult::Unauthorized,
                 Some(ctx) => {
-                    if !ctx.is_admin {
+                    if !ctx.is_superuser {
                         return GuardResult::Forbidden;
                     }
                 }

@@ -84,19 +84,19 @@ class IsAdminUser(BasePermission):
     """
     Require that the authenticated user is an admin/superuser.
 
-    Returns 403 if user is not admin.
-    Requires JWT token to include 'is_superuser' or 'is_admin' claim.
+    Returns 403 if user is not a superuser.
+    Requires JWT token to include 'is_superuser' claim.
     """
 
     @property
     def guard_name(self) -> str:
-        return "is_admin"
+        return "is_superuser"
 
     def to_metadata(self) -> Dict[str, Any]:
-        return {"type": "is_admin"}
+        return {"type": "is_superuser"}
 
     def has_permission(self, auth_context: Optional[Any]) -> bool:
-        return auth_context is not None and auth_context.is_admin
+        return auth_context is not None and auth_context.is_superuser
 
 
 class IsStaff(BasePermission):

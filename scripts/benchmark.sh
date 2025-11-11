@@ -66,6 +66,65 @@ ab -k -c $C -n $N -r -H 'Accept: */*' http://$HOST:$PORT/redirect 2>/dev/null | 
 printf "### File Static via FileResponse (/file-static)\n"
 ab -k -c $C -n $N http://$HOST:$PORT/file-static 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
+echo ""
+echo "## Authentication & Authorization Performance"
+
+# Create a Django user and JWT token for testing
+TOKEN=$(uv run python << 'PYTHON_TOKEN_SCRIPT'
+import os
+import sys
+import jwt
+import time
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'testproject.settings')
+
+try:
+    import django
+    django.setup()
+
+    from django.conf import settings
+    from django.contrib.auth.models import User
+
+    # Get or create a test user
+    user, created = User.objects.get_or_create(
+        username='benchuser',
+        defaults={'email': 'bench@example.com'}
+    )
+
+    # Create JWT token with correct user ID
+    payload = {
+        'sub': str(user.id),
+        'exp': int(time.time()) + 3600,
+        'iat': int(time.time()),
+        'is_staff': user.is_staff,
+        'is_superuser': user.is_superuser,
+        'username': user.username,
+        'email': user.email
+    }
+
+    token = jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
+    print(token)
+except Exception as e:
+    print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)
+PYTHON_TOKEN_SCRIPT
+2>/dev/null)
+
+# Only run auth tests if we have a valid token
+if [ -n "$TOKEN" ] && [ ${#TOKEN} -gt 50 ]; then
+    printf "### Get Authenticated User (/auth/me)\n"
+    AUTH_HEADER="Authorization: Bearer $TOKEN"
+    ab -k -c $C -n $N -H "$AUTH_HEADER" http://$HOST:$PORT/auth/me 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
+    printf "### Get User via Dependency (/auth/me-dependency)\n"
+    ab -k -c $C -n $N -H "$AUTH_HEADER" http://$HOST:$PORT/auth/me-dependency 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
+    printf "### Get Auth Context (/auth/context) validated jwt no db\n"
+    ab -k -c $C -n $N -H "$AUTH_HEADER" http://$HOST:$PORT/auth/context 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+else
+    echo "Skipped auth benchmarks: Could not generate JWT token"
+fi
+
 # Streaming and SSE tests using hey (better than ab for streaming)
 echo ""
 echo "## Streaming and SSE Performance"

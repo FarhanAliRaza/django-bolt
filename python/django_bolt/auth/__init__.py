@@ -48,6 +48,13 @@ from .revocation import (
     create_revocation_handler,
 )
 
+# User loading for request.user
+from .user_loader import (
+    register_auth_backend,
+    get_registered_backend,
+    load_user,
+)
+
 __all__ = [
     # Authentication
     "BaseAuthentication",
@@ -81,4 +88,9 @@ __all__ = [
     "DjangoCacheRevocation",
     "DjangoORMRevocation",
     "create_revocation_handler",
+
+    # User loading
+    "register_auth_backend",
+    "get_registered_backend",
+    "load_user",
 ]

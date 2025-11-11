@@ -371,6 +371,7 @@ pub async fn handle_request(
             headers,
             cookies,
             context,
+            user: None,
         };
         let request_obj = Py::new(py, request)?;
 

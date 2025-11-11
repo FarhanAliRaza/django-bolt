@@ -28,7 +28,7 @@ pub struct Claims {
 pub struct AuthContext {
     pub user_id: Option<String>,
     pub is_staff: bool,
-    pub is_admin: bool,
+    pub is_superuser: bool,
     pub backend: String,
     pub claims: Option<Claims>,
     pub permissions: HashSet<String>,
@@ -38,7 +38,7 @@ impl AuthContext {
     pub fn from_jwt_claims(claims: Claims, backend: &str) -> Self {
         let user_id = claims.sub.clone();
         let is_staff = claims.is_staff.unwrap_or(false);
-        let is_admin = claims.is_superuser.unwrap_or(false) || claims.is_admin.unwrap_or(false);
+        let is_superuser = claims.is_superuser.unwrap_or(false);
 
         let mut permissions = HashSet::new();
         if let Some(perms) = &claims.permissions {
@@ -50,7 +50,7 @@ impl AuthContext {
         AuthContext {
             user_id,
             is_staff,
-            is_admin,
+            is_superuser,
             backend: backend.to_string(),
             claims: Some(claims),
             permissions,
@@ -68,7 +68,7 @@ impl AuthContext {
         AuthContext {
             user_id: Some(format!("apikey:{}", key)),
             is_staff: false,
-            is_admin: false,
+            is_superuser: false,
             backend: "api_key".to_string(),
             claims: None,
             permissions,
@@ -225,9 +225,9 @@ pub fn populate_auth_context(context: &Py<PyDict>, auth_ctx: &AuthContext, py: P
         let _ = dict.set_item("user_id", user_id);
     }
 
-    // Store is_staff and is_admin
+    // Store is_staff and is_superuser
     let _ = dict.set_item("is_staff", auth_ctx.is_staff);
-    let _ = dict.set_item("is_admin", auth_ctx.is_admin);
+    let _ = dict.set_item("is_superuser", auth_ctx.is_superuser);
 
     // Store backend name
     let _ = dict.set_item("auth_backend", &auth_ctx.backend);

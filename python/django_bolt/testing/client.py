@@ -204,6 +204,9 @@ class TestClient(httpx.Client):
             ]
             _core.register_test_middleware_metadata(self.app_id, middleware_data)
 
+        # Register authentication backends for user resolution (lazy loading in request.user)
+        api._register_auth_backends()
+
         # Ensure runtime is ready
         _core.ensure_test_runtime(self.app_id)
 

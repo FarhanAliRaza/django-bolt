@@ -2,47 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/),
-and this project adheres to [Semantic Versioning](https://semver.org/).
-
-## [Unreleased]
+## [0.3.1]
 
 ### Added
-- Request user support for dependency injection
+
+- **`request.user`** - Eager-loaded user objects for authenticated endpoints (eager-loaded at dispatch time)
 - Type-safe dependency injection with runtime validation
+- `preload_user` parameter to control user loading behavior (default: True for auth endpoints)
+- New `user_loader.py` module for extensible user resolution
+- Custom user model support via `get_user_model()`
+- Override `get_user()` in auth backends for custom user resolution
+- Authentication benchmarks for `/auth/me`, `/auth/me-dependency`, and `/auth/context` endpoints
 
 ### Changed
+
+- Replaced `is_admin` with `is_superuser` (Django standard naming)
 - Optimized Python request/response hot path
+- Auth context type system improvements in `python/django_bolt/types.py`
+- Guards module updated to use `is_superuser` instead of `is_admin`
 
 ### Fixed
-- Streaming response handling improvements
 
-## [0.3.0] - 2025-11-08
-
-### Added
-- Integrated Rust parameter type conversion into hot path for better performance
-- Wired parameter metadata from Python to Rust layer
-- Simplified computed field API (no @classmethod required)
-- Enhanced ORM integration with validators and computed fields
-
-### Fixed
-- Fixed streaming response handling with proper async/sync support
-- Server-sent events (SSE) improvements for concurrent requests
-
-### Changed
-- Performance optimizations in serialization layer
-
-## [0.2.9] - 2025-11-07
-
-### Added
-- Sync views support for class-based views
-- Support for sync functions with inline parameter
-- Better error messaging for serialization
-- QuerySet serialization optimization
-- Test infrastructure improvements with Claude Code GitHub Workflow
-- Python 3.14 test support
-
-### Fixed
-- Sync function bug fixes
-- Django views registration improvements
-- Test layer bug fixes
+-

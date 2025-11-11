@@ -2,6 +2,7 @@ from .api import BoltAPI
 from .responses import Response, JSON, StreamingResponse
 from .middleware import CompressionConfig
 from .types import Request
+from .params import Query, Path, Body, Header, Cookie, Form, File, Depends
 
 # Views module
 from .views import (
@@ -86,6 +87,15 @@ __all__ = [
     "JSON",
     "StreamingResponse",
     "CompressionConfig",
+    # Parameter markers
+    "Query",
+    "Path",
+    "Body",
+    "Header",
+    "Cookie",
+    "Form",
+    "File",
+    "Depends",
     # Views
     "APIView",
     "ViewSet",

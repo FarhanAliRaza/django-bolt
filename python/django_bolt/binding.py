@@ -79,15 +79,30 @@ def convert_primitive(value: str, annotation: Any) -> Any:
         return value
 
 
-def create_path_extractor(name: str, annotation: Any, alias: Optional[str] = None) -> Callable:
+def create_path_extractor(
+    name: str,
+    annotation: Any,
+    alias: Optional[str] = None,
+    constraints: Optional[Dict[str, Any]] = None
+) -> Callable:
     """Create a pre-compiled extractor for path parameters."""
+    from .validation import validate_constraints
+
     key = alias or name
     converter = lambda v: convert_primitive(str(v), annotation)
 
-    def extract(params_map: Dict[str, Any]) -> Any:
-        if key not in params_map:
-            raise ValueError(f"Missing required path parameter: {key}")
-        return converter(params_map[key])
+    if constraints and any(v is not None for v in constraints.values()):
+        def extract(params_map: Dict[str, Any]) -> Any:
+            if key not in params_map:
+                raise ValueError(f"Missing required path parameter: {key}")
+            value = converter(params_map[key])
+            validate_constraints(value, name, **constraints)
+            return value
+    else:
+        def extract(params_map: Dict[str, Any]) -> Any:
+            if key not in params_map:
+                raise ValueError(f"Missing required path parameter: {key}")
+            return converter(params_map[key])
 
     return extract
 
@@ -96,22 +111,42 @@ def create_query_extractor(
     name: str,
     annotation: Any,
     default: Any,
-    alias: Optional[str] = None
+    alias: Optional[str] = None,
+    constraints: Optional[Dict[str, Any]] = None
 ) -> Callable:
     """Create a pre-compiled extractor for query parameters."""
+    from .validation import validate_constraints
+
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
     converter = lambda v: convert_primitive(str(v), annotation)
+    has_constraints = constraints and any(v is not None for v in constraints.values())
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
-        def extract(query_map: Dict[str, Any]) -> Any:
-            return converter(query_map[key]) if key in query_map else default_value
+        if has_constraints:
+            def extract(query_map: Dict[str, Any]) -> Any:
+                if key in query_map:
+                    value = converter(query_map[key])
+                    validate_constraints(value, name, **constraints)
+                    return value
+                return default_value
+        else:
+            def extract(query_map: Dict[str, Any]) -> Any:
+                return converter(query_map[key]) if key in query_map else default_value
     else:
-        def extract(query_map: Dict[str, Any]) -> Any:
-            if key not in query_map:
-                raise ValueError(f"Missing required query parameter: {key}")
-            return converter(query_map[key])
+        if has_constraints:
+            def extract(query_map: Dict[str, Any]) -> Any:
+                if key not in query_map:
+                    raise ValueError(f"Missing required query parameter: {key}")
+                value = converter(query_map[key])
+                validate_constraints(value, name, **constraints)
+                return value
+        else:
+            def extract(query_map: Dict[str, Any]) -> Any:
+                if key not in query_map:
+                    raise ValueError(f"Missing required query parameter: {key}")
+                return converter(query_map[key])
 
     return extract
 
@@ -120,22 +155,42 @@ def create_header_extractor(
     name: str,
     annotation: Any,
     default: Any,
-    alias: Optional[str] = None
+    alias: Optional[str] = None,
+    constraints: Optional[Dict[str, Any]] = None
 ) -> Callable:
     """Create a pre-compiled extractor for HTTP headers."""
+    from .validation import validate_constraints
+
     key = (alias or name).lower()
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
     converter = lambda v: convert_primitive(str(v), annotation)
+    has_constraints = constraints and any(v is not None for v in constraints.values())
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
-        def extract(headers_map: Dict[str, str]) -> Any:
-            return converter(headers_map[key]) if key in headers_map else default_value
+        if has_constraints:
+            def extract(headers_map: Dict[str, str]) -> Any:
+                if key in headers_map:
+                    value = converter(headers_map[key])
+                    validate_constraints(value, name, **constraints)
+                    return value
+                return default_value
+        else:
+            def extract(headers_map: Dict[str, str]) -> Any:
+                return converter(headers_map[key]) if key in headers_map else default_value
     else:
-        def extract(headers_map: Dict[str, str]) -> Any:
-            if key not in headers_map:
-                raise ValueError(f"Missing required header: {key}")
-            return converter(headers_map[key])
+        if has_constraints:
+            def extract(headers_map: Dict[str, str]) -> Any:
+                if key not in headers_map:
+                    raise ValueError(f"Missing required header: {key}")
+                value = converter(headers_map[key])
+                validate_constraints(value, name, **constraints)
+                return value
+        else:
+            def extract(headers_map: Dict[str, str]) -> Any:
+                if key not in headers_map:
+                    raise ValueError(f"Missing required header: {key}")
+                return converter(headers_map[key])
 
     return extract
 
@@ -144,22 +199,42 @@ def create_cookie_extractor(
     name: str,
     annotation: Any,
     default: Any,
-    alias: Optional[str] = None
+    alias: Optional[str] = None,
+    constraints: Optional[Dict[str, Any]] = None
 ) -> Callable:
     """Create a pre-compiled extractor for cookies."""
+    from .validation import validate_constraints
+
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
     converter = lambda v: convert_primitive(str(v), annotation)
+    has_constraints = constraints and any(v is not None for v in constraints.values())
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
-        def extract(cookies_map: Dict[str, str]) -> Any:
-            return converter(cookies_map[key]) if key in cookies_map else default_value
+        if has_constraints:
+            def extract(cookies_map: Dict[str, str]) -> Any:
+                if key in cookies_map:
+                    value = converter(cookies_map[key])
+                    validate_constraints(value, name, **constraints)
+                    return value
+                return default_value
+        else:
+            def extract(cookies_map: Dict[str, str]) -> Any:
+                return converter(cookies_map[key]) if key in cookies_map else default_value
     else:
-        def extract(cookies_map: Dict[str, str]) -> Any:
-            if key not in cookies_map:
-                raise ValueError(f"Missing required cookie: {key}")
-            return converter(cookies_map[key])
+        if has_constraints:
+            def extract(cookies_map: Dict[str, str]) -> Any:
+                if key not in cookies_map:
+                    raise ValueError(f"Missing required cookie: {key}")
+                value = converter(cookies_map[key])
+                validate_constraints(value, name, **constraints)
+                return value
+        else:
+            def extract(cookies_map: Dict[str, str]) -> Any:
+                if key not in cookies_map:
+                    raise ValueError(f"Missing required cookie: {key}")
+                return converter(cookies_map[key])
 
     return extract
 
@@ -168,22 +243,42 @@ def create_form_extractor(
     name: str,
     annotation: Any,
     default: Any,
-    alias: Optional[str] = None
+    alias: Optional[str] = None,
+    constraints: Optional[Dict[str, Any]] = None
 ) -> Callable:
     """Create a pre-compiled extractor for form fields."""
+    from .validation import validate_constraints
+
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
     converter = lambda v: convert_primitive(str(v), annotation)
+    has_constraints = constraints and any(v is not None for v in constraints.values())
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
-        def extract(form_map: Dict[str, Any]) -> Any:
-            return converter(form_map[key]) if key in form_map else default_value
+        if has_constraints:
+            def extract(form_map: Dict[str, Any]) -> Any:
+                if key in form_map:
+                    value = converter(form_map[key])
+                    validate_constraints(value, name, **constraints)
+                    return value
+                return default_value
+        else:
+            def extract(form_map: Dict[str, Any]) -> Any:
+                return converter(form_map[key]) if key in form_map else default_value
     else:
-        def extract(form_map: Dict[str, Any]) -> Any:
-            if key not in form_map:
-                raise ValueError(f"Missing required form field: {key}")
-            return converter(form_map[key])
+        if has_constraints:
+            def extract(form_map: Dict[str, Any]) -> Any:
+                if key not in form_map:
+                    raise ValueError(f"Missing required form field: {key}")
+                value = converter(form_map[key])
+                validate_constraints(value, name, **constraints)
+                return value
+        else:
+            def extract(form_map: Dict[str, Any]) -> Any:
+                if key not in form_map:
+                    raise ValueError(f"Missing required form field: {key}")
+                return converter(form_map[key])
 
     return extract
 
@@ -276,17 +371,30 @@ def create_extractor(field: Dict[str, Any]) -> Callable:
     default = field["default"]
     alias = field.get("alias")
 
+    # Extract constraint fields if present
+    constraints = {
+        "gt": field.get("gt"),
+        "ge": field.get("ge"),
+        "lt": field.get("lt"),
+        "le": field.get("le"),
+        "multiple_of": field.get("multiple_of"),
+        "min_length": field.get("min_length"),
+        "max_length": field.get("max_length"),
+        "pattern": field.get("pattern"),
+        "compiled_pattern": field.get("compiled_pattern"),
+    }
+
     # Return appropriate extractor based on source
     if source == "path":
-        return create_path_extractor(name, annotation, alias)
+        return create_path_extractor(name, annotation, alias, constraints)
     elif source == "query":
-        return create_query_extractor(name, annotation, default, alias)
+        return create_query_extractor(name, annotation, default, alias, constraints)
     elif source == "header":
-        return create_header_extractor(name, annotation, default, alias)
+        return create_header_extractor(name, annotation, default, alias, constraints)
     elif source == "cookie":
-        return create_cookie_extractor(name, annotation, default, alias)
+        return create_cookie_extractor(name, annotation, default, alias, constraints)
     elif source == "form":
-        return create_form_extractor(name, annotation, default, alias)
+        return create_form_extractor(name, annotation, default, alias, constraints)
     elif source == "file":
         return create_file_extractor(name, annotation, default, alias)
     elif source == "body":

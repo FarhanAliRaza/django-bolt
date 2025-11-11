@@ -163,11 +163,17 @@ def extract_dependency_value(
     elif field.source == "header":
         raw = headers_map.get(key.lower())
         if raw is None:
+            # Check if field is optional
+            if field.is_optional:
+                return None if field.default is inspect.Parameter.empty else field.default
             raise ValueError(f"Missing required header: {key}")
         return convert_primitive(str(raw), field.annotation)
     elif field.source == "cookie":
         raw = cookies_map.get(key)
         if raw is None:
+            # Check if field is optional
+            if field.is_optional:
+                return None if field.default is inspect.Parameter.empty else field.default
             raise ValueError(f"Missing required cookie: {key}")
         return convert_primitive(str(raw), field.annotation)
     else:

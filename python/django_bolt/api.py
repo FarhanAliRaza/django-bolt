@@ -66,6 +66,48 @@ def _extract_path_params(path: str) -> set[str]:
     return set(_PATH_PARAM_REGEX.findall(path))
 
 
+def _validate_field_constraints(field: "FieldDefinition", value: Any) -> None:
+    """
+    Validate field value against constraints.
+
+    Args:
+        field: FieldDefinition with constraint information
+        value: Value to validate
+
+    Raises:
+        HTTPException: If validation fails (422 status code)
+    """
+    from .validation import validate_constraints
+
+    # Check if any constraints are defined
+    if not any([
+        field.gt is not None,
+        field.ge is not None,
+        field.lt is not None,
+        field.le is not None,
+        field.multiple_of is not None,
+        field.min_length is not None,
+        field.max_length is not None,
+        field.pattern is not None,
+    ]):
+        return  # No constraints, skip validation
+
+    # Validate using the validation module
+    validate_constraints(
+        value,
+        field.name,
+        gt=field.gt,
+        ge=field.ge,
+        lt=field.lt,
+        le=field.le,
+        multiple_of=field.multiple_of,
+        min_length=field.min_length,
+        max_length=field.max_length,
+        pattern=field.pattern,
+        compiled_pattern=field.compiled_pattern,
+    )
+
+
 def extract_parameter_value(
     field: "FieldDefinition",
     request: Dict[str, Any],
@@ -108,12 +150,16 @@ def extract_parameter_value(
     # Handle different sources
     if source == "path":
         if key in params_map:
-            return convert_primitive(str(params_map[key]), annotation), body_obj, body_loaded
+            value = convert_primitive(str(params_map[key]), annotation)
+            _validate_field_constraints(field, value)
+            return value, body_obj, body_loaded
         raise HTTPException(status_code=400, detail=f"Missing required path parameter: {key}")
 
     elif source == "query":
         if key in query_map:
-            return convert_primitive(str(query_map[key]), annotation), body_obj, body_loaded
+            value = convert_primitive(str(query_map[key]), annotation)
+            _validate_field_constraints(field, value)
+            return value, body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise HTTPException(status_code=400, detail=f"Missing required query parameter: {key}")
@@ -121,21 +167,27 @@ def extract_parameter_value(
     elif source == "header":
         lower_key = key.lower()
         if lower_key in headers_map:
-            return convert_primitive(str(headers_map[lower_key]), annotation), body_obj, body_loaded
+            value = convert_primitive(str(headers_map[lower_key]), annotation)
+            _validate_field_constraints(field, value)
+            return value, body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise HTTPException(status_code=400, detail=f"Missing required header: {key}")
 
     elif source == "cookie":
         if key in cookies_map:
-            return convert_primitive(str(cookies_map[key]), annotation), body_obj, body_loaded
+            value = convert_primitive(str(cookies_map[key]), annotation)
+            _validate_field_constraints(field, value)
+            return value, body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise HTTPException(status_code=400, detail=f"Missing required cookie: {key}")
 
     elif source == "form":
         if key in form_map:
-            return convert_primitive(str(form_map[key]), annotation), body_obj, body_loaded
+            value = convert_primitive(str(form_map[key]), annotation)
+            _validate_field_constraints(field, value)
+            return value, body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise HTTPException(status_code=400, detail=f"Missing required form field: {key}")

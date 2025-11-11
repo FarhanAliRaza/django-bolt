@@ -83,6 +83,7 @@ def Query(
     ge: Optional[float] = None,
     lt: Optional[float] = None,
     le: Optional[float] = None,
+    multiple_of: Optional[float] = None,
     min_length: Optional[int] = None,
     max_length: Optional[int] = None,
     pattern: Optional[str] = None,
@@ -100,6 +101,7 @@ def Query(
         ge: Value must be greater than or equal to this
         lt: Value must be less than this
         le: Value must be less than or equal to this
+        multiple_of: Value must be multiple of this
         min_length: Minimum string/collection length
         max_length: Maximum string/collection length
         pattern: Regex pattern to match
@@ -117,6 +119,7 @@ def Query(
         ge=ge,
         lt=lt,
         le=le,
+        multiple_of=multiple_of,
         min_length=min_length,
         max_length=max_length,
         pattern=pattern,
@@ -134,6 +137,7 @@ def Path(
     ge: Optional[float] = None,
     lt: Optional[float] = None,
     le: Optional[float] = None,
+    multiple_of: Optional[float] = None,
     min_length: Optional[int] = None,
     max_length: Optional[int] = None,
     pattern: Optional[str] = None,
@@ -151,6 +155,7 @@ def Path(
         ge: Value must be greater than or equal to this
         lt: Value must be less than this
         le: Value must be less than or equal to this
+        multiple_of: Value must be multiple of this
         min_length: Minimum string length
         max_length: Maximum string length
         pattern: Regex pattern to match
@@ -171,6 +176,7 @@ def Path(
         ge=ge,
         lt=lt,
         le=le,
+        multiple_of=multiple_of,
         min_length=min_length,
         max_length=max_length,
         pattern=pattern,
@@ -214,6 +220,14 @@ def Header(
     default: Any = ...,
     *,
     alias: Optional[str] = None,
+    gt: Optional[float] = None,
+    ge: Optional[float] = None,
+    lt: Optional[float] = None,
+    le: Optional[float] = None,
+    multiple_of: Optional[float] = None,
+    min_length: Optional[int] = None,
+    max_length: Optional[int] = None,
+    pattern: Optional[str] = None,
     description: Optional[str] = None,
     example: Any = None,
     deprecated: bool = False,
@@ -224,6 +238,14 @@ def Header(
     Args:
         default: Default value (... for required)
         alias: Alternative header name
+        gt: Value must be greater than this
+        ge: Value must be greater than or equal to this
+        lt: Value must be less than this
+        le: Value must be less than or equal to this
+        multiple_of: Value must be multiple of this
+        min_length: Minimum string/collection length
+        max_length: Maximum string/collection length
+        pattern: Regex pattern to match
         description: Parameter description
         example: Example value
         deprecated: Mark as deprecated
@@ -234,6 +256,14 @@ def Header(
     return Param(
         source="header",
         alias=alias,
+        gt=gt,
+        ge=ge,
+        lt=lt,
+        le=le,
+        multiple_of=multiple_of,
+        min_length=min_length,
+        max_length=max_length,
+        pattern=pattern,
         description=description,
         example=example,
         deprecated=deprecated,
@@ -244,6 +274,14 @@ def Cookie(
     default: Any = ...,
     *,
     alias: Optional[str] = None,
+    gt: Optional[float] = None,
+    ge: Optional[float] = None,
+    lt: Optional[float] = None,
+    le: Optional[float] = None,
+    multiple_of: Optional[float] = None,
+    min_length: Optional[int] = None,
+    max_length: Optional[int] = None,
+    pattern: Optional[str] = None,
     description: Optional[str] = None,
     example: Any = None,
     deprecated: bool = False,
@@ -254,6 +292,14 @@ def Cookie(
     Args:
         default: Default value (... for required)
         alias: Alternative cookie name
+        gt: Value must be greater than this
+        ge: Value must be greater than or equal to this
+        lt: Value must be less than this
+        le: Value must be less than or equal to this
+        multiple_of: Value must be multiple of this
+        min_length: Minimum string/collection length
+        max_length: Maximum string/collection length
+        pattern: Regex pattern to match
         description: Parameter description
         example: Example value
         deprecated: Mark as deprecated
@@ -264,6 +310,14 @@ def Cookie(
     return Param(
         source="cookie",
         alias=alias,
+        gt=gt,
+        ge=ge,
+        lt=lt,
+        le=le,
+        multiple_of=multiple_of,
+        min_length=min_length,
+        max_length=max_length,
+        pattern=pattern,
         description=description,
         example=example,
         deprecated=deprecated,
@@ -274,6 +328,14 @@ def Form(
     default: Any = ...,
     *,
     alias: Optional[str] = None,
+    gt: Optional[float] = None,
+    ge: Optional[float] = None,
+    lt: Optional[float] = None,
+    le: Optional[float] = None,
+    multiple_of: Optional[float] = None,
+    min_length: Optional[int] = None,
+    max_length: Optional[int] = None,
+    pattern: Optional[str] = None,
     description: Optional[str] = None,
     example: Any = None,
 ) -> Any:
@@ -283,6 +345,14 @@ def Form(
     Args:
         default: Default value (... for required)
         alias: Alternative form field name
+        gt: Value must be greater than this
+        ge: Value must be greater than or equal to this
+        lt: Value must be less than this
+        le: Value must be less than or equal to this
+        multiple_of: Value must be multiple of this
+        min_length: Minimum string/collection length
+        max_length: Maximum string/collection length
+        pattern: Regex pattern to match
         description: Parameter description
         example: Example value
 
@@ -292,6 +362,14 @@ def Form(
     return Param(
         source="form",
         alias=alias,
+        gt=gt,
+        ge=ge,
+        lt=lt,
+        le=le,
+        multiple_of=multiple_of,
+        min_length=min_length,
+        max_length=max_length,
+        pattern=pattern,
         description=description,
         example=example,
     )
@@ -324,10 +402,23 @@ def File(
 @dataclass(frozen=True)
 class Depends:
     """
-    Dependency injection marker.
+    Dependency injection marker with type inference.
 
     Marks a parameter as a dependency that will be resolved
-    by calling the specified function.
+    by calling the specified function. The return type is inferred
+    from the dependency function for better IDE support and type checking.
+
+    Example:
+        ```python
+        async def get_current_user(token: str = Header(...)) -> User:
+            # ... authenticate and return user
+            return user
+
+        @api.get("/profile")
+        async def get_profile(user: Annotated[User, Depends(get_current_user)]):
+            # user is now properly typed as User
+            return {"username": user.username}
+        ```
     """
 
     dependency: Optional[Callable[..., Any]] = None

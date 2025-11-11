@@ -230,6 +230,34 @@ class FieldDefinition:
     kind: inspect._ParameterKind = inspect.Parameter.POSITIONAL_OR_KEYWORD
     """Parameter kind (positional, keyword-only, etc.)"""
 
+    # Validation constraints
+    gt: Optional[float] = None
+    """Greater than (exclusive minimum)"""
+
+    ge: Optional[float] = None
+    """Greater than or equal (inclusive minimum)"""
+
+    lt: Optional[float] = None
+    """Less than (exclusive maximum)"""
+
+    le: Optional[float] = None
+    """Less than or equal (inclusive maximum)"""
+
+    multiple_of: Optional[float] = None
+    """Value must be multiple of this number"""
+
+    min_length: Optional[int] = None
+    """Minimum length for strings or collections"""
+
+    max_length: Optional[int] = None
+    """Maximum length for strings or collections"""
+
+    pattern: Optional[str] = None
+    """Regex pattern for string validation"""
+
+    compiled_pattern: Any = None
+    """Pre-compiled regex pattern for performance"""
+
     # Cached type properties for performance
     _is_optional: Optional[bool] = None
     _is_simple: Optional[bool] = None
@@ -321,10 +349,37 @@ class FieldDefinition:
         embed: Optional[bool] = None
         dependency: Any = None
 
+        # Validation constraints
+        gt: Optional[float] = None
+        ge: Optional[float] = None
+        lt: Optional[float] = None
+        le: Optional[float] = None
+        multiple_of: Optional[float] = None
+        min_length: Optional[int] = None
+        max_length: Optional[int] = None
+        pattern: Optional[str] = None
+        compiled_pattern: Any = None
+
         if isinstance(explicit_marker, Param):
             source = explicit_marker.source
             alias = explicit_marker.alias
             embed = explicit_marker.embed
+
+            # Extract constraints
+            gt = explicit_marker.gt
+            ge = explicit_marker.ge
+            lt = explicit_marker.lt
+            le = explicit_marker.le
+            multiple_of = explicit_marker.multiple_of
+            min_length = explicit_marker.min_length
+            max_length = explicit_marker.max_length
+            pattern = explicit_marker.pattern
+
+            # Pre-compile regex pattern for performance
+            if pattern:
+                import re
+                compiled_pattern = re.compile(pattern)
+
         elif isinstance(explicit_marker, DependsMarker):
             source = "dependency"
             dependency = explicit_marker
@@ -341,4 +396,13 @@ class FieldDefinition:
             embed=embed,
             dependency=dependency,
             kind=parameter.kind,
+            gt=gt,
+            ge=ge,
+            lt=lt,
+            le=le,
+            multiple_of=multiple_of,
+            min_length=min_length,
+            max_length=max_length,
+            pattern=pattern,
+            compiled_pattern=compiled_pattern,
         )

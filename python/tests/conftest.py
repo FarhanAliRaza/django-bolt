@@ -72,7 +72,7 @@ def pytest_configure(config):
             DATABASES={
                 'default': {
                     'ENGINE': 'django.db.backends.sqlite3',
-                    'NAME': ':memory:',
+                    'NAME': '/tmp/django_bolt_test.sqlite3',  # File-based for better thread isolation
                 }
             },
             USE_TZ=True,
@@ -87,23 +87,37 @@ def pytest_configure(config):
 
 
 @pytest.fixture(scope='session')
-def django_db_setup(django_db_setup, django_db_blocker):
+def django_db_setup(django_db_blocker):
     """
     Ensure database migrations are run before any tests that use the database.
     This creates the auth_user table and other Django core tables.
     Also creates test model tables (Article, etc.).
+
+    Note: We skip the default django_db_setup to have better control over test database.
     """
     from django.core.management import call_command
     from django.db import connection
+    from django.conf import settings
+    import os
 
     with django_db_blocker.unblock():
+        # Ensure test database directory exists
+        db_path = settings.DATABASES['default']['NAME']
+        if db_path and db_path != ':memory:':
+            db_dir = os.path.dirname(db_path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
+
         # Run migrations to create all necessary tables
         call_command('migrate', '--run-syncdb', verbosity=0)
 
         # Create test model tables manually since they're not in migrations
+        # But only if they don't already exist (for persistent file-based databases)
         with connection.schema_editor() as schema_editor:
             from .test_models import Article
-            schema_editor.create_model(Article)
+            # Check if table already exists
+            if Article._meta.db_table not in connection.introspection.table_names():
+                schema_editor.create_model(Article)
 
 
 def spawn_process(command):

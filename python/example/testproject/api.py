@@ -19,7 +19,10 @@ from django_bolt.exceptions import (
 from django_bolt.health import register_health_checks, add_health_check
 from django_bolt.middleware import no_compress, cors
 from django_bolt import CompressionConfig
-
+from django_bolt.auth import JWTAuthentication, IsAuthenticated, get_current_user, create_jwt_for_user
+from django_bolt.param_functions import Depends
+from typing import Protocol
+from django.contrib.auth import get_user_model
 # OpenAPI is enabled by default at /docs with Swagger UI
 # You can customize it by passing openapi_config:
 #
@@ -72,6 +75,197 @@ import test_data
 async def health():
     """Health check endpoint."""
     return {"status": "healthy", "timestamp": time.time()}
+
+
+class CustomRequest(Request, Protocol):
+    """Extended Request type with custom properties"""
+
+    # Inherited from Request:
+    # - method, path, body, context, user
+    # - get(), __getitem__()
+
+    # If you add custom request properties via middleware:
+    tenant_id: Optional[str]
+    request_id: str
+
+
+# ==== Authentication Examples - JWT Auth with request.user ====
+@api.get(
+    "/auth/me",
+    auth=[JWTAuthentication()],
+    guards=[IsAuthenticated()],
+    tags=["auth"],
+    summary="Get current authenticated user"
+)
+async def get_me(request: CustomRequest):
+    """
+    Returns the authenticated user's information using request.user.
+
+    Requires a valid JWT token in the Authorization header:
+    Authorization: Bearer <jwt_token>
+
+    The request.user property is automatically populated by the authentication
+    system and contains the Django User instance for the authenticated user.
+    """
+    # Debug logging
+    context = request.get("context", {})
+    user_id = context.get("user_id")
+    auth_backend = context.get("auth_backend")
+    print(f"DEBUG: user_id={user_id}, auth_backend={auth_backend}", flush=True)
+
+    user = request.user
+    print(f"DEBUG: request.user={user}, type={type(user)}", flush=True)
+
+    if not user:
+        return {"error": "User not authenticated"}
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "is_staff": user.is_staff,
+        "is_superuser": user.is_superuser,
+        "is_active": user.is_active,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+    }
+
+
+@api.get(
+    "/auth/me-dependency",
+    auth=[JWTAuthentication()],
+    guards=[IsAuthenticated()],
+    tags=["auth"],
+    summary="Get current user via dependency injection"
+)
+async def get_me_dependency(user=Depends(get_current_user)):
+    """
+    Alternative endpoint that uses dependency injection to get the current user.
+
+    This demonstrates the `get_current_user` dependency which is useful when
+    you want to ensure the user is loaded early and available for other operations.
+
+    Requires a valid JWT token in the Authorization header:
+    Authorization: Bearer <jwt_token>
+    """
+    if not user:
+        return {"error": "User not authenticated"}
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "is_staff": user.is_staff,
+        "is_superuser": user.is_superuser,
+        "is_active": user.is_active,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+    }
+
+
+@api.get(
+    "/auth/context",
+    auth=[JWTAuthentication()],
+    guards=[IsAuthenticated()],
+    tags=["auth"],
+    summary="Get authentication context",
+    preload_user=False
+)
+async def get_auth_context(request: Request):
+    """
+    Returns the raw authentication context (header-based access).
+
+    This shows what's available in the request.context dictionary,
+    including auth backend info and user claims from the JWT.
+
+    Requires a valid JWT token in the Authorization header:
+    Authorization: Bearer <jwt_token>
+    """
+    context = request.context
+
+    return {
+        "user_id": context.get("user_id"),
+        "is_staff": context.get("is_staff"),
+        "is_superuser": context.get("is_superuser"),
+        "auth_backend": context.get("auth_backend"),
+        "permissions": context.get("permissions", []),
+        "auth_claims": context.get("auth_claims", {}),
+    }
+
+
+class TokenRequest(msgspec.Struct):
+    """Request body for token generation."""
+    username: str
+    password: str
+
+
+@api.post(
+    "/auth/token",
+    tags=["auth"],
+    summary="Generate access token"
+)
+async def generate_token(token_req: TokenRequest):
+    """
+    Generate a JWT access token for a user.
+
+    Accepts username and password, validates them, and returns a JWT token.
+
+    Request body:
+    ```json
+    {
+        "username": "john",
+        "password": "password123"
+    }
+    ```
+
+    Response on success:
+    ```json
+    {
+        "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+        "token_type": "bearer",
+        "expires_in": 3600,
+        "user": {
+            "id": 1,
+            "username": "john",
+            "email": "john@example.com",
+            "is_staff": false,
+            "is_superuser": false
+        }
+    }
+    ```
+
+    Response on failure (invalid credentials):
+    ```json
+    {
+        "error": "Invalid username or password"
+    }
+    ```
+    """
+    from django.contrib.auth import aauthenticate
+
+    User = get_user_model()
+
+    # Authenticate the user
+    user = await  aauthenticate(username=token_req.username, password=token_req.password)
+
+    if user is None:
+        raise Unauthorized(detail="Invalid username or password")
+
+    # Generate JWT token
+    access_token = create_jwt_for_user(user, expires_in=3600)
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": 3600,
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "is_staff": user.is_staff,
+            "is_superuser": user.is_superuser,
+        },
+    }
 
 
 @api.get("/", tags=["root"], summary="summary", description="description")

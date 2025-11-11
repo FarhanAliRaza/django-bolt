@@ -279,6 +279,10 @@ class Command(BaseCommand):
                     compression_config = api.compression.to_rust_config()
                     break
 
+        # Register authentication backends for user resolution (request.user loading)
+        # CRITICAL: Must be called BEFORE starting server so backends are available for user loading
+        merged_api._register_auth_backends()
+
         # Start the server
         _core.start_server_async(merged_api._dispatch, options["host"], options["port"], compression_config)
 

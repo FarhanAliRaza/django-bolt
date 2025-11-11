@@ -46,7 +46,7 @@ class Token:
 
     Django-Bolt Custom Claims:
         is_staff: Whether user is staff
-        is_superuser/is_admin: Whether user is admin
+        is_superuser: Whether user is a superuser/admin
         permissions: List of permission strings
 
     Example:

@@ -109,17 +109,17 @@ class TestPermissionGuards:
     def test_is_admin(self):
         """Test IsAdminUser guard"""
         guard = IsAdminUser()
-        assert guard.guard_name == "is_admin"
+        assert guard.guard_name == "is_superuser"
 
         # Should deny without auth
         assert guard.has_permission(None) == False
 
         # Should deny non-admin user
-        ctx = AuthContext(user_id="user123", is_admin=False)
+        ctx = AuthContext(user_id="user123", is_superuser=False)
         assert guard.has_permission(ctx) == False
 
         # Should allow admin user
-        ctx = AuthContext(user_id="admin", is_admin=True)
+        ctx = AuthContext(user_id="admin", is_superuser=True)
         assert guard.has_permission(ctx) == True
 
     def test_is_staff(self):
@@ -203,7 +203,7 @@ class TestRouteDecoratorAPI:
         metadata = api._handler_middleware[handler_id]
         assert "guards" in metadata
         assert len(metadata["guards"]) == 1
-        assert metadata["guards"][0]["type"] == "is_admin"
+        assert metadata["guards"][0]["type"] == "is_superuser"
 
     def test_route_with_auth_override(self):
         """Test route with custom auth backend"""
@@ -324,7 +324,7 @@ class TestJWTTokenHandling:
             "exp": int(time.time()) + 3600,
             "iat": int(time.time()),
             "is_staff": True,
-            "is_admin": False,
+            "is_superuser": False,
             "permissions": ["users.view", "users.create"]
         }
 
@@ -370,7 +370,7 @@ class TestContextPopulation:
         expected_context = {
             "user_id": "user123",
             "is_staff": False,
-            "is_admin": False,
+            "is_superuser": False,
             "auth_backend": "jwt",
             "permissions": ["users.view"],
             "auth_claims": {
@@ -384,7 +384,7 @@ class TestContextPopulation:
         # Verify structure
         assert "user_id" in expected_context
         assert "is_staff" in expected_context
-        assert "is_admin" in expected_context
+        assert "is_superuser" in expected_context
         assert "auth_backend" in expected_context
 
 

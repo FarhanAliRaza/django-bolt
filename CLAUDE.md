@@ -537,3 +537,5 @@ uv run --with pytest pytest python/tests -s -vv
 - only add tests that test actual functionality and that test must fail when that code is changed or removed
 - always try to use from **future** import annotations instead of string annotations
 - imports should always be on top
+- always import on the top
+- do not pass the test by removing asserts or remove the failing tests if the behabior expected is correct. Tell me it is failing and why it is failing and if i allow only than remove the test

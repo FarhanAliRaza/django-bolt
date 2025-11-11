@@ -15,14 +15,14 @@ from django_bolt.auth import (
 from django_bolt.testing import TestClient
 
 
-def create_token(user_id="user123", is_staff=False, is_admin=False, permissions=None):
+def create_token(user_id="user123", is_staff=False, is_superuser=False, permissions=None):
     """Helper to create JWT tokens"""
     payload = {
         "sub": user_id,
         "exp": int(time.time()) + 3600,
         "iat": int(time.time()),
         "is_staff": is_staff,
-        "is_superuser": is_admin,
+        "is_superuser": is_superuser,
         "permissions": permissions or []
     }
     return jwt.encode(payload, "test-secret", algorithm="HS256")
@@ -76,7 +76,7 @@ def api():
             "message": "protected",
             "user_id": context.get("user_id"),
             "is_staff": context.get("is_staff", False),
-            "is_admin": context.get("is_admin", False),
+            "is_superuser": context.get("is_superuser", False),
         }
 
     # Admin-only endpoint
@@ -90,7 +90,7 @@ def api():
         return {
             "message": "admin area",
             "user_id": context["user_id"],
-            "is_admin": context["is_admin"],
+            "is_superuser": context["is_superuser"],
         }
 
     # Staff-only endpoint
@@ -148,7 +148,7 @@ def api():
             "context_keys": list(context.keys()) if hasattr(context, 'keys') else [],
             "user_id": context.get("user_id"),
             "is_staff": context.get("is_staff"),
-            "is_admin": context.get("is_admin"),
+            "is_superuser": context.get("is_superuser"),
             "auth_backend": context.get("auth_backend"),
             "has_claims": "auth_claims" in context,
             "has_permissions": "permissions" in context,
@@ -189,19 +189,19 @@ def test_protected_endpoint_with_valid_token(client):
 
 def test_admin_endpoint_with_non_admin_token(client):
     """Test admin endpoint with non-admin token (should fail with 403)"""
-    token = create_token(user_id="regular-user", is_admin=False)
+    token = create_token(user_id="regular-user", is_superuser=False)
     response = client.get("/admin", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 403
 
 
 def test_admin_endpoint_with_admin_token(client):
     """Test admin endpoint with admin token"""
-    token = create_token(user_id="admin-user", is_admin=True)
+    token = create_token(user_id="admin-user", is_superuser=True)
     response = client.get("/admin", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     data = response.json()
     assert data["message"] == "admin area"
-    assert data["is_admin"] is True
+    assert data["is_superuser"] is True
 
 
 def test_staff_endpoint_with_non_staff_token(client):

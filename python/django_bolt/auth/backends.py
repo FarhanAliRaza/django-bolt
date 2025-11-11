@@ -13,11 +13,14 @@ The authentication flow:
 
 Performance: ~60k+ RPS with JWT validation happening entirely in Rust.
 """
-
+import sys
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Set
 from dataclasses import dataclass
-
+from django.contrib.auth import get_user_model
+from asgiref.sync import sync_to_async
+from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 
 @dataclass
 class AuthContext:
@@ -28,7 +31,7 @@ class AuthContext:
     """
     user_id: Optional[str] = None
     is_staff: bool = False
-    is_admin: bool = False
+    is_superuser: bool = False
     backend: str = "none"
     claims: Optional[Dict[str, Any]] = None
     permissions: Optional[Set[str]] = None
@@ -56,6 +59,29 @@ class BaseAuthentication(ABC):
         Returns a dict that will be parsed by Rust into typed enums.
         """
         pass
+
+    async def get_user(self, user_id: Optional[str], auth_context: Dict[str, Any]) -> Optional[Any]:
+        """
+        Resolve a User instance from the authentication context.
+
+        This method is called when request.user is awaited. Override this method
+        to provide custom user resolution logic for your authentication backend.
+
+        Args:
+            user_id: The user identifier from the auth context
+            auth_context: The full authentication context dict containing:
+                - user_id: User identifier
+                - is_staff: Whether user is staff
+                - is_superuser: Whether user is a superuser
+                - auth_backend: Backend name (jwt, api_key, session)
+                - permissions: Set of permission strings
+                - auth_claims: JWT claims dict (if JWT backend)
+
+        Returns:
+            User instance or None if user not found or backend doesn't support user loading
+        """
+        # Default: no user resolution
+        return None
 
 
 class JWTAuthentication(BaseAuthentication):
@@ -151,6 +177,31 @@ class JWTAuthentication(BaseAuthentication):
 
         return metadata
 
+    async def get_user(self, user_id: Optional[str], auth_context: Dict[str, Any]) -> Optional[Any]:
+        """
+        Load user from database using the user_id from JWT token.
+
+        The user_id should be the primary key of the user in the database.
+        Uses sync_to_async for proper thread-safety with Django ORM.
+        """
+        if not user_id:
+            return None
+
+
+        User = get_user_model()
+
+        try:
+            # Use sync_to_async wrapper for proper thread-safety and database context
+            # Ensures Django's connection pooling is used correctly
+            return await sync_to_async(User.objects.get, thread_sensitive=False)(pk=user_id)
+        except User.DoesNotExist:
+            # User not found - this is expected in some cases
+            return None
+        except Exception as e:
+            # Unexpected error - log it for debugging
+            print(f"Error loading user {user_id} in JWTAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
+            return None
+
 
 class APIKeyAuthentication(BaseAuthentication):
     """
@@ -213,6 +264,29 @@ class SessionAuthentication(BaseAuthentication):
             "type": "session",
         }
 
+    async def get_user(self, user_id: Optional[str], auth_context: Dict[str, Any]) -> Optional[Any]:
+        """
+        Load user from database using the user_id from session.
+
+        The user_id should be the primary key of the user in the database.
+        Uses sync_to_async for proper thread-safety with Django ORM.
+        """
+        if not user_id:
+            return None
+        User = get_user_model()
+
+        try:
+            # Use sync_to_async wrapper for proper thread-safety and database context
+            # Ensures Django's connection pooling is used correctly
+            return await sync_to_async(User.objects.get, thread_sensitive=False)(pk=user_id)
+        except User.DoesNotExist:
+            # User not found - this is expected in some cases
+            return None
+        except Exception as e:
+            # Unexpected error - log it for debugging
+            print(f"Error loading user {user_id} in SessionAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
+            return None
+
 
 def get_default_authentication_classes() -> List[BaseAuthentication]:
     """
@@ -222,8 +296,7 @@ def get_default_authentication_classes() -> List[BaseAuthentication]:
     returns an empty list (no authentication by default).
     """
     try:
-        from django.conf import settings
-        from django.core.exceptions import ImproperlyConfigured
+        
         try:
             if hasattr(settings, 'BOLT_AUTHENTICATION_CLASSES'):
                 return settings.BOLT_AUTHENTICATION_CLASSES

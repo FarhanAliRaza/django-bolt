@@ -187,7 +187,7 @@ def get_auth_context(request: Request) -> Dict[str, Any]:
         Authentication context dictionary containing:
         - user_id: User identifier
         - is_staff: Staff status boolean
-        - is_admin: Admin/superuser status boolean
+        - is_superuser: Superuser status boolean
         - auth_backend: Authentication backend used (jwt, api_key, etc.)
         - permissions: List of permissions (if available)
         - auth_claims: JWT claims dict (if JWT auth was used)
@@ -198,7 +198,7 @@ def get_auth_context(request: Request) -> Dict[str, Any]:
         async def admin_stats(request: dict):
             auth_ctx = get_auth_context(request)
 
-            if not auth_ctx.get("is_admin"):
+            if not auth_ctx.get("is_superuser"):
                 return {"error": "Admin access required"}
 
             # Use user_id for audit logging

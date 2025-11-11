@@ -320,6 +320,7 @@ pub fn handle_test_request_for(
         headers: header_map,
         cookies,
         context,
+        user: None,
     };
     let request_obj = Py::new(py, request)?;
 

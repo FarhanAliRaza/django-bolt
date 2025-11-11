@@ -117,7 +117,7 @@ def test_jwt_authentication_with_django_user():
         return {
             "user_id": context.get("user_id"),
             "is_staff": context.get("is_staff"),
-            "is_admin": context.get("is_admin"),
+            "is_superuser": context.get("is_superuser"),
             "auth_backend": context.get("auth_backend"),
         }
 
@@ -216,7 +216,7 @@ def test_jwt_utils_get_auth_context():
         "context": {
             "user_id": "456",
             "is_staff": False,
-            "is_admin": True,
+            "is_superuser": True,
             "auth_backend": "jwt",
             "permissions": ["read", "write"]
         }
@@ -225,7 +225,7 @@ def test_jwt_utils_get_auth_context():
     ctx = get_auth_context(request)
     assert ctx["user_id"] == "456"
     assert ctx["is_staff"] is False
-    assert ctx["is_admin"] is True
+    assert ctx["is_superuser"] is True
     assert ctx["auth_backend"] == "jwt"
     assert ctx["permissions"] == ["read", "write"]
 

@@ -300,6 +300,41 @@ async def flexible_auth(request):
 
 **See [docs/RESPONSES.md](docs/RESPONSES.md) for complete response documentation.**
 
+### Model Serializers
+
+Django-Bolt provides automatic serializer generation from Django models with msgspec performance:
+
+```python
+from django_bolt.serializers import create_model_serializer
+from django.contrib.auth.models import User
+
+# Generate serializer from model
+UserSerializer = create_model_serializer(
+    User,
+    fields=['id', 'username', 'email', 'first_name', 'last_name'],
+    read_only_fields=['id']
+)
+
+# Serialize Django model to JSON-ready struct
+user = await User.objects.aget(id=1)
+data = UserSerializer.from_model(user)
+return data  # Auto-serialized to JSON
+
+# Deserialize and save to database
+serializer = UserSerializer(username="john", email="john@example.com")
+user = await serializer.asave()
+```
+
+**Features:**
+- Auto-generates fields from Django models
+- 5-10x faster than DRF (msgspec-powered)
+- Type-safe at runtime
+- Supports relationships (ForeignKey, ManyToMany)
+- Read-only and custom fields
+- Async save support
+
+**See [docs/MODEL_SERIALIZERS.md](docs/MODEL_SERIALIZERS.md) for complete documentation.**
+
 ### Class-Based Views
 
 Django-Bolt supports DRF-style ViewSets:

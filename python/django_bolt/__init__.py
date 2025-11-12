@@ -30,6 +30,9 @@ from .pagination import (
 # Decorators module
 from .decorators import action
 
+# Serializers module
+from .serializers import create_model_serializer, ModelSerializer
+
 # Auth module
 from .auth import (
     # Authentication backends
@@ -109,6 +112,9 @@ __all__ = [
     "paginate",
     # Decorators
     "action",
+    # Serializers
+    "create_model_serializer",
+    "ModelSerializer",
     # Auth - Authentication
     "JWTAuthentication",
     "APIKeyAuthentication",

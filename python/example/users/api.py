@@ -10,7 +10,8 @@ from django_bolt.pagination import (
 from asgiref.sync import sync_to_async
 import msgspec
 from .models import User
-from typing import List
+from typing import List, Annotated
+from msgspec import Meta
 api = BoltAPI(prefix="/users")
 
 
@@ -108,6 +109,27 @@ async def delete_all_users() -> dict:
     count, _ = await User.objects.all().adelete()
     return {"deleted": count}
 
+
+
+# ============================================================================
+# Serializer Benchmark Endpoints - Raw msgspec
+# ============================================================================
+
+class BenchUser(msgspec.Struct):
+    """Benchmark user with msgspec only (no custom validators)."""
+    id: int
+    username: Annotated[str, Meta(min_length=2, max_length=150)]
+    email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
+    bio: str = ""
+
+
+@api.post("/bench/msgspec")
+async def bench_msgspec_serializer(user: BenchUser) -> BenchUser:
+    """
+    Benchmark endpoint using raw msgspec Struct.
+    Tests deserialization (JSON -> Object) and serialization (Object -> JSON).
+    """
+    return user
 
 
 # ============================================================================

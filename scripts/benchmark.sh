@@ -451,8 +451,62 @@ if [ "$PCODE" != "200" ]; then
 else
   ab -k -c $C -n $N -p "$BODY_FILE" -T 'application/json' http://$HOST:$PORT/bench/parse 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 fi
+rm -f "$BODY_FILE"
+
+echo ""
+echo "## Serializer Performance Benchmarks"
+
+# Test raw msgspec (baseline)
+SERIALIZER_RAW=$(mktemp)
+cat > "$SERIALIZER_RAW" << 'JSON'
+{
+  "id": 1,
+  "name": "John Doe",
+  "email": "john@example.com",
+  "bio": "Software developer"
+}
+JSON
+
+echo "### Raw msgspec Serializer (POST /bench/serializer-raw)"
+ab -k -c $C -n $N -p "$SERIALIZER_RAW" -T 'application/json' http://$HOST:$PORT/bench/serializer-raw 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+rm -f "$SERIALIZER_RAW"
+
+# Test with custom validators
+SERIALIZER_VALIDATED=$(mktemp)
+cat > "$SERIALIZER_VALIDATED" << 'JSON'
+{
+  "id": 1,
+  "name": "  John Doe  ",
+  "email": "JOHN@EXAMPLE.COM",
+  "bio": "Software developer"
+}
+JSON
+
+echo "### Django-Bolt Serializer with Validators (POST /bench/serializer-validated)"
+ab -k -c $C -n $N -p "$SERIALIZER_VALIDATED" -T 'application/json' http://$HOST:$PORT/bench/serializer-validated 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+rm -f "$SERIALIZER_VALIDATED"
+
+# Test users endpoint with raw msgspec
+USER_BENCH=$(mktemp)
+cat > "$USER_BENCH" << 'JSON'
+{
+  "id": 1,
+  "username": "testuser",
+  "email": "test@example.com",
+  "bio": "Test bio"
+}
+JSON
+
+echo "### Users msgspec Serializer (POST /users/bench/msgspec)"
+USCODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary @"$USER_BENCH" http://$HOST:$PORT/users/bench/msgspec)
+if [ "$USCODE" = "200" ]; then
+  ab -k -c $C -n $N -p "$USER_BENCH" -T 'application/json' http://$HOST:$PORT/users/bench/msgspec 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+else
+  echo "Skipped: Users msgspec endpoint returned $USCODE" >&2
+fi
+rm -f "$USER_BENCH"
+
 kill -TERM -$SERVER_PID 2>/dev/null || true
 pkill -TERM -f "manage.py runbolt --host $HOST --port $PORT" 2>/dev/null || true
-rm -f "$BODY_FILE"
 
 

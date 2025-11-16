@@ -1,10 +1,12 @@
 from typing import Optional, List, Annotated
 from django_bolt.types import Request
 import msgspec
+from msgspec import Meta
 import asyncio
 import time
 import json
 from django_bolt import BoltAPI, JSON, OpenAPIConfig, SwaggerRenderPlugin, RedocRenderPlugin
+from django_bolt.serializers import Serializer, field_validator
 from django_bolt.views import APIView, ViewSet
 from django_bolt.param_functions import Header, Cookie, Form, File
 from django_bolt.responses import PlainText, HTML, Redirect, FileResponse, StreamingResponse
@@ -703,6 +705,62 @@ async def compression_test():
     }
 
     return large_data
+
+
+# ============================================================================
+# Serializer Benchmark Endpoints
+# ============================================================================
+
+class BenchAuthorRaw(msgspec.Struct):
+    """Raw msgspec for baseline comparison."""
+    id: int
+    name: Annotated[str, Meta(min_length=2)]
+    email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
+    bio: str = ""
+
+
+class BenchAuthorWithValidators(Serializer):
+    """Django-Bolt Serializer with custom field validators."""
+    id: int
+    name: Annotated[str, Meta(min_length=2)]
+    email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
+    bio: str = ""
+
+    @field_validator("name")
+    def strip_name(cls, value: str) -> str:
+        """Strip whitespace from name."""
+        return value.strip()
+
+    @field_validator("email")
+    def lowercase_email(cls, value: str) -> str:
+        """Lowercase email for consistency."""
+        return value.lower()
+
+
+@api.post("/bench/serializer-raw")
+async def bench_serializer_raw(author: BenchAuthorRaw) -> BenchAuthorRaw:
+    """
+    Benchmark endpoint using raw msgspec (no validators).
+    Tests pure msgspec deserialization and serialization.
+    """
+    return author
+
+
+@api.post("/bench/serializer-validated")
+async def bench_serializer_validated(author: BenchAuthorWithValidators) -> BenchAuthorWithValidators:
+    """
+    Benchmark endpoint using Django-Bolt Serializer with custom validators.
+    Tests deserialization with field validators (strip, lowercase).
+
+    Validates that:
+    - name is stripped of whitespace
+    - email is lowercased
+    """
+    # Ensure validations worked
+    assert author.name == author.name.strip(), "Name should be stripped"
+    assert author.email == author.email.lower(), "Email should be lowercase"
+
+    return author
 
 
 # ============================================================================

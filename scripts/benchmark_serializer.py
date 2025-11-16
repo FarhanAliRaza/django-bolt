@@ -125,7 +125,7 @@ def run_benchmarks():
     print("\n2. JSON → Object Deserialization")
     print("-" * 80)
     bolt_time = timeit.timeit(
-        lambda: msgspec.json.decode(JSON_STRING.encode(), type=BoltAuthorSimple),
+        lambda: msgspec.json.decode(JSON_STRING, type=BoltAuthorSimple),
         number=iterations
     )
     pydantic_time = timeit.timeit(
@@ -191,7 +191,7 @@ def run_benchmarks():
     print("\n2. JSON → Object Deserialization (with validators)")
     print("-" * 80)
     bolt_time = timeit.timeit(
-        lambda: msgspec.json.decode(JSON_STRING.encode(), type=BoltAuthorWithValidators),
+        lambda: msgspec.json.decode(JSON_STRING, type=BoltAuthorWithValidators),
         number=iterations
     )
     pydantic_time = timeit.timeit(
@@ -244,17 +244,7 @@ def run_benchmarks():
     # ========================================================================
     print("\n\n" + "=" * 80)
     print("SUMMARY")
-    print("=" * 80)
-    print("""
-Pydantic v2 uses Rust (pydantic-core) for validation, making it very fast.
-django-bolt uses msgspec (also Rust-based) but runs custom validators in Python.
-
-Key Takeaways:
-  • For JSON/dict serialization: django-bolt is significantly faster
-  • For deserialization with validation: Pydantic v2 has an edge
-  • django-bolt is optimized for high-throughput API responses
-  • Pydantic v2 excels at input validation
-    """)
+    
     print("=" * 80 + "\n")
 
 

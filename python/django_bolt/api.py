@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_a
 
 from .bootstrap import ensure_django_ready
 from django_bolt import _core
+from asgiref.sync import sync_to_async
 
 # Import local modules
 from .responses import StreamingResponse
@@ -1098,14 +1099,16 @@ class BoltAPI:
                 if is_async:
                     result = await handler(request)
                 else:
-                    result = handler(request)
+                    # Wrap sync handler in sync_to_async for Django ORM compatibility
+                    result = await sync_to_async(handler, thread_sensitive=True)(request)
             else:
                 # Build handler arguments
                 args, kwargs = await self._build_handler_arguments(meta, request)
                 if is_async:
                     result = await handler(*args, **kwargs)
                 else:
-                    result = handler(*args, **kwargs)
+                    # Wrap sync handler in sync_to_async for Django ORM compatibility
+                    result = await sync_to_async(handler, thread_sensitive=True)(*args, **kwargs)
 
             # Serialize response
             response = await serialize_response(result, meta)

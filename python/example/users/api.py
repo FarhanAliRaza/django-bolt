@@ -80,7 +80,7 @@ async def list_mini_10() -> List[UserMini]:
     return User.objects.only("id", "username")[:10]
 
 
-@api.post("/seed")
+@api.get("/seed")
 async def seed_users(count: int = 1000) -> dict:
     """Create test users for benchmarking."""
     # Delete existing users first

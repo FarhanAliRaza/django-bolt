@@ -261,6 +261,78 @@ class Serializer(msgspec.Struct):
             except Exception as e:
                 raise
 
+    def validate(self: T) -> T:
+        """
+        Validate the current instance by re-running msgspec validation.
+
+        This is useful when you create an instance directly with __init__()
+        and want to validate it afterwards.
+
+        Returns:
+            A new validated instance
+
+        Raises:
+            ValidationError: If validation fails
+
+        Example:
+            # Direct creation skips Meta validation
+            author = BenchAuthor(id=1, name="  John  ", email="BAD-EMAIL")
+
+            # Validate afterwards (will raise ValidationError)
+            author = author.validate()
+        """
+        # Convert to dict and back through msgspec to trigger full validation
+        data = msgspec.structs.asdict(self)
+        return msgspec.convert(data, type=self.__class__)
+
+    @classmethod
+    def model_validate(cls: type[T], data: dict[str, Any] | Any) -> T:
+        """
+        Validate data and create a serializer instance (Pydantic-style API).
+
+        This triggers full msgspec validation (Meta constraints) plus custom validators.
+
+        Args:
+            data: Dictionary or object to validate
+
+        Returns:
+            Validated Serializer instance
+
+        Raises:
+            ValidationError: If validation fails
+
+        Example:
+            data = {"id": 1, "name": "  John  ", "email": "JOHN@EXAMPLE.COM"}
+            author = BenchAuthor.model_validate(data)
+            # author.name == 'John' (stripped)
+            # author.email == 'john@example.com' (lowercased)
+        """
+        return msgspec.convert(data, type=cls)
+
+    @classmethod
+    def model_validate_json(cls: type[T], json_data: str | bytes) -> T:
+        """
+        Validate JSON string and create a serializer instance (Pydantic-style API).
+
+        This triggers full msgspec validation (Meta constraints) plus custom validators.
+
+        Args:
+            json_data: JSON string or bytes to validate
+
+        Returns:
+            Validated Serializer instance
+
+        Raises:
+            ValidationError: If validation fails
+
+        Example:
+            json_str = '{"id": 1, "name": "  John  ", "email": "JOHN@EXAMPLE.COM"}'
+            author = BenchAuthor.model_validate_json(json_str)
+            # author.name == 'John' (stripped)
+            # author.email == 'john@example.com' (lowercased)
+        """
+        return msgspec.json.decode(json_data, type=cls)
+
     @classmethod
     def from_model(cls: type[T], instance: Model) -> T:
         """

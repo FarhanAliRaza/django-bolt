@@ -1,12 +1,12 @@
 from typing import Optional, List, Annotated
 from django_bolt.types import Request
 import msgspec
-from msgspec import Meta
+from msgspec import Meta, ValidationError
 import asyncio
 import time
 import json
 from django_bolt import BoltAPI, JSON, OpenAPIConfig, SwaggerRenderPlugin, RedocRenderPlugin
-from django_bolt.serializers import Serializer, field_validator
+from django_bolt.serializers import Serializer, field_validator, model_validator
 from django_bolt.views import APIView, ViewSet
 from django_bolt.param_functions import Header, Cookie, Form, File
 from django_bolt.responses import PlainText, HTML, Redirect, FileResponse, StreamingResponse
@@ -724,6 +724,8 @@ class BenchAuthorWithValidators(Serializer):
     id: int
     name: Annotated[str, Meta(min_length=2)]
     email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
+    password: str
+    password2: str
     bio: str = ""
 
     @field_validator("name")
@@ -735,6 +737,39 @@ class BenchAuthorWithValidators(Serializer):
     def lowercase_email(cls, value: str) -> str:
         """Lowercase email for consistency."""
         return value.lower()
+
+    # @field_validator("password")
+    # def validate_password(cls, value: str) -> str:
+    #     """Validate password strength."""
+    #     if value == "4321":
+    #         raise ValidationError("Incorrect password")
+    #     # MUST return the value (or transformed value)
+    #     return value
+
+    @model_validator
+    def validate_passwords_match(self) -> None:
+        """Validate that password and password2 match."""
+        if self.password != self.password2:
+            raise ValidationError("Passwords do not match")
+
+# Example usage: validating an already-created instance
+test = BenchAuthorWithValidators(
+    id=1,
+    name="  John Doe  ",
+    email="JOHN@EXAMPLE.COM",
+    bio="Software developer",
+    password="1234",
+    password2="12346"
+    
+)
+
+print("Before validate():", test)
+
+# Validate the instance (triggers Meta validation + field validators)
+validated_test = test.validate()
+print("After validate():", validated_test)
+print("  name (stripped):", repr(validated_test.name))
+print("  email (lowercased):", repr(validated_test.email))
 
 
 @api.post("/bench/serializer-raw")

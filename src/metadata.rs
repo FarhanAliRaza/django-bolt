@@ -201,6 +201,7 @@ pub struct RouteMetadata {
     pub skip: HashSet<String>,
     pub cors_config: Option<CorsConfig>,
     pub rate_limit_config: Option<RateLimitConfig>,
+    pub is_async: Option<bool>,  // MVP: Track if handler is async or sync
 }
 
 impl RouteMetadata {
@@ -265,12 +266,20 @@ impl RouteMetadata {
             }
         }
 
+        // Parse is_async flag (MVP: for sync dispatch routing)
+        let is_async = if let Ok(Some(is_async_val)) = py_meta.get_item("is_async") {
+            is_async_val.extract::<bool>().ok()
+        } else {
+            None  // Default to None (will use true in handler.rs for backward compat)
+        };
+
         Ok(RouteMetadata {
             auth_backends,
             guards,
             skip,
             cors_config,
             rate_limit_config,
+            is_async,
         })
     }
 }

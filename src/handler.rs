@@ -346,8 +346,168 @@ pub async fn handle_request(
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
 
-    // Unified handler path: all handlers (async/sync inline/sync spawn_blocking) return coroutines from _dispatch
-    // The handler type (is_async, inline) only matters in Python, not in Rust
+    // Check if handler is async or sync from metadata
+    let is_async_handler = route_metadata
+        .as_ref()
+        .and_then(|meta| {
+            // Look for is_async flag in metadata
+            // For MVP, we default to async (true) if not specified for backward compatibility
+            Some(meta.is_async.unwrap_or(true))
+        })
+        .unwrap_or(true); // Default to async for backward compatibility
+
+    // MVP: Route to sync or async dispatch based on handler type
+    if !is_async_handler {
+        // Sync handler path: call dispatch_sync directly (no coroutine, no await)
+        return match Python::attach(|py| -> PyResult<_> {
+            let dispatch_sync = state.dispatch_sync.clone_ref(py);
+            let handler = route_handler.clone_ref(py);
+
+            // Create context dict only if auth context is present
+            let context = if let Some(ref auth) = auth_ctx {
+                let ctx_dict = PyDict::new(py);
+                let ctx_py = ctx_dict.unbind();
+                populate_auth_context(&ctx_py, auth, py);
+                Some(ctx_py)
+            } else {
+                None
+            };
+
+            let request = PyRequest {
+                method,
+                path,
+                body: body.to_vec(),
+                path_params,
+                query_params,
+                headers,
+                cookies,
+                context,
+                user: None,
+            };
+            let request_obj = Py::new(py, request)?;
+
+            // Call dispatch_sync - returns response directly (no coroutine)
+            dispatch_sync.call1(py, (handler, request_obj, handler_id))
+        }) {
+            Ok(result_obj) => {
+                // Process sync response (same as async response processing below)
+                // Fast-path: minimize GIL time for tuple responses (status, headers, body)
+                let fast_tuple: Option<(u16, Vec<(String, String)>, Py<PyAny>, *const u8, usize)> =
+                    Python::attach(|py| {
+                        let obj = result_obj.bind(py);
+                        let tuple = obj.downcast::<PyTuple>().ok()?;
+                        if tuple.len() != 3 {
+                            return None;
+                        }
+
+                        // 0: status
+                        let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
+
+                        // 1: headers
+                        let resp_headers: Vec<(String, String)> = tuple
+                            .get_item(1)
+                            .ok()?
+                            .extract::<Vec<(String, String)>>()
+                            .ok()?;
+
+                        // 2: body (bytes or bytearray)
+                        let body_obj = match tuple.get_item(2) {
+                            Ok(v) => v,
+                            Err(_) => return None,
+                        };
+                        // Only support bytes (tuple serializer returns bytes)
+                        if let Ok(pybytes) = body_obj.downcast::<PyBytes>() {
+                            let slice = pybytes.as_bytes();
+                            let len = slice.len();
+                            let ptr = slice.as_ptr();
+                            let owner: Py<PyAny> = body_obj.unbind();
+                            Some((status_code, resp_headers, owner, ptr, len))
+                        } else {
+                            None
+                        }
+                    });
+
+                if let Some((status_code, resp_headers, body_owner, body_ptr, body_len)) = fast_tuple {
+                    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+                    let mut builder = HttpResponse::build(status);
+                    for (k, v) in resp_headers {
+                        builder.append_header((k, v));
+                    }
+                    if skip_compression {
+                        builder.append_header(("Content-Encoding", "identity"));
+                    }
+
+                    // HEAD requests must have empty body per RFC 7231
+                    let mut response = if is_head_request {
+                        builder.body(Vec::<u8>::new())
+                    } else {
+                        // Copy body bytes outside of the GIL
+                        let mut body_vec = Vec::<u8>::with_capacity(body_len);
+                        unsafe {
+                            body_vec.set_len(body_len);
+                            std::ptr::copy_nonoverlapping(
+                                body_ptr,
+                                body_vec.as_mut_ptr(),
+                                body_len,
+                            );
+                        }
+                        // Drop the Python owner with the GIL attached
+                        let _ = Python::attach(|_| drop(body_owner));
+                        builder.body(body_vec)
+                    };
+
+                    // Add CORS headers if configured (NO GIL - uses Rust-native config)
+                    if let Some(ref route_meta) = route_metadata {
+                        if let Some(ref cors_cfg) = route_meta.cors_config {
+                            let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+                            let _ = add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
+                        }
+                    }
+
+                    return response;
+                } else {
+                    // Error: sync handler returned unexpected type
+                    return Python::attach(|py| {
+                        error::build_error_response(
+                            py,
+                            500,
+                            "Sync handler returned unsupported response type (expected tuple)".to_string(),
+                            vec![],
+                            None,
+                            state.debug,
+                        )
+                    });
+                }
+            }
+            Err(e) => {
+                // Use error handler for Python exceptions during sync handler execution
+                return Python::attach(|py| {
+                    e.restore(py);
+                    if let Some(exc) = PyErr::take(py) {
+                        let exc_value = exc.value(py);
+                        error::handle_python_exception(
+                            py,
+                            exc_value,
+                            &path_clone,
+                            &method_clone,
+                            state.debug,
+                        )
+                    } else {
+                        error::build_error_response(
+                            py,
+                            500,
+                            "Sync handler execution error".to_string(),
+                            vec![],
+                            None,
+                            state.debug,
+                        )
+                    }
+                });
+            }
+        };
+    }
+
+    // Async handler path: call dispatch (returns coroutine, needs await)
     let fut = match Python::attach(|py| -> PyResult<_> {
         let dispatch = state.dispatch.clone_ref(py);
         let handler = route_handler.clone_ref(py);

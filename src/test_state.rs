@@ -34,6 +34,7 @@ pub struct TestApp {
     pub middleware_metadata: AHashMap<usize, Py<PyAny>>, // raw Python metadata for compatibility
     pub route_metadata: AHashMap<usize, RouteMetadata>,  // parsed Rust metadata
     pub dispatch: Py<PyAny>,
+    pub dispatch_sync: Py<PyAny>,  // MVP: Sync dispatch for sync handlers
     pub event_loop: Option<Py<PyAny>>, // store loop; create TaskLocals per call
     pub cors_allowed_origins: Vec<String>, // global CORS origins for testing
 }
@@ -49,6 +50,7 @@ fn registry() -> &'static DashMap<u64, Arc<RwLock<TestApp>>> {
 pub fn create_test_app(
     py: Python<'_>,
     dispatch: Py<PyAny>,
+    dispatch_sync: Py<PyAny>,
     _debug: bool,
     cors_allowed_origins: Option<Vec<String>>,
 ) -> PyResult<u64> {
@@ -57,6 +59,7 @@ pub fn create_test_app(
         middleware_metadata: AHashMap::new(),
         route_metadata: AHashMap::new(),
         dispatch: dispatch.clone_ref(py),
+        dispatch_sync: dispatch_sync.clone_ref(py),
         event_loop: None,
         cors_allowed_origins: cors_allowed_origins.unwrap_or_default(),
     };
@@ -171,6 +174,7 @@ pub fn handle_test_request_for(
         query_string
     );
     let dispatch: Py<PyAny>;
+    let dispatch_sync: Py<PyAny>;
     let (route, path_params, handler_id): (Py<PyAny>, AHashMap<String, String>, usize);
     let route_meta_opt: Option<RouteMetadata>;
     let middleware_present: bool;
@@ -178,6 +182,7 @@ pub fn handle_test_request_for(
     {
         let app = entry.read();
         dispatch = app.dispatch.clone_ref(py);
+        dispatch_sync = app.dispatch_sync.clone_ref(py);
 
         // Route matching
         if let Some((r, params, id)) = app.router.find(&method, &path) {
@@ -324,16 +329,14 @@ pub fn handle_test_request_for(
     };
     let request_obj = Py::new(py, request)?;
 
-    // Call dispatch to get coroutine
-    let coroutine = dispatch.call1(py, (route, request_obj, handler_id))?;
-    test_debug!("[test_state] obtained coroutine");
+    // Check if handler is async or sync from metadata
+    let is_async_handler = route_meta_opt
+        .as_ref()
+        .and_then(|meta| Some(meta.is_async.unwrap_or(true)))
+        .unwrap_or(true); // Default to async for backward compatibility
 
-    // Instead of using pyo3_async_runtimes which requires a running event loop,
-    // let's run the coroutine directly using asyncio.run() or loop.run_until_complete()
+    // Get or create event loop upfront (needed for both async handlers and streaming responses)
     let asyncio = py.import("asyncio")?;
-    test_debug!("[test_state] imported asyncio");
-
-    // Get or create event loop
     let loop_obj = if let Some(ev_obj) = event_loop_obj_opt {
         test_debug!("[test_state] using stored event loop");
         ev_obj.into_bound(py)
@@ -355,10 +358,24 @@ pub fn handle_test_request_for(
         }
     };
 
-    test_debug!("[test_state] running coroutine with run_until_complete");
-    let result_obj = loop_obj.call_method1("run_until_complete", (coroutine,))?;
-    test_debug!("[test_state] coroutine completed");
-    let result_obj = result_obj.unbind();
+    // Call appropriate dispatch based on handler type
+    let result_obj = if !is_async_handler {
+        // Sync handler: call dispatch_sync directly (no coroutine)
+        test_debug!("[test_state] calling dispatch_sync for sync handler");
+        let result = dispatch_sync.call1(py, (route, request_obj, handler_id))?;
+        test_debug!("[test_state] dispatch_sync completed");
+        result
+    } else {
+        // Async handler: call dispatch to get coroutine
+        test_debug!("[test_state] calling dispatch for async handler");
+        let coroutine = dispatch.call1(py, (route, request_obj, handler_id))?;
+        test_debug!("[test_state] obtained coroutine");
+
+        test_debug!("[test_state] running coroutine with run_until_complete");
+        let result = loop_obj.call_method1("run_until_complete", (coroutine,))?;
+        test_debug!("[test_state] coroutine completed");
+        result.unbind()
+    };
 
     // Debug: check what type we got back
     let type_name = result_obj
@@ -496,7 +513,6 @@ pub fn handle_test_request_for(
         if has_aiter {
             // For async generators, we need to consume them with the event loop
             // Create a list from the async generator
-            let _asyncio = py.import("asyncio")?;
             let list_from_agen =
                 |agen: &Bound<PyAny>, loop_obj: &Bound<PyAny>| -> PyResult<Vec<Vec<u8>>> {
                     let loop_ref = loop_obj.clone();

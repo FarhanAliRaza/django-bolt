@@ -70,3 +70,15 @@ Must use Header(alias="X-API-Key") not Header("X-API-Key")
 Same for Cookie(alias="session_id")
 Reason: Parameter naming convention
 Future: Could add FastAPI-style auto-conversion
+
+SYNC PARALLEL:
+
+VP Limitations (Future Work)
+
+❌ Not Yet Implemented:
+
+1. User loading in sync handlers (currently request.user = None)
+2. Dependency injection (Depends()) in sync handlers
+3. Comprehensive streaming response tests
+
+🚀 How to Test

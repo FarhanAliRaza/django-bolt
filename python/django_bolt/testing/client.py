@@ -186,8 +186,8 @@ class TestClient(httpx.Client):
         if cors_allowed_origins is None and read_django_settings:
             cors_allowed_origins = self._read_cors_settings_from_django()
 
-        # Create test app instance
-        self.app_id = _core.create_test_app(api._dispatch, False, cors_allowed_origins)
+        # Create test app instance (pass both dispatch and dispatch_sync)
+        self.app_id = _core.create_test_app(api._dispatch, api._dispatch_sync, False, cors_allowed_origins)
 
         # Register routes
         rust_routes = [

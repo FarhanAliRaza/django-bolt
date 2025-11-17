@@ -313,9 +313,29 @@ def read_10k_sync() -> list[UserMini]:
 
     """
     from users.models import User
+    users = User.objects.all()[0:100]
+    # users = list(users)
+    
+    return users
+    # users = list(users)
+    # return users
     
     
-    return User.objects.all() 
+@api.get("/async-users")
+async def read_10k_sync() -> list[UserMini]:
+    """
+    Sync version: Endpoint that returns 10k JSON objects.
+
+    """
+    from users.models import User
+    users = User.objects.all()[0:100]
+    # users = list(users)
+    
+    return users
+    # users = list(users)
+    # return users
+    
+    
 
 
 @api.get("/items/{item_id}")

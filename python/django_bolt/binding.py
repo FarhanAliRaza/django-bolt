@@ -358,6 +358,7 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
       - msgspec.Struct: build mapping from attributes if needed
       - list[T]: recursively coerce elements
       - dict/primitive: defer to msgspec.convert
+      - Django QuerySet: convert to list using .values()
 
     Args:
         value: Value to coerce
@@ -367,6 +368,23 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
     Returns:
         Coerced value
     """
+    # Handle Django QuerySets (sync version - direct list() call, no async overhead)
+    if meta and "response_field_names" in meta and hasattr(value, '_iterable_class') and hasattr(value, 'model'):
+        # Use pre-computed field names (computed at route registration time)
+        field_names = meta["response_field_names"]
+
+        # Call .values() to get a ValuesQuerySet
+        values_qs = value.values(*field_names)
+
+        # Convert QuerySet to list (this triggers SQL execution)
+        # Direct list() call - no sync_to_async overhead
+        items = list(values_qs)
+
+        # Let msgspec validate and convert entire list in one batch
+        result = msgspec.convert(items, annotation)
+
+        return result
+
     # Fast path: if annotation is a primitive type (dict, list, str, int, etc.),
     # just return the value without validation. Validation only makes sense for
     # structured types like msgspec.Struct or parameterized generics.

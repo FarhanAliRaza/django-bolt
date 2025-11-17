@@ -63,6 +63,7 @@ pub fn register_middleware_metadata(
 pub fn start_server_async(
     py: Python<'_>,
     dispatch: Py<PyAny>,
+    dispatch_sync: Py<PyAny>,  // MVP: Synchronous dispatch callable
     host: String,
     port: u16,
     compression_config: Option<Py<PyAny>>,
@@ -288,6 +289,7 @@ pub fn start_server_async(
 
     let app_state = Arc::new(AppState {
         dispatch: dispatch.into(),
+        dispatch_sync: dispatch_sync.into(),
         debug,
         max_header_size,
         global_cors_config,

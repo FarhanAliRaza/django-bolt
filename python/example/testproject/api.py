@@ -304,6 +304,20 @@ def read_10k_sync():
     """
     return test_data.JSON_10K
 
+from users.api import UserMini
+
+@api.get("/sync-users")
+def read_10k_sync() -> list[UserMini]:
+    """
+    Sync version: Endpoint that returns 10k JSON objects.
+
+    """
+    from users.models import User
+    
+    
+    return User.objects.all() 
+
+
 @api.get("/items/{item_id}")
 async def read_item(item_id: int, q: Optional[str] = None):
     return {"item_id": item_id, "q": q}
@@ -724,8 +738,6 @@ class BenchAuthorWithValidators(Serializer):
     id: int
     name: Annotated[str, Meta(min_length=2)]
     email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
-    password: str
-    password2: str
     bio: str = ""
 
     @field_validator("name")
@@ -745,32 +757,6 @@ class BenchAuthorWithValidators(Serializer):
     #         raise ValidationError("Incorrect password")
     #     # MUST return the value (or transformed value)
     #     return value
-
-    @model_validator
-    def validate_passwords_match(self) -> None:
-        """Validate that password and password2 match."""
-        if self.password != self.password2:
-            raise ValidationError("Passwords do not match")
-
-# Example usage: validating an already-created instance
-test = BenchAuthorWithValidators(
-    id=1,
-    name="  John Doe  ",
-    email="JOHN@EXAMPLE.COM",
-    bio="Software developer",
-    password="1234",
-    password2="12346"
-    
-)
-
-print("Before validate():", test)
-
-# Validate the instance (triggers Meta validation + field validators)
-validated_test = test.validate()
-print("After validate():", validated_test)
-print("  name (stripped):", repr(validated_test.name))
-print("  email (lowercased):", repr(validated_test.email))
-
 
 @api.post("/bench/serializer-raw")
 async def bench_serializer_raw(author: BenchAuthorRaw) -> BenchAuthorRaw:

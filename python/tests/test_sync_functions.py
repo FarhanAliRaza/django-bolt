@@ -15,6 +15,7 @@ from django_bolt.auth import JWTAuthentication, IsAuthenticated
 from django_bolt.middleware import cors, rate_limit
 from django_bolt.params import Header, Query, Depends
 from django_bolt.testing import TestClient
+from .test_models import Article, Author, Tag, BlogPost, Comment
 
 
 # ========================
@@ -663,3 +664,754 @@ class TestAsyncSyncParityAuthentication:
         assert async_data["is_async"] is True
         assert "Protected" in async_data["message"]
         assert "Protected" in sync_data["message"]
+
+
+# ========================
+# DJANGO ORM TESTS
+# ========================
+
+
+class ArticleResponse(msgspec.Struct):
+    """Article response model."""
+
+    id: int
+    title: str
+    content: str
+    status: str
+    author: str
+    is_published: bool
+
+
+class ArticleCreate(msgspec.Struct):
+    """Article creation request model."""
+
+    title: str
+    content: str
+    author: str
+    status: str = "draft"
+
+
+class ArticleUpdate(msgspec.Struct):
+    """Article update request model."""
+
+    title: str | None = None
+    content: str | None = None
+    author: str | None = None
+    status: str | None = None
+    is_published: bool | None = None
+
+
+@pytest.fixture
+def orm_api():
+    """Create test API with Django ORM handlers."""
+    api = BoltAPI()
+
+    # ========================
+    # Sync ORM Handlers
+    # ========================
+
+    @api.get("/sync/articles")
+    def sync_list_articles(status: str | None = None, limit: int = 10):
+        """Sync handler to list articles with optional filtering."""
+        queryset = Article.objects.all()
+        if status:
+            queryset = queryset.filter(status=status)
+        articles = list(queryset[:limit].values("id", "title", "content", "status", "author", "is_published"))
+        return {"articles": articles, "count": len(articles)}
+
+    @api.get("/sync/articles/{article_id}")
+    def sync_get_article(article_id: int):
+        """Sync handler to get a single article by ID."""
+        try:
+            article = Article.objects.get(id=article_id)
+            return {
+                "id": article.id,
+                "title": article.title,
+                "content": article.content,
+                "status": article.status,
+                "author": article.author,
+                "is_published": article.is_published,
+            }
+        except Article.DoesNotExist:
+            from django_bolt.exceptions import HTTPException
+            raise HTTPException(status_code=404, detail="Article not found")
+
+    @api.post("/sync/articles")
+    def sync_create_article(article: ArticleCreate):
+        """Sync handler to create a new article."""
+        new_article = Article.objects.create(
+            title=article.title,
+            content=article.content,
+            author=article.author,
+            status=article.status,
+        )
+        return {
+            "id": new_article.id,
+            "title": new_article.title,
+            "content": new_article.content,
+            "status": new_article.status,
+            "author": new_article.author,
+            "is_published": new_article.is_published,
+        }
+
+    @api.put("/sync/articles/{article_id}")
+    def sync_update_article(article_id: int, article: ArticleUpdate):
+        """Sync handler to update an article."""
+        try:
+            db_article = Article.objects.get(id=article_id)
+
+            # Update fields if provided
+            if article.title is not None:
+                db_article.title = article.title
+            if article.content is not None:
+                db_article.content = article.content
+            if article.author is not None:
+                db_article.author = article.author
+            if article.status is not None:
+                db_article.status = article.status
+            if article.is_published is not None:
+                db_article.is_published = article.is_published
+
+            db_article.save()
+
+            return {
+                "id": db_article.id,
+                "title": db_article.title,
+                "content": db_article.content,
+                "status": db_article.status,
+                "author": db_article.author,
+                "is_published": db_article.is_published,
+            }
+        except Article.DoesNotExist:
+            from django_bolt.exceptions import HTTPException
+            raise HTTPException(status_code=404, detail="Article not found")
+
+    @api.delete("/sync/articles/{article_id}")
+    def sync_delete_article(article_id: int):
+        """Sync handler to delete an article."""
+        try:
+            article = Article.objects.get(id=article_id)
+            article.delete()
+            return {"message": f"Article {article_id} deleted successfully"}
+        except Article.DoesNotExist:
+            from django_bolt.exceptions import HTTPException
+            raise HTTPException(status_code=404, detail="Article not found")
+
+    # ========================
+    # Async ORM Handlers
+    # ========================
+
+    @api.get("/async/articles")
+    async def async_list_articles(status: str | None = None, limit: int = 10):
+        """Async handler to list articles with optional filtering."""
+        queryset = Article.objects.all()
+        if status:
+            queryset = queryset.filter(status=status)
+        articles = [
+            {
+                "id": article.id,
+                "title": article.title,
+                "content": article.content,
+                "status": article.status,
+                "author": article.author,
+                "is_published": article.is_published,
+            }
+            async for article in queryset[:limit]
+        ]
+        return {"articles": articles, "count": len(articles), "is_async": True}
+
+    @api.get("/async/articles/{article_id}")
+    async def async_get_article(article_id: int):
+        """Async handler to get a single article by ID."""
+        try:
+            article = await Article.objects.aget(id=article_id)
+            return {
+                "id": article.id,
+                "title": article.title,
+                "content": article.content,
+                "status": article.status,
+                "author": article.author,
+                "is_published": article.is_published,
+                "is_async": True,
+            }
+        except Article.DoesNotExist:
+            from django_bolt.exceptions import HTTPException
+            raise HTTPException(status_code=404, detail="Article not found")
+
+    @api.post("/async/articles")
+    async def async_create_article(article: ArticleCreate):
+        """Async handler to create a new article."""
+        new_article = await Article.objects.acreate(
+            title=article.title,
+            content=article.content,
+            author=article.author,
+            status=article.status,
+        )
+        return {
+            "id": new_article.id,
+            "title": new_article.title,
+            "content": new_article.content,
+            "status": new_article.status,
+            "author": new_article.author,
+            "is_published": new_article.is_published,
+            "is_async": True,
+        }
+
+    @api.put("/async/articles/{article_id}")
+    async def async_update_article(article_id: int, article: ArticleUpdate):
+        """Async handler to update an article."""
+        try:
+            db_article = await Article.objects.aget(id=article_id)
+
+            # Update fields if provided
+            if article.title is not None:
+                db_article.title = article.title
+            if article.content is not None:
+                db_article.content = article.content
+            if article.author is not None:
+                db_article.author = article.author
+            if article.status is not None:
+                db_article.status = article.status
+            if article.is_published is not None:
+                db_article.is_published = article.is_published
+
+            await db_article.asave()
+
+            return {
+                "id": db_article.id,
+                "title": db_article.title,
+                "content": db_article.content,
+                "status": db_article.status,
+                "author": db_article.author,
+                "is_published": db_article.is_published,
+                "is_async": True,
+            }
+        except Article.DoesNotExist:
+            from django_bolt.exceptions import HTTPException
+            raise HTTPException(status_code=404, detail="Article not found")
+
+    @api.delete("/async/articles/{article_id}")
+    async def async_delete_article(article_id: int):
+        """Async handler to delete an article."""
+        try:
+            article = await Article.objects.aget(id=article_id)
+            await article.adelete()
+            return {"message": f"Article {article_id} deleted successfully", "is_async": True}
+        except Article.DoesNotExist:
+            from django_bolt.exceptions import HTTPException
+            raise HTTPException(status_code=404, detail="Article not found")
+
+    # ========================
+    # Complex Query Handlers
+    # ========================
+
+    @api.get("/sync/articles/search")
+    def sync_search_articles(q: str, author: str | None = None):
+        """Sync handler with complex query."""
+        queryset = Article.objects.filter(title__icontains=q)
+        if author:
+            queryset = queryset.filter(author=author)
+
+        articles = list(queryset.values("id", "title", "author", "status"))
+        return {"results": articles, "count": len(articles)}
+
+    @api.get("/async/articles/search")
+    async def async_search_articles(q: str, author: str | None = None):
+        """Async handler with complex query."""
+        queryset = Article.objects.filter(title__icontains=q)
+        if author:
+            queryset = queryset.filter(author=author)
+
+        articles = [
+            {"id": a.id, "title": a.title, "author": a.author, "status": a.status}
+            async for a in queryset
+        ]
+        return {"results": articles, "count": len(articles), "is_async": True}
+
+    @api.get("/sync/articles/count")
+    def sync_count_articles(status: str | None = None):
+        """Sync handler for aggregation."""
+        queryset = Article.objects.all()
+        if status:
+            queryset = queryset.filter(status=status)
+
+        total = queryset.count()
+        published = queryset.filter(is_published=True).count()
+
+        return {
+            "total": total,
+            "published": published,
+            "draft": total - published,
+        }
+
+    @api.get("/async/articles/count")
+    async def async_count_articles(status: str | None = None):
+        """Async handler for aggregation."""
+        queryset = Article.objects.all()
+        if status:
+            queryset = queryset.filter(status=status)
+
+        total = await queryset.acount()
+        published = await queryset.filter(is_published=True).acount()
+
+        return {
+            "total": total,
+            "published": published,
+            "draft": total - published,
+            "is_async": True,
+        }
+
+    return api
+
+
+@pytest.fixture
+def orm_client(orm_api):
+    """Test client for Django ORM tests."""
+    with TestClient(orm_api) as client:
+        yield client
+
+
+@pytest.mark.django_db(transaction=True)
+class TestSyncORMOperations:
+    """Test sync handlers with Django ORM operations."""
+
+    def test_sync_list_articles_empty(self, orm_client):
+        """Sync handler should return empty list when no articles exist."""
+        response = orm_client.get("/sync/articles")
+        assert response.status_code == 200
+        data = response.json()
+        assert "articles" in data
+        assert data["count"] == 0
+        assert len(data["articles"]) == 0
+
+    def test_sync_create_article(self, orm_client):
+        """Sync handler should create a new article."""
+        response = orm_client.post(
+            "/sync/articles",
+            json={
+                "title": "Test Article",
+                "content": "This is a test article",
+                "author": "John Doe",
+                "status": "draft",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["title"] == "Test Article"
+        assert data["content"] == "This is a test article"
+        assert data["author"] == "John Doe"
+        assert data["status"] == "draft"
+        assert data["is_published"] is False
+        assert "id" in data
+
+    def test_sync_get_article_by_id(self, orm_client):
+        """Sync handler should retrieve article by ID."""
+        # Create an article first
+        create_response = orm_client.post(
+            "/sync/articles",
+            json={
+                "title": "Get Test Article",
+                "content": "Content for get test",
+                "author": "Jane Doe",
+            },
+        )
+        created_id = create_response.json()["id"]
+
+        # Get the article
+        response = orm_client.get(f"/sync/articles/{created_id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == created_id
+        assert data["title"] == "Get Test Article"
+        assert data["author"] == "Jane Doe"
+
+    def test_sync_get_article_not_found(self, orm_client):
+        """Sync handler should return 404 for non-existent article."""
+        response = orm_client.get("/sync/articles/99999")
+        assert response.status_code == 404
+
+    def test_sync_update_article(self, orm_client):
+        """Sync handler should update article fields."""
+        # Create an article
+        create_response = orm_client.post(
+            "/sync/articles",
+            json={
+                "title": "Original Title",
+                "content": "Original content",
+                "author": "Original Author",
+            },
+        )
+        article_id = create_response.json()["id"]
+
+        # Update the article
+        response = orm_client.put(
+            f"/sync/articles/{article_id}",
+            json={
+                "title": "Updated Title",
+                "is_published": True,
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["title"] == "Updated Title"
+        assert data["is_published"] is True
+        assert data["content"] == "Original content"  # Unchanged
+        assert data["author"] == "Original Author"  # Unchanged
+
+    def test_sync_update_article_not_found(self, orm_client):
+        """Sync handler should return 404 when updating non-existent article."""
+        response = orm_client.put(
+            "/sync/articles/99999",
+            json={"title": "Updated Title"},
+        )
+        assert response.status_code == 404
+
+    def test_sync_delete_article(self, orm_client):
+        """Sync handler should delete an article."""
+        # Create an article
+        create_response = orm_client.post(
+            "/sync/articles",
+            json={
+                "title": "Delete Me",
+                "content": "This will be deleted",
+                "author": "Test Author",
+            },
+        )
+        article_id = create_response.json()["id"]
+
+        # Delete the article
+        response = orm_client.delete(f"/sync/articles/{article_id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert "deleted successfully" in data["message"]
+
+        # Verify it's gone
+        get_response = orm_client.get(f"/sync/articles/{article_id}")
+        assert get_response.status_code == 404
+
+    def test_sync_delete_article_not_found(self, orm_client):
+        """Sync handler should return 404 when deleting non-existent article."""
+        response = orm_client.delete("/sync/articles/99999")
+        assert response.status_code == 404
+
+    def test_sync_list_articles_with_filtering(self, orm_client):
+        """Sync handler should filter articles by status."""
+        # Create draft and published articles
+        orm_client.post(
+            "/sync/articles",
+            json={"title": "Draft 1", "content": "Content", "author": "Author", "status": "draft"},
+        )
+        orm_client.post(
+            "/sync/articles",
+            json={"title": "Published 1", "content": "Content", "author": "Author", "status": "published"},
+        )
+
+        # Filter by status
+        response = orm_client.get("/sync/articles?status=draft")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        assert data["articles"][0]["status"] == "draft"
+
+    def test_sync_list_articles_with_limit(self, orm_client):
+        """Sync handler should respect limit parameter."""
+        # Create multiple articles
+        for i in range(5):
+            orm_client.post(
+                "/sync/articles",
+                json={"title": f"Article {i}", "content": "Content", "author": "Author"},
+            )
+
+        # Request with limit
+        response = orm_client.get("/sync/articles?limit=3")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 3
+
+
+@pytest.mark.django_db(transaction=True)
+class TestAsyncORMOperations:
+    """Test async handlers with Django ORM operations."""
+
+    def test_async_list_articles_empty(self, orm_client):
+        """Async handler should return empty list when no articles exist."""
+        response = orm_client.get("/async/articles")
+        assert response.status_code == 200
+        data = response.json()
+        assert "articles" in data
+        assert data["count"] == 0
+        assert data["is_async"] is True
+
+    def test_async_create_article(self, orm_client):
+        """Async handler should create a new article."""
+        response = orm_client.post(
+            "/async/articles",
+            json={
+                "title": "Async Test Article",
+                "content": "This is an async test article",
+                "author": "Async Author",
+                "status": "published",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["title"] == "Async Test Article"
+        assert data["author"] == "Async Author"
+        assert data["status"] == "published"
+        assert data["is_async"] is True
+
+    def test_async_get_article_by_id(self, orm_client):
+        """Async handler should retrieve article by ID."""
+        # Create an article
+        create_response = orm_client.post(
+            "/async/articles",
+            json={
+                "title": "Async Get Test",
+                "content": "Content",
+                "author": "Author",
+            },
+        )
+        created_id = create_response.json()["id"]
+
+        # Get the article
+        response = orm_client.get(f"/async/articles/{created_id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == created_id
+        assert data["title"] == "Async Get Test"
+        assert data["is_async"] is True
+
+    def test_async_get_article_not_found(self, orm_client):
+        """Async handler should return 404 for non-existent article."""
+        response = orm_client.get("/async/articles/99999")
+        assert response.status_code == 404
+
+    def test_async_update_article(self, orm_client):
+        """Async handler should update article fields."""
+        # Create an article
+        create_response = orm_client.post(
+            "/async/articles",
+            json={
+                "title": "Async Original",
+                "content": "Original content",
+                "author": "Author",
+            },
+        )
+        article_id = create_response.json()["id"]
+
+        # Update the article
+        response = orm_client.put(
+            f"/async/articles/{article_id}",
+            json={
+                "title": "Async Updated",
+                "status": "published",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["title"] == "Async Updated"
+        assert data["status"] == "published"
+        assert data["is_async"] is True
+
+    def test_async_delete_article(self, orm_client):
+        """Async handler should delete an article."""
+        # Create an article
+        create_response = orm_client.post(
+            "/async/articles",
+            json={
+                "title": "Async Delete Me",
+                "content": "Content",
+                "author": "Author",
+            },
+        )
+        article_id = create_response.json()["id"]
+
+        # Delete the article
+        response = orm_client.delete(f"/async/articles/{article_id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["is_async"] is True
+
+        # Verify it's gone
+        get_response = orm_client.get(f"/async/articles/{article_id}")
+        assert get_response.status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
+class TestSyncComplexQueries:
+    """Test sync handlers with complex Django queries."""
+
+    def test_sync_search_articles(self, orm_client):
+        """Sync handler should search articles by title."""
+        # Create articles
+        orm_client.post(
+            "/sync/articles",
+            json={"title": "Python Tutorial", "content": "Content", "author": "John"},
+        )
+        orm_client.post(
+            "/sync/articles",
+            json={"title": "Django Guide", "content": "Content", "author": "Jane"},
+        )
+        orm_client.post(
+            "/sync/articles",
+            json={"title": "Python Advanced", "content": "Content", "author": "John"},
+        )
+
+        # Search for Python
+        response = orm_client.get("/sync/articles/search?q=Python")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 2
+        assert all("Python" in r["title"] for r in data["results"])
+
+    def test_sync_search_with_author_filter(self, orm_client):
+        """Sync handler should filter search results by author."""
+        # Create articles
+        orm_client.post(
+            "/sync/articles",
+            json={"title": "Python Tutorial", "content": "Content", "author": "John"},
+        )
+        orm_client.post(
+            "/sync/articles",
+            json={"title": "Python Advanced", "content": "Content", "author": "Jane"},
+        )
+
+        # Search for Python by John
+        response = orm_client.get("/sync/articles/search?q=Python&author=John")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        assert data["results"][0]["author"] == "John"
+
+    def test_sync_count_articles(self, orm_client):
+        """Sync handler should count articles correctly."""
+        # Create articles
+        orm_client.post(
+            "/sync/articles",
+            json={"title": "Article 1", "content": "Content", "author": "Author"},
+        )
+        create_response = orm_client.post(
+            "/sync/articles",
+            json={"title": "Article 2", "content": "Content", "author": "Author"},
+        )
+
+        # Mark one as published
+        article_id = create_response.json()["id"]
+        orm_client.put(
+            f"/sync/articles/{article_id}",
+            json={"is_published": True},
+        )
+
+        # Count articles
+        response = orm_client.get("/sync/articles/count")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        assert data["published"] == 1
+        assert data["draft"] == 1
+
+
+@pytest.mark.django_db(transaction=True)
+class TestAsyncComplexQueries:
+    """Test async handlers with complex Django queries."""
+
+    def test_async_search_articles(self, orm_client):
+        """Async handler should search articles by title."""
+        # Create articles
+        orm_client.post(
+            "/async/articles",
+            json={"title": "Rust Tutorial", "content": "Content", "author": "Alice"},
+        )
+        orm_client.post(
+            "/async/articles",
+            json={"title": "Go Guide", "content": "Content", "author": "Bob"},
+        )
+
+        # Search
+        response = orm_client.get("/async/articles/search?q=Rust")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        assert data["is_async"] is True
+        assert "Rust" in data["results"][0]["title"]
+
+    def test_async_count_articles(self, orm_client):
+        """Async handler should count articles correctly."""
+        # Create articles
+        orm_client.post(
+            "/async/articles",
+            json={"title": "Article 1", "content": "Content", "author": "Author"},
+        )
+        orm_client.post(
+            "/async/articles",
+            json={"title": "Article 2", "content": "Content", "author": "Author"},
+        )
+
+        # Count
+        response = orm_client.get("/async/articles/count")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        assert data["is_async"] is True
+
+
+@pytest.mark.django_db(transaction=True)
+class TestSyncAsyncORMParity:
+    """Compare sync and async ORM handlers for consistency."""
+
+    def test_create_parity(self, orm_client):
+        """Both sync and async create should produce same results."""
+        sync_response = orm_client.post(
+            "/sync/articles",
+            json={"title": "Sync Article", "content": "Content", "author": "Author"},
+        )
+        async_response = orm_client.post(
+            "/async/articles",
+            json={"title": "Async Article", "content": "Content", "author": "Author"},
+        )
+
+        assert sync_response.status_code == 200
+        assert async_response.status_code == 200
+
+        sync_data = sync_response.json()
+        async_data = async_response.json()
+
+        # Both should have same structure
+        assert set(sync_data.keys()) - {"is_async"} == set(async_data.keys()) - {"is_async"}
+        assert async_data["is_async"] is True
+
+    def test_search_parity(self, orm_client):
+        """Both sync and async search should return same results."""
+        # Create test data
+        orm_client.post(
+            "/sync/articles",
+            json={"title": "Search Test", "content": "Content", "author": "Author"},
+        )
+
+        sync_response = orm_client.get("/sync/articles/search?q=Search")
+        async_response = orm_client.get("/async/articles/search?q=Search")
+
+        assert sync_response.status_code == 200
+        assert async_response.status_code == 200
+
+        sync_data = sync_response.json()
+        async_data = async_response.json()
+
+        assert sync_data["count"] == async_data["count"]
+
+    def test_count_parity(self, orm_client):
+        """Both sync and async count should return same results."""
+        # Create test data
+        orm_client.post(
+            "/sync/articles",
+            json={"title": "Count Test", "content": "Content", "author": "Author"},
+        )
+
+        sync_response = orm_client.get("/sync/articles/count")
+        async_response = orm_client.get("/async/articles/count")
+
+        sync_data = sync_response.json()
+        async_data = async_response.json()
+
+        assert sync_data["total"] == async_data["total"]
+        assert sync_data["published"] == async_data["published"]

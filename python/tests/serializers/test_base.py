@@ -113,6 +113,54 @@ class TestFieldValidators:
         with pytest.raises(ValidationError):
             UserSerializer(password="longpassword1")
 
+    def test_field_validator_without_return(self):
+        """Test that validators without return statements preserve the original value."""
+
+        class UserSerializer(Serializer):
+            email: str
+
+            @field_validator("email")
+            def validate_email(cls, value):
+                # Validator that only validates, doesn't transform
+                if "@" not in value:
+                    raise ValueError("Invalid email")
+                # No return statement - should preserve original value
+
+        # Valid email should preserve the original value
+        user = UserSerializer(email="valid@example.com")
+        assert user.email == "valid@example.com"
+
+        # Invalid email should still raise
+        with pytest.raises(ValidationError) as exc_info:
+            UserSerializer(email="invalid")
+        assert "Invalid email" in str(exc_info.value)
+
+    def test_field_validator_with_mixed_returns(self):
+        """Test validators with some returning None and some returning values."""
+
+        class UserSerializer(Serializer):
+            email: str
+
+            @field_validator("email")
+            def validate_format(cls, value):
+                # Validates but doesn't return
+                if "@" not in value:
+                    raise ValueError("Invalid email format")
+                # No return
+
+            @field_validator("email")
+            def normalize_email(cls, value):
+                # Transforms and returns
+                return value.lower().strip()
+
+        # Should apply the transformation from the second validator
+        user = UserSerializer(email="  TEST@EXAMPLE.COM  ")
+        assert user.email == "test@example.com"
+
+        # Should still validate with first validator
+        with pytest.raises(ValidationError):
+            UserSerializer(email="invalid-email")
+
 
 class TestModelValidators:
     """Test model-level validation."""

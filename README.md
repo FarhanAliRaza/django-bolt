@@ -254,6 +254,7 @@ HTTP Request → Actix Web (Rust)
 
 - **[Getting Started Guide](docs/GETTING_STARTED.md)** - Complete tutorial from installation to first API
 - **[Security Guide](docs/SECURITY.md)** - Authentication, authorization, CORS, rate limiting
+- **[Serializers Guide](docs/SERIALIZERS.md)** - Type-safe validation, nested serializers, Django model integration
 - **[Middleware Guide](docs/MIDDLEWARE.md)** - CORS, rate limiting, custom middleware
 - **[Responses Guide](docs/RESPONSES.md)** - All response types and streaming
 - **[Class-Based Views](docs/CLASS_BASED_VIEWS.md)** - ViewSet and ModelViewSet patterns
@@ -514,6 +515,97 @@ async def stream_json():
 
 **📖 See [docs/RESPONSES.md](docs/RESPONSES.md) for complete response documentation.**
 
+### Serializers - Type-Safe Validation
+
+Django-Bolt includes an enhanced serialization system built on `msgspec.Struct` that provides Pydantic-like functionality with 5-10x better performance:
+
+```python
+from django_bolt.serializers import Serializer, field_validator, model_validator, Nested
+from typing import Annotated
+from msgspec import Meta
+
+# Simple serializer with validation
+class UserCreate(Serializer):
+    username: Annotated[str, Meta(min_length=3, max_length=150)]
+    email: str
+    password: Annotated[str, Meta(min_length=8)]
+
+    @field_validator('email')
+    def validate_email(cls, value):
+        if '@' not in value:
+            raise ValueError('Invalid email address')
+        return value.lower()
+
+# Using in API routes
+@api.post("/users", response_model=UserPublic)
+async def create_user(data: UserCreate):
+    # Validation happens automatically
+    user = await User.objects.acreate(**data.to_dict())
+    return UserPublic.from_model(user)
+
+# Nested serializers for relationships
+class AuthorSerializer(Serializer):
+    id: int
+    name: str
+    email: str
+
+class BlogPostSerializer(Serializer):
+    id: int
+    title: str
+    content: str
+    # Nested author - single object
+    author: Annotated[AuthorSerializer, Nested(AuthorSerializer)]
+    # Nested tags - list of objects
+    tags: Annotated[list[TagSerializer], Nested(TagSerializer, many=True)]
+
+@api.get("/posts/{post_id}")
+async def get_post(post_id: int):
+    # Efficient query with relationships loaded
+    post = await (
+        BlogPost.objects
+        .select_related("author")
+        .prefetch_related("tags")
+        .aget(id=post_id)
+    )
+    return BlogPostSerializer.from_model(post)
+
+# Model validators for cross-field validation
+class PasswordChangeSerializer(Serializer):
+    old_password: str
+    new_password: str
+    new_password_confirm: str
+
+    @model_validator
+    def validate_passwords(self):
+        if self.new_password != self.new_password_confirm:
+            raise ValueError("New passwords don't match")
+        if self.old_password == self.new_password:
+            raise ValueError("New password must be different")
+
+# Auto-generate serializers from Django models
+from django_bolt.serializers import create_serializer_set
+
+UserCreate, UserUpdate, UserPublic = create_serializer_set(
+    User,
+    create_fields=['username', 'email', 'password'],
+    update_fields=['username', 'email'],
+    public_fields=['id', 'username', 'email', 'date_joined'],
+)
+```
+
+**Key Features:**
+
+- ✅ **Field-level validation** with `@field_validator` decorator
+- ✅ **Model-level validation** with `@model_validator` decorator
+- ✅ **Nested serializers** for relationships (ForeignKey, ManyToMany)
+- ✅ **Django model integration** - `.from_model()`, `.to_dict()`, `.to_model()`
+- ✅ **Auto-generation** - Create serializers from models with `create_serializer()`
+- ✅ **Type constraints** - `Meta(min_length=3, max_length=150, pattern=r"...")`
+- ✅ **100% type safety** - Full IDE autocomplete and type checking
+- ✅ **High-performance** - Thanks to msgspec
+
+**📖 See [docs/SERIALIZERS.md](docs/SERIALIZERS.md) for complete serializer documentation.**
+
 ---
 
 ## 🔧 Development
@@ -572,7 +664,7 @@ Contributions welcome! Here's how:
 - Add extension support (adding lifecycle events, making di comprehensive)
 - WebSocket support
 - Cleaning up code.
-- Adding django compatibility layer for views and middlewares 
+- Adding django compatibility layer for views and middlewares
 - More examples, tutorials, and docs.
 
 ---

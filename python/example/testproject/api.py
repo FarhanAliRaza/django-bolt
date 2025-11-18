@@ -311,7 +311,7 @@ class UserMiniSerializer(Serializer):
     username:str
 
 
-@api.get("/sync-users", response_model=list[UserMini])
+@api.get("/sync-users", response_model=list[UserMiniSerializer])
 def read_10k_sync():
     """
     Sync version: Endpoint that returns 10k JSON objects.

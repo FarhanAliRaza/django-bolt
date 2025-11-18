@@ -98,40 +98,57 @@ class Serializer(msgspec.Struct):
 
         This is called ONCE per class (in __init_subclass__), not per instance.
         This is critical for performance - moving from 10K ops/sec to 1.75M ops/sec!
-        """
-        try:
-            # For local classes (defined in function scope), we need to provide the localns
-            # Get the frame of the class definition to access local variables
-            frame = inspect.currentframe()
-            # Walk up the stack to find the class definition frame
-            localns = {}
-            try:
-                for _ in range(10):  # Check up to 10 frames up
-                    if frame is None:
-                        break
-                    localns.update(frame.f_locals)
-                    frame = frame.f_back
-            finally:
-                del frame  # Avoid reference cycles
 
-            # Try to resolve type hints with local namespace
+        Note: Function-scoped serializer classes (classes defined inside functions) have
+        limited support and may not resolve all type hints correctly, especially when
+        using forward references or complex generic types. This is due to Python's
+        type hint resolution requiring access to the local namespace where the class
+        was defined. For best results and full type hint resolution, always define
+        serializers at module level.
+        """
+        # Track all frame references for proper cleanup to prevent memory leaks
+        frames_to_cleanup = []
+        try:
+            # Strategy 1: Try with local namespace for function-scoped classes
+            # This handles edge cases but adds complexity
+            frame = inspect.currentframe()
+            if frame is not None:
+                frames_to_cleanup.append(frame)
+
+            localns = {}
+
+            # Walk up to 10 frames to find class definition context
+            for _ in range(10):
+                if frame is None:
+                    break
+                localns.update(frame.f_locals)
+                frame = frame.f_back
+                if frame is not None:
+                    frames_to_cleanup.append(frame)
+
+            # Resolve type hints with local namespace
             if sys.version_info >= (3, 11):
                 hints = get_type_hints(cls, globalns=None, localns=localns, include_extras=True)
             else:
-                # For Python < 3.11, we need to use typing_extensions
+                # For Python < 3.11, try typing_extensions first
                 try:
                     from typing_extensions import get_type_hints as get_type_hints_ext
                     hints = get_type_hints_ext(cls, globalns=None, localns=localns, include_extras=True)
                 except ImportError:
-                    # Try stdlib get_type_hints without include_extras
                     hints = get_type_hints(cls, globalns=None, localns=localns)
+
         except Exception:
-            # If all else fails, try without localns
+            # Strategy 2: Fallback without local namespace (module-level classes)
             try:
                 hints = get_type_hints(cls)
-            except:
-                # Last resort: use annotations directly (will be strings if PEP 563 is active)
+            except Exception:
+                # Last resort: use raw annotations
                 hints = getattr(cls, "__annotations__", {})
+        finally:
+            # Clean up all frame references to prevent memory leaks
+            for f in frames_to_cleanup:
+                del f
+            frames_to_cleanup.clear()
 
         # Cache the type hints
         cls.__cached_type_hints__ = hints
@@ -181,7 +198,7 @@ class Serializer(msgspec.Struct):
         """Execute all field validators in order."""
         # First, validate nested/literal fields if any exist
         if self.__has_nested_or_literal__:
-            self._validate_nested_fields()
+            self._validate_nested_and_literal_fields()
 
         # Then run custom field validators if any exist
         if self.__has_field_validators__:
@@ -190,17 +207,32 @@ class Serializer(msgspec.Struct):
             _setattr = msgspec_structs.force_setattr
 
             for field_name, validators in self.__field_validators__.items():
-                # Batch validation: getattr once, setattr once per field (optimization #1)
-                # Saves ~80-150ns per field with multiple validators
-                current_value = getattr(self, field_name)
-
                 try:
-                    # Run all validators for this field, accumulating the value
-                    for validator in validators:
-                        current_value = validator(_class, current_value)
+                    # Optimization #4: Fast path for single validator (skip loop overhead)
+                    if len(validators) == 1:
+                        validator = validators[0]
+                        current_value = getattr(self, field_name)
+                        new_value = validator(_class, current_value)
+                        # If validator returns None, keep the original value
+                        # This allows validators to validate without transforming
+                        if new_value is None:
+                            new_value = current_value
+                        _setattr(self, field_name, new_value)
+                    else:
+                        # Batch validation: getattr once, setattr once per field (optimization #1)
+                        # Saves ~80-150ns per field with multiple validators
+                        current_value = getattr(self, field_name)
 
-                    # Update the field once with the final value
-                    _setattr(self, field_name, current_value)
+                        # Run all validators for this field, accumulating the value
+                        for validator in validators:
+                            result = validator(_class, current_value)
+                            # If validator returns None, keep the current value
+                            if result is not None:
+                                current_value = result
+
+                        # Update the field once with the final value
+                        _setattr(self, field_name, current_value)
+
                 except (ValueError, TypeError) as e:
                     # Convert to ValidationError with field context
                     raise MsgspecValidationError(f"{field_name}: {str(e)}") from e
@@ -208,8 +240,14 @@ class Serializer(msgspec.Struct):
                     # Re-raise other exceptions
                     raise
 
-    def _validate_nested_fields(self) -> None:
-        """Validate any nested serializer fields and Literal choice fields using cached metadata."""
+    def _validate_nested_and_literal_fields(self) -> None:
+        """
+        Validate nested serializer fields and Literal (choice) fields using cached metadata.
+
+        This method handles two types of validation:
+        1. Nested fields: Fields with Nested() annotation that contain serializer instances
+        2. Literal fields: Fields with Literal[] type hints that restrict values to specific choices
+        """
         # Cache force_setattr for nested field validation (optimization #2)
         _setattr = msgspec_structs.force_setattr
 
@@ -331,20 +369,45 @@ class Serializer(msgspec.Struct):
         return msgspec.json.decode(json_data, type=cls)
 
     @classmethod
-    def from_model(cls: type[T], instance: Model) -> T:
+    def from_model(
+        cls: type[T],
+        instance: Model,
+        *,
+        _depth: int = 0,
+        max_depth: int = 10,
+    ) -> T:
         """
         Create a serializer instance from a Django model instance.
 
         Args:
             instance: A Django model instance
+            _depth: Internal - current recursion depth
+            max_depth: Maximum recursion depth to prevent runaway recursion (default: 10)
 
         Returns:
             A new Serializer instance with fields populated from the model
+
+        Raises:
+            ValueError: If max_depth exceeded (indicates deeply nested or circular references)
+
+        Note:
+            Circular nested serializers (e.g., Author.posts -> Post.author -> Author.posts)
+            are not recommended for API design. Use separate serializers with ID-only fields
+            for reverse relationships. Django's ORM typically prevents infinite recursion
+            through select_related/prefetch_related, but max_depth provides a safety net.
 
         Example:
             user = await User.objects.aget(id=1)
             user_data = UserPublicSerializer.from_model(user)
         """
+        # Safety: Prevent runaway recursion from deeply nested or circular relationships
+        if _depth > max_depth:
+            raise ValueError(
+                f"Maximum recursion depth ({max_depth}) exceeded in from_model(). "
+                f"This usually indicates overly deep nesting or circular references. "
+                f"Current serializer: {cls.__name__}, instance: {instance.__class__.__name__}(pk={instance.pk}). "
+                f"Consider using separate serializers with ID-only fields for deeply nested relationships."
+            )
 
         # Use cached nested field metadata (no expensive introspection!)
         data = {}
@@ -366,8 +429,14 @@ class Serializer(msgspec.Struct):
                         items = []
                         for item in value.all():
                             if isinstance(item, DjangoModel):
-                                # Recursively call from_model on the nested serializer
-                                items.append(nested_config.serializer_class.from_model(item))
+                                # Recursively call from_model with depth tracking
+                                items.append(
+                                    nested_config.serializer_class.from_model(
+                                        item,
+                                        _depth=_depth + 1,
+                                        max_depth=max_depth,
+                                    )
+                                )
                         data[field_name] = items
                     elif isinstance(value, list):
                         data[field_name] = value
@@ -376,8 +445,12 @@ class Serializer(msgspec.Struct):
                 else:
                     # Single nested object (ForeignKey)
                     if isinstance(value, DjangoModel):
-                        # Convert to nested serializer
-                        data[field_name] = nested_config.serializer_class.from_model(value)
+                        # Convert to nested serializer with depth tracking
+                        data[field_name] = nested_config.serializer_class.from_model(
+                            value,
+                            _depth=_depth + 1,
+                            max_depth=max_depth,
+                        )
                     else:
                         data[field_name] = value
             else:

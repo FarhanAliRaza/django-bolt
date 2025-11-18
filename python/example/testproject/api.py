@@ -311,18 +311,26 @@ class UserMiniSerializer(Serializer):
     username:str
 
 
-@api.get("/sync-users")
-def read_10k_sync() -> list[UserMini]:
+@api.get("/sync-users", response_model=list[UserMini])
+def read_10k_sync():
     """
     Sync version: Endpoint that returns 10k JSON objects.
 
     """
     users = User.objects.all()[0:100]
-    # return users
 
     return users
-    # users = list(users)
-    # return users
+
+
+# @api.get("/sync-users")
+# def read_10k_sync() -> list[UserMini]:
+#     """
+#     Sync version: Endpoint that returns 10k JSON objects.
+
+#     """
+#     users = User.objects.all()[0:100]
+
+#     return users
 
 
 @api.get("/async-users")
@@ -339,15 +347,6 @@ async def read_10k_sync() -> list[UserMini]:
     
     return User.objects.all()[:100]
 
-@api.get("/async-users")
-async def read_10k_sync() -> list[UserMini]:
-    """
-    Sync version: Endpoint that returns 10k JSON objects.
-
-    """
-    from users.models import User
-    
-    return User.objects.all()[:100]
 
 
 @api.get("/items/{item_id}")

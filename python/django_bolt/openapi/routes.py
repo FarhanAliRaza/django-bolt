@@ -6,6 +6,10 @@ This module handles the registration of OpenAPI documentation routes
 """
 from typing import Dict, Any, TYPE_CHECKING
 
+from django_bolt.openapi.plugins import JsonRenderPlugin, YamlRenderPlugin
+from django_bolt.openapi.schema_generator import SchemaGenerator
+from django_bolt.responses import HTML, Redirect, JSON, PlainText
+
 if TYPE_CHECKING:
     from django_bolt.api import BoltAPI
 
@@ -33,9 +37,6 @@ class OpenAPIRouteRegistrar:
         """
         if not self.api.openapi_config or self.api._openapi_routes_registered:
             return
-
-        from django_bolt.openapi.plugins import JsonRenderPlugin, YamlRenderPlugin
-        from django_bolt.responses import HTML, Redirect, JSON, PlainText
 
         # Always register JSON endpoint
         json_plugin = JsonRenderPlugin()
@@ -98,8 +99,6 @@ class OpenAPIRouteRegistrar:
             OpenAPI schema as dictionary
         """
         if self.api._openapi_schema is None:
-            from django_bolt.openapi.schema_generator import SchemaGenerator
-
             generator = SchemaGenerator(self.api, self.api.openapi_config)
             openapi = generator.generate()
             self.api._openapi_schema = openapi.to_schema()
@@ -108,8 +107,6 @@ class OpenAPIRouteRegistrar:
 
     def _register_ui_plugins(self) -> None:
         """Register UI plugin routes (Swagger UI, ReDoc, etc.)."""
-        from django_bolt.responses import HTML
-
         schema_url = f"{self.api.openapi_config.path}/openapi.json"
 
         for plugin in self.api.openapi_config.render_plugins:
@@ -141,8 +138,6 @@ class OpenAPIRouteRegistrar:
 
     def _register_root_redirect(self) -> None:
         """Register root redirect to default UI plugin."""
-        from django_bolt.responses import Redirect
-
         if self.api.openapi_config.default_plugin:
             default_path = self.api.openapi_config.default_plugin.paths[0]
 

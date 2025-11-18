@@ -5,8 +5,10 @@ These tests configure Django properly and will FAIL if ASGI bridge is broken.
 """
 
 import pytest
+import asyncio
 from django_bolt.api import BoltAPI
 from django_bolt.testing import TestClient
+from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
 
 
 @pytest.fixture(scope="module")
@@ -74,9 +76,6 @@ def test_admin_login_page(client):
 @pytest.mark.django_db
 def test_asgi_bridge_direct_with_real_django():
     """Test ASGI bridge directly with real Django configuration."""
-    from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
-    import asyncio
-
     # Database is already set up by pytest-django
     handler = ASGIFallbackHandler(server_host="127.0.0.1", server_port=8000)
 
@@ -119,9 +118,6 @@ def test_asgi_bridge_direct_with_real_django():
 @pytest.mark.django_db
 def test_asgi_bridge_admin_root():
     """Test ASGI bridge handles /admin/ root correctly."""
-    from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
-    import asyncio
-
     handler = ASGIFallbackHandler(server_host="127.0.0.1", server_port=8000)
 
     request = {
@@ -154,9 +150,6 @@ def test_asgi_bridge_admin_root():
 @pytest.mark.django_db
 def test_asgi_bridge_with_query_params():
     """Test ASGI bridge handles query parameters correctly."""
-    from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
-    import asyncio
-
     handler = ASGIFallbackHandler(server_host="127.0.0.1", server_port=8000)
 
     request = {
@@ -180,9 +173,6 @@ def test_asgi_bridge_with_query_params():
 @pytest.mark.django_db
 def test_asgi_bridge_post_request():
     """Test ASGI bridge handles POST requests correctly."""
-    from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
-    import asyncio
-
     handler = ASGIFallbackHandler(server_host="127.0.0.1", server_port=8000)
 
     # POST request with form data
@@ -213,9 +203,6 @@ def test_asgi_bridge_post_request():
 @pytest.mark.django_db
 def test_asgi_bridge_404_path():
     """Test ASGI bridge handles non-existent admin paths correctly."""
-    from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
-    import asyncio
-
     handler = ASGIFallbackHandler(server_host="127.0.0.1", server_port=8000)
 
     request = {
@@ -240,9 +227,6 @@ def test_asgi_bridge_404_path():
 @pytest.mark.django_db
 def test_asgi_bridge_with_cookies():
     """Test ASGI bridge handles cookies correctly."""
-    from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
-    import asyncio
-
     handler = ASGIFallbackHandler(server_host="127.0.0.1", server_port=8000)
 
     request = {

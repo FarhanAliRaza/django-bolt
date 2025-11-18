@@ -6,6 +6,7 @@ Provides utilities for subprocess-based testing.
 """
 import os
 import pathlib
+import platform
 import signal
 import socket
 import subprocess
@@ -114,15 +115,17 @@ def django_db_setup(django_db_blocker):
         # Create test model tables manually since they're not in migrations
         # But only if they don't already exist (for persistent file-based databases)
         with connection.schema_editor() as schema_editor:
-            from .test_models import Article
-            # Check if table already exists
-            if Article._meta.db_table not in connection.introspection.table_names():
-                schema_editor.create_model(Article)
+            from .test_models import Article, Author, Tag, BlogPost, Comment, User, UserProfile
+
+            models = [Article, Author, Tag, BlogPost, Comment, User, UserProfile]
+            for model in models:
+                # Check if table already exists
+                if model._meta.db_table not in connection.introspection.table_names():
+                    schema_editor.create_model(model)
 
 
 def spawn_process(command):
     """Spawn a subprocess in a new process group"""
-    import platform
     if platform.system() == "Windows":
         process = subprocess.Popen(
             command,
@@ -143,7 +146,6 @@ def spawn_process(command):
 
 def kill_process(process):
     """Kill a subprocess and its process group"""
-    import platform
     if platform.system() == "Windows":
         try:
             process.send_signal(signal.CTRL_BREAK_EVENT)

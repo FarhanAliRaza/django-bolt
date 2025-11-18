@@ -6,6 +6,7 @@ to Django REST Framework's ModelViewSet, where you just set queryset and seriali
 """
 import pytest
 import msgspec
+from asgiref.sync import async_to_sync
 from django_bolt import BoltAPI, ModelViewSet, ReadOnlyModelViewSet
 from django_bolt.testing import TestClient
 from .test_models import Article
@@ -44,8 +45,6 @@ class ArticleCreateSchema(msgspec.Struct):
 @pytest.mark.django_db(transaction=True)
 def test_readonly_model_viewset(api):
     """Test ReadOnlyModelViewSet provides helpers for read operations."""
-    from asgiref.sync import async_to_sync
-
     # Create test data
     article1 = async_to_sync(Article.objects.acreate)(
         title="Article 1",
@@ -205,8 +204,6 @@ def test_model_viewset_with_custom_methods(api):
 @pytest.mark.django_db(transaction=True)
 def test_model_viewset_queryset_reevaluation(api):
     """Test that queryset is re-evaluated on each request (like DRF)."""
-    from asgiref.sync import async_to_sync
-
     @api.view("/articles", methods=["GET"])
     class ArticleViewSet(ReadOnlyModelViewSet):
         queryset = Article.objects.all()
@@ -241,8 +238,6 @@ def test_model_viewset_queryset_reevaluation(api):
 @pytest.mark.django_db(transaction=True)
 def test_model_viewset_custom_queryset(api):
     """Test ModelViewSet with custom get_queryset()."""
-    from asgiref.sync import async_to_sync
-
     # Create test data
     async_to_sync(Article.objects.acreate)(
         title="Published 1",
@@ -287,8 +282,6 @@ def test_model_viewset_custom_queryset(api):
 @pytest.mark.django_db(transaction=True)
 def test_model_viewset_lookup_field(api):
     """Test ModelViewSet with custom lookup_field."""
-    from asgiref.sync import async_to_sync
-
     # Create article
     article = async_to_sync(Article.objects.acreate)(
         title="Test Article",

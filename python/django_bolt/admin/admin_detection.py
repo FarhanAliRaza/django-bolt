@@ -2,7 +2,12 @@
 Utilities for detecting and configuring Django admin integration.
 """
 
+import re
+import sys
 from typing import List, Optional, Tuple
+
+from django.conf import settings
+from django.urls import get_resolver
 
 
 def is_admin_installed() -> bool:
@@ -13,7 +18,6 @@ def is_admin_installed() -> bool:
         True if admin is in INSTALLED_APPS, False otherwise
     """
     try:
-        from django.conf import settings
         return 'django.contrib.admin' in settings.INSTALLED_APPS
     except Exception:
         return False
@@ -30,10 +34,6 @@ def detect_admin_url_prefix() -> Optional[str]:
         return None
 
     try:
-        from django.conf import settings
-        from django.urls import get_resolver
-        import re
-
         # Get root URL resolver
         resolver = get_resolver(getattr(settings, 'ROOT_URLCONF', None))
 
@@ -67,7 +67,6 @@ def detect_admin_url_prefix() -> Optional[str]:
 
     except Exception as e:
         # If detection fails, log warning and return default
-        import sys
         print(f"[django-bolt] Warning: Could not auto-detect admin URL prefix: {e}", file=sys.stderr)
 
     # Default fallback
@@ -115,7 +114,6 @@ def get_static_url_prefix() -> Optional[str]:
         Static URL prefix (e.g., 'static') or None if not configured
     """
     try:
-        from django.conf import settings
         if hasattr(settings, 'STATIC_URL') and settings.STATIC_URL:
             static_url = settings.STATIC_URL
             # Remove leading/trailing slashes
@@ -138,8 +136,6 @@ def should_enable_admin() -> bool:
 
     # Check if required dependencies are installed
     try:
-        from django.conf import settings
-
         required_apps = [
             'django.contrib.auth',
             'django.contrib.contenttypes',
@@ -148,7 +144,6 @@ def should_enable_admin() -> bool:
 
         for app in required_apps:
             if app not in settings.INSTALLED_APPS:
-                import sys
                 print(
                     f"[django-bolt] Warning: Django admin is installed but {app} is missing. "
                     f"Admin integration disabled.",
@@ -159,7 +154,6 @@ def should_enable_admin() -> bool:
         return True
 
     except Exception as e:
-        import sys
         print(f"[django-bolt] Warning: Could not check admin dependencies: {e}", file=sys.stderr)
         return False
 

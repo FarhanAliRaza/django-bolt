@@ -8,8 +8,9 @@ This test suite verifies that the new unified ViewSet pattern works correctly:
 - Different serializers for list vs detail (list_serializer_class)
 - Type-driven serialization
 """
-import pytest
 import msgspec
+import pytest
+from asgiref.sync import async_to_sync
 from django_bolt import BoltAPI, ViewSet, action
 from django_bolt.testing import TestClient
 from .test_models import Article

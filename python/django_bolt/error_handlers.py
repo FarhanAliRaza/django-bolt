@@ -5,8 +5,18 @@ structured HTTP error responses.
 """
 
 import msgspec
+import re
 import traceback
 from typing import Any, Dict, List, Tuple, Optional
+
+# Django import - may fail if Django not configured
+try:
+    from django.conf import settings as django_settings
+    from django.views.debug import ExceptionReporter
+except ImportError:
+    django_settings = None
+    ExceptionReporter = None
+
 from . import _json
 from .exceptions import (
     HTTPException,
@@ -94,7 +104,6 @@ def msgspec_validation_error_to_dict(error: msgspec.ValidationError) -> List[Dic
         loc_parts.append(loc_path.replace("$", "").replace("[", ".").replace("]", "").strip("."))
     elif "missing required field" in error_msg.lower():
         # Extract field name from message
-        import re
         match = re.search(r"`(\w+)`", error_msg)
         field = match.group(1) if match else "unknown"
         errors.append({
@@ -210,18 +219,17 @@ def generic_exception_handler(
     if debug:
         # Try to use Django's ExceptionReporter HTML page
         try:
-            from django.views.debug import ExceptionReporter
+            if ExceptionReporter is not None:
+                # ExceptionReporter works fine with None request (avoids URL resolution issues)
+                reporter = ExceptionReporter(None, type(exc), exc, exc.__traceback__)
+                html_content = reporter.get_traceback_html()
 
-            # ExceptionReporter works fine with None request (avoids URL resolution issues)
-            reporter = ExceptionReporter(None, type(exc), exc, exc.__traceback__)
-            html_content = reporter.get_traceback_html()
-
-            # Return HTML response instead of JSON
-            return (
-                500,
-                [("content-type", "text/html; charset=utf-8")],
-                html_content.encode("utf-8")
-            )
+                # Return HTML response instead of JSON
+                return (
+                    500,
+                    [("content-type", "text/html; charset=utf-8")],
+                    html_content.encode("utf-8")
+                )
         except Exception:
             # Fallback to standard traceback formatting in JSON
             pass
@@ -263,9 +271,8 @@ def handle_exception(
     # Check Django's DEBUG setting dynamically only if debug is not explicitly set
     if debug is None:
         try:
-            from django.conf import settings
-            if settings.configured:
-                debug = settings.DEBUG
+            if django_settings and django_settings.configured:
+                debug = django_settings.DEBUG
             else:
                 debug = False
         except (ImportError, AttributeError):

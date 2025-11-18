@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 import pytest
 
 from django_bolt import BoltAPI
@@ -159,8 +160,6 @@ def test_file_not_found():
 
 def test_file_performance_small_vs_large():
     """Test that small files use in-memory buffering for better performance"""
-    import time
-    
     api = BoltAPI()
     temp_dir = tempfile.mkdtemp()
     

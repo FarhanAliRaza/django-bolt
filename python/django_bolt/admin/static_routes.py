@@ -5,7 +5,13 @@ This module handles the registration of static file serving routes
 needed by Django admin and other Django apps.
 """
 import inspect
+import sys
 from typing import TYPE_CHECKING
+
+from django.conf import settings
+
+from django_bolt.admin.static import serve_static_file
+from django_bolt.typing import FieldDefinition
 
 if TYPE_CHECKING:
     from django_bolt.api import BoltAPI
@@ -37,8 +43,6 @@ class StaticRouteRegistrar:
             return
 
         try:
-            from django.conf import settings
-
             # Check if static files are configured
             if not hasattr(settings, 'STATIC_URL') or not settings.STATIC_URL:
                 return
@@ -49,9 +53,6 @@ class StaticRouteRegistrar:
 
             # Register catch-all route for static files
             route_pattern = f'/{static_url}/{{path:path}}'
-
-            # Import here to avoid circular dependency
-            from django_bolt.admin.static import serve_static_file
 
             # Create static file handler
             async def static_handler(path: str):
@@ -64,7 +65,6 @@ class StaticRouteRegistrar:
             self.api._static_routes_registered = True
 
         except Exception as e:
-            import sys
             print(f"[django-bolt] Warning: Failed to register static routes: {e}", file=sys.stderr)
 
     def _register_static_route(self, route_pattern: str, handler) -> None:
@@ -82,8 +82,6 @@ class StaticRouteRegistrar:
 
         # Create metadata for static handler
         # Extract path parameter metadata using FieldDefinition
-        from django_bolt.typing import FieldDefinition
-
         sig = inspect.signature(handler)
         path_field = FieldDefinition(
             name="path",

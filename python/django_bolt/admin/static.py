@@ -4,9 +4,20 @@ Static file serving utilities for Django-Bolt.
 Provides static file serving for Django admin and other static assets.
 """
 
+import mimetypes
 import os
+import sys
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
+
+from django.conf import settings
+try:
+    from django.contrib.staticfiles.finders import find
+except ImportError:
+    find = None
+
+from ..exceptions import HTTPException
+from ..responses import FileResponse
 
 
 def find_static_file(path: str) -> Optional[str]:
@@ -20,8 +31,6 @@ def find_static_file(path: str) -> Optional[str]:
         Absolute path to file if found, None otherwise
     """
     try:
-        from django.conf import settings
-
         # First try STATIC_ROOT (collected static files in production)
         if hasattr(settings, 'STATIC_ROOT') and settings.STATIC_ROOT:
             static_root = Path(settings.STATIC_ROOT)
@@ -30,14 +39,10 @@ def find_static_file(path: str) -> Optional[str]:
                 return str(file_path)
 
         # Try using Django's static file finders (development mode)
-        try:
-            from django.contrib.staticfiles.finders import find
+        if find is not None:
             found_path = find(path)
             if found_path:
                 return found_path
-        except ImportError:
-            # staticfiles not installed
-            pass
 
         # Fallback: check STATICFILES_DIRS
         if hasattr(settings, 'STATICFILES_DIRS'):
@@ -49,7 +54,6 @@ def find_static_file(path: str) -> Optional[str]:
                     return str(file_path)
 
     except Exception as e:
-        import sys
         print(f"[django-bolt] Warning: Error finding static file {path}: {e}", file=sys.stderr)
 
     return None
@@ -65,8 +69,6 @@ def guess_content_type(file_path: str) -> str:
     Returns:
         MIME type string
     """
-    import mimetypes
-
     content_type, _ = mimetypes.guess_type(file_path)
     if content_type:
         return content_type
@@ -102,8 +104,6 @@ async def serve_static_file(path: str) -> Tuple[int, List[Tuple[str, str]], byte
     Returns:
         Response tuple: (status_code, headers, body)
     """
-    from ..exceptions import HTTPException
-
     # Security: prevent directory traversal
     if '..' in path or path.startswith('/'):
         raise HTTPException(400, "Invalid static file path")
@@ -115,7 +115,6 @@ async def serve_static_file(path: str) -> Tuple[int, List[Tuple[str, str]], byte
         raise HTTPException(404, f"Static file not found: {path}")
 
     # Return FileResponse (Rust will handle streaming)
-    from ..responses import FileResponse
     content_type = guess_content_type(file_path)
 
     # Use FileResponse which returns the special file response format
@@ -133,8 +132,6 @@ def register_static_routes(api, static_url: Optional[str] = None):
         api: BoltAPI instance
         static_url: Static URL prefix (default: from settings.STATIC_URL)
     """
-    from django.conf import settings
-
     if static_url is None:
         if not hasattr(settings, 'STATIC_URL') or not settings.STATIC_URL:
             # Static files not configured

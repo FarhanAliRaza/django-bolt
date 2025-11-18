@@ -16,6 +16,9 @@ Example:
 """
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Set, Type
+
+import msgspec
+
 from .exceptions import HTTPException
 
 
@@ -497,7 +500,6 @@ class ViewSet(APIView):
                         return [serializer_class.from_model(obj) for obj in instance]
                     else:
                         # Manual mapping
-                        import msgspec
                         fields = getattr(serializer_class, "__annotations__", {})
                         return [
                             msgspec.convert({name: getattr(obj, name, None) for name in fields.keys()}, serializer_class)
@@ -508,7 +510,6 @@ class ViewSet(APIView):
                     if hasattr(serializer_class, "from_model"):
                         return serializer_class.from_model(instance)
                     else:
-                        import msgspec
                         fields = getattr(serializer_class, "__annotations__", {})
                         mapped = {name: getattr(instance, name, None) for name in fields.keys()}
                         return msgspec.convert(mapped, serializer_class)
@@ -561,7 +562,6 @@ class ListMixin:
                     results.append(serializer_class.from_model(obj))
                 else:
                     # Assume it's a msgspec.Struct, use convert
-                    import msgspec
                     fields = getattr(serializer_class, "__annotations__", {})
                     mapped = {name: getattr(obj, name, None) for name in fields.keys()}
                     results.append(msgspec.convert(mapped, serializer_class))
@@ -600,7 +600,6 @@ class RetrieveMixin:
                 return serializer_class.from_model(obj)
             else:
                 # Assume it's a msgspec.Struct, use convert
-                import msgspec
                 fields = getattr(serializer_class, "__annotations__", {})
                 mapped = {name: getattr(obj, name, None) for name in fields.keys()}
                 return msgspec.convert(mapped, serializer_class)
@@ -654,7 +653,6 @@ class CreateMixin:
             if hasattr(serializer_class, "from_model"):
                 return serializer_class.from_model(obj)
             else:
-                import msgspec
                 fields = getattr(serializer_class, "__annotations__", {})
                 mapped = {name: getattr(obj, name, None) for name in fields.keys()}
                 return msgspec.convert(mapped, serializer_class)
@@ -706,7 +704,6 @@ class UpdateMixin:
             if hasattr(serializer_class, "from_model"):
                 return serializer_class.from_model(obj)
             else:
-                import msgspec
                 fields = getattr(serializer_class, "__annotations__", {})
                 mapped = {name: getattr(obj, name, None) for name in fields.keys()}
                 return msgspec.convert(mapped, serializer_class)
@@ -759,7 +756,6 @@ class PartialUpdateMixin:
             if hasattr(serializer_class, "from_model"):
                 return serializer_class.from_model(obj)
             else:
-                import msgspec
                 fields = getattr(serializer_class, "__annotations__", {})
                 mapped = {name: getattr(obj, name, None) for name in fields.keys()}
                 return msgspec.convert(mapped, serializer_class)
@@ -930,7 +926,6 @@ class ModelViewSet(ViewSet):
                 results.append(serializer_class.from_model(obj))
             else:
                 # Fallback: manual conversion
-                import msgspec
                 fields = getattr(serializer_class, '__annotations__', {})
                 mapped = {name: getattr(obj, name, None) for name in fields.keys()}
                 results.append(msgspec.convert(mapped, serializer_class))
@@ -954,7 +949,6 @@ class ModelViewSet(ViewSet):
         if hasattr(serializer_class, 'from_model'):
             return serializer_class.from_model(obj)
         else:
-            import msgspec
             fields = getattr(serializer_class, '__annotations__', {})
             mapped = {name: getattr(obj, name, None) for name in fields.keys()}
             return msgspec.convert(mapped, serializer_class)
@@ -991,7 +985,6 @@ class ModelViewSet(ViewSet):
         if hasattr(serializer_class, 'from_model'):
             return serializer_class.from_model(obj)
         else:
-            import msgspec
             fields = getattr(serializer_class, '__annotations__', {})
             mapped = {name: getattr(obj, name, None) for name in fields.keys()}
             return msgspec.convert(mapped, serializer_class)

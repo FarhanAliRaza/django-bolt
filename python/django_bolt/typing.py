@@ -8,8 +8,14 @@ from __future__ import annotations
 
 import inspect
 import msgspec
-from dataclasses import dataclass
+from dataclasses import dataclass, is_dataclass
 from typing import Any, get_origin, get_args, Union, Optional, List, Dict, Annotated, TypedDict
+
+# Import Param and Depends for use in from_parameter method
+# Note: Imported here to avoid circular imports at module level
+# These are only used in the from_parameter classmethod
+if False:  # TYPE_CHECKING equivalent but doesn't require TYPE_CHECKING block
+    from .params import Param, Depends as DependsMarker
 
 __all__ = [
     "FieldDefinition",
@@ -133,7 +139,6 @@ def unwrap_optional(annotation: Any) -> Any:
 def is_dataclass_type(annotation: Any) -> bool:
     """Check if annotation is a dataclass."""
     try:
-        from dataclasses import is_dataclass
         return is_dataclass(annotation)
     except (TypeError, AttributeError):
         return False
@@ -310,6 +315,7 @@ class FieldDefinition:
         Returns:
             FieldDefinition instance
         """
+        # Import here to avoid circular import issues
         from .params import Param, Depends as DependsMarker
 
         name = parameter.name

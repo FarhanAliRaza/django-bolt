@@ -6,7 +6,14 @@ import msgspec
 import re
 import sys
 import time
-from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Annotated, get_type_hints
+import types
+from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Annotated, get_type_hints, Union
+
+# Django import - may fail if Django not configured
+try:
+    from django.conf import settings as django_settings
+except ImportError:
+    django_settings = None
 
 from .bootstrap import ensure_django_ready
 from django_bolt import _core
@@ -21,10 +28,7 @@ from .logging.middleware import create_logging_middleware, LoggingMiddleware
 from .exceptions import RequestValidationError, parse_msgspec_decode_error
 # Import modularized components
 from .binding import (
-    coerce_to_response_type,
-    coerce_to_response_type_async,
     convert_primitive,
-    create_extractor,
     get_msgspec_decoder
 )
 from .typing import is_msgspec_struct, is_optional, unwrap_optional
@@ -33,6 +37,7 @@ from .dependencies import resolve_dependency
 from .serialization import serialize_response
 from .middleware.compiler import compile_middleware_meta
 from .types import Request
+from .concurrency import sync_to_thread
 from .views import APIView, ViewSet
 from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
 from .decorators import ActionHandler
@@ -43,7 +48,7 @@ from .openapi.routes import OpenAPIRouteRegistrar
 from .admin.routes import AdminRouteRegistrar
 from .admin.static_routes import StaticRouteRegistrar
 from .admin.admin_detection import detect_admin_url_prefix
-from .auth import get_default_authentication_classes
+from .auth import get_default_authentication_classes, register_auth_backend
 from .auth.user_loader import load_user
 
 from . import _json
@@ -273,8 +278,7 @@ class BoltAPI:
             # Create default OpenAPI config
             try:
                 # Try to get Django project name from settings
-                from django.conf import settings
-                title = getattr(settings, 'PROJECT_NAME', None) or getattr(settings, 'SITE_NAME', None) or "API"
+                title = getattr(django_settings, 'PROJECT_NAME', None) or getattr(django_settings, 'SITE_NAME', None) or "API" if django_settings else "API"
             except:
                 title = "API"
 
@@ -646,8 +650,6 @@ class BoltAPI:
             base_path: Base path for the ViewSet (e.g., "/users")
             lookup_field: Lookup field name for detail actions (e.g., "id", "pk")
         """
-        import inspect
-        import types
 
         # Get class-level auth and guards (if any)
         class_auth = getattr(view_cls, 'auth', None)
@@ -759,13 +761,33 @@ class BoltAPI:
             self._routes.append((method, full_path, handler_id, fn))
             self._handlers[handler_id] = fn
 
-            # Pre-compile lightweight binder for this handler with HTTP method validation
+            # Pre-compile parameter binder (handles parameter binding only)
             meta = self._compile_binder(fn, method, full_path)
+
             # Store sync/async metadata
             meta["is_async"] = is_async
-            # Allow explicit response model override
+
+            # Determine final response type with proper priority:
+            # 1. response_model parameter (explicit, takes precedence)
+            # 2. sig.return_annotation (fallback if response_model not provided)
+            final_response_type = None
             if response_model is not None:
-                meta["response_type"] = response_model
+                # Explicit response_model provided - use it (ignore annotation)
+                final_response_type = response_model
+            else:
+                # No response_model - check for return annotation
+                # Need to resolve string annotations (from __future__ import annotations)
+                globalns = sys.modules.get(fn.__module__, {}).__dict__ if fn.__module__ else {}
+                type_hints = get_type_hints(fn, globalns=globalns, include_extras=True)
+                final_response_type = type_hints.get("return", None)
+
+            # Extract metadata from final type (after priority resolution)
+            if final_response_type is not None:
+                meta["response_type"] = final_response_type
+                # Pre-compute field names for QuerySet optimization (registration time only)
+                response_meta = self._extract_response_metadata(final_response_type)
+                meta.update(response_meta)
+
             if status_code is not None:
                 meta["default_status_code"] = int(status_code)
             # Store OpenAPI metadata
@@ -808,6 +830,40 @@ class BoltAPI:
 
             return fn
         return decorator
+
+    def _extract_response_metadata(self, response_type: Any) -> Dict[str, Any]:
+        """
+        Extract serialization metadata from response type annotation.
+
+        Pre-computes field names for QuerySet.values() optimization.
+        This method is called once at route registration time, not per-request.
+
+        Args:
+            response_type: Type annotation (e.g., list[UserMini], User, dict, etc.)
+
+        Returns:
+            Metadata dictionary with optional 'response_field_names' key
+
+        Example:
+            meta = self._extract_response_metadata(list[UserMini])
+            # Returns: {"response_field_names": ["id", "username"]}
+        """
+        metadata = {}
+
+        # Check if response type is list[Struct] for QuerySet optimization
+        origin = get_origin(response_type)
+        if origin in (list, List):
+            args = get_args(response_type)
+            if args:
+                elem_type = args[0]
+                if is_msgspec_struct(elem_type):
+                    # Extract field names for QuerySet.values() optimization
+                    # This allows us to do: queryset.values("id", "username")
+                    # instead of loading all fields and converting to dict
+                    fields = getattr(elem_type, "__annotations__", {})
+                    metadata["response_field_names"] = list(fields.keys())
+
+        return metadata
 
     def _compile_binder(self, fn: Callable, http_method: str = "", path: str = "") -> HandlerMetadata:
         """
@@ -912,23 +968,8 @@ class BoltAPI:
                 meta["body_struct_param"] = body_field.name
                 meta["body_struct_type"] = body_field.annotation
 
-        # Capture return type for response validation/serialization
-        if sig.return_annotation is not inspect._empty:
-            meta["response_type"] = sig.return_annotation
-
-            # Pre-compute field names for QuerySet serialization (performance optimization)
-            # If response type is list[Struct], extract field names at registration time
-            # instead of doing runtime introspection on every request
-            origin = get_origin(sig.return_annotation)
-            from typing import List
-            if origin in (list, List):
-                args = get_args(sig.return_annotation)
-                if args:
-                    elem_type = args[0]
-                    if is_msgspec_struct(elem_type):
-                        # Extract field names from the struct's annotations
-                        fields = getattr(elem_type, "__annotations__", {})
-                        meta["response_field_names"] = list(fields.keys())
+        # Response type handling is done in _route_decorator() after priority resolution
+        # This keeps _compile_binder() focused on parameter binding only
 
         meta["mode"] = "mixed"
 
@@ -991,6 +1032,7 @@ class BoltAPI:
         return args, kwargs
 
 
+
     def _handle_http_exception(self, he: HTTPException) -> Response:
         """Handle HTTPException and return response."""
         try:
@@ -1042,6 +1084,7 @@ class BoltAPI:
         # Eagerly load user now (no lazy evaluation, no proxy overhead)
         user = await load_user(user_id, backend_name, auth_context)
         request["user"] = user
+
 
     async def _dispatch(self, handler: Callable, request: Dict[str, Any], handler_id: int = None) -> Response:
         """Async dispatch that calls the handler and returns response tuple.
@@ -1098,16 +1141,18 @@ class BoltAPI:
                 if is_async:
                     result = await handler(request)
                 else:
-                    result = handler(request)
+                    # Run sync handler in thread pool to avoid blocking worker
+                    result = await sync_to_thread(handler, request)
             else:
                 # Build handler arguments
                 args, kwargs = await self._build_handler_arguments(meta, request)
                 if is_async:
                     result = await handler(*args, **kwargs)
                 else:
-                    result = handler(*args, **kwargs)
-
-            # Serialize response
+                    # Run sync handler in thread pool to enable concurrent I/O
+                    # This allows Django ORM queries to run concurrently across requests
+                    result = await sync_to_thread(handler, *args, **kwargs)
+        # Serialize response
             response = await serialize_response(result, meta)
 
             # Log response if logging enabled
@@ -1132,6 +1177,7 @@ class BoltAPI:
 
             return self._handle_generic_exception(e, request=request)
 
+
     def _get_openapi_schema(self) -> Dict[str, Any]:
         """Get or generate OpenAPI schema.
 
@@ -1139,7 +1185,6 @@ class BoltAPI:
             OpenAPI schema as dictionary.
         """
         if self._openapi_schema is None:
-
             generator = SchemaGenerator(self, self.openapi_config)
             openapi = generator.generate()
             self._openapi_schema = openapi.to_schema()
@@ -1184,8 +1229,6 @@ class BoltAPI:
         Scans all handler middleware metadata to find unique auth backends,
         then registers them for request.user lazy loading.
         """
-        from .auth import register_auth_backend
-
         registered = set()
 
         for handler_id, metadata in self._handler_middleware.items():

@@ -6,6 +6,9 @@ Tests the full request flow including Rust-side authentication and guard evaluat
 import jwt
 import time
 import pytest
+import django
+from django.conf import settings
+from django.core.management import call_command
 from django_bolt import BoltAPI
 from django_bolt.auth import JWTAuthentication, APIKeyAuthentication
 from django_bolt.auth import (
@@ -32,10 +35,6 @@ def create_token(user_id="user123", is_staff=False, is_superuser=False, permissi
 def api():
     """Create test API with guards and authentication"""
     # Setup Django
-    import django
-    from django.conf import settings
-    from django.core.management import call_command
-
     if not settings.configured:
         settings.configure(
             DEBUG=True,

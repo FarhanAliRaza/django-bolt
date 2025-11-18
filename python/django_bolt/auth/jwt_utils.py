@@ -10,6 +10,7 @@ import time
 import jwt
 from typing import Any, Dict, Optional
 from django.contrib.auth import get_user_model
+from django.conf import settings
 from django_bolt.types import Request
 
 
@@ -67,7 +68,6 @@ def create_jwt_for_user(
     """
     # Use Django SECRET_KEY if no secret provided
     if secret is None:
-        from django.conf import settings
         secret = settings.SECRET_KEY
 
     # Build standard claims

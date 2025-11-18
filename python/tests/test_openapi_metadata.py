@@ -6,7 +6,8 @@ from django_bolt import BoltAPI
 from django_bolt.openapi import OpenAPIConfig
 from django_bolt.openapi.schema_generator import SchemaGenerator
 from django_bolt.openapi.spec import Tag
-from django_bolt.decorators import action
+from django_bolt.decorators import action, ActionHandler
+from django_bolt.views import ViewSet
 
 
 def test_route_decorator_with_tags():
@@ -209,8 +210,6 @@ def test_tag_collection_with_config_tags():
 
 def test_action_decorator_with_metadata():
     """Test that @action decorator accepts and stores metadata."""
-    from django_bolt.decorators import ActionHandler
-
     @action(
         methods=["POST"],
         detail=True,
@@ -230,7 +229,6 @@ def test_action_decorator_with_metadata():
 def test_action_metadata_passed_to_route():
     """Test that action metadata is passed through to the route."""
     api = BoltAPI()
-    from django_bolt.views import ViewSet
     @api.viewset("/users")
     class UserViewSet(ViewSet):
         @action(

@@ -8,8 +8,13 @@ to handle requests for admin routes.
 
 import asyncio
 import logging
+import traceback
 from typing import Any, Dict, List, Tuple
 from urllib.parse import parse_qs, urlencode
+
+from django.core.asgi import get_asgi_application
+
+from ..bootstrap import ensure_django_ready
 
 
 logger = logging.getLogger(__name__)
@@ -193,10 +198,7 @@ class ASGIFallbackHandler:
     def _get_asgi_app(self):
         """Lazy-load Django ASGI application with middleware."""
         if self._asgi_app is None:
-            from django.core.asgi import get_asgi_application
-
             # Ensure Django is configured
-            from ..bootstrap import ensure_django_ready
             ensure_django_ready()
 
             try:
@@ -243,7 +245,6 @@ class ASGIFallbackHandler:
             await asgi_app(scope, receive, send)
         except Exception as e:
             # Handle errors by returning 500 response
-            import traceback
             error_body = f"ASGI Handler Error: {str(e)}\n\n{traceback.format_exc()}"
             return (
                 500,

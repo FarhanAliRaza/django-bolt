@@ -1,7 +1,11 @@
 """Tests for Django-Bolt error handling system."""
 
 import pytest
+import json
 import msgspec
+import django
+from django.conf import settings
+from unittest.mock import patch
 from django_bolt.exceptions import (
     HTTPException,
     BadRequest,
@@ -108,7 +112,6 @@ class TestErrorHandlers:
         assert ("content-type", "application/json") in headers
 
         # Decode and check JSON
-        import json
         data = json.loads(body)
         assert data["detail"] == "Not found"
 
@@ -120,7 +123,6 @@ class TestErrorHandlers:
             extra={"errors": ["field1"]}
         )
 
-        import json
         data = json.loads(body)
         assert data["detail"] == "Validation failed"
         assert data["extra"] == {"errors": ["field1"]}
@@ -131,7 +133,6 @@ class TestErrorHandlers:
         status, headers, body = http_exception_handler(exc)
 
         assert status == 404
-        import json
         data = json.loads(body)
         assert data["detail"] == "User not found"
 
@@ -159,7 +160,6 @@ class TestErrorHandlers:
         status, headers, body = request_validation_error_handler(exc)
 
         assert status == 422
-        import json
         data = json.loads(body)
         assert isinstance(data["detail"], list)
         assert len(data["detail"]) == 1
@@ -178,7 +178,6 @@ class TestErrorHandlers:
         status, headers, body = response_validation_error_handler(exc)
 
         assert status == 500
-        import json
         data = json.loads(body)
         assert data["detail"] == "Response validation error"
         assert "validation_errors" in data["extra"]
@@ -189,7 +188,6 @@ class TestErrorHandlers:
         status, headers, body = generic_exception_handler(exc, debug=False)
 
         assert status == 500
-        import json
         data = json.loads(body)
         assert data["detail"] == "Internal Server Error"
         # Should not expose details in production
@@ -198,8 +196,6 @@ class TestErrorHandlers:
     def test_generic_exception_handler_debug(self):
         """Test generic exception handler in debug mode returns HTML."""
         # Configure Django settings for ExceptionReporter
-        import django
-        from django.conf import settings
         if not settings.configured:
             settings.configure(
                 DEBUG=True,
@@ -237,8 +233,6 @@ class TestErrorHandlers:
 
     def test_generic_exception_handler_debug_without_request(self):
         """Test generic exception handler in debug mode works without request."""
-        import django
-        from django.conf import settings
         if not settings.configured:
             settings.configure(
                 DEBUG=True,
@@ -263,12 +257,10 @@ class TestErrorHandlers:
     def test_generic_exception_handler_debug_fallback_to_json(self):
         """Test generic exception handler falls back to JSON if HTML generation fails."""
         # Mock ExceptionReporter to raise an exception
-        from unittest.mock import patch
-
         exc = ValueError("Test exception")
 
-        # Mock the import inside generic_exception_handler
-        with patch('django.views.debug.ExceptionReporter', side_effect=Exception("HTML failed")):
+        # Mock the ExceptionReporter where it's used (in error_handlers module)
+        with patch('django_bolt.error_handlers.ExceptionReporter', side_effect=Exception("HTML failed")):
             status, headers, body = generic_exception_handler(exc, debug=True, request=None)
 
         assert status == 500, "Fallback must return 500 status"
@@ -277,7 +269,6 @@ class TestErrorHandlers:
             "Fallback must return JSON content type"
 
         # Should fall back to JSON with traceback
-        import json
         data = json.loads(body)
         assert "ValueError" in data["detail"], \
             "Fallback JSON must contain exception type in detail"
@@ -311,7 +302,6 @@ class TestErrorHandlers:
                     "HTML traceback must show function names"
             else:
                 # Fallback JSON path
-                import json
                 data = json.loads(body)
                 traceback_lines = data["extra"]["traceback"]
                 traceback_str = "".join(traceback_lines)
@@ -326,7 +316,6 @@ class TestErrorHandlers:
         status, headers, body = handle_exception(exc)
 
         assert status == 404
-        import json
         data = json.loads(body)
         assert data["detail"] == "Resource not found"
 
@@ -337,7 +326,6 @@ class TestErrorHandlers:
         status, headers, body = handle_exception(exc)
 
         assert status == 422
-        import json
         data = json.loads(body)
         assert isinstance(data["detail"], list)
 
@@ -347,14 +335,11 @@ class TestErrorHandlers:
         status, headers, body = handle_exception(exc, debug=False)
 
         assert status == 500
-        import json
         data = json.loads(body)
         assert data["detail"] == "Internal Server Error"
 
     def test_handle_exception_with_request_parameter(self):
         """Test that handle_exception properly passes request to generic_exception_handler."""
-        import django
-        from django.conf import settings
         if not settings.configured:
             settings.configure(
                 DEBUG=True,
@@ -384,8 +369,6 @@ class TestErrorHandlers:
 
     def test_handle_exception_respects_django_debug_setting(self):
         """Test that handle_exception uses Django DEBUG setting when debug param is not provided."""
-        from django.conf import settings
-
         # Store original DEBUG setting
         original_debug = settings.DEBUG
 
@@ -455,7 +438,6 @@ class TestExceptionIntegration:
         )
 
         status, headers, body = http_exception_handler(exc)
-        import json
         data = json.loads(body)
 
         assert data["detail"] == "Invalid input"
@@ -472,7 +454,6 @@ class TestExceptionIntegration:
         exc = RequestValidationError(errors)
         status, headers, body = request_validation_error_handler(exc)
 
-        import json
         data = json.loads(body)
         assert len(data["detail"]) == 3
 

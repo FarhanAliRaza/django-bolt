@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, List, Union
 import msgspec
 
+from .. import _json
+
 if TYPE_CHECKING:
     from typing import Dict
 
@@ -57,7 +59,6 @@ class OpenAPIRenderPlugin(ABC):
         Returns:
             The rendered JSON as string.
         """
-        from .. import _json
         return _json.encode(openapi_schema).decode('utf-8')
 
     @abstractmethod
@@ -121,6 +122,7 @@ class YamlRenderPlugin(OpenAPIRenderPlugin):
     def render(self, openapi_schema: Dict[str, Any], schema_url: str) -> str:
         """Render OpenAPI schema as YAML."""
         try:
+            # Import yaml here because it's an optional dependency
             import yaml
             return yaml.dump(openapi_schema, default_flow_style=False)
         except ImportError:

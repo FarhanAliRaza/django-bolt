@@ -21,6 +21,7 @@ from django.contrib.auth import get_user_model
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from .revocation import create_revocation_handler
 
 @dataclass
 class AuthContext:
@@ -119,9 +120,6 @@ class JWTAuthentication(BaseAuthentication):
         # If no secret provided, try to get Django's SECRET_KEY
         if self.secret is None:
             try:
-                from django.conf import settings
-                from django.core.exceptions import ImproperlyConfigured
-
                 if not hasattr(settings, 'SECRET_KEY'):
                     raise ImproperlyConfigured(
                         "JWTAuthentication requires a 'secret' parameter or Django's SECRET_KEY setting. "
@@ -136,7 +134,6 @@ class JWTAuthentication(BaseAuthentication):
                         "Please provide a non-empty 'secret' parameter or set Django's SECRET_KEY."
                     )
             except ImportError:
-                from django.core.exceptions import ImproperlyConfigured
                 raise ImproperlyConfigured(
                     "JWTAuthentication requires Django to be installed and configured, "
                     "or a 'secret' parameter must be explicitly provided."
@@ -153,7 +150,6 @@ class JWTAuthentication(BaseAuthentication):
 
         # If revocation_store provided, create handler from it
         if revocation_store and not revoked_token_handler:
-            from .revocation import create_revocation_handler
             self.revoked_token_handler = create_revocation_handler(revocation_store)
 
     @property

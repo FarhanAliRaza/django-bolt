@@ -2,8 +2,12 @@
 
 This file tests the TestClient (V2) that routes through Rust with per-instance state.
 """
+from typing import Annotated
+
+import msgspec
 import pytest
 from django_bolt import BoltAPI
+from django_bolt.param_functions import Header
 from django_bolt.testing import TestClient
 
 
@@ -55,7 +59,6 @@ def test_query_parameters():
 
 def test_post_with_body():
     """Test POST with JSON body."""
-    import msgspec
 
     class UserCreate(msgspec.Struct):
         name: str
@@ -118,9 +121,6 @@ def test_multiple_methods():
 
 def test_headers():
     """Test request headers."""
-    from django_bolt.param_functions import Header
-    from typing import Annotated
-
     api = BoltAPI()
 
     @api.get("/with-header")

@@ -5,6 +5,7 @@ use bytes::Bytes;
 use futures_util::stream;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyTuple};
+use std::io::ErrorKind;
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -346,8 +347,8 @@ pub async fn handle_request(
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
 
-    // Unified handler path: all handlers (async/sync inline/sync spawn_blocking) return coroutines from _dispatch
-    // The handler type (is_async, inline) only matters in Python, not in Rust
+    // All handlers (sync and async) go through async dispatch path
+    // Sync handlers are executed in thread pool via sync_to_thread() in Python layer
     let fut = match Python::attach(|py| -> PyResult<_> {
         let dispatch = state.dispatch.clone_ref(py);
         let handler = route_handler.clone_ref(py);
@@ -551,7 +552,6 @@ pub async fn handle_request(
                         }
                         Err(e) => {
                             // Return appropriate HTTP status based on error kind
-                            use std::io::ErrorKind;
                             match e.kind() {
                                 ErrorKind::NotFound => HttpResponse::NotFound()
                                     .content_type("text/plain; charset=utf-8")
@@ -689,7 +689,6 @@ pub async fn handle_request(
                                 builder.body(response_body)
                             }
                             Err(e) => {
-                                use std::io::ErrorKind;
                                 match e.kind() {
                                     ErrorKind::NotFound => HttpResponse::NotFound()
                                         .content_type("text/plain; charset=utf-8")

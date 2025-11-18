@@ -1,12 +1,13 @@
 use actix_web::web::Bytes;
+use futures_util::future::join_all;
 use futures_util::{stream, Stream};
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyMemoryView, PyString};
 use std::pin::Pin;
-use tokio::sync::mpsc;
 use std::sync::atomic::Ordering;
+use tokio::sync::mpsc;
 
-use crate::state::{TASK_LOCALS, ACTIVE_SYNC_STREAMING_THREADS, get_max_sync_streaming_threads};
+use crate::state::{get_max_sync_streaming_threads, ACTIVE_SYNC_STREAMING_THREADS, TASK_LOCALS};
 // Streaming uses direct_stream only in higher-level handler; not directly here
 
 // Buffer pool imports removed (unused)
@@ -108,8 +109,6 @@ fn create_python_stream_with_config(
     if is_async_final {
         let fast_path = fast_path_threshold;
         tokio::spawn(async move {
-            use futures_util::future::join_all;
-
             let is_optimized_batcher = Python::attach(|py| {
                 if let Ok(name) = resolved_target_final.bind(py).get_type().name() {
                     name.to_string().contains("OptimizedStreamBatcher")

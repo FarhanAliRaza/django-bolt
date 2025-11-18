@@ -4,6 +4,7 @@
 /// Key design: Reuses production middleware code (rate limiting, CORS, auth, guards)
 /// to ensure tests validate the actual request pipeline. HttpResponse is converted
 /// to simple tuples at the end for easy test assertions.
+use actix_web::body::MessageBody;
 use actix_web::HttpResponse;
 use ahash::AHashMap;
 use pyo3::prelude::*;
@@ -35,7 +36,6 @@ fn http_response_to_tuple(response: HttpResponse) -> (u16, Vec<(String, String)>
     let body = response.into_body();
     // Extract body bytes from actix_web::body::BoxBody
     // For testing, we assume the body is already materialized
-    use actix_web::body::MessageBody;
     let body_bytes = match body.try_into_bytes() {
         Ok(bytes) => bytes.to_vec(),
         Err(_) => Vec::new(), // Streaming bodies return empty for now
@@ -51,7 +51,9 @@ fn http_response_to_tuple(response: HttpResponse) -> (u16, Vec<(String, String)>
 /// 1. Takes raw request parameters instead of Actix types
 /// 2. Runs synchronously for test execution
 /// 3. Returns simple tuple instead of HttpResponse
+/// 4. Supports both async and sync dispatch
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn handle_test_request(
     py: Python<'_>,
     method: String,
@@ -165,6 +167,8 @@ pub fn handle_test_request(
     };
     let request_obj = Py::new(py, request)?;
 
+    // All handlers (sync and async) go through async dispatch
+    // Sync handlers are executed in thread pool via sync_to_thread() in Python layer
     // Create or get event loop locals
     let locals_owned;
     let locals = if let Some(globals) = TASK_LOCALS.get() {
@@ -174,7 +178,7 @@ pub fn handle_test_request(
         &locals_owned
     };
 
-    // Call dispatch to get coroutine
+    // Call dispatch to get coroutine (works for both sync and async handlers)
     let coroutine = dispatch.call1(py, (route, request_obj, handler_id))?;
 
     // Convert to future and await it

@@ -7,6 +7,8 @@ that are compiled to Rust types for zero-GIL performance.
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
+from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 
 
 class BasePermission(ABC):
@@ -210,8 +212,6 @@ def get_default_permission_classes() -> List[BasePermission]:
     returns [AllowAny()] (no restrictions by default).
     """
     try:
-        from django.conf import settings
-        from django.core.exceptions import ImproperlyConfigured
         try:
             if hasattr(settings, 'BOLT_DEFAULT_PERMISSION_CLASSES'):
                 return settings.BOLT_DEFAULT_PERMISSION_CLASSES

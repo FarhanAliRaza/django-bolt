@@ -14,6 +14,8 @@ from asgiref.sync import sync_to_async
 
 from .typing import is_msgspec_struct, is_optional, unwrap_optional
 from .typing import HandlerMetadata
+from .concurrency import sync_to_thread
+from .exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
 
 __all__ = [
     "convert_primitive",
@@ -54,14 +56,12 @@ def convert_primitive(value: str, annotation: Any) -> Any:
         try:
             return int(value)
         except ValueError:
-            from .exceptions import HTTPException
             raise HTTPException(422, detail=f"Invalid integer value: '{value}'")
 
     if tp is float:
         try:
             return float(value)
         except ValueError:
-            from .exceptions import HTTPException
             raise HTTPException(422, detail=f"Invalid float value: '{value}'")
 
     if tp is bool:
@@ -218,8 +218,6 @@ def create_body_extractor(name: str, annotation: Any) -> Callable:
     Uses cached msgspec decoder for maximum performance.
     Converts msgspec.DecodeError (JSON parsing errors) to RequestValidationError for proper 422 responses.
     """
-    from .exceptions import RequestValidationError, parse_msgspec_decode_error
-
     if is_msgspec_struct(annotation):
         decoder = get_msgspec_decoder(annotation)
         def extract(body_bytes: bytes) -> Any:
@@ -324,7 +322,7 @@ async def coerce_to_response_type_async(value: Any, annotation: Any, meta: Handl
         values_qs = value.values(*field_names)
 
         # Convert QuerySet to list (this triggers SQL execution)
-        # Using sync_to_async(list) is MUCH faster than async for iteration
+        # Using sync_to_thread(list) is MUCH faster than async for iteration
         #
         # Django's async for implementation (django/db/models/query.py:54-68):
         #   - Uses GET_ITERATOR_CHUNK_SIZE = 100 (django/db/models/sql/constants.py:7)
@@ -332,7 +330,7 @@ async def coerce_to_response_type_async(value: Any, annotation: Any, meta: Handl
         #   - For 10,000 items: 100 sync_to_async calls (~30-50ms overhead)
         #   - For 100,000 items: 1000 sync_to_async calls (~300-500ms overhead)
         #
-        # Our approach: 1 sync_to_async call total (~0.3ms overhead)
+        # Our approach: 1 sync_to_thread call total (minimal overhead)
         # Performance gain: 100-1000x fewer context switches
         #
         # Memory tradeoff:
@@ -358,6 +356,7 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
       - msgspec.Struct: build mapping from attributes if needed
       - list[T]: recursively coerce elements
       - dict/primitive: defer to msgspec.convert
+      - Django QuerySet: convert to list using .values()
 
     Args:
         value: Value to coerce
@@ -367,6 +366,23 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
     Returns:
         Coerced value
     """
+    # Handle Django QuerySets - convert to list using .values()
+    # Works for both sync and async handlers (sync handlers run in thread pool)
+    if meta and "response_field_names" in meta and hasattr(value, '_iterable_class') and hasattr(value, 'model'):
+        # Use pre-computed field names (computed at route registration time)
+        field_names = meta["response_field_names"]
+
+        # Call .values() to get a ValuesQuerySet
+        values_qs = value.values(*field_names)
+
+        # Convert QuerySet to list (this triggers SQL execution)
+        items = list(values_qs)
+
+        # Let msgspec validate and convert entire list in one batch
+        result = msgspec.convert(items, annotation)
+
+        return result
+
     # Fast path: if annotation is a primitive type (dict, list, str, int, etc.),
     # just return the value without validation. Validation only makes sense for
     # structured types like msgspec.Struct or parameterized generics.

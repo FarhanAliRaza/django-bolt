@@ -6,6 +6,8 @@ Tests the new DRF-inspired guards and authentication classes.
 import jwt
 import time
 import pytest
+import django
+from django.conf import settings
 from django_bolt import BoltAPI
 from django_bolt.auth import (
     JWTAuthentication,
@@ -267,9 +269,6 @@ class TestMetadataCompilation:
 
     def test_global_auth_defaults(self):
         """Test that global auth defaults are used when no per-route auth"""
-        import django
-        from django.conf import settings
-
         if not settings.configured:
             settings.configure(
                 SECRET_KEY="test-key",

@@ -7,7 +7,9 @@ Revocation is OPTIONAL - only checked if user provides a handler.
 
 from abc import ABC, abstractmethod
 from typing import Optional, Set
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+from django.core.cache import caches
+from django.apps import apps
 
 
 class RevocationStore(ABC):
@@ -151,7 +153,6 @@ class DjangoCacheRevocation(RevocationStore):
     def cache(self):
         """Lazy-load cache to avoid import issues."""
         if self._cache is None:
-            from django.core.cache import caches
             self._cache = caches[self.cache_alias]
         return self._cache
 
@@ -235,7 +236,6 @@ class DjangoORMRevocation(RevocationStore):
     def model(self):
         """Lazy-load model to avoid import issues."""
         if self._model is None:
-            from django.apps import apps
             app_label, model_name = self.model_path.split('.')
             self._model = apps.get_model(app_label, model_name)
         return self._model
@@ -244,8 +244,6 @@ class DjangoORMRevocation(RevocationStore):
         return await self.model.objects.filter(jti=jti).aexists()
 
     async def revoke(self, jti: str, ttl: Optional[int] = None) -> None:
-        from datetime import datetime, timezone, timedelta
-
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl or 86400 * 30)
 
         await self.model.objects.aupdate_or_create(

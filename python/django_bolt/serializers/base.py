@@ -98,40 +98,46 @@ class Serializer(msgspec.Struct):
 
         This is called ONCE per class (in __init_subclass__), not per instance.
         This is critical for performance - moving from 10K ops/sec to 1.75M ops/sec!
-        """
-        try:
-            # For local classes (defined in function scope), we need to provide the localns
-            # Get the frame of the class definition to access local variables
-            frame = inspect.currentframe()
-            # Walk up the stack to find the class definition frame
-            localns = {}
-            try:
-                for _ in range(10):  # Check up to 10 frames up
-                    if frame is None:
-                        break
-                    localns.update(frame.f_locals)
-                    frame = frame.f_back
-            finally:
-                del frame  # Avoid reference cycles
 
-            # Try to resolve type hints with local namespace
+        Note: Function-scoped serializer classes (classes defined inside functions) have
+        limited support. For best results, define serializers at module level.
+        """
+        frame = None
+        try:
+            # Strategy 1: Try with local namespace for function-scoped classes
+            # This handles edge cases but adds complexity
+            frame = inspect.currentframe()
+            localns = {}
+
+            # Walk up to 10 frames to find class definition context
+            for _ in range(10):
+                if frame is None:
+                    break
+                localns.update(frame.f_locals)
+                frame = frame.f_back
+
+            # Resolve type hints with local namespace
             if sys.version_info >= (3, 11):
                 hints = get_type_hints(cls, globalns=None, localns=localns, include_extras=True)
             else:
-                # For Python < 3.11, we need to use typing_extensions
+                # For Python < 3.11, try typing_extensions first
                 try:
                     from typing_extensions import get_type_hints as get_type_hints_ext
                     hints = get_type_hints_ext(cls, globalns=None, localns=localns, include_extras=True)
                 except ImportError:
-                    # Try stdlib get_type_hints without include_extras
                     hints = get_type_hints(cls, globalns=None, localns=localns)
+
         except Exception:
-            # If all else fails, try without localns
+            # Strategy 2: Fallback without local namespace (module-level classes)
             try:
                 hints = get_type_hints(cls)
-            except:
-                # Last resort: use annotations directly (will be strings if PEP 563 is active)
+            except Exception:
+                # Last resort: use raw annotations
                 hints = getattr(cls, "__annotations__", {})
+        finally:
+            # Clean up frame references to prevent memory leaks
+            if frame is not None:
+                del frame
 
         # Cache the type hints
         cls.__cached_type_hints__ = hints
@@ -181,7 +187,7 @@ class Serializer(msgspec.Struct):
         """Execute all field validators in order."""
         # First, validate nested/literal fields if any exist
         if self.__has_nested_or_literal__:
-            self._validate_nested_fields()
+            self._validate_nested_and_literal_fields()
 
         # Then run custom field validators if any exist
         if self.__has_field_validators__:
@@ -190,17 +196,25 @@ class Serializer(msgspec.Struct):
             _setattr = msgspec_structs.force_setattr
 
             for field_name, validators in self.__field_validators__.items():
-                # Batch validation: getattr once, setattr once per field (optimization #1)
-                # Saves ~80-150ns per field with multiple validators
-                current_value = getattr(self, field_name)
-
                 try:
-                    # Run all validators for this field, accumulating the value
-                    for validator in validators:
-                        current_value = validator(_class, current_value)
+                    # Optimization #4: Fast path for single validator (skip loop overhead)
+                    if len(validators) == 1:
+                        validator = validators[0]
+                        current_value = getattr(self, field_name)
+                        new_value = validator(_class, current_value)
+                        _setattr(self, field_name, new_value)
+                    else:
+                        # Batch validation: getattr once, setattr once per field (optimization #1)
+                        # Saves ~80-150ns per field with multiple validators
+                        current_value = getattr(self, field_name)
 
-                    # Update the field once with the final value
-                    _setattr(self, field_name, current_value)
+                        # Run all validators for this field, accumulating the value
+                        for validator in validators:
+                            current_value = validator(_class, current_value)
+
+                        # Update the field once with the final value
+                        _setattr(self, field_name, current_value)
+
                 except (ValueError, TypeError) as e:
                     # Convert to ValidationError with field context
                     raise MsgspecValidationError(f"{field_name}: {str(e)}") from e
@@ -208,8 +222,14 @@ class Serializer(msgspec.Struct):
                     # Re-raise other exceptions
                     raise
 
-    def _validate_nested_fields(self) -> None:
-        """Validate any nested serializer fields and Literal choice fields using cached metadata."""
+    def _validate_nested_and_literal_fields(self) -> None:
+        """
+        Validate nested serializer fields and Literal (choice) fields using cached metadata.
+
+        This method handles two types of validation:
+        1. Nested fields: Fields with Nested() annotation that contain serializer instances
+        2. Literal fields: Fields with Literal[] type hints that restrict values to specific choices
+        """
         # Cache force_setattr for nested field validation (optimization #2)
         _setattr = msgspec_structs.force_setattr
 
@@ -331,71 +351,125 @@ class Serializer(msgspec.Struct):
         return msgspec.json.decode(json_data, type=cls)
 
     @classmethod
-    def from_model(cls: type[T], instance: Model) -> T:
+    def from_model(
+        cls: type[T],
+        instance: Model,
+        *,
+        _visited: set[tuple[type, int]] | None = None,
+        _depth: int = 0,
+        max_depth: int = 10,
+    ) -> T:
         """
         Create a serializer instance from a Django model instance.
 
         Args:
             instance: A Django model instance
+            _visited: Internal - set of visited (model_class, pk) tuples to detect cycles
+            _depth: Internal - current recursion depth
+            max_depth: Maximum recursion depth to prevent infinite loops (default: 10)
 
         Returns:
             A new Serializer instance with fields populated from the model
+
+        Raises:
+            ValueError: If circular reference detected or max_depth exceeded
 
         Example:
             user = await User.objects.aget(id=1)
             user_data = UserPublicSerializer.from_model(user)
         """
+        # Security: Prevent infinite recursion from circular relationships
+        if _depth > max_depth:
+            raise ValueError(
+                f"Maximum recursion depth ({max_depth}) exceeded in from_model(). "
+                f"This may indicate a circular reference in your model relationships. "
+                f"Current serializer: {cls.__name__}, instance: {instance.__class__.__name__}(pk={instance.pk})"
+            )
 
-        # Use cached nested field metadata (no expensive introspection!)
-        data = {}
-        for field_name in cls.__struct_fields__:
-            if not hasattr(instance, field_name):
-                continue
+        # Track visited instances to detect circular references
+        if _visited is None:
+            _visited = set()
 
-            value = getattr(instance, field_name)
+        # Create a unique key for this instance (model class + primary key)
+        instance_key = (instance.__class__, instance.pk)
 
-            # Check if this field has a nested serializer (from cache!)
-            nested_config = cls.__nested_fields__.get(field_name)
+        if instance_key in _visited:
+            raise ValueError(
+                f"Circular reference detected in from_model(): "
+                f"{instance.__class__.__name__}(pk={instance.pk}) has already been visited. "
+                f"Avoid bidirectional nested serializers (e.g., Author.posts -> Post.author). "
+                f"Use separate serializers with ID-only fields for one direction."
+            )
 
-            if nested_config:
-                # This field is a nested serializer - extract full object data
-                if nested_config.many:
-                    # Many-to-many or reverse relationship
-                    if hasattr(value, "all") and callable(getattr(value, "all", None)):
-                        # Convert each related object to a dict for the nested serializer
-                        items = []
-                        for item in value.all():
-                            if isinstance(item, DjangoModel):
-                                # Recursively call from_model on the nested serializer
-                                items.append(nested_config.serializer_class.from_model(item))
-                        data[field_name] = items
-                    elif isinstance(value, list):
-                        data[field_name] = value
+        # Mark this instance as visited
+        _visited.add(instance_key)
+
+        try:
+            # Use cached nested field metadata (no expensive introspection!)
+            data = {}
+            for field_name in cls.__struct_fields__:
+                if not hasattr(instance, field_name):
+                    continue
+
+                value = getattr(instance, field_name)
+
+                # Check if this field has a nested serializer (from cache!)
+                nested_config = cls.__nested_fields__.get(field_name)
+
+                if nested_config:
+                    # This field is a nested serializer - extract full object data
+                    if nested_config.many:
+                        # Many-to-many or reverse relationship
+                        if hasattr(value, "all") and callable(getattr(value, "all", None)):
+                            # Convert each related object to a dict for the nested serializer
+                            items = []
+                            for item in value.all():
+                                if isinstance(item, DjangoModel):
+                                    # Recursively call from_model with circular reference tracking
+                                    items.append(
+                                        nested_config.serializer_class.from_model(
+                                            item,
+                                            _visited=_visited.copy(),  # Pass copy to allow siblings
+                                            _depth=_depth + 1,
+                                            max_depth=max_depth,
+                                        )
+                                    )
+                            data[field_name] = items
+                        elif isinstance(value, list):
+                            data[field_name] = value
+                        else:
+                            data[field_name] = []
                     else:
-                        data[field_name] = []
+                        # Single nested object (ForeignKey)
+                        if isinstance(value, DjangoModel):
+                            # Convert to nested serializer with circular reference tracking
+                            data[field_name] = nested_config.serializer_class.from_model(
+                                value,
+                                _visited=_visited.copy(),  # Pass copy to allow siblings
+                                _depth=_depth + 1,
+                                max_depth=max_depth,
+                            )
+                        else:
+                            data[field_name] = value
                 else:
-                    # Single nested object (ForeignKey)
+                    # Regular field - not nested
                     if isinstance(value, DjangoModel):
-                        # Convert to nested serializer
-                        data[field_name] = nested_config.serializer_class.from_model(value)
+                        # Related object without nested serializer - use ID
+                        data[field_name] = value.pk
+                    elif hasattr(value, "all") and callable(getattr(value, "all", None)):
+                        # Manager without nested serializer - extract IDs
+                        try:
+                            data[field_name] = [item.pk for item in value.all()]
+                        except Exception:
+                            data[field_name] = value
                     else:
+                        # Regular field
                         data[field_name] = value
-            else:
-                # Regular field - not nested
-                if isinstance(value, DjangoModel):
-                    # Related object without nested serializer - use ID
-                    data[field_name] = value.pk
-                elif hasattr(value, "all") and callable(getattr(value, "all", None)):
-                    # Manager without nested serializer - extract IDs
-                    try:
-                        data[field_name] = [item.pk for item in value.all()]
-                    except Exception:
-                        data[field_name] = value
-                else:
-                    # Regular field
-                    data[field_name] = value
 
-        return cls(**data)
+            return cls(**data)
+        finally:
+            # Clean up: remove this instance from visited set
+            _visited.discard(instance_key)
 
     def to_dict(self, *, exclude_unset: bool = False) -> dict[str, Any]:
         """

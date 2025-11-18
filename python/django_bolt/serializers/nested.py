@@ -11,6 +11,10 @@ if TYPE_CHECKING:
 T = TypeVar("T", bound="Serializer")
 logger = logging.getLogger(__name__)
 
+# Security: Maximum number of items allowed in nested many relationships
+# This prevents DoS attacks via extremely large nested object lists
+DEFAULT_MAX_NESTED_ITEMS = 1000
+
 
 class NestedConfig:
     """Configuration for a nested serializer field."""
@@ -19,6 +23,7 @@ class NestedConfig:
         self,
         serializer_class: type[Serializer],
         many: bool = False,
+        max_items: int | None = DEFAULT_MAX_NESTED_ITEMS,
     ):
         """
         Initialize nested serializer configuration.
@@ -26,14 +31,17 @@ class NestedConfig:
         Args:
             serializer_class: The Serializer class to use for validation
             many: If True, expects a list of objects (for M2M relationships)
+            max_items: Maximum number of items allowed in many relationships (default: 1000)
+                      Set to None to disable limit (not recommended for production)
         """
         self.serializer_class = serializer_class
         self.many = many
+        self.max_items = max_items
 
     def __repr__(self) -> str:
         return (
             f"NestedConfig(serializer={self.serializer_class.__name__}, "
-            f"many={self.many})"
+            f"many={self.many}, max_items={self.max_items})"
         )
 
 
@@ -41,6 +49,7 @@ def Nested(
     serializer_class: type[Serializer],
     *,
     many: bool = False,
+    max_items: int | None = DEFAULT_MAX_NESTED_ITEMS,
 ) -> NestedConfig:
     """
     Mark a field as a nested serializer that validates related objects.
@@ -51,9 +60,14 @@ def Nested(
     Args:
         serializer_class: The Serializer class for the related object(s)
         many: If True, field contains a list (for M2M or reverse FK relationships)
+        max_items: Maximum number of items allowed in many relationships (default: 1000)
+                  Set to None to disable limit (not recommended for production)
 
     Returns:
         NestedConfig that can be used in field annotations
+
+    Raises:
+        TypeError: If serializer_class is not a Serializer subclass
 
     Examples:
         Single nested object (ForeignKey with select_related):
@@ -66,14 +80,37 @@ def Nested(
                 title: str
                 tags: Annotated[list[TagSerializer], Nested(TagSerializer, many=True)]
 
+        With custom max_items limit:
+            class BookSerializer(Serializer):
+                title: str
+                tags: Annotated[list[TagSerializer], Nested(TagSerializer, many=True, max_items=500)]
+
         Simple ID reference (no Nested wrapper needed):
             class BookListSerializer(Serializer):
                 title: str
                 author_id: int  # Just the ID, no nested object
     """
+    # Type safety: Validate that serializer_class is actually a Serializer subclass
+    # This catches errors at definition time rather than at validation time
+    from .base import Serializer as BaseSerializer
+
+    if not isinstance(serializer_class, type):
+        raise TypeError(
+            f"serializer_class must be a class, got {type(serializer_class).__name__}. "
+            f"Usage: Nested(MySerializer) not Nested(MySerializer())"
+        )
+
+    if not issubclass(serializer_class, BaseSerializer):
+        raise TypeError(
+            f"serializer_class must be a Serializer subclass, "
+            f"got {serializer_class.__name__}. "
+            f"Make sure your serializer inherits from django_bolt.serializers.Serializer"
+        )
+
     return NestedConfig(
         serializer_class=serializer_class,
         many=many,
+        max_items=max_items,
     )
 
 
@@ -149,6 +186,15 @@ def _validate_many_nested(
     if not isinstance(value, list):
         raise ValueError(
             f"{field_name}: Expected list for many=True relationship, got {type(value).__name__}"
+        )
+
+    # Security: Check list size to prevent DoS attacks
+    if config.max_items is not None and len(value) > config.max_items:
+        raise ValueError(
+            f"{field_name}: Too many items ({len(value)}). "
+            f"Maximum allowed: {config.max_items}. "
+            f"This limit prevents resource exhaustion attacks. "
+            f"If you need more items, increase max_items in Nested() configuration."
         )
 
     result = []

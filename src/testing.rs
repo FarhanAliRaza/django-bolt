@@ -4,6 +4,7 @@
 /// Key design: Reuses production middleware code (rate limiting, CORS, auth, guards)
 /// to ensure tests validate the actual request pipeline. HttpResponse is converted
 /// to simple tuples at the end for easy test assertions.
+use actix_web::body::MessageBody;
 use actix_web::HttpResponse;
 use ahash::AHashMap;
 use pyo3::prelude::*;
@@ -35,7 +36,6 @@ fn http_response_to_tuple(response: HttpResponse) -> (u16, Vec<(String, String)>
     let body = response.into_body();
     // Extract body bytes from actix_web::body::BoxBody
     // For testing, we assume the body is already materialized
-    use actix_web::body::MessageBody;
     let body_bytes = match body.try_into_bytes() {
         Ok(bytes) => bytes.to_vec(),
         Err(_) => Vec::new(), // Streaming bodies return empty for now

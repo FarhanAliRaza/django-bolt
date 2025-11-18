@@ -17,14 +17,18 @@ class-based views (APIView, ViewSet, ModelViewSet):
 import pytest
 import msgspec
 from typing import Annotated
-from django_bolt import BoltAPI
+from django.contrib.auth.models import User, Permission
+from django.contrib.contenttypes.models import ContentType
+from django_bolt import BoltAPI, action
 from django_bolt.testing import TestClient
 from django_bolt.views import APIView, ViewSet, ModelViewSet
 from django_bolt.params import Query, Path, Body, Header, Cookie, Form, File, Depends
 from django_bolt.exceptions import HTTPException
 from django_bolt.responses import StreamingResponse, FileResponse
-from django_bolt.auth import JWTAuthentication, APIKeyAuthentication
-from django_bolt.auth.guards import IsAuthenticated, IsAdminUser, IsStaff, HasPermission
+from django_bolt.auth import JWTAuthentication, APIKeyAuthentication, IsAuthenticated
+from django_bolt.auth.guards import IsAdminUser, IsStaff, HasPermission
+from django_bolt.auth.jwt_utils import create_jwt_for_user, get_current_user
+from django_bolt.middleware import cors, rate_limit, skip_middleware
 
 
 # --- Fixtures ---

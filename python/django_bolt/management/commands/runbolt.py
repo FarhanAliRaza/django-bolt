@@ -1,11 +1,14 @@
 import importlib
+import os
+import signal
 import sys
-from django.core.management.base import BaseCommand, CommandError
-from django.conf import settings
-from django.apps import apps
 
-from django_bolt.api import BoltAPI
+from django.apps import apps
+from django.conf import settings
+from django.core.management.base import BaseCommand, CommandError
+
 from django_bolt import _core
+from django_bolt.api import BoltAPI
 
 
 class Command(BaseCommand):
@@ -81,11 +84,9 @@ class Command(BaseCommand):
                     "Upgrade Django or use --no-dev mode."
                 )
             )
-            import sys
             sys.exit(1)
 
         # Print dev mode message only once (in the main reloader process)
-        import os
         if os.environ.get('RUN_MAIN') == 'true':
             self.stdout.write(
                 self.style.SUCCESS("[django-bolt] 🔥 Development mode enabled (auto-reload on file changes)")
@@ -101,10 +102,6 @@ class Command(BaseCommand):
 
     def start_multiprocess(self, options):
         """Start multiple processes with SO_REUSEPORT"""
-        import os
-        import sys
-        import signal
-        
         processes = options['processes']
         self.stdout.write(f"[django-bolt] Starting {processes} processes with SO_REUSEPORT")
         
@@ -152,11 +149,13 @@ class Command(BaseCommand):
     def start_single_process(self, options, process_id=None, dev_mode=False):
         """Start a single process server"""
         # Setup Django logging once at server startup (one-shot, respects existing LOGGING)
+        # Import here to avoid circular imports during module initialization
         from django_bolt.logging.config import setup_django_logging
+        from django_bolt.responses import initialize_file_response_settings
+
         setup_django_logging()
 
         # Initialize FileResponse settings cache once at server startup
-        from django_bolt.responses import initialize_file_response_settings
         initialize_file_response_settings()
 
         if process_id is not None:
@@ -203,11 +202,13 @@ class Command(BaseCommand):
         admin_enabled = not options.get('no_admin', False)
 
         if admin_enabled:
+            # Import here to avoid circular imports during module initialization
+            from django_bolt.admin.admin_detection import detect_admin_url_prefix
+
             # Register admin routes
             merged_api._register_admin_routes(options['host'], options['port'])
 
             if merged_api._admin_routes_registered:
-                from django_bolt.admin.admin_detection import detect_admin_url_prefix
                 admin_prefix = detect_admin_url_prefix() or 'admin'
                 if process_id is not None:
                     self.stdout.write(f"[django-bolt] Process {process_id}: Django admin enabled at http://{options['host']}:{options['port']}/{admin_prefix}/")
@@ -233,7 +234,6 @@ class Command(BaseCommand):
         rust_routes = []
         for method, path, handler_id, handler in merged_api._routes:
             # Ensure matchit path syntax
-            from django_bolt.api import BoltAPI
             convert = getattr(merged_api, "_convert_path", None)
             norm_path = convert(path) if callable(convert) else path
             rust_routes.append((method, norm_path, handler_id, handler))
@@ -259,7 +259,6 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(f"[django-bolt] Starting server on http://{options['host']}:{options['port']}"))
             self.stdout.write(f"[django-bolt] Workers: {options['workers']}, Processes: {options['processes']}")
         # Set environment variable for Rust to read worker count, backlog, and keep-alive
-        import os
         os.environ['DJANGO_BOLT_WORKERS'] = str(options['workers'])
         os.environ['DJANGO_BOLT_BACKLOG'] = str(options['backlog'])
         if options.get('keep_alive') is not None:

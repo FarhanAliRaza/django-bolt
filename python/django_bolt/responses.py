@@ -2,6 +2,13 @@ import msgspec
 import inspect
 from typing import Any, Dict, Optional, List
 from pathlib import Path
+
+# Django import - may fail if Django not configured, kept at top for consistency
+try:
+    from django.conf import settings as django_settings
+except ImportError:
+    django_settings = None
+
 from . import _json
 
 # Cache for BOLT_ALLOWED_FILE_PATHS - loaded once at server startup
@@ -20,9 +27,8 @@ def initialize_file_response_settings():
         return
 
     try:
-        from django.conf import settings
-        if hasattr(settings, 'BOLT_ALLOWED_FILE_PATHS'):
-            allowed_paths = settings.BOLT_ALLOWED_FILE_PATHS
+        if django_settings and hasattr(django_settings, 'BOLT_ALLOWED_FILE_PATHS'):
+            allowed_paths = django_settings.BOLT_ALLOWED_FILE_PATHS
             if allowed_paths:
                 # Resolve all paths once at startup
                 _ALLOWED_FILE_PATHS_CACHE = [Path(p).resolve() for p in allowed_paths]

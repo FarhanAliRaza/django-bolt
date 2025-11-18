@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
+import sys
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar, get_args, get_origin, get_type_hints
+
+from django.db.models import Model as DjangoModel
 
 import msgspec
 from msgspec import ValidationError as MsgspecValidationError
@@ -95,13 +99,9 @@ class Serializer(msgspec.Struct):
         This is called ONCE per class (in __init_subclass__), not per instance.
         This is critical for performance - moving from 10K ops/sec to 1.75M ops/sec!
         """
-        import sys
-        from typing import get_origin, get_args, Literal
-
         try:
             # For local classes (defined in function scope), we need to provide the localns
             # Get the frame of the class definition to access local variables
-            import inspect
             frame = inspect.currentframe()
             # Walk up the stack to find the class definition frame
             localns = {}
@@ -116,7 +116,6 @@ class Serializer(msgspec.Struct):
 
             # Try to resolve type hints with local namespace
             if sys.version_info >= (3, 11):
-                from typing import get_type_hints
                 hints = get_type_hints(cls, globalns=None, localns=localns, include_extras=True)
             else:
                 # For Python < 3.11, we need to use typing_extensions
@@ -125,12 +124,10 @@ class Serializer(msgspec.Struct):
                     hints = get_type_hints_ext(cls, globalns=None, localns=localns, include_extras=True)
                 except ImportError:
                     # Try stdlib get_type_hints without include_extras
-                    from typing import get_type_hints
                     hints = get_type_hints(cls, globalns=None, localns=localns)
         except Exception:
             # If all else fails, try without localns
             try:
-                from typing import get_type_hints
                 hints = get_type_hints(cls)
             except:
                 # Last resort: use annotations directly (will be strings if PEP 563 is active)
@@ -348,7 +345,6 @@ class Serializer(msgspec.Struct):
             user = await User.objects.aget(id=1)
             user_data = UserPublicSerializer.from_model(user)
         """
-        from django.db.models import Model as DjangoModel
 
         # Use cached nested field metadata (no expensive introspection!)
         data = {}

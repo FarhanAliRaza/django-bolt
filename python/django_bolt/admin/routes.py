@@ -6,6 +6,9 @@ keeping the BoltAPI class lean and focused.
 """
 from typing import TYPE_CHECKING
 
+from django_bolt.admin.admin_detection import should_enable_admin, get_admin_route_patterns
+from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
+
 if TYPE_CHECKING:
     from django_bolt.api import BoltAPI
 
@@ -36,8 +39,6 @@ class AdminRouteRegistrar:
             return
 
         # Check if admin should be enabled
-        from django_bolt.admin.admin_detection import should_enable_admin, get_admin_route_patterns
-
         if not should_enable_admin():
             return
 
@@ -48,7 +49,6 @@ class AdminRouteRegistrar:
 
         # Lazy-load ASGI handler
         if self.api._asgi_handler is None:
-            from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
             self.api._asgi_handler = ASGIFallbackHandler(host, port)
 
         # Register admin routes for each method

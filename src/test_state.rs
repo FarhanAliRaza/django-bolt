@@ -16,7 +16,11 @@ use crate::router::{parse_query_string, Router};
 
 // Actix testing imports
 use actix_web::dev::Service;
-use actix_web::{test, web, App};
+use actix_web::http::header::{
+    ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+    ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE, VARY,
+};
+use actix_web::{test, web, App, HttpResponse};
 use bytes::Bytes;
 
 // Macro for conditional debug output - only enabled with DJANGO_BOLT_TEST_DEBUG env var
@@ -687,13 +691,6 @@ pub fn handle_actix_http_request(
                 // Handle CORS preflight - MUST validate origin per RFC 6454
                 if is_preflight && !should_skip_cors {
                     if let Some(ref cors_cfg) = cors_config {
-                        use actix_web::http::header::{
-                            ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
-                            ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
-                            ACCESS_CONTROL_MAX_AGE, VARY,
-                        };
-                        use actix_web::HttpResponse;
-
                         // Merge route-specific origins with global origins
                         let origins = if !cors_cfg.origins.is_empty() {
                             &cors_cfg.origins
@@ -815,15 +812,17 @@ pub fn handle_actix_http_request(
                 if let (Some(handler_id), Some(rate_cfg)) =
                     (handler_id_opt, rate_limit_config.as_ref())
                 {
-                    use crate::middleware::rate_limit::check_rate_limit;
                     // Convert headers to AHashMap
                     let header_map: ahash::AHashMap<String, String> = headers
                         .iter()
                         .map(|(k, v)| (k.to_lowercase(), v.clone()))
                         .collect();
-                    if let Some(response) =
-                        check_rate_limit(handler_id, &header_map, None, rate_cfg)
-                    {
+                    if let Some(response) = crate::middleware::rate_limit::check_rate_limit(
+                        handler_id,
+                        &header_map,
+                        None,
+                        rate_cfg,
+                    ) {
                         return Ok(response);
                     }
                 }
@@ -861,11 +860,6 @@ pub fn handle_actix_http_request(
                         // Add CORS headers to response if not skipped
                         if !should_skip_cors {
                             if let Some(ref cors_cfg) = cors_config {
-                                use actix_web::http::header::{
-                                    ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN,
-                                    ACCESS_CONTROL_EXPOSE_HEADERS, VARY,
-                                };
-
                                 // Merge route-specific origins with global origins
                                 let origins = if !cors_cfg.origins.is_empty() {
                                     &cors_cfg.origins

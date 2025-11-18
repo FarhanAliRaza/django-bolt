@@ -6,8 +6,14 @@ import msgspec
 import re
 import sys
 import time
-from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Annotated, get_type_hints
-from asgiref.sync import sync_to_async
+import types
+from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Annotated, get_type_hints, Union
+
+# Django import - may fail if Django not configured
+try:
+    from django.conf import settings as django_settings
+except ImportError:
+    django_settings = None
 
 from .bootstrap import ensure_django_ready
 from django_bolt import _core
@@ -22,10 +28,7 @@ from .logging.middleware import create_logging_middleware, LoggingMiddleware
 from .exceptions import RequestValidationError, parse_msgspec_decode_error
 # Import modularized components
 from .binding import (
-    coerce_to_response_type,
-    coerce_to_response_type_async,
     convert_primitive,
-    create_extractor,
     get_msgspec_decoder
 )
 from .typing import is_msgspec_struct, is_optional, unwrap_optional
@@ -45,7 +48,7 @@ from .openapi.routes import OpenAPIRouteRegistrar
 from .admin.routes import AdminRouteRegistrar
 from .admin.static_routes import StaticRouteRegistrar
 from .admin.admin_detection import detect_admin_url_prefix
-from .auth import get_default_authentication_classes
+from .auth import get_default_authentication_classes, register_auth_backend
 from .auth.user_loader import load_user
 
 from . import _json
@@ -275,8 +278,7 @@ class BoltAPI:
             # Create default OpenAPI config
             try:
                 # Try to get Django project name from settings
-                from django.conf import settings
-                title = getattr(settings, 'PROJECT_NAME', None) or getattr(settings, 'SITE_NAME', None) or "API"
+                title = getattr(django_settings, 'PROJECT_NAME', None) or getattr(django_settings, 'SITE_NAME', None) or "API" if django_settings else "API"
             except:
                 title = "API"
 
@@ -648,8 +650,6 @@ class BoltAPI:
             base_path: Base path for the ViewSet (e.g., "/users")
             lookup_field: Lookup field name for detail actions (e.g., "id", "pk")
         """
-        import inspect
-        import types
 
         # Get class-level auth and guards (if any)
         class_auth = getattr(view_cls, 'auth', None)
@@ -922,7 +922,6 @@ class BoltAPI:
             # If response type is list[Struct], extract field names at registration time
             # instead of doing runtime introspection on every request
             origin = get_origin(sig.return_annotation)
-            from typing import List
             if origin in (list, List):
                 args = get_args(sig.return_annotation)
                 if args:
@@ -1146,7 +1145,6 @@ class BoltAPI:
             OpenAPI schema as dictionary.
         """
         if self._openapi_schema is None:
-
             generator = SchemaGenerator(self, self.openapi_config)
             openapi = generator.generate()
             self._openapi_schema = openapi.to_schema()
@@ -1191,8 +1189,6 @@ class BoltAPI:
         Scans all handler middleware metadata to find unique auth backends,
         then registers them for request.user lazy loading.
         """
-        from .auth import register_auth_backend
-
         registered = set()
 
         for handler_id, metadata in self._handler_middleware.items():

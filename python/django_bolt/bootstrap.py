@@ -3,12 +3,18 @@ import os
 import sys
 from pathlib import Path
 
-from django.conf import settings
+# Django imports - may fail if Django not configured
+try:
+    from django.conf import settings
+    import django
+except ImportError:
+    settings = None
+    django = None
 
 
 def ensure_django_ready() -> dict:
     """Ensure Django is properly configured using the project's settings module."""
-    if settings.configured:
+    if settings and settings.configured:
         return _info()
 
     settings_module = os.getenv("DJANGO_SETTINGS_MODULE")

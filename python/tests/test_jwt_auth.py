@@ -9,12 +9,18 @@ Uses pytest-django for proper Django configuration.
 import pytest
 import jwt
 import time
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django_bolt import BoltAPI
 from django_bolt.auth import (
     create_jwt_for_user,
     get_current_user,
     extract_user_id_from_context,
     get_auth_context,
+    JWTAuthentication,
+    IsAuthenticated,
 )
+from django_bolt.params import Depends
 
 # Mark all tests to use Django DB
 pytestmark = pytest.mark.django_db
@@ -22,7 +28,6 @@ pytestmark = pytest.mark.django_db
 
 def test_create_jwt_for_user():
     """Test creating JWT tokens for Django users."""
-    from django.contrib.auth import get_user_model
     User = get_user_model()
 
     # Create a test user
@@ -54,7 +59,6 @@ def test_create_jwt_for_user():
 
 def test_create_jwt_with_extra_claims():
     """Test creating JWT tokens with custom claims."""
-    from django.contrib.auth import get_user_model
     User = get_user_model()
 
     user = User.objects.create(
@@ -90,10 +94,6 @@ def test_create_jwt_with_extra_claims():
 
 def test_jwt_authentication_with_django_user():
     """Test JWT authentication extracts correct user data."""
-    from django.contrib.auth import get_user_model
-    from django_bolt import BoltAPI
-    from django_bolt.auth import JWTAuthentication
-    from django_bolt.auth import IsAuthenticated
     User = get_user_model()
 
     # Create test user
@@ -131,11 +131,6 @@ def test_jwt_authentication_with_django_user():
 
 def test_django_user_dependency_injection():
     """Test type-safe Django User dependency injection with Depends()."""
-    from django_bolt import BoltAPI
-    from django_bolt.auth import JWTAuthentication
-    from django_bolt.auth import IsAuthenticated
-    from django_bolt.params import Depends
-
     # Create API with the dependency (using imported get_current_user)
     api = BoltAPI()
 
@@ -234,7 +229,6 @@ def test_jwt_utils_get_auth_context():
 
 def test_jwt_claims_stored_in_context():
     """Test that JWT claims are properly stored in request context."""
-    from django.contrib.auth import get_user_model
     User = get_user_model()
 
     user = User.objects.create(
@@ -266,7 +260,6 @@ def test_jwt_claims_stored_in_context():
 
 def test_jwt_expiration():
     """Test JWT expiration handling."""
-    from django.contrib.auth import get_user_model
     User = get_user_model()
 
     user = User.objects.create(username="expuser")
@@ -298,9 +291,6 @@ def test_jwt_expiration():
 
 def test_jwt_uses_django_secret_key():
     """Test that JWTAuthentication uses Django SECRET_KEY by default."""
-    from django.conf import settings
-    from django_bolt.auth import JWTAuthentication
-
     # Create JWT auth without explicit secret
     auth = JWTAuthentication()
 
@@ -311,9 +301,6 @@ def test_jwt_uses_django_secret_key():
 
 def test_jwt_custom_secret_overrides():
     """Test that explicit secret overrides Django SECRET_KEY."""
-    from django.conf import settings
-    from django_bolt.auth import JWTAuthentication
-
     # Create with explicit secret
     auth = JWTAuthentication(secret="custom-secret")
 

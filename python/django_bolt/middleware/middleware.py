@@ -5,10 +5,11 @@ Provides both decorator-based and class-based middleware approaches.
 Middleware can be applied globally to all routes or selectively to specific routes.
 """
 
+import inspect
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Union
-import inspect
 
 
 class Middleware(ABC):
@@ -142,7 +143,6 @@ def cors(
 
         # SECURITY: Validate wildcard + credentials
         if "*" in origin_list and credentials:
-            import warnings
             warnings.warn(
                 "CORS misconfiguration: Cannot use wildcard '*' with credentials=True. "
                 "This violates the CORS specification. Please specify explicit origins.",

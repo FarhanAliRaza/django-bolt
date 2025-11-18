@@ -9,13 +9,15 @@ These tests validate the behavior documented in docs/LOGGING.md:
 - Integration with Django's logging system
 """
 
-import pytest
 import logging
 import time
-from unittest.mock import Mock, patch, MagicMock
+import pytest
 from logging.handlers import QueueHandler
+from unittest.mock import Mock, patch, MagicMock
+
+from django.conf import settings
 from django_bolt.logging import LoggingConfig, LoggingMiddleware, create_logging_middleware
-from django_bolt.logging.config import setup_django_logging, _ensure_queue_logging
+from django_bolt.logging.config import setup_django_logging, _ensure_queue_logging, _QUEUE_LISTENER
 
 
 class TestLoggingConfig:
@@ -728,8 +730,6 @@ class TestQueueBasedLogging:
 
     def test_ensure_queue_logging_creates_queue_listener(self):
         """_ensure_queue_logging should create and start a QueueListener."""
-        from django_bolt.logging.config import _QUEUE_LISTENER
-
         # Reset global state for test
         import django_bolt.logging.config as config_module
         config_module._QUEUE_LISTENER = None
@@ -744,7 +744,6 @@ class TestQueueBasedLogging:
     def test_setup_django_logging_configures_queue_handlers(self):
         """setup_django_logging should configure queue handlers for django loggers."""
         # Configure Django settings for test
-        from django.conf import settings
         if not settings.configured:
             settings.configure(
                 DEBUG=True,
@@ -782,7 +781,6 @@ class TestQueueBasedLogging:
     def test_setup_django_logging_respects_explicit_logging_config(self):
         """setup_django_logging should skip setup when LOGGING is explicitly configured."""
         # Configure Django settings with explicit LOGGING
-        from django.conf import settings
         if not settings.configured:
             settings.configure(
                 DEBUG=True,
@@ -811,7 +809,6 @@ class TestQueueBasedLogging:
     def test_setup_django_logging_is_idempotent(self):
         """setup_django_logging should not reconfigure when called multiple times."""
         # Configure Django settings for test
-        from django.conf import settings
         if not settings.configured:
             settings.configure(
                 DEBUG=True,

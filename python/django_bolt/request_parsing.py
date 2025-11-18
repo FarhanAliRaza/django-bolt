@@ -1,7 +1,16 @@
 """Request parsing utilities for form and multipart data."""
+import logging
+import traceback
 from typing import Any, Dict, Tuple
 from io import BytesIO
+from urllib.parse import parse_qs
 import multipart
+
+# Django import - may fail if Django not configured
+try:
+    from django.conf import settings as django_settings
+except ImportError:
+    django_settings = None
 
 # Cache for max upload size (read once from Django settings)
 _MAX_UPLOAD_SIZE = None
@@ -12,9 +21,8 @@ def get_max_upload_size() -> int:
     global _MAX_UPLOAD_SIZE
     if _MAX_UPLOAD_SIZE is None:
         try:
-            from django.conf import settings
-            _MAX_UPLOAD_SIZE = getattr(settings, 'BOLT_MAX_UPLOAD_SIZE', 10 * 1024 * 1024)  # 10MB default
-        except ImportError:
+            _MAX_UPLOAD_SIZE = getattr(django_settings, 'BOLT_MAX_UPLOAD_SIZE', 10 * 1024 * 1024) if django_settings else 10 * 1024 * 1024  # 10MB default
+        except (ImportError, AttributeError):
             _MAX_UPLOAD_SIZE = 10 * 1024 * 1024
     return _MAX_UPLOAD_SIZE
 
@@ -31,7 +39,6 @@ def parse_form_data(request: Dict[str, Any], headers_map: Dict[str, str]) -> Tup
     files_map: Dict[str, Any] = {}
 
     if content_type.startswith("application/x-www-form-urlencoded"):
-        from urllib.parse import parse_qs
         body_bytes: bytes = request["body"]
         form_data = parse_qs(body_bytes.decode("utf-8"))
         # parse_qs returns lists, but for single values we want the value directly
@@ -120,8 +127,6 @@ def parse_multipart_data(request: Dict[str, Any], content_type: str) -> Tuple[Di
 
     except Exception as e:
         # Return empty maps on parse error (don't expose internal errors)
-        import logging
-        import traceback
         logging.warning(f"Multipart parsing failed: {e}\n{traceback.format_exc()}")
         return {}, {}
 

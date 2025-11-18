@@ -2,8 +2,11 @@
 Test type definitions and protocols.
 """
 import pytest
+import jwt
+import time
 from django_bolt import BoltAPI, Request
 from django_bolt.testing import TestClient
+from django_bolt.auth import JWTAuthentication, IsAuthenticated
 import msgspec
 
 
@@ -90,10 +93,6 @@ def test_request_with_validated_body():
 
 def test_request_with_auth_context():
     """Test Request type with authentication context."""
-    from django_bolt.auth import JWTAuthentication, IsAuthenticated
-    import jwt
-    import time
-
     api = BoltAPI()
 
     @api.get(
@@ -230,7 +229,8 @@ def test_request_property_access():
 
 def test_request_import_from_main_module():
     """Test that Request can be imported from django_bolt."""
-    from django_bolt import Request as ImportedRequest
+    from django_bolt import Request as ImportedRequest  # noqa: F401
 
-    # Should be the same class
+    # Should be the same class (ImportedRequest is the same as the module-level Request)
+    # This test verifies the import works, even though we compare with module-level Request
     assert ImportedRequest is Request

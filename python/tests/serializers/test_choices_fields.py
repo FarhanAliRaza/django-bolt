@@ -6,6 +6,7 @@ from typing import Literal, get_args, get_origin
 
 import pytest
 from django.db import models
+from msgspec import ValidationError
 
 from django_bolt.serializers import Serializer, create_serializer
 from django_bolt.serializers.fields import get_msgspec_type_for_django_field
@@ -48,7 +49,6 @@ class TestChoicesFieldDetection:
 
         # Should be Annotated[str, Meta(max_length=100)]
         # The origin will be str after unwrapping Annotated
-        from typing import get_origin, get_args
 
         # If it's Annotated, get the first arg (the actual type)
         if hasattr(field_type, "__origin__"):
@@ -88,7 +88,6 @@ class TestChoicesFieldDetection:
         field_type = get_msgspec_type_for_django_field(field)
 
         # IntegerField may have range validators, so check the unwrapped type
-        from typing import get_args, get_origin
         if hasattr(field_type, "__origin__"):
             # It's an Annotated type, get the actual type
             actual_type = get_args(field_type)[0]
@@ -118,7 +117,6 @@ class TestChoicesSerializerCreation:
 
     def test_serializer_rejects_invalid_choice(self):
         """Test that serializer rejects invalid choice values."""
-        from msgspec import ValidationError
 
         class ArticleSerializer(Serializer):
             title: str
@@ -140,7 +138,6 @@ class TestChoicesSerializerCreation:
         assert priority.level == 3
 
         # Invalid choice should fail
-        from msgspec import ValidationError
         with pytest.raises(ValidationError):
             PrioritySerializer(name="Invalid", level=99)
 
@@ -241,7 +238,6 @@ class TestChoicesValidation:
 
     def test_invalid_choice_rejected(self):
         """Test that invalid choice values are rejected."""
-        from msgspec import ValidationError
 
         class StatusSerializer(Serializer):
             status: Literal["active", "inactive"]
@@ -273,6 +269,5 @@ class TestChoicesValidation:
         assert obj.code == "2"
 
         # Actual number should not work (type mismatch)
-        from msgspec import ValidationError
         with pytest.raises(ValidationError):
             NumericStringChoice(code=2)  # int instead of str

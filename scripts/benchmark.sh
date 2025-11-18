@@ -212,7 +212,7 @@ fi
 
 # Seed users for benchmarking (create 1000 test users)
 echo "Seeding 1000 users for benchmark..."
-SEED_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://$HOST:$PORT/users/seed?count=1000)
+SEED_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X GET http://$HOST:$PORT/users/seed?count=1000)
 if [ "$SEED_CODE" != "200" ]; then
   echo "Warning: Failed to seed users (got $SEED_CODE), benchmarking with empty database" >&2
 else

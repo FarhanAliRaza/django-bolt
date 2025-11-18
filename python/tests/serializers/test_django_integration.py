@@ -29,7 +29,7 @@ class TestFromModel:
 
         # Convert to serializer
         serializer = UserSerializer.from_model(user)
-        
+
         assert serializer.id == user.id
         assert serializer.username == "testuser"
         assert serializer.email == "test@example.com"

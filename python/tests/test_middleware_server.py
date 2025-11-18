@@ -4,6 +4,8 @@ Integration test for middleware with TestClient
 import jwt
 import time
 import pytest
+import django
+from django.conf import settings
 from django_bolt import BoltAPI
 from django_bolt.middleware import rate_limit, cors
 from django_bolt.auth import JWTAuthentication, APIKeyAuthentication
@@ -15,9 +17,6 @@ from django_bolt.testing import TestClient
 def api():
     """Create test API with various middleware configurations"""
     # Setup minimal Django for testing
-    import django
-    from django.conf import settings
-
     if not settings.configured:
         settings.configure(
             DEBUG=True,

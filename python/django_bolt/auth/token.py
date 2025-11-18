@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
 import msgspec
+import jwt
 
 
 def _normalize_datetime(value: datetime) -> datetime:
@@ -190,7 +191,6 @@ class Token:
             ValueError: If encoding fails
         """
         try:
-            import jwt
             return jwt.encode(
                 payload=self.to_dict(),
                 key=secret,
@@ -233,8 +233,6 @@ class Token:
             ValueError: If token is invalid or verification fails
         """
         try:
-            import jwt
-
             options = {
                 "verify_signature": True,
                 "verify_exp": verify_exp,

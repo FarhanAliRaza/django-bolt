@@ -4,7 +4,7 @@ import mimetypes
 import msgspec
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from .responses import Response as ResponseClass, JSON, PlainText, HTML, Redirect, File, FileResponse, StreamingResponse
-from .binding import coerce_to_response_type_async
+from .binding import coerce_to_response_type_async, coerce_to_response_type
 from . import _json
 
 if TYPE_CHECKING:
@@ -61,8 +61,6 @@ async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTupl
 
 def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple:
     """Serialize handler result to HTTP response (sync version for sync handlers)."""
-    from .binding import coerce_to_response_type
-
     response_tp = meta.get("response_type")
 
     # Check if result is already a raw response tuple (status, headers, body)
@@ -279,8 +277,6 @@ async def serialize_json_data(result: Any, response_tp: Optional[Any], meta: "Ha
 
 def serialize_json_data_sync(result: Any, response_tp: Optional[Any], meta: "HandlerMetadata") -> ResponseTuple:
     """Serialize dict/list/other data as JSON (sync version for sync handlers)."""
-    from .binding import coerce_to_response_type
-
     if response_tp is not None:
         try:
             validated = coerce_to_response_type(result, response_tp, meta=meta)

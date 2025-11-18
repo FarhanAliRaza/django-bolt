@@ -8,10 +8,13 @@ import inspect
 import time
 from typing import Annotated
 
+import jwt
 import msgspec
 import pytest
+from asgiref.sync import async_to_sync
 from django_bolt import BoltAPI
 from django_bolt.auth import JWTAuthentication, IsAuthenticated
+from django_bolt.exceptions import HTTPException
 from django_bolt.middleware import cors, rate_limit
 from django_bolt.params import Header, Query, Depends
 from django_bolt.testing import TestClient
@@ -553,8 +556,6 @@ class TestSyncAuthentication:
 
     def test_sync_protected_endpoint_with_valid_token(self, client):
         """Sync protected handler should accept valid token."""
-        import jwt
-
         token = jwt.encode(
             {"sub": "user123", "exp": int(time.time()) + 3600},
             "test-secret-key",
@@ -643,8 +644,6 @@ class TestAsyncSyncParityAuthentication:
 
     def test_async_vs_sync_protected_with_token(self, client):
         """Async and sync protected handlers should both accept valid token."""
-        import jwt
-
         token = jwt.encode(
             {"sub": "user123", "exp": int(time.time()) + 3600},
             "test-secret-key",
@@ -733,7 +732,6 @@ def orm_api():
                 "is_published": article.is_published,
             }
         except Article.DoesNotExist:
-            from django_bolt.exceptions import HTTPException
             raise HTTPException(status_code=404, detail="Article not found")
 
     @api.post("/sync/articles")
@@ -783,7 +781,6 @@ def orm_api():
                 "is_published": db_article.is_published,
             }
         except Article.DoesNotExist:
-            from django_bolt.exceptions import HTTPException
             raise HTTPException(status_code=404, detail="Article not found")
 
     @api.delete("/sync/articles/{article_id}")
@@ -794,7 +791,6 @@ def orm_api():
             article.delete()
             return {"message": f"Article {article_id} deleted successfully"}
         except Article.DoesNotExist:
-            from django_bolt.exceptions import HTTPException
             raise HTTPException(status_code=404, detail="Article not found")
 
     # ========================
@@ -835,7 +831,6 @@ def orm_api():
                 "is_async": True,
             }
         except Article.DoesNotExist:
-            from django_bolt.exceptions import HTTPException
             raise HTTPException(status_code=404, detail="Article not found")
 
     @api.post("/async/articles")
@@ -887,7 +882,6 @@ def orm_api():
                 "is_async": True,
             }
         except Article.DoesNotExist:
-            from django_bolt.exceptions import HTTPException
             raise HTTPException(status_code=404, detail="Article not found")
 
     @api.delete("/async/articles/{article_id}")
@@ -898,7 +892,6 @@ def orm_api():
             await article.adelete()
             return {"message": f"Article {article_id} deleted successfully", "is_async": True}
         except Article.DoesNotExist:
-            from django_bolt.exceptions import HTTPException
             raise HTTPException(status_code=404, detail="Article not found")
 
     # ========================

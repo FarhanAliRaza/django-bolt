@@ -5,7 +5,7 @@ import json
 import msgspec
 import pytest
 
-from django_bolt import BoltAPI, JSON, StreamingResponse
+from django_bolt import BoltAPI, JSON, StreamingResponse, Response
 from django_bolt.param_functions import Query, Path, Header, Cookie, Depends, Form, File as FileParam
 from django_bolt.responses import PlainText, HTML, Redirect, File, FileResponse
 from django_bolt.exceptions import HTTPException
@@ -623,8 +623,6 @@ def test_options_on_nonexistent_route(client):
 
 def test_explicit_options_handler():
     """Test that explicit OPTIONS handler overrides automatic behavior"""
-    from django_bolt import Response
-
     api = BoltAPI()
 
     @api.get("/custom-options")
@@ -638,7 +636,6 @@ def test_explicit_options_handler():
             headers={"Allow": "GET, OPTIONS", "X-Custom": "header"}
         )
 
-    from django_bolt.testing import TestClient
     with TestClient(api) as client:
         response = client.options("/custom-options")
         assert response.status_code == 200

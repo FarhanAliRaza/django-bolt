@@ -7,6 +7,7 @@ import pytest
 from django_bolt import BoltAPI
 from django_bolt.middleware import skip_middleware, no_compress, CompressionConfig
 from django_bolt.testing import TestClient
+from django_bolt.responses import PlainText, HTML, StreamingResponse
 
 
 def test_compression_enabled_by_default():
@@ -176,8 +177,6 @@ def test_compression_with_different_content_types():
     async def json_route():
         return {"data": "x" * 1000}
 
-    from django_bolt.responses import PlainText, HTML
-
     @api.get("/text")
     async def text_route():
         return PlainText("x" * 1000)
@@ -203,8 +202,6 @@ def test_compression_with_different_content_types():
 
 def test_compression_skip_on_streaming():
     """Test that streaming responses can skip compression."""
-    from django_bolt.responses import StreamingResponse
-
     api = BoltAPI(compression=CompressionConfig(backend="gzip"))
 
     @api.get("/stream")

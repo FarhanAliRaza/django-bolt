@@ -2,8 +2,12 @@
 Test request.get() method default parameter behavior.
 """
 import pytest
+import jwt
+import time
 from django_bolt import BoltAPI
 from django_bolt.testing import TestClient
+from django_bolt.auth import JWTAuthentication
+from django_bolt.auth.guards import IsAuthenticated
 
 
 def test_request_get_default_behavior():
@@ -92,9 +96,6 @@ def test_request_get_with_auth_context():
     """
     Test that request.get() returns actual auth context when present.
     """
-    from django_bolt.auth import JWTAuthentication
-    from django_bolt.auth.guards import IsAuthenticated
-
     api = BoltAPI()
 
     @api.get(
@@ -114,8 +115,6 @@ def test_request_get_with_auth_context():
 
     with TestClient(api) as client:
         # Create a valid JWT token
-        import jwt
-        import time
         payload = {
             "sub": "123",
             "user_id": 123,

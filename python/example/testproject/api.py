@@ -1,30 +1,35 @@
-from typing import Optional, List, Annotated
-from django_bolt.types import Request
+import asyncio
+import json
+import os
+import time
+from typing import Annotated, List, Optional, Protocol
+
 import msgspec
 from msgspec import Meta, ValidationError
-import asyncio
-import time
-import json
-from django_bolt import BoltAPI, JSON, OpenAPIConfig, SwaggerRenderPlugin, RedocRenderPlugin
-from django_bolt.serializers import Serializer, field_validator, model_validator
-from django_bolt.views import APIView, ViewSet
-from django_bolt.param_functions import Header, Cookie, Form, File
-from django_bolt.responses import PlainText, HTML, Redirect, FileResponse, StreamingResponse
+
+from django.contrib.auth import aauthenticate, get_user_model
+
+from django_bolt import BoltAPI, CompressionConfig, JSON, OpenAPIConfig, RedocRenderPlugin, SwaggerRenderPlugin, action
+from django_bolt.auth import JWTAuthentication, IsAuthenticated, create_jwt_for_user, get_current_user
 from django_bolt.exceptions import (
+    BadRequest,
     HTTPException,
     NotFound,
-    BadRequest,
+    RequestValidationError,
     Unauthorized,
     UnprocessableEntity,
-    RequestValidationError,
 )
-from django_bolt.health import register_health_checks, add_health_check
-from django_bolt.middleware import no_compress, cors
-from django_bolt import CompressionConfig
-from django_bolt.auth import JWTAuthentication, IsAuthenticated, get_current_user, create_jwt_for_user
-from django_bolt.param_functions import Depends
-from typing import Protocol
-from django.contrib.auth import get_user_model
+from django_bolt.health import add_health_check, register_health_checks
+from django_bolt.middleware import cors, no_compress
+from django_bolt.param_functions import Cookie, Depends, File, Form, Header
+from django_bolt.responses import FileResponse, HTML, PlainText, Redirect, StreamingResponse
+from django_bolt.serializers import Serializer, field_validator, model_validator
+from django_bolt.types import Request
+from django_bolt.views import APIView, ViewSet
+
+import test_data
+from users.api import UserMini
+from users.models import User
 # OpenAPI is enabled by default at /docs with Swagger UI
 # You can customize it by passing openapi_config:
 #
@@ -70,8 +75,6 @@ class Item(msgspec.Struct):
     price: float
     is_offer: Optional[bool] = None
 
-
-import test_data
 
 @api.get("/health")
 async def health():
@@ -243,12 +246,10 @@ async def generate_token(token_req: TokenRequest):
     }
     ```
     """
-    from django.contrib.auth import aauthenticate
-
     User = get_user_model()
 
     # Authenticate the user
-    user = await  aauthenticate(username=token_req.username, password=token_req.password)
+    user = await aauthenticate(username=token_req.username, password=token_req.password)
 
     if user is None:
         raise Unauthorized(detail="Invalid username or password")
@@ -304,7 +305,11 @@ def read_10k_sync():
     """
     return test_data.JSON_10K
 
-from users.api import UserMini
+
+class UserMiniSerializer(Serializer):
+    id: int
+    username:str
+
 
 @api.get("/sync-users")
 def read_10k_sync() -> list[UserMini]:
@@ -312,22 +317,22 @@ def read_10k_sync() -> list[UserMini]:
     Sync version: Endpoint that returns 10k JSON objects.
 
     """
-    from users.models import User
     users = User.objects.all()[0:100]
+    # return users
+
     return users
     # users = list(users)
     # return users
-    
-    
+
+
 @api.get("/async-users")
 async def read_10k_sync() -> list[UserMini]:
     """
     Sync version: Endpoint that returns 10k JSON objects.
 
     """
-    from users.models import User
     users = User.objects.all()[0:100]
-    
+
     return users
     # users = list(users)
     # return users
@@ -450,7 +455,6 @@ async def handle_mixed(
 
 
 # ==== File serving endpoint for benchmarks ====
-import os
 THIS_FILE = os.path.abspath(__file__)
 
 
@@ -844,9 +848,6 @@ class ItemAPIView(APIView):
 # ============================================================================
 # Class-Based Views (ViewSet) - Using Unified ViewSet Pattern with @action
 # ============================================================================
-
-from django_bolt import action
-
 
 
 # ============================================================================

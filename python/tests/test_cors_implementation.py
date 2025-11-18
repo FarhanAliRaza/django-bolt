@@ -10,6 +10,8 @@ Tests route-level CORS decorators with TestClient use_http_layer=True mode.
 NOTE: Global Django settings (CORS_ALLOWED_ORIGINS, CORS_ALLOWED_ORIGIN_REGEXES)
 are tested in actual server integration tests, not with TestClient.
 """
+import warnings
+
 import pytest
 from django_bolt import BoltAPI
 from django_bolt.middleware import cors, skip_middleware
@@ -98,7 +100,6 @@ class TestWildcardCredentials:
         api = BoltAPI()
 
         # This should trigger a RuntimeWarning
-        import warnings
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
 

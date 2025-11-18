@@ -15,6 +15,7 @@ from asgiref.sync import sync_to_async
 from .typing import is_msgspec_struct, is_optional, unwrap_optional
 from .typing import HandlerMetadata
 from .concurrency import sync_to_thread
+from .exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
 
 __all__ = [
     "convert_primitive",
@@ -55,14 +56,12 @@ def convert_primitive(value: str, annotation: Any) -> Any:
         try:
             return int(value)
         except ValueError:
-            from .exceptions import HTTPException
             raise HTTPException(422, detail=f"Invalid integer value: '{value}'")
 
     if tp is float:
         try:
             return float(value)
         except ValueError:
-            from .exceptions import HTTPException
             raise HTTPException(422, detail=f"Invalid float value: '{value}'")
 
     if tp is bool:
@@ -219,8 +218,6 @@ def create_body_extractor(name: str, annotation: Any) -> Callable:
     Uses cached msgspec decoder for maximum performance.
     Converts msgspec.DecodeError (JSON parsing errors) to RequestValidationError for proper 422 responses.
     """
-    from .exceptions import RequestValidationError, parse_msgspec_decode_error
-
     if is_msgspec_struct(annotation):
         decoder = get_msgspec_decoder(annotation)
         def extract(body_bytes: bytes) -> Any:

@@ -1,14 +1,16 @@
 """
-Integration tests for nested serializers with sync views and TestClient.
+Integration tests for nested serializers with async/sync views and TestClient.
 
-This test suite demonstrates 4 different API endpoints that use nested serializers:
-1. Simple nested ForeignKey (Author in BlogPost)
-2. Many-to-many nested relationships (Tags in BlogPost)
-3. Deeply nested structures (Comments with Authors in BlogPost)
-4. Mixed nested relationships with validation
+This test suite demonstrates 5 different API endpoints that use nested serializers:
+1. Simple nested ForeignKey (Author in BlogPost) - ASYNC endpoints with async ORM
+2. Many-to-many nested relationships (Tags in BlogPost) - SYNC endpoints
+3. Deeply nested structures (Comments with Authors in BlogPost) - SYNC endpoints
+4. Mixed nested relationships with validation - SYNC endpoints
+5. User authentication & profile management - ASYNC endpoints with async ORM
 
 These tests use TestClient to make real HTTP requests and verify the full
-request/response cycle with nested serializers.
+request/response cycle with nested serializers. Tests demonstrate that both
+async and sync endpoints work seamlessly with sync tests through TestClient.
 """
 
 from __future__ import annotations
@@ -119,7 +121,7 @@ class BlogPostDetailedInputSerializer(Serializer):
 
 
 # ============================================================================
-# API 1: Simple Nested ForeignKey
+# API 1: Simple Nested ForeignKey (ASYNC with async ORM queries)
 # ============================================================================
 
 
@@ -127,30 +129,45 @@ api_1_nested_fk = BoltAPI()
 
 
 @api_1_nested_fk.get("/posts/{post_id}")
-def get_post_simple(post_id: int):
+async def get_post_simple(post_id: int):
     """
-    API 1: Get a single post with its nested author.
+    API 1: Get a single post with its nested author (ASYNC).
 
     Query with select_related to include the author as a nested object.
-    If author is not loaded, it returns just the ID.
+    Uses async ORM (.aget) with prefetch_related to demonstrate async query support.
     """
-    post = BlogPost.objects.select_related("author").get(id=post_id)
+    post = await (
+        BlogPost.objects
+        .select_related("author")
+        .prefetch_related("tags")
+        .aget(id=post_id)
+    )
     return BlogPostSerializer.from_model(post)
 
 
 @api_1_nested_fk.post("/posts")
-def create_post_simple(data: BlogPostInputSerializer):
+async def create_post_simple(data: BlogPostInputSerializer):
     """
-    API 1: Create a new post with author reference.
+    API 1: Create a new post with author reference (ASYNC).
 
     Accepts nested author (must be full object for input).
+    Uses async ORM (.acreate) to demonstrate async query support.
+    After creation, refetches with select_related/prefetch_related for serialization.
     """
     author_id = data.author.id
-    post = BlogPost.objects.create(
+    created_post = await BlogPost.objects.acreate(
         title=data.title,
         content=data.content,
         author_id=author_id,
         published=data.published,
+    )
+
+    # Refetch with relationships for serialization
+    post = await (
+        BlogPost.objects
+        .select_related("author")
+        .prefetch_related("tags")
+        .aget(id=created_post.id)
     )
     return BlogPostSerializer.from_model(post)
 
@@ -752,3 +769,268 @@ class TestAPI4MixedValidation:
         data = response.json()
         assert data["title"] == "Roundtrip Post"
         assert data["id"] == post.id
+
+
+# ============================================================================
+# API 5: User Authentication & Profile Management - Full Cycle Tests  
+# ============================================================================
+
+# Import additional dependencies
+from django_bolt.auth import JWTAuthentication, IsAuthenticated, create_jwt_for_user
+from django_bolt.exceptions import HTTPException, NotFound, BadRequest
+from django_bolt.serializers import model_validator
+from tests.test_models import User, UserProfile
+import hashlib
+
+
+# User Authentication Serializers
+class UserSerializer(Serializer):
+    """Serializer for User model - OUTPUT."""
+    id: int
+    username: str
+    email: str
+    is_active: bool = True
+    is_staff: bool = False
+
+
+class UserSignupSerializer(Serializer):
+    """Serializer for user registration with password confirmation validation."""
+    username: Annotated[str, Meta(min_length=3, max_length=150)]
+    email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
+    password: Annotated[str, Meta(min_length=8)]
+    confirm_password: str
+
+    @field_validator("username")
+    def strip_username(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("email")
+    def lowercase_email(cls, value: str) -> str:
+        return value.lower()
+
+    @model_validator
+    def validate_passwords_match(self):
+        if self.password != self.confirm_password:
+            raise ValueError("Passwords do not match")
+        return self
+
+
+class UserLoginSerializer(Serializer):
+    """Serializer for user login - accepts username or email."""
+    username: str
+    password: str
+
+    @field_validator("username")
+    def strip_username(cls, value: str) -> str:
+        return value.strip()
+
+
+class UserProfileSerializer(Serializer):
+    """Serializer for user profile with nested user data - OUTPUT."""
+    id: int
+    user: Annotated[UserSerializer, Nested(UserSerializer)]
+    bio: Annotated[str, Meta(max_length=500)] = ""
+    avatar_url: str = ""
+    phone: Annotated[str, Meta(max_length=20)] = ""
+    location: Annotated[str, Meta(max_length=100)] = ""
+
+
+# Helper functions
+def hash_password(password: str) -> str:
+    """Simple password hashing for testing (use bcrypt/argon2 in production)."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+# API endpoints
+api_5_user_auth = BoltAPI()
+
+
+@api_5_user_auth.post("/auth/signup")
+async def signup(data: UserSignupSerializer):
+    """User registration endpoint."""
+    if await User.objects.filter(username=data.username).aexists():
+        raise BadRequest(detail="Username already exists")
+    
+    if await User.objects.filter(email=data.email).aexists():
+        raise BadRequest(detail="Email already exists")
+    
+    user = await User.objects.acreate(
+        username=data.username,
+        email=data.email,
+        password_hash=hash_password(data.password),
+        is_active=True,
+        is_staff=False,
+    )
+    return UserSerializer.from_model(user)
+
+
+@pytest.fixture
+def client_api_5():
+    """TestClient for API 5: User authentication."""
+    return TestClient(api_5_user_auth)
+
+
+# Simple test to verify the framework works
+class TestAPI5UserRegistration:
+    """Test user registration with comprehensive validation."""
+
+    @pytest.mark.django_db(transaction=True)
+    def test_successful_signup(self, client_api_5):
+        """Test successful user registration."""
+        payload = {
+            "username": "johndoe",
+            "email": "john@example.com",
+            "password": "SecurePass123!",
+            "confirm_password": "SecurePass123!",
+        }
+        response = client_api_5.post("/auth/signup", json=payload)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["username"] == "johndoe"
+        assert data["email"] == "john@example.com"
+        assert "password" not in data
+
+        # Verify user exists in database (using sync ORM in test)
+        assert User.objects.filter(username="johndoe").exists()
+
+    @pytest.mark.django_db(transaction=True)
+    def test_signup_password_mismatch(self, client_api_5):
+        """Test that signup fails when passwords don't match."""
+        payload = {
+            "username": "janedoe",
+            "email": "jane@example.com",
+            "password": "SecurePass123!",
+            "confirm_password": "DifferentPass456!",
+        }
+        response = client_api_5.post("/auth/signup", json=payload)
+
+        # Should fail validation
+        assert response.status_code in [400, 422]
+        data = response.json()
+        # detail can be a string or list of validation errors
+        detail_str = str(data["detail"]).lower()
+        assert "password" in detail_str or "match" in detail_str
+        assert not User.objects.filter(username="janedoe").exists()
+
+    @pytest.mark.django_db(transaction=True)
+    def test_signup_duplicate_username(self, client_api_5):
+        """Test that signup fails when username already exists."""
+        # Create existing user
+        User.objects.create(
+            username="existinguser",
+            email="existing@example.com",
+            password_hash=hash_password("password123")
+        )
+
+        # Try to sign up with same username
+        payload = {
+            "username": "existinguser",
+            "email": "newemail@example.com",
+            "password": "SecurePass123!",
+            "confirm_password": "SecurePass123!",
+        }
+        response = client_api_5.post("/auth/signup", json=payload)
+
+        # Should fail with BadRequest
+        assert response.status_code == 400
+        data = response.json()
+        assert "username" in data["detail"].lower() and "already exists" in data["detail"].lower()
+
+    @pytest.mark.django_db(transaction=True)
+    def test_signup_duplicate_email(self, client_api_5):
+        """Test that signup fails when email already exists."""
+        # Create existing user
+        User.objects.create(
+            username="existinguser",
+            email="existing@example.com",
+            password_hash=hash_password("password123")
+        )
+
+        # Try to sign up with same email
+        payload = {
+            "username": "newuser",
+            "email": "existing@example.com",
+            "password": "SecurePass123!",
+            "confirm_password": "SecurePass123!",
+        }
+        response = client_api_5.post("/auth/signup", json=payload)
+
+        # Should fail with BadRequest
+        assert response.status_code == 400
+        data = response.json()
+        assert "email" in data["detail"].lower() and "already exists" in data["detail"].lower()
+
+    @pytest.mark.django_db(transaction=True)
+    def test_signup_invalid_email_format(self, client_api_5):
+        """Test that signup fails with invalid email format."""
+        payload = {
+            "username": "testuser",
+            "email": "notanemail",
+            "password": "SecurePass123!",
+            "confirm_password": "SecurePass123!",
+        }
+        response = client_api_5.post("/auth/signup", json=payload)
+
+        # Should fail validation with email-related error
+        assert response.status_code in [400, 422]
+        data = response.json()
+        # Check if detail mentions email or regex pattern
+        detail_str = str(data["detail"]).lower()
+        assert "email" in detail_str or "regex" in detail_str or "pattern" in detail_str
+        assert not User.objects.filter(username="testuser").exists()
+
+    @pytest.mark.django_db(transaction=True)
+    def test_signup_short_username(self, client_api_5):
+        """Test that signup fails with username shorter than 3 characters."""
+        payload = {
+            "username": "ab",
+            "email": "test@example.com",
+            "password": "SecurePass123!",
+            "confirm_password": "SecurePass123!",
+        }
+        response = client_api_5.post("/auth/signup", json=payload)
+
+        # Should fail validation with username length error
+        assert response.status_code in [400, 422]
+        data = response.json()
+        detail_str = str(data["detail"]).lower()
+        assert ("username" in detail_str or "length" in detail_str or ">= 3" in detail_str)
+        assert not User.objects.filter(username="ab").exists()
+
+    @pytest.mark.django_db(transaction=True)
+    def test_signup_short_password(self, client_api_5):
+        """Test that signup fails with password shorter than 8 characters."""
+        payload = {
+            "username": "testuser",
+            "email": "test@example.com",
+            "password": "short",
+            "confirm_password": "short",
+        }
+        response = client_api_5.post("/auth/signup", json=payload)
+
+        # Should fail validation with password length error
+        assert response.status_code in [400, 422]
+        data = response.json()
+        detail_str = str(data["detail"]).lower()
+        assert ("password" in detail_str or "length" in detail_str or ">= 8" in detail_str)
+        assert not User.objects.filter(username="testuser").exists()
+
+    @pytest.mark.django_db(transaction=True)
+    def test_signup_email_case_normalization(self, client_api_5):
+        """Test that email is normalized to lowercase."""
+        payload = {
+            "username": "testuser",
+            "email": "Test@Example.COM",
+            "password": "SecurePass123!",
+            "confirm_password": "SecurePass123!",
+        }
+        response = client_api_5.post("/auth/signup", json=payload)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["email"] == "test@example.com"
+
+        # Verify in database
+        user = User.objects.get(username="testuser")
+        assert user.email == "test@example.com"

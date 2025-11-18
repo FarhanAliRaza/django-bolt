@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional, List, Dict
 
+from .plugins import ScalarRenderPlugin
 from .spec import (
     Components,
     Contact,
@@ -153,7 +154,6 @@ class OpenAPIConfig:
     def __post_init__(self) -> None:
         """Initialize default render plugin if none provided."""
         if not self.render_plugins:
-            from .plugins import ScalarRenderPlugin
             self.render_plugins = [ScalarRenderPlugin()]
 
         # Normalize path

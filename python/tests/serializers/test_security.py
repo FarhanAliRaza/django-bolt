@@ -181,26 +181,36 @@ class TestNestedTypeSafety:
         assert "must be a Serializer subclass" in error_msg
 
 
-class TestCircularReferenceDetection:
-    """Test that from_model() detects and prevents circular references."""
+class TestRecursionPrevention:
+    """
+    Test DoS protection mechanisms.
 
-    def test_circular_reference_raises_error(self):
-        """Test that circular references in from_model() raise descriptive errors."""
-        # Note: This test requires Django models
-        # For now, we test the detection logic directly
-        pass  # TODO: Add Django model-based test when models are available
+    Python's recursion limit (~1000) automatically protects against deeply nested JSON.
+    We test that max_items limits prevent resource exhaustion from wide lists.
+    """
 
-    def test_max_depth_prevents_deep_recursion(self):
-        """Test that max_depth parameter prevents excessive recursion."""
-        # Note: This test requires Django models
-        # For now, we document the expected behavior
-        pass  # TODO: Add Django model-based test when models are available
+    def test_max_items_prevents_dos_via_large_lists(self):
+        """Test that max_items prevents DoS attacks from extremely large nested lists."""
 
-    def test_siblings_allowed_same_depth(self):
-        """Test that sibling relationships at same depth are allowed."""
-        # Note: This test requires Django models
-        # Example: Book -> Author and Book -> Publisher should both work
-        pass  # TODO: Add Django model-based test when models are available
+        class TagSerializer(Serializer):
+            id: int
+            name: str
+
+        class BookSerializer(Serializer):
+            title: str
+            # Default max_items=1000
+            tags: Annotated[list[TagSerializer], Nested(TagSerializer, many=True)]
+
+        # Attempt to create 10,000 tags (would consume significant memory)
+        many_tags = [{"id": i, "name": f"tag_{i}"} for i in range(10000)]
+
+        # Should be rejected due to max_items=1000 limit
+        with pytest.raises(msgspec.ValidationError) as exc_info:
+            BookSerializer(title="Attack", tags=many_tags)
+
+        error_msg = str(exc_info.value)
+        assert "Too many items" in error_msg
+        assert "10000" in error_msg
 
 
 class TestValidatorPerformanceOptimizations:

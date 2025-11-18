@@ -33,6 +33,10 @@ class NestedConfig:
             many: If True, expects a list of objects (for M2M relationships)
             max_items: Maximum number of items allowed in many relationships (default: 1000)
                       Set to None to disable limit (not recommended for production)
+
+        Note:
+            Deep nesting protection is handled by Python's recursion limit (~1000 levels).
+            No custom max_depth needed - Python protects against deeply nested JSON automatically.
         """
         self.serializer_class = serializer_class
         self.many = many
@@ -136,6 +140,10 @@ def validate_nested_field(
 
     Raises:
         ValueError: If validation fails
+
+    Note:
+        Deep nesting protection is handled by Python's recursion limit (~1000 levels).
+        If extremely deep nesting is attempted, Python will raise RecursionError automatically.
     """
     if value is None:
         return None

@@ -100,13 +100,21 @@ class Serializer(msgspec.Struct):
         This is critical for performance - moving from 10K ops/sec to 1.75M ops/sec!
 
         Note: Function-scoped serializer classes (classes defined inside functions) have
-        limited support. For best results, define serializers at module level.
+        limited support and may not resolve all type hints correctly, especially when
+        using forward references or complex generic types. This is due to Python's
+        type hint resolution requiring access to the local namespace where the class
+        was defined. For best results and full type hint resolution, always define
+        serializers at module level.
         """
-        frame = None
+        # Track all frame references for proper cleanup to prevent memory leaks
+        frames_to_cleanup = []
         try:
             # Strategy 1: Try with local namespace for function-scoped classes
             # This handles edge cases but adds complexity
             frame = inspect.currentframe()
+            if frame is not None:
+                frames_to_cleanup.append(frame)
+
             localns = {}
 
             # Walk up to 10 frames to find class definition context
@@ -115,6 +123,8 @@ class Serializer(msgspec.Struct):
                     break
                 localns.update(frame.f_locals)
                 frame = frame.f_back
+                if frame is not None:
+                    frames_to_cleanup.append(frame)
 
             # Resolve type hints with local namespace
             if sys.version_info >= (3, 11):
@@ -135,9 +145,10 @@ class Serializer(msgspec.Struct):
                 # Last resort: use raw annotations
                 hints = getattr(cls, "__annotations__", {})
         finally:
-            # Clean up frame references to prevent memory leaks
-            if frame is not None:
-                del frame
+            # Clean up all frame references to prevent memory leaks
+            for f in frames_to_cleanup:
+                del f
+            frames_to_cleanup.clear()
 
         # Cache the type hints
         cls.__cached_type_hints__ = hints
@@ -362,7 +373,6 @@ class Serializer(msgspec.Struct):
         cls: type[T],
         instance: Model,
         *,
-        _visited: set[tuple[type, int]] | None = None,
         _depth: int = 0,
         max_depth: int = 10,
     ) -> T:
@@ -371,112 +381,94 @@ class Serializer(msgspec.Struct):
 
         Args:
             instance: A Django model instance
-            _visited: Internal - set of visited (model_class, pk) tuples to detect cycles
             _depth: Internal - current recursion depth
-            max_depth: Maximum recursion depth to prevent infinite loops (default: 10)
+            max_depth: Maximum recursion depth to prevent runaway recursion (default: 10)
 
         Returns:
             A new Serializer instance with fields populated from the model
 
         Raises:
-            ValueError: If circular reference detected or max_depth exceeded
+            ValueError: If max_depth exceeded (indicates deeply nested or circular references)
+
+        Note:
+            Circular nested serializers (e.g., Author.posts -> Post.author -> Author.posts)
+            are not recommended for API design. Use separate serializers with ID-only fields
+            for reverse relationships. Django's ORM typically prevents infinite recursion
+            through select_related/prefetch_related, but max_depth provides a safety net.
 
         Example:
             user = await User.objects.aget(id=1)
             user_data = UserPublicSerializer.from_model(user)
         """
-        # Security: Prevent infinite recursion from circular relationships
+        # Safety: Prevent runaway recursion from deeply nested or circular relationships
         if _depth > max_depth:
             raise ValueError(
                 f"Maximum recursion depth ({max_depth}) exceeded in from_model(). "
-                f"This may indicate a circular reference in your model relationships. "
-                f"Current serializer: {cls.__name__}, instance: {instance.__class__.__name__}(pk={instance.pk})"
+                f"This usually indicates overly deep nesting or circular references. "
+                f"Current serializer: {cls.__name__}, instance: {instance.__class__.__name__}(pk={instance.pk}). "
+                f"Consider using separate serializers with ID-only fields for deeply nested relationships."
             )
 
-        # Track visited instances to detect circular references
-        if _visited is None:
-            _visited = set()
+        # Use cached nested field metadata (no expensive introspection!)
+        data = {}
+        for field_name in cls.__struct_fields__:
+            if not hasattr(instance, field_name):
+                continue
 
-        # Create a unique key for this instance (model class + primary key)
-        instance_key = (instance.__class__, instance.pk)
+            value = getattr(instance, field_name)
 
-        if instance_key in _visited:
-            raise ValueError(
-                f"Circular reference detected in from_model(): "
-                f"{instance.__class__.__name__}(pk={instance.pk}) has already been visited. "
-                f"Avoid bidirectional nested serializers (e.g., Author.posts -> Post.author). "
-                f"Use separate serializers with ID-only fields for one direction."
-            )
+            # Check if this field has a nested serializer (from cache!)
+            nested_config = cls.__nested_fields__.get(field_name)
 
-        # Mark this instance as visited
-        _visited.add(instance_key)
-
-        try:
-            # Use cached nested field metadata (no expensive introspection!)
-            data = {}
-            for field_name in cls.__struct_fields__:
-                if not hasattr(instance, field_name):
-                    continue
-
-                value = getattr(instance, field_name)
-
-                # Check if this field has a nested serializer (from cache!)
-                nested_config = cls.__nested_fields__.get(field_name)
-
-                if nested_config:
-                    # This field is a nested serializer - extract full object data
-                    if nested_config.many:
-                        # Many-to-many or reverse relationship
-                        if hasattr(value, "all") and callable(getattr(value, "all", None)):
-                            # Convert each related object to a dict for the nested serializer
-                            items = []
-                            for item in value.all():
-                                if isinstance(item, DjangoModel):
-                                    # Recursively call from_model with circular reference tracking
-                                    items.append(
-                                        nested_config.serializer_class.from_model(
-                                            item,
-                                            _visited=_visited.copy(),  # Pass copy to allow siblings
-                                            _depth=_depth + 1,
-                                            max_depth=max_depth,
-                                        )
+            if nested_config:
+                # This field is a nested serializer - extract full object data
+                if nested_config.many:
+                    # Many-to-many or reverse relationship
+                    if hasattr(value, "all") and callable(getattr(value, "all", None)):
+                        # Convert each related object to a dict for the nested serializer
+                        items = []
+                        for item in value.all():
+                            if isinstance(item, DjangoModel):
+                                # Recursively call from_model with depth tracking
+                                items.append(
+                                    nested_config.serializer_class.from_model(
+                                        item,
+                                        _depth=_depth + 1,
+                                        max_depth=max_depth,
                                     )
-                            data[field_name] = items
-                        elif isinstance(value, list):
-                            data[field_name] = value
-                        else:
-                            data[field_name] = []
-                    else:
-                        # Single nested object (ForeignKey)
-                        if isinstance(value, DjangoModel):
-                            # Convert to nested serializer with circular reference tracking
-                            data[field_name] = nested_config.serializer_class.from_model(
-                                value,
-                                _visited=_visited.copy(),  # Pass copy to allow siblings
-                                _depth=_depth + 1,
-                                max_depth=max_depth,
-                            )
-                        else:
-                            data[field_name] = value
-                else:
-                    # Regular field - not nested
-                    if isinstance(value, DjangoModel):
-                        # Related object without nested serializer - use ID
-                        data[field_name] = value.pk
-                    elif hasattr(value, "all") and callable(getattr(value, "all", None)):
-                        # Manager without nested serializer - extract IDs
-                        try:
-                            data[field_name] = [item.pk for item in value.all()]
-                        except Exception:
-                            data[field_name] = value
-                    else:
-                        # Regular field
+                                )
+                        data[field_name] = items
+                    elif isinstance(value, list):
                         data[field_name] = value
+                    else:
+                        data[field_name] = []
+                else:
+                    # Single nested object (ForeignKey)
+                    if isinstance(value, DjangoModel):
+                        # Convert to nested serializer with depth tracking
+                        data[field_name] = nested_config.serializer_class.from_model(
+                            value,
+                            _depth=_depth + 1,
+                            max_depth=max_depth,
+                        )
+                    else:
+                        data[field_name] = value
+            else:
+                # Regular field - not nested
+                if isinstance(value, DjangoModel):
+                    # Related object without nested serializer - use ID
+                    data[field_name] = value.pk
+                elif hasattr(value, "all") and callable(getattr(value, "all", None)):
+                    # Manager without nested serializer - extract IDs
+                    try:
+                        data[field_name] = [item.pk for item in value.all()]
+                    except Exception:
+                        data[field_name] = value
+                else:
+                    # Regular field
+                    data[field_name] = value
 
-            return cls(**data)
-        finally:
-            # Clean up: remove this instance from visited set
-            _visited.discard(instance_key)
+        return cls(**data)
 
     def to_dict(self, *, exclude_unset: bool = False) -> dict[str, Any]:
         """

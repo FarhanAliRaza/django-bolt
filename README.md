@@ -602,7 +602,7 @@ UserCreate, UserUpdate, UserPublic = create_serializer_set(
 - ✅ **Auto-generation** - Create serializers from models with `create_serializer()`
 - ✅ **Type constraints** - `Meta(min_length=3, max_length=150, pattern=r"...")`
 - ✅ **100% type safety** - Full IDE autocomplete and type checking
-- ✅ **Performant** Thanks to msgspec.
+- ✅ **High-performance** - Thanks to msgspec
 
 **📖 See [docs/SERIALIZERS.md](docs/SERIALIZERS.md) for complete serializer documentation.**
 

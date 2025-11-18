@@ -202,6 +202,10 @@ class Serializer(msgspec.Struct):
                         validator = validators[0]
                         current_value = getattr(self, field_name)
                         new_value = validator(_class, current_value)
+                        # If validator returns None, keep the original value
+                        # This allows validators to validate without transforming
+                        if new_value is None:
+                            new_value = current_value
                         _setattr(self, field_name, new_value)
                     else:
                         # Batch validation: getattr once, setattr once per field (optimization #1)
@@ -210,7 +214,10 @@ class Serializer(msgspec.Struct):
 
                         # Run all validators for this field, accumulating the value
                         for validator in validators:
-                            current_value = validator(_class, current_value)
+                            result = validator(_class, current_value)
+                            # If validator returns None, keep the current value
+                            if result is not None:
+                                current_value = result
 
                         # Update the field once with the final value
                         _setattr(self, field_name, current_value)

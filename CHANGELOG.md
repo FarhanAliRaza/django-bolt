@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2]
+
+### Added
+
+- `Serializer` class that extends msgspec struct using which we can validate response data using python function.
+
+### Changed
+
+- sync views are not handled by a thread not called directly in the dispatch function.
+
+### Fixed
+
+- Fixed Exception when orm query evaludated inside of the sync function.
+
+- Fixed `response_model` not working.
+
 ## [0.3.1]
 
 ### Added

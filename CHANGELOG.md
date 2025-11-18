@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.3]
+
+### Added
+
+- Docs changes related to serializer.
+
+### Changed
+
+- When None is returned from field validation function it uses the old value instead of setting it into None.
+
+- dispatch function clean for performance.
+
+### Fixed
+
 ## [0.3.2]
 
 ### Added

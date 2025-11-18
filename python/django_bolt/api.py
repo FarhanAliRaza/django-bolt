@@ -808,6 +808,13 @@ class BoltAPI:
                 # Explicit override
                 meta["preload_user"] = preload_user
 
+            # Compile optimized argument injector (once at registration time)
+            # This pre-compiles all parameter extraction logic for maximum performance
+            injector = self._compile_argument_injector(meta)
+            meta["injector"] = injector
+            # Store whether injector is async (avoids runtime check with inspect.iscoroutinefunction)
+            meta["injector_is_async"] = inspect.iscoroutinefunction(injector)
+
             self._handler_meta[fn] = meta
 
             # Compile middleware metadata for this handler (including guards and auth)
@@ -1031,6 +1038,145 @@ class BoltAPI:
 
         return args, kwargs
 
+    def _compile_argument_injector(self, meta: HandlerMetadata) -> Callable[[Dict[str, Any]], Tuple[List[Any], Dict[str, Any]]]:
+        """
+        Compile a specialized argument injector function for a handler.
+
+        This method creates a closure that captures all parameter extraction logic
+        at route registration time, eliminating the overhead of _build_handler_arguments()
+        at request time.
+
+        The compiled injector is stored in meta["injector"] and returns a tuple of
+        (args, kwargs) ready for handler invocation.
+
+        Args:
+            meta: Handler metadata containing field definitions
+
+        Returns:
+            Injector function that takes request dict and returns (args, kwargs)
+
+        Performance benefits:
+            - Eliminates function call overhead (_build_handler_arguments)
+            - Pre-compiles all parameter extraction logic
+            - Reduces branching with specialized paths for common cases
+            - Better CPU cache locality with single inline function
+        """
+        fields = meta.get("fields", [])
+        mode = meta.get("mode", "mixed")
+
+        # Fast path 1: Request-only mode (single request parameter)
+        # Note: Sync function - no async overhead
+        if mode == "request_only":
+            def injector_request_only(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+                # Should never be called for request_only mode, but provide fallback
+                return ([request], {})
+            return injector_request_only
+
+        # Fast path 2: No parameters
+        # Note: Sync function - no async overhead
+        if not fields:
+            def injector_no_params(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+                return ([], {})
+            return injector_no_params
+
+        # General path: Build custom injector based on field types
+        # Pre-analyze fields to determine what maps we need
+        needs_form = meta.get("needs_form_parsing", False)
+        has_deps = any(f.source == "dependency" for f in fields)
+
+        # If handler has dependencies, must be async to resolve them
+        if has_deps:
+            async def injector_with_deps(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+                """Optimized argument injector with dependency support."""
+                args: List[Any] = []
+                kwargs: Dict[str, Any] = {}
+
+                # Pre-fetch request maps
+                params_map = request["params"]
+                query_map = request["query"]
+                headers_map = request.get("headers", {})
+                cookies_map = request.get("cookies", {})
+
+                # Parse form data only if needed
+                if needs_form:
+                    form_map, files_map = parse_form_data(request, headers_map)
+                else:
+                    form_map, files_map = {}, {}
+
+                # Body decode cache
+                body_obj: Any = None
+                body_loaded: bool = False
+                dep_cache: Dict[Any, Any] = {}
+
+                # Extract each parameter
+                for field in fields:
+                    if field.source == "request":
+                        value = request
+                    elif field.source == "dependency":
+                        if field.dependency is None:
+                            raise ValueError(f"Depends for parameter {field.name} requires a callable")
+                        value = await resolve_dependency(
+                            field.dependency.dependency, field.dependency, request, dep_cache,
+                            params_map, query_map, headers_map, cookies_map,
+                            self._handler_meta, self._compile_binder,
+                            meta.get("http_method", ""), meta.get("path", "")
+                        )
+                    else:
+                        value, body_obj, body_loaded = extract_parameter_value(
+                            field, request, params_map, query_map, headers_map, cookies_map,
+                            form_map, files_map, meta, body_obj, body_loaded
+                        )
+
+                    # Build args/kwargs based on parameter kind
+                    if field.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                        args.append(value)
+                    else:
+                        kwargs[field.name] = value
+
+                return args, kwargs
+            return injector_with_deps
+
+        # Sync version for handlers without dependencies (faster - no async overhead)
+        def injector_sync(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+            """Optimized synchronous injector (no dependencies)."""
+            args: List[Any] = []
+            kwargs: Dict[str, Any] = {}
+
+            # Pre-fetch request maps (direct access - no .get())
+            params_map = request["params"]
+            query_map = request["query"]
+            headers_map = request.get("headers", {})
+            cookies_map = request.get("cookies", {})
+
+            # Parse form data only if needed
+            if needs_form:
+                form_map, files_map = parse_form_data(request, headers_map)
+            else:
+                form_map, files_map = {}, {}
+
+            # Body decode cache
+            body_obj: Any = None
+            body_loaded: bool = False
+
+            # Extract each parameter
+            for field in fields:
+                if field.source == "request":
+                    value = request
+                else:
+                    value, body_obj, body_loaded = extract_parameter_value(
+                        field, request, params_map, query_map, headers_map, cookies_map,
+                        form_map, files_map, meta, body_obj, body_loaded
+                    )
+
+                # Build args/kwargs based on parameter kind
+                if field.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                    args.append(value)
+                else:
+                    kwargs[field.name] = value
+
+            return args, kwargs
+
+        return injector_sync
 
 
     def _handle_http_exception(self, he: HTTPException) -> Response:
@@ -1052,7 +1198,7 @@ class BoltAPI:
         # Use the error handler which respects Django DEBUG setting
         return handle_exception(e, debug=None, request=request)  # debug will be checked dynamically
 
-    async def _load_user(self, request: Dict[str, Any], meta: HandlerMetadata, handler_id: Optional[int] = None) -> None:
+    async def _load_user(self, request: Dict[str, Any], meta: HandlerMetadata, handler_id: Optional[int] = None) -> None:  # noqa: ARG002
         """
         Load user from auth context (eager or skip based on preload_user flag).
 
@@ -1087,7 +1233,14 @@ class BoltAPI:
 
 
     async def _dispatch(self, handler: Callable, request: Dict[str, Any], handler_id: int = None) -> Response:
-        """Async dispatch that calls the handler and returns response tuple.
+        """
+        Optimized async dispatch that calls the handler and returns response tuple.
+
+        Performance optimizations:
+        - Unchecked metadata access (guaranteed to exist)
+        - Inline user loading (eliminates function call overhead)
+        - Pre-compiled argument injector (zero parameter binding overhead)
+        - Streamlined execution flow (minimal branching)
 
         Args:
             handler: The route handler function
@@ -1123,36 +1276,45 @@ class BoltAPI:
             logging_middleware.log_request(request)
 
         try:
-            meta = self._handler_meta.get(handler)
-            if meta is None:
-                meta = self._compile_binder(handler)
-                self._handler_meta[handler] = meta
+            # 1. Direct metadata access (guaranteed to exist - fastest path)
+            meta = self._handler_meta[handler]
 
-            # Determine if handler is async (default to True for backward compatibility)
-            is_async = meta.get("is_async", True)
+            # 2. Inline user loading (eliminates _load_user() call overhead)
+            if meta.get("preload_user", True):
+                auth_context = request.get("auth")
+                if auth_context:
+                    user_id = auth_context.get("user_id")
+                    backend_name = auth_context.get("auth_backend")
+                    if user_id:
+                        request["user"] = await load_user(user_id, backend_name, auth_context)
+                    else:
+                        request["user"] = None
+                else:
+                    request["user"] = None
+            else:
+                request["user"] = None
 
-            # Load user from auth context (eager loading based on preload_user flag)
-            # If preload_user=True: loads user directly (43% faster than lazy loading)
-            # If preload_user=False: skips loading (zero overhead for public endpoints)
-            await self._load_user(request, meta, handler_id=handler_id)
-
-            # Fast path for request-only handlers
+            # 3. Fast path for request-only handlers (no parameter extraction)
             if meta.get("mode") == "request_only":
-                if is_async:
+                if meta.get("is_async", True):
                     result = await handler(request)
                 else:
-                    # Run sync handler in thread pool to avoid blocking worker
                     result = await sync_to_thread(handler, request)
             else:
-                # Build handler arguments
-                args, kwargs = await self._build_handler_arguments(meta, request)
-                if is_async:
+                # 4. Use pre-compiled injector (sync or async based on needs)
+                if meta.get("injector_is_async", False):
+                    args, kwargs = await meta["injector"](request)
+                else:
+                    args, kwargs = meta["injector"](request)
+
+                # 5. Execute handler (async or sync)
+                if meta.get("is_async", True):
                     result = await handler(*args, **kwargs)
                 else:
                     # Run sync handler in thread pool to enable concurrent I/O
-                    # This allows Django ORM queries to run concurrently across requests
                     result = await sync_to_thread(handler, *args, **kwargs)
-        # Serialize response
+
+            # 6. Serialize response
             response = await serialize_response(result, meta)
 
             # Log response if logging enabled

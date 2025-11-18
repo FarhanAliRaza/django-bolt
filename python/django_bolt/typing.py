@@ -90,6 +90,29 @@ class HandlerMetadata(TypedDict, total=False):
     openapi_description: str
     """Detailed description for OpenAPI docs"""
 
+    # Performance optimization: pre-compiled argument injector
+    injector: Any
+    """Pre-compiled function that extracts handler arguments from request.
+
+    Returns (args, kwargs) tuple ready for handler invocation.
+    Compiled once at route registration time for maximum performance.
+    Can be sync (for most handlers) or async (only if using dependencies).
+
+    Example:
+        if meta["injector_is_async"]:
+            args, kwargs = await meta["injector"](request)
+        else:
+            args, kwargs = meta["injector"](request)
+        result = await handler(*args, **kwargs)
+    """
+
+    injector_is_async: bool
+    """Whether the injector function is async (True only if handler uses Depends)"""
+
+    # User loading optimization
+    preload_user: bool
+    """Whether to eagerly load user at dispatch time (default: True if auth configured)"""
+
 
 # Simple scalar types that map to query parameters
 SIMPLE_TYPES = (str, int, float, bool, bytes)

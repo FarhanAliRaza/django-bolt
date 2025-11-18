@@ -7,6 +7,7 @@ import re
 import sys
 import time
 from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Annotated, get_type_hints
+from asgiref.sync import sync_to_async
 
 from .bootstrap import ensure_django_ready
 from django_bolt import _core
@@ -1098,14 +1099,14 @@ class BoltAPI:
                 if is_async:
                     result = await handler(request)
                 else:
-                    result = await handler(*args, **kwargs)
+                    result = await sync_to_async(handler, thread_sensitive=True)(*args, **kwargs)
             else:
                 # Build handler arguments
                 args, kwargs = await self._build_handler_arguments(meta, request)
                 if is_async:
                     result = await handler(*args, **kwargs)
                 else:
-                    result = handler(*args, **kwargs)
+                    result = await sync_to_async(handler, thread_sensitive=True)(*args, **kwargs)
         # Serialize response
             response = await serialize_response(result, meta)
 

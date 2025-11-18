@@ -314,8 +314,6 @@ def read_10k_sync() -> list[UserMini]:
     """
     from users.models import User
     users = User.objects.all()[0:100]
-    # users = list(users)
-    
     return users
     # users = list(users)
     # return users
@@ -329,7 +327,6 @@ async def read_10k_sync() -> list[UserMini]:
     """
     from users.models import User
     users = User.objects.all()[0:100]
-    # users = list(users)
     
     return users
     # users = list(users)

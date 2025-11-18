@@ -62,7 +62,6 @@ pub fn handle_test_request(
     body: Vec<u8>,
     query_string: Option<String>,
     dispatch: Py<PyAny>,
-    dispatch_sync: Py<PyAny>,
     _debug: Option<bool>,
 ) -> PyResult<(u16, Vec<(String, String)>, Vec<u8>)> {
     let router = GLOBAL_ROUTER
@@ -168,57 +167,46 @@ pub fn handle_test_request(
     };
     let request_obj = Py::new(py, request)?;
 
-    // Check if handler is async or sync from metadata
-    let is_async_handler = route_metadata
-        .as_ref()
-        .and_then(|meta| Some(meta.is_async.unwrap_or(true)))
-        .unwrap_or(true); // Default to async for backward compatibility
-
-    // Route to sync or async dispatch based on handler type
-    let result_obj = if !is_async_handler {
-        // Sync handler path: call dispatch_sync directly (no coroutine, no await)
-        dispatch_sync.call1(py, (route, request_obj, handler_id))?
+    // All handlers (sync and async) go through async dispatch
+    // Sync handlers are executed in thread pool via sync_to_thread() in Python layer
+    // Create or get event loop locals
+    let locals_owned;
+    let locals = if let Some(globals) = TASK_LOCALS.get() {
+        globals
     } else {
-        // Async handler path: call dispatch and await coroutine
-        // Create or get event loop locals
-        let locals_owned;
-        let locals = if let Some(globals) = TASK_LOCALS.get() {
-            globals
-        } else {
-            locals_owned = pyo3_async_runtimes::tokio::get_current_locals(py)?;
-            &locals_owned
-        };
+        locals_owned = pyo3_async_runtimes::tokio::get_current_locals(py)?;
+        &locals_owned
+    };
 
-        // Call dispatch to get coroutine
-        let coroutine = dispatch.call1(py, (route, request_obj, handler_id))?;
+    // Call dispatch to get coroutine (works for both sync and async handlers)
+    let coroutine = dispatch.call1(py, (route, request_obj, handler_id))?;
 
-        // Convert to future and await it
-        let fut = pyo3_async_runtimes::into_future_with_locals(&locals, coroutine.into_bound(py))?;
+    // Convert to future and await it
+    let fut = pyo3_async_runtimes::into_future_with_locals(&locals, coroutine.into_bound(py))?;
 
-        // For test context, ensure we have a tokio runtime
-        // Check if runtime exists, if not initialize one
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                // Runtime exists, use it
-                handle.block_on(fut).map_err(|e| {
+    // For test context, ensure we have a tokio runtime
+    // Check if runtime exists, if not initialize one
+    let result_obj = match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            // Runtime exists, use it
+            handle.block_on(fut).map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Handler execution failed: {}",
+                    e
+                ))
+            })?
+        }
+        Err(_) => {
+            // No runtime, create a new one for testing
+            pyo3_async_runtimes::tokio::init(tokio::runtime::Builder::new_current_thread());
+            pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(fut)
+                .map_err(|e| {
                     pyo3::exceptions::PyRuntimeError::new_err(format!(
                         "Handler execution failed: {}",
                         e
                     ))
                 })?
-            }
-            Err(_) => {
-                // No runtime, create a new one for testing
-                pyo3_async_runtimes::tokio::init(tokio::runtime::Builder::new_current_thread());
-                pyo3_async_runtimes::tokio::get_runtime()
-                    .block_on(fut)
-                    .map_err(|e| {
-                        pyo3::exceptions::PyRuntimeError::new_err(format!(
-                            "Handler execution failed: {}",
-                            e
-                        ))
-                    })?
-            }
         }
     };
 

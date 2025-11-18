@@ -11,7 +11,6 @@ use crate::router::Router;
 
 pub struct AppState {
     pub dispatch: Py<PyAny>,
-    pub dispatch_sync: Py<PyAny>,  // MVP: Synchronous dispatch for sync handlers
     pub debug: bool,
     pub max_header_size: usize,
     pub global_cors_config: Option<CorsConfig>,           // Global CORS configuration from Django settings

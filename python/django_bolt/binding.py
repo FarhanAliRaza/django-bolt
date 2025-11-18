@@ -14,6 +14,7 @@ from asgiref.sync import sync_to_async
 
 from .typing import is_msgspec_struct, is_optional, unwrap_optional
 from .typing import HandlerMetadata
+from .concurrency import sync_to_thread
 
 __all__ = [
     "convert_primitive",
@@ -324,7 +325,7 @@ async def coerce_to_response_type_async(value: Any, annotation: Any, meta: Handl
         values_qs = value.values(*field_names)
 
         # Convert QuerySet to list (this triggers SQL execution)
-        # Using sync_to_async(list) is MUCH faster than async for iteration
+        # Using sync_to_thread(list) is MUCH faster than async for iteration
         #
         # Django's async for implementation (django/db/models/query.py:54-68):
         #   - Uses GET_ITERATOR_CHUNK_SIZE = 100 (django/db/models/sql/constants.py:7)
@@ -332,7 +333,7 @@ async def coerce_to_response_type_async(value: Any, annotation: Any, meta: Handl
         #   - For 10,000 items: 100 sync_to_async calls (~30-50ms overhead)
         #   - For 100,000 items: 1000 sync_to_async calls (~300-500ms overhead)
         #
-        # Our approach: 1 sync_to_async call total (~0.3ms overhead)
+        # Our approach: 1 sync_to_thread call total (minimal overhead)
         # Performance gain: 100-1000x fewer context switches
         #
         # Memory tradeoff:
@@ -368,7 +369,8 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
     Returns:
         Coerced value
     """
-    # Handle Django QuerySets (sync version - direct list() call, no async overhead)
+    # Handle Django QuerySets - convert to list using .values()
+    # Works for both sync and async handlers (sync handlers run in thread pool)
     if meta and "response_field_names" in meta and hasattr(value, '_iterable_class') and hasattr(value, 'model'):
         # Use pre-computed field names (computed at route registration time)
         field_names = meta["response_field_names"]
@@ -377,7 +379,6 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
         values_qs = value.values(*field_names)
 
         # Convert QuerySet to list (this triggers SQL execution)
-        # Direct list() call - no sync_to_async overhead
         items = list(values_qs)
 
         # Let msgspec validate and convert entire list in one batch

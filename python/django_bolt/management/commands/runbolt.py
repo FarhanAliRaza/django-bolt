@@ -283,8 +283,8 @@ class Command(BaseCommand):
         # CRITICAL: Must be called BEFORE starting server so backends are available for user loading
         merged_api._register_auth_backends()
 
-        # Start the server (pass both async and sync dispatch)
-        _core.start_server_async(merged_api._dispatch, merged_api._dispatch_sync, options["host"], options["port"], compression_config)
+        # Start the server (all handlers go through async dispatch with thread pool for sync)
+        _core.start_server_async(merged_api._dispatch, options["host"], options["port"], compression_config)
 
     def autodiscover_apis(self):
         """Discover BoltAPI instances from installed apps.

@@ -200,11 +200,11 @@ else:
             },
         },
         "loggers": {
-            "django": {"handlers": ["console"], "level": "INFO"},
-            "django.server": {"handlers": ["console"], "level": "INFO", "propagate": False},
-            "django_bolt": {"handlers": ["console"], "level": "INFO", "propagate": False},
+            "django": {"handlers": ["console"], "level": "DEBUG"},
+            "django.server": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+            "django_bolt": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
         },
-        "root": {"handlers": ["console"], "level": "INFO"},
+        "root": {"handlers": ["console"], "level": "DEBUG"},
     }
     
     

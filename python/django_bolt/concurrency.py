@@ -52,11 +52,11 @@ async def sync_to_thread(fn: Callable[P, T], *args: P.args, **kwargs: P.kwargs) 
         - Expected 40-60% RPS improvement for I/O-bound sync handlers
     """
     # Copy current context to preserve request-scoped variables
-    ctx = contextvars.copy_context()
+    # ctx = contextvars.copy_context()
 
     # Bind the context to the function call
-    bound_fn = partial(ctx.run, fn, *args, **kwargs)
+    # bound_fn = partial(ctx.run, fn, *args, **kwargs)
 
     # Run in default executor (thread pool)
     # None = use default executor (ThreadPoolExecutor with max_workers=min(32, cpu_count + 4))
-    return await asyncio.get_running_loop().run_in_executor(None, bound_fn)
+    return await asyncio.get_running_loop().run_in_executor(None, fn, *args, **kwargs)

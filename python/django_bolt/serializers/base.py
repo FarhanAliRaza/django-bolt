@@ -13,7 +13,7 @@ import msgspec
 from msgspec import ValidationError as MsgspecValidationError
 from msgspec import structs as msgspec_structs
 
-from .decorators import collect_field_validators, collect_model_validators
+from .decorators import collect_field_validators, collect_model_validators, collect_computed_fields
 from .nested import get_nested_config, validate_nested_field
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,7 @@ class Serializer(msgspec.Struct):
     Features:
     - Field validation via @field_validator decorator
     - Model-level validation via @model_validator decorator
+    - Computed fields via @computed_field decorator
     - Django model integration (from_model, to_dict, to_model)
     - Full type safety for IDE/type checkers
     - All msgspec.Struct features (frozen, array_like, etc.)
@@ -52,11 +53,27 @@ class Serializer(msgspec.Struct):
                 from django.contrib.auth.models import User
                 if User.objects.filter(username=self.username).exists():
                     raise ValueError('Username already exists')
+
+        class UserPublic(Serializer):
+            first_name: str
+            last_name: str
+            email: str
+
+            @computed_field
+            def full_name(self) -> str:
+                \"\"\"Computed field combining first and last name.\"\"\"
+                return f"{self.first_name} {self.last_name}".strip()
+
+            @computed_field
+            def display_name(self) -> str:
+                \"\"\"Computed field with fallback logic.\"\"\"
+                return self.full_name() if self.full_name() else self.email
     """
 
     # Class attributes for validators (populated by __init_subclass__)
     __field_validators__: ClassVar[dict[str, list[Any]]] = {}
     __model_validators__: ClassVar[list[Any]] = []
+    __computed_fields__: ClassVar[dict[str, Any]] = {}
 
     # Cached type hints and metadata (populated by __init_subclass__)
     __cached_type_hints__: ClassVar[dict[str, Any]] = {}
@@ -68,6 +85,7 @@ class Serializer(msgspec.Struct):
     __has_nested_or_literal__: ClassVar[bool] = False  # Has nested/literal fields
     __has_field_validators__: ClassVar[bool] = False  # Has custom field validators
     __has_model_validators__: ClassVar[bool] = False  # Has model validators
+    __has_computed_fields__: ClassVar[bool] = False  # Has computed fields
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Collect validators and cache type hints when a subclass is created."""
@@ -75,6 +93,7 @@ class Serializer(msgspec.Struct):
         # Collect validators for this class
         cls.__field_validators__ = collect_field_validators(cls)
         cls.__model_validators__ = collect_model_validators(cls)
+        cls.__computed_fields__ = collect_computed_fields(cls)
 
         # Cache type hints and field metadata (expensive - do once!)
         cls._cache_type_metadata()
@@ -83,6 +102,7 @@ class Serializer(msgspec.Struct):
         cls.__has_nested_or_literal__ = bool(cls.__nested_fields__ or cls.__literal_fields__)
         cls.__has_field_validators__ = bool(cls.__field_validators__)
         cls.__has_model_validators__ = bool(cls.__model_validators__)
+        cls.__has_computed_fields__ = bool(cls.__computed_fields__)
 
         # Skip all validation if there's nothing to validate
         cls.__skip_validation__ = not (
@@ -468,7 +488,20 @@ class Serializer(msgspec.Struct):
                     # Regular field
                     data[field_name] = value
 
-        return cls(**data)
+        # Create the serializer instance
+        serializer_instance = cls(**data)
+
+        # Populate computed fields if any exist (fast-path: skip if no computed fields)
+        if cls.__has_computed_fields__:
+            # Computed fields are added to the result dict after creation
+            # They're not part of the struct fields, so we need to handle them separately
+            # We'll store them in a special way for to_dict() to access
+            for field_name, compute_func in cls.__computed_fields__.items():
+                # Note: Computed fields are evaluated lazily in to_dict()
+                # We don't compute them here to avoid unnecessary work
+                pass
+
+        return serializer_instance
 
     def to_dict(self, *, exclude_unset: bool = False) -> dict[str, Any]:
         """
@@ -478,7 +511,7 @@ class Serializer(msgspec.Struct):
             exclude_unset: If True, exclude fields with default values
 
         Returns:
-            Dictionary representation of the serializer
+            Dictionary representation of the serializer (includes computed fields)
 
         Example:
             user_data = UserCreateSerializer(...)
@@ -487,6 +520,19 @@ class Serializer(msgspec.Struct):
         result = {}
         for field_name in self.__struct_fields__:
             result[field_name] = getattr(self, field_name)
+
+        # Add computed fields if any exist (fast-path: skip if no computed fields)
+        if self.__has_computed_fields__:
+            for field_name, compute_func in self.__computed_fields__.items():
+                try:
+                    result[field_name] = compute_func(self)
+                except Exception as e:
+                    # Log the error but don't fail the serialization
+                    logger.warning(f"Error computing field '{field_name}': {e}")
+                    # Optionally, you could raise here depending on requirements
+                    # For now, we'll skip the field if computation fails
+                    pass
+
         return result
 
     def to_model(self, model_class: type[Model]) -> Model:

@@ -8,6 +8,7 @@ The `Serializer` class extends `msgspec.Struct` with:
 
 - **Field-level validation** via `@field_validator` decorator
 - **Model-level validation** via `@model_validator` decorator
+- **Computed fields** via `@computed_field` decorator for derived/calculated fields
 - **Nested serializers** with `Nested()` annotation for relationships
 - **Django model integration** with `.from_model()`, `.to_dict()`, `.to_model()`
 - **Async and sync support** - Works seamlessly with both `async def` and `def` handlers
@@ -137,6 +138,282 @@ class PasswordChangeSerializer(Serializer):
             raise ValueError("New passwords don't match")
         if self.old_password == self.new_password:
             raise ValueError("New password must be different from old password")
+```
+
+## Computed Fields
+
+Computed fields are read-only fields that are calculated from the serializer's data. They're included in serialization output (`to_dict()`, JSON responses) but not accepted as input. Computed fields are evaluated lazily when serializing, ensuring **zero overhead** when not used.
+
+### Basic Computed Field
+
+```python
+from django_bolt.serializers import Serializer, computed_field
+
+class UserSerializer(Serializer):
+    first_name: str
+    last_name: str
+
+    @computed_field
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}".strip()
+
+user = UserSerializer(first_name="John", last_name="Doe")
+data = user.to_dict()
+# {'first_name': 'John', 'last_name': 'Doe', 'full_name': 'John Doe'}
+```
+
+### Multiple Computed Fields
+
+You can define multiple computed fields in a single serializer:
+
+```python
+class PersonSerializer(Serializer):
+    first_name: str
+    last_name: str
+    age: int
+
+    @computed_field
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}"
+
+    @computed_field
+    def is_adult(self) -> bool:
+        return self.age >= 18
+
+    @computed_field
+    def display_name(self) -> str:
+        return f"{self.full_name()} ({self.age})"
+
+person = PersonSerializer(first_name="Alice", last_name="Smith", age=25)
+data = person.to_dict()
+# {
+#     'first_name': 'Alice',
+#     'last_name': 'Smith',
+#     'age': 25,
+#     'full_name': 'Alice Smith',
+#     'is_adult': True,
+#     'display_name': 'Alice Smith (25)'
+# }
+```
+
+### Computed Fields with Django Models
+
+Computed fields work seamlessly with `from_model()`:
+
+```python
+from django.contrib.auth.models import User
+
+class UserPublicSerializer(Serializer):
+    id: int
+    username: str
+    first_name: str
+    last_name: str
+    email: str
+
+    @computed_field
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}".strip()
+
+    @computed_field
+    def display_name(self) -> str:
+        if self.first_name or self.last_name:
+            return self.full_name()
+        return self.username
+
+# Use in API endpoint
+@api.get("/users/{user_id}")
+async def get_user(user_id: int):
+    user = await User.objects.aget(id=user_id)
+    return UserPublicSerializer.from_model(user)
+# Response includes computed fields:
+# {
+#     'id': 1,
+#     'username': 'jdoe',
+#     'first_name': 'John',
+#     'last_name': 'Doe',
+#     'email': 'jdoe@example.com',
+#     'full_name': 'John Doe',
+#     'display_name': 'John Doe'
+# }
+```
+
+### Computed Fields with Validation
+
+Computed fields can access validated field values:
+
+```python
+class ProductSerializer(Serializer):
+    name: str
+    price: float
+    quantity: int
+
+    @field_validator("name")
+    def uppercase_name(cls, value):
+        return value.upper()
+
+    @computed_field
+    def total_value(self) -> float:
+        return self.price * self.quantity
+
+    @computed_field
+    def display(self) -> str:
+        total = self.price * self.quantity
+        return f"{self.name}: ${total:.2f}"
+
+product = ProductSerializer(name="widget", price=10.50, quantity=5)
+data = product.to_dict()
+# {
+#     'name': 'WIDGET',
+#     'price': 10.5,
+#     'quantity': 5,
+#     'total_value': 52.5,
+#     'display': 'WIDGET: $52.50'
+# }
+```
+
+### Computed Fields with Complex Return Types
+
+Computed fields can return any type that msgspec can serialize:
+
+```python
+class StatsSerializer(Serializer):
+    items: list[int]
+
+    @computed_field
+    def item_stats(self) -> dict:
+        return {
+            "count": len(self.items),
+            "sum": sum(self.items),
+            "avg": sum(self.items) / len(self.items) if self.items else 0,
+            "min": min(self.items) if self.items else None,
+            "max": max(self.items) if self.items else None,
+        }
+
+data = StatsSerializer(items=[1, 2, 3, 4, 5])
+result = data.to_dict()
+# {
+#     'items': [1, 2, 3, 4, 5],
+#     'item_stats': {
+#         'count': 5,
+#         'sum': 15,
+#         'avg': 3.0,
+#         'min': 1,
+#         'max': 5
+#     }
+# }
+```
+
+### Performance Characteristics
+
+Computed fields are designed for **zero overhead when not used**:
+
+- **Class-time collection**: Computed fields are identified once during class definition
+- **Fast-path flag**: Serializers without computed fields skip all computation logic
+- **Lazy evaluation**: Computed fields are only evaluated when `to_dict()` is called
+- **No validation overhead**: Computed fields don't participate in `__post_init__` validation
+
+```python
+# Serializer without computed fields - zero overhead
+class SimpleSerializer(Serializer):
+    name: str
+    value: int
+
+# Fast-path flag is False
+assert SimpleSerializer.__has_computed_fields__ is False
+
+# Serializer with computed fields
+class ComputedSerializer(Serializer):
+    name: str
+    value: int
+
+    @computed_field
+    def doubled(self) -> int:
+        return self.value * 2
+
+# Fast-path flag is True
+assert ComputedSerializer.__has_computed_fields__ is True
+
+# Computed fields only run when serializing
+instance = ComputedSerializer(name="test", value=10)  # No computation yet
+data = instance.to_dict()  # Computed fields run now
+# {'name': 'test', 'value': 10, 'doubled': 20}
+```
+
+### Computed Fields are Read-Only
+
+Computed fields cannot be passed as input to the serializer:
+
+```python
+class UserSerializer(Serializer):
+    first_name: str
+    last_name: str
+
+    @computed_field
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}"
+
+# ✅ Correct - only pass struct fields
+user = UserSerializer(first_name="John", last_name="Doe")
+
+# ❌ Wrong - computed fields are not in __struct_fields__
+# user = UserSerializer(first_name="John", last_name="Doe", full_name="...")
+# This will raise an error because full_name is not a struct field
+```
+
+### Computed Fields with Inheritance
+
+Computed fields are inherited by subclasses:
+
+```python
+class BaseUserSerializer(Serializer):
+    first_name: str
+    last_name: str
+
+    @computed_field
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}"
+
+class ExtendedUserSerializer(BaseUserSerializer):
+    email: str
+
+    @computed_field
+    def email_with_name(self) -> str:
+        return f"{self.full_name()} <{self.email}>"
+
+user = ExtendedUserSerializer(
+    first_name="Jane",
+    last_name="Doe",
+    email="jane@example.com"
+)
+data = user.to_dict()
+# Both computed fields are present:
+# {
+#     'first_name': 'Jane',
+#     'last_name': 'Doe',
+#     'email': 'jane@example.com',
+#     'full_name': 'Jane Doe',
+#     'email_with_name': 'Jane Doe <jane@example.com>'
+# }
+```
+
+### Error Handling
+
+If a computed field raises an exception, it's logged and skipped:
+
+```python
+class SafeSerializer(Serializer):
+    value: int
+
+    @computed_field
+    def risky_computation(self) -> float:
+        if self.value == 0:
+            raise ValueError("Cannot divide by zero")
+        return 100 / self.value
+
+# If computation fails, the field is simply not included
+safe = SafeSerializer(value=0)
+data = safe.to_dict()
+# {'value': 0}  # risky_computation is not present
 ```
 
 ## Nested Serializers

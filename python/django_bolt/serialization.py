@@ -18,7 +18,8 @@ def _convert_serializers(result: Any) -> Any:
     Convert Serializer instances to dicts using dump().
 
     This ensures write_only fields are excluded and computed_field values are included.
-    Uses duck typing to avoid circular imports.
+    Uses a unique marker (__is_bolt_serializer__) to identify Serializers, avoiding
+    false positives from duck typing with random objects that happen to have dump().
 
     Args:
         result: The handler result to potentially convert
@@ -26,15 +27,15 @@ def _convert_serializers(result: Any) -> Any:
     Returns:
         Converted result (dict/list if Serializer, original otherwise)
     """
-    # Check for Serializer instance (duck typing to avoid circular import)
-    # Serializer has dump() method and __has_computed_fields__ class attribute
-    if hasattr(result, "dump") and hasattr(result.__class__, "__has_computed_fields__"):
+    # Check for Serializer instance using unique marker (not duck typing)
+    # __is_bolt_serializer__ is defined on the Serializer base class
+    if getattr(result.__class__, "__is_bolt_serializer__", False) and hasattr(result, "dump"):
         return result.dump()
 
     # Handle list of Serializers
-    if isinstance(result, list) and result:
+    if isinstance(result, list) and len(result) > 0:
         first = result[0]
-        if hasattr(first, "dump") and hasattr(first.__class__, "__has_computed_fields__"):
+        if getattr(first.__class__, "__is_bolt_serializer__", False) and hasattr(first, "dump"):
             return [item.dump() for item in result]
 
     return result

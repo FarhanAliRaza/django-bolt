@@ -33,6 +33,38 @@ T = TypeVar("T", bound="Serializer")
 _subset_cache: dict[tuple[type, frozenset[str]], type] = {}
 
 
+def clear_subset_cache() -> int:
+    """
+    Clear the cache of dynamically created subset serializer classes.
+
+    In long-running processes that create many dynamic subsets, the cache can
+    grow unbounded. Call this function periodically to free memory if needed.
+
+    Returns:
+        The number of cached classes that were cleared.
+
+    Example:
+        from django_bolt.serializers.base import clear_subset_cache
+
+        # Clear cache and get count
+        count = clear_subset_cache()
+        print(f"Cleared {count} cached subset serializers")
+    """
+    count = len(_subset_cache)
+    _subset_cache.clear()
+    return count
+
+
+def get_subset_cache_size() -> int:
+    """
+    Get the current size of the subset serializer cache.
+
+    Returns:
+        The number of cached subset serializer classes.
+    """
+    return len(_subset_cache)
+
+
 class Serializer(msgspec.Struct):
     """
     Enhanced msgspec.Struct with validation and Django model integration.
@@ -63,6 +95,9 @@ class Serializer(msgspec.Struct):
                     raise ValueError('Username already exists')
     """
 
+    # Unique marker to identify Serializer instances (for type checking in _convert_serializers)
+    __is_bolt_serializer__: ClassVar[bool] = True
+
     # Class attributes for validators (populated by __init_subclass__)
     __field_validators__: ClassVar[dict[str, list[Any]]] = {}
     __model_validators__: ClassVar[list[Any]] = []
@@ -80,12 +115,16 @@ class Serializer(msgspec.Struct):
     __source_mapping__: ClassVar[dict[str, str]] = {}  # API field name -> source attribute
     __field_sets__: ClassVar[dict[str, list[str]]] = {}  # Named field sets for use() method
 
+    # _FieldMarker default resolution (populated by __init_subclass__)
+    __field_marker_defaults__: ClassVar[dict[str, Any]] = {}  # field_name -> actual default value
+
     # Fast-path flags: Control which validation runs (set at class definition time)
     __skip_validation__: ClassVar[bool] = True  # Skip all validation
     __has_nested_or_literal__: ClassVar[bool] = False  # Has nested/literal fields
     __has_field_validators__: ClassVar[bool] = False  # Has custom field validators
     __has_model_validators__: ClassVar[bool] = False  # Has model validators
     __has_computed_fields__: ClassVar[bool] = False  # Has computed fields
+    __has_field_markers__: ClassVar[bool] = False  # Has fields defined with field()
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Collect validators and cache type hints when a subclass is created."""
@@ -121,32 +160,53 @@ class Serializer(msgspec.Struct):
 
         This processes fields defined with the field() function and extracts
         their configuration (read_only, write_only, source, etc.).
+
+        Also extracts actual default values from _FieldMarker instances so they
+        can be applied in __post_init__ (since msgspec stores the _FieldMarker
+        as the default, not the actual default value).
         """
         field_configs: dict[str, FieldConfig] = {}
+        field_marker_defaults: dict[str, Any] = {}
         read_only: set[str] = set()
         write_only: set[str] = set()
         source_mapping: dict[str, str] = {}
 
+        # Build a mapping from field name to default value position
+        # msgspec stores defaults aligned from the END of the fields list
+        defaults = getattr(cls, "__struct_defaults__", ())
+        fields = getattr(cls, "__struct_fields__", ())
+        num_fields = len(fields)
+        num_defaults = len(defaults)
+
         # Walk through class annotations to find field markers
         # Note: We can't actually intercept msgspec.Struct field creation,
         # so we check class attributes for _FieldMarker defaults
-        for field_name in getattr(cls, "__struct_fields__", ()):
-            # Check if this field has a default that's a _FieldMarker
-            defaults = getattr(cls, "__struct_defaults__", ())
-            field_idx = cls.__struct_fields__.index(field_name) if field_name in cls.__struct_fields__ else -1
+        for i, default_val in enumerate(defaults):
+            # Calculate which field this default belongs to
+            field_idx = num_fields - num_defaults + i
+            if field_idx < 0 or field_idx >= num_fields:
+                continue
 
-            if field_idx >= 0 and field_idx < len(defaults):
-                default_val = defaults[field_idx]
-                if isinstance(default_val, _FieldMarker):
-                    config = default_val.config
-                    field_configs[field_name] = config
+            field_name = fields[field_idx]
 
-                    if config.read_only:
-                        read_only.add(field_name)
-                    if config.write_only:
-                        write_only.add(field_name)
-                    if config.source:
-                        source_mapping[field_name] = config.source
+            if isinstance(default_val, _FieldMarker):
+                config = default_val.config
+                field_configs[field_name] = config
+
+                # Extract the actual default value from the _FieldMarker
+                if config.has_default():
+                    field_marker_defaults[field_name] = config.get_default()
+                else:
+                    # No explicit default - field is required but user didn't provide
+                    # We'll use the _FieldMarker itself as a sentinel
+                    field_marker_defaults[field_name] = _UNSET
+
+                if config.read_only:
+                    read_only.add(field_name)
+                if config.write_only:
+                    write_only.add(field_name)
+                if config.source:
+                    source_mapping[field_name] = config.source
 
         # Also check Meta class for read_only/write_only sets (for backwards compatibility)
         meta = getattr(cls, "Meta", None)
@@ -162,9 +222,11 @@ class Serializer(msgspec.Struct):
             cls.__field_sets__ = meta_field_sets
 
         cls.__field_configs__ = field_configs
+        cls.__field_marker_defaults__ = field_marker_defaults
         cls.__read_only_fields__ = frozenset(read_only)
         cls.__write_only_fields__ = frozenset(write_only)
         cls.__source_mapping__ = source_mapping
+        cls.__has_field_markers__ = bool(field_marker_defaults)
 
     @classmethod
     def _cache_type_metadata(cls) -> None:
@@ -252,12 +314,22 @@ class Serializer(msgspec.Struct):
         """
         Run all field and model validators after struct initialization.
 
+        Also fixes _FieldMarker defaults - msgspec stores the _FieldMarker object
+        as the default value, so we need to replace it with the actual default.
+
         Validators are executed in order:
-        1. Field validators with mode='before'
-        2. Field validators with mode='after'
-        3. Model validators with mode='before'
-        4. Model validators with mode='after'
+        1. Fix _FieldMarker defaults (always runs to check for field() usage)
+        2. Field validators with mode='before'
+        3. Field validators with mode='after'
+        4. Model validators with mode='before'
+        5. Model validators with mode='after'
         """
+        # ALWAYS check for and fix _FieldMarker defaults
+        # This handles the case where field() was used but the value wasn't provided
+        # Note: __has_field_markers__ can't be reliably set in __init_subclass__
+        # because msgspec hasn't processed the class yet at that point
+        self._fix_field_marker_defaults()
+
         # Fast path: skip validation if there are no validators
         # This avoids function call overhead when there's nothing to validate
         if self.__skip_validation__:
@@ -268,6 +340,88 @@ class Serializer(msgspec.Struct):
 
         # Run model validators
         self._run_model_validators()
+
+    def _fix_field_marker_defaults(self) -> None:
+        """
+        Replace _FieldMarker instances with their actual default values.
+
+        When using field(), msgspec stores the _FieldMarker object as the default.
+        This method checks if any field values are _FieldMarker instances and
+        replaces them with the configured default value.
+
+        Also lazily collects field configs (read_only, write_only, etc.) on first
+        instance creation, since __init_subclass__ runs before msgspec sets
+        __struct_defaults__.
+        """
+        cls = self.__class__
+        _setattr = msgspec_structs.force_setattr
+
+        # Lazy field config collection - run once per class when first instance is created
+        # This is needed because __init_subclass__ runs BEFORE msgspec sets __struct_defaults__
+        if not getattr(cls, "__field_configs_collected__", False):
+            cls._lazy_collect_field_configs()
+
+        for field_name in self.__struct_fields__:
+            current_value = getattr(self, field_name)
+
+            # Check if the current value is a _FieldMarker (meaning the user
+            # didn't provide a value and msgspec used the marker as default)
+            if isinstance(current_value, _FieldMarker):
+                config = current_value.config
+                if config.has_default():
+                    # Replace with actual default from the _FieldMarker config
+                    _setattr(self, field_name, config.get_default())
+                else:
+                    # field() was used without a default, and user didn't provide value
+                    # This shouldn't normally happen since msgspec requires the field
+                    raise MsgspecValidationError(
+                        f"Field '{field_name}' is required but was not provided"
+                    )
+
+    @classmethod
+    def _lazy_collect_field_configs(cls) -> None:
+        """
+        Lazily collect field configs from _FieldMarker defaults.
+
+        This runs once per class on first instance creation, because at this point
+        msgspec has already processed the class and set __struct_defaults__.
+        """
+        field_configs: dict[str, FieldConfig] = {}
+        read_only: set[str] = set()
+        write_only: set[str] = set()
+        source_mapping: dict[str, str] = {}
+
+        defaults = getattr(cls, "__struct_defaults__", ())
+        fields = getattr(cls, "__struct_fields__", ())
+        num_fields = len(fields)
+        num_defaults = len(defaults)
+
+        for i, default_val in enumerate(defaults):
+            field_idx = num_fields - num_defaults + i
+            if field_idx < 0 or field_idx >= num_fields:
+                continue
+
+            field_name = fields[field_idx]
+
+            if isinstance(default_val, _FieldMarker):
+                config = default_val.config
+                field_configs[field_name] = config
+
+                if config.read_only:
+                    read_only.add(field_name)
+                if config.write_only:
+                    write_only.add(field_name)
+                if config.source:
+                    source_mapping[field_name] = config.source
+
+        # Merge with existing configs from Meta class
+        cls.__field_configs__.update(field_configs)
+        cls.__read_only_fields__ = cls.__read_only_fields__ | frozenset(read_only)
+        cls.__write_only_fields__ = cls.__write_only_fields__ | frozenset(write_only)
+        cls.__source_mapping__.update(source_mapping)
+
+        # Mark as collected so we don't run again
+        cls.__field_configs_collected__ = True
 
     def _run_field_validators(self) -> None:
         """Execute all field validators in order."""
@@ -812,6 +966,7 @@ class Serializer(msgspec.Struct):
             A new Serializer class with the fields from the field set
 
         Raises:
+            TypeError: If field_set is not a non-empty string
             ValueError: If the field set name is not defined
 
         Example:
@@ -836,6 +991,10 @@ class Serializer(msgspec.Struct):
             async def list_users() -> list[UserListSerializer]:
                 ...
         """
+        # Validate field_set parameter
+        if not isinstance(field_set, str) or not field_set:
+            raise TypeError("field_set must be a non-empty string")
+
         field_sets = getattr(cls, "__field_sets__", {})
         if field_set not in field_sets:
             available = ", ".join(field_sets.keys()) if field_sets else "none defined"

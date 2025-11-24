@@ -8,6 +8,21 @@ from .fields import FieldConfig, field
 from .helpers import create_serializer, create_serializer_set
 from .nested import Nested
 
+# Re-export common types for convenience
+# Full list available in django_bolt.serializers.types
+from .types import (
+    Email,
+    HttpUrl,
+    HttpsUrl,
+    PhoneNumber,
+    Slug,
+    Username,
+    NonEmptyStr,
+    PositiveInt,
+    NonNegativeInt,
+    Percentage,
+)
+
 __all__ = [
     # Core classes
     "Serializer",
@@ -23,4 +38,15 @@ __all__ = [
     "create_serializer",
     "create_serializer_set",
     "Nested",
+    # Common types (full list in .types module)
+    "Email",
+    "HttpUrl",
+    "HttpsUrl",
+    "PhoneNumber",
+    "Slug",
+    "Username",
+    "NonEmptyStr",
+    "PositiveInt",
+    "NonNegativeInt",
+    "Percentage",
 ]

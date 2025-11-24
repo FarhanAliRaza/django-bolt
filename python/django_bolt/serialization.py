@@ -13,9 +13,39 @@ if TYPE_CHECKING:
 ResponseTuple = Tuple[int, List[Tuple[str, str]], bytes]
 
 
+def _convert_serializers(result: Any) -> Any:
+    """
+    Convert Serializer instances to dicts using dump().
+
+    This ensures write_only fields are excluded and computed_field values are included.
+    Uses duck typing to avoid circular imports.
+
+    Args:
+        result: The handler result to potentially convert
+
+    Returns:
+        Converted result (dict/list if Serializer, original otherwise)
+    """
+    # Check for Serializer instance (duck typing to avoid circular import)
+    # Serializer has dump() method and __has_computed_fields__ class attribute
+    if hasattr(result, "dump") and hasattr(result.__class__, "__has_computed_fields__"):
+        return result.dump()
+
+    # Handle list of Serializers
+    if isinstance(result, list) and result:
+        first = result[0]
+        if hasattr(first, "dump") and hasattr(first.__class__, "__has_computed_fields__"):
+            return [item.dump() for item in result]
+
+    return result
+
+
 async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTuple:
     """Serialize handler result to HTTP response."""
     response_tp = meta.get("response_type")
+
+    # Convert Serializer instances to dicts (handles write_only, computed_field)
+    result = _convert_serializers(result)
 
     # Check if result is already a raw response tuple (status, headers, body)
     # This is used by ASGI bridge and other low-level handlers
@@ -62,6 +92,9 @@ async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTupl
 def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple:
     """Serialize handler result to HTTP response (sync version for sync handlers)."""
     response_tp = meta.get("response_type")
+
+    # Convert Serializer instances to dicts (handles write_only, computed_field)
+    result = _convert_serializers(result)
 
     # Check if result is already a raw response tuple (status, headers, body)
     if isinstance(result, tuple) and len(result) == 3:

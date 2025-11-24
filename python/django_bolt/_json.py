@@ -3,6 +3,7 @@
 This module provides optimized JSON encoding/decoding using msgspec with:
 - Thread-local cached encoder/decoder instances (thread-safe buffer reuse)
 - Support for common non-JSON-native types (datetime, Path, Decimal, UUID, IP addresses)
+- Automatic Serializer.dump() for write_only, computed_field support
 - Type-safe decoding with validation
 - Custom encoder/decoder hooks
 
@@ -63,6 +64,9 @@ def default_serializer(value: Any) -> Any:
 
     Walks the MRO (Method Resolution Order) to support subclasses.
     Raises TypeError if type is unsupported.
+
+    Note: Serializer instances are handled in serialization.py before reaching
+    this hook, since msgspec.Struct is natively supported by msgspec.
     """
     # Walk MRO to support polymorphic types
     for base in value.__class__.__mro__[:-1]:  # Skip 'object'

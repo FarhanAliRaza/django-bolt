@@ -620,6 +620,228 @@ class UserSerializer(Serializer):
         read_only = {'id', 'date_joined'}  # Output-only fields
 ```
 
+## Advanced Features
+
+### Field Configuration with `field()`
+
+Use the `field()` function for fine-grained control over field behavior:
+
+```python
+from django_bolt.serializers import Serializer, field
+
+class UserSerializer(Serializer):
+    id: int = field(read_only=True)  # Only in output, not input
+    email: str = field(source="email_address")  # Map to different model attribute
+    password: str = field(write_only=True)  # Only in input, not output
+    name: str = field(min_length=1, max_length=100)  # Constraints
+```
+
+**Available options:**
+
+| Option | Description |
+|--------|-------------|
+| `read_only=True` | Field only appears in output (dump), ignored in input |
+| `write_only=True` | Field only accepted in input, excluded from output |
+| `source="attr"` | Map API field name to different model attribute |
+| `alias="name"` | Alternative JSON key name |
+| `default=value` | Default value for the field |
+| `default_factory=fn` | Factory function for mutable defaults |
+| `exclude=True` | Always exclude from serialization |
+| `ge`, `gt`, `le`, `lt` | Numeric constraints |
+| `min_length`, `max_length` | String/list length constraints |
+| `pattern` | Regex pattern for strings |
+
+### Computed Fields with `@computed_field`
+
+Add calculated fields that are computed during serialization:
+
+```python
+from django_bolt.serializers import Serializer, computed_field
+
+class UserSerializer(Serializer):
+    first_name: str
+    last_name: str
+
+    @computed_field
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}"
+
+    @computed_field
+    def initials(self) -> str:
+        return f"{self.first_name[0]}{self.last_name[0]}".upper()
+
+# Usage:
+user = UserSerializer(first_name="John", last_name="Doe")
+user.dump()
+# {"first_name": "John", "last_name": "Doe", "full_name": "John Doe", "initials": "JD"}
+```
+
+**Note:** Computed fields are OUTPUT ONLY - they don't exist during parsing/loading.
+
+### Dynamic Field Selection
+
+One of the biggest pain points with DRF is needing multiple serializer classes for different views (list vs detail, admin vs public). Django-Bolt solves this with dynamic field selection:
+
+#### Using `only()` - Include specific fields
+
+```python
+class UserSerializer(Serializer):
+    id: int
+    name: str
+    email: str
+    created_at: datetime
+    internal_notes: str
+
+# For list view - only essential fields
+UserSerializer.only("id", "name", "email").dump_many(users)
+# Returns: [{"id": 1, "name": "John", "email": "john@example.com"}, ...]
+```
+
+#### Using `exclude()` - Remove specific fields
+
+```python
+# Exclude sensitive fields
+UserSerializer.exclude("internal_notes", "created_at").dump(user)
+# Returns: {"id": 1, "name": "John", "email": "john@example.com"}
+```
+
+#### Using `use()` - Predefined field sets
+
+Define common field combinations once, reuse everywhere:
+
+```python
+class UserSerializer(Serializer):
+    id: int
+    name: str
+    email: str
+    password: str
+    created_at: datetime
+    last_login: datetime
+    internal_notes: str
+
+    class Meta:
+        write_only = {"password"}
+        field_sets = {
+            "list": ["id", "name", "email"],
+            "detail": ["id", "name", "email", "created_at", "last_login"],
+            "admin": ["id", "name", "email", "created_at", "last_login", "internal_notes"],
+        }
+
+# In your API handlers:
+@api.get("/users")
+async def list_users():
+    users = await User.objects.all()
+    return UserSerializer.use("list").dump_many([UserSerializer.from_model(u) for u in users])
+
+@api.get("/users/{user_id}")
+async def get_user(user_id: int):
+    user = await User.objects.aget(id=user_id)
+    return UserSerializer.use("detail").dump(UserSerializer.from_model(user))
+
+@api.get("/admin/users/{user_id}")
+async def admin_get_user(user_id: int):
+    user = await User.objects.aget(id=user_id)
+    return UserSerializer.use("admin").dump(UserSerializer.from_model(user))
+```
+
+#### Chaining field selection
+
+```python
+# Start with a field set, then further customize
+UserSerializer.use("detail").exclude("last_login").dump(user)
+
+# Chain multiple exclusions
+UserSerializer.only("id", "name", "email", "phone").exclude("email").dump(user)
+```
+
+### Dump Methods
+
+Serializers now have powerful `dump()` methods with various options:
+
+```python
+class UserSerializer(Serializer):
+    name: str
+    email: str | None = None
+    role: str = "user"
+
+user = UserSerializer(name="John", email=None, role="user")
+
+# Basic dump
+user.dump()  # {"name": "John", "email": None, "role": "user"}
+
+# Exclude None values (great for sparse responses)
+user.dump(exclude_none=True)  # {"name": "John", "role": "user"}
+
+# Exclude default values (great for PATCH responses)
+user.dump(exclude_defaults=True)  # {"name": "John"}
+
+# Dump to JSON bytes (fast, using msgspec)
+user.dump_json()  # b'{"name":"John","email":null,"role":"user"}'
+
+# Dump multiple instances
+users = [UserSerializer(name="John", role="admin"), UserSerializer(name="Jane")]
+UserSerializer.dump_many(users)  # [{"name": "John", ...}, {"name": "Jane", ...}]
+UserSerializer.dump_many_json(users)  # JSON bytes
+```
+
+### Complete Example: One Serializer, Multiple Views
+
+Here's how to replace multiple DRF serializers with ONE Django-Bolt serializer:
+
+```python
+# BEFORE (DRF style - 4 serializers)
+class UserListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'name']
+
+class UserDetailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'name', 'email', 'created_at']
+
+class UserCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['name', 'email', 'password']
+
+class UserAdminSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'name', 'email', 'created_at', 'is_staff', 'internal_notes']
+
+
+# AFTER (Django-Bolt style - 1 serializer)
+from django_bolt.serializers import Serializer, computed_field, field
+
+class UserSerializer(Serializer):
+    id: int
+    name: str
+    email: str
+    password: str
+    created_at: datetime
+    is_staff: bool = False
+    internal_notes: str | None = None
+
+    class Meta:
+        write_only = {"password"}  # Never include in output
+        field_sets = {
+            "list": ["id", "name"],
+            "detail": ["id", "name", "email", "created_at"],
+            "admin": ["id", "name", "email", "created_at", "is_staff", "internal_notes"],
+        }
+
+    @computed_field
+    def display_name(self) -> str:
+        return f"@{self.name}"
+
+# Usage in handlers:
+UserSerializer.use("list").dump_many(users)      # List view
+UserSerializer.use("detail").dump(user)          # Detail view
+UserSerializer.use("admin").dump(user)           # Admin view
+UserSerializer.only("id", "display_name").dump(user)  # Custom view
+```
+
 ## Features Inherited from msgspec.Struct
 
 Since `Serializer` extends `msgspec.Struct`, you get all msgspec features:

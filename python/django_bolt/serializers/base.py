@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import logging
 import sys
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Any, ClassVar, Iterable, Literal, TypeVar, get_args, get_origin, get_type_hints
 
 from django.db.models import Model as DjangoModel
 
@@ -13,7 +13,13 @@ import msgspec
 from msgspec import ValidationError as MsgspecValidationError
 from msgspec import structs as msgspec_structs
 
-from .decorators import collect_field_validators, collect_model_validators
+from .decorators import (
+    ComputedFieldConfig,
+    collect_computed_fields,
+    collect_field_validators,
+    collect_model_validators,
+)
+from .fields import FieldConfig, _FieldMarker, _UNSET
 from .nested import get_nested_config, validate_nested_field
 
 logger = logging.getLogger(__name__)
@@ -63,11 +69,20 @@ class Serializer(msgspec.Struct):
     __nested_fields__: ClassVar[dict[str, Any]] = {}
     __literal_fields__: ClassVar[dict[str, frozenset[Any]]] = {}  # Frozenset for O(1) lookup
 
+    # Field configuration (populated by __init_subclass__)
+    __field_configs__: ClassVar[dict[str, FieldConfig]] = {}
+    __computed_fields__: ClassVar[dict[str, ComputedFieldConfig]] = {}
+    __read_only_fields__: ClassVar[frozenset[str]] = frozenset()
+    __write_only_fields__: ClassVar[frozenset[str]] = frozenset()
+    __source_mapping__: ClassVar[dict[str, str]] = {}  # API field name -> source attribute
+    __field_sets__: ClassVar[dict[str, list[str]]] = {}  # Named field sets for use() method
+
     # Fast-path flags: Control which validation runs (set at class definition time)
     __skip_validation__: ClassVar[bool] = True  # Skip all validation
     __has_nested_or_literal__: ClassVar[bool] = False  # Has nested/literal fields
     __has_field_validators__: ClassVar[bool] = False  # Has custom field validators
     __has_model_validators__: ClassVar[bool] = False  # Has model validators
+    __has_computed_fields__: ClassVar[bool] = False  # Has computed fields
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Collect validators and cache type hints when a subclass is created."""
@@ -75,6 +90,10 @@ class Serializer(msgspec.Struct):
         # Collect validators for this class
         cls.__field_validators__ = collect_field_validators(cls)
         cls.__model_validators__ = collect_model_validators(cls)
+        cls.__computed_fields__ = collect_computed_fields(cls)
+
+        # Collect field configurations from _FieldMarker defaults
+        cls._collect_field_configs()
 
         # Cache type hints and field metadata (expensive - do once!)
         cls._cache_type_metadata()
@@ -83,6 +102,7 @@ class Serializer(msgspec.Struct):
         cls.__has_nested_or_literal__ = bool(cls.__nested_fields__ or cls.__literal_fields__)
         cls.__has_field_validators__ = bool(cls.__field_validators__)
         cls.__has_model_validators__ = bool(cls.__model_validators__)
+        cls.__has_computed_fields__ = bool(cls.__computed_fields__)
 
         # Skip all validation if there's nothing to validate
         cls.__skip_validation__ = not (
@@ -90,6 +110,58 @@ class Serializer(msgspec.Struct):
             or cls.__has_field_validators__
             or cls.__has_model_validators__
         )
+
+    @classmethod
+    def _collect_field_configs(cls) -> None:
+        """
+        Collect field configurations from _FieldMarker defaults.
+
+        This processes fields defined with the field() function and extracts
+        their configuration (read_only, write_only, source, etc.).
+        """
+        field_configs: dict[str, FieldConfig] = {}
+        read_only: set[str] = set()
+        write_only: set[str] = set()
+        source_mapping: dict[str, str] = {}
+
+        # Walk through class annotations to find field markers
+        # Note: We can't actually intercept msgspec.Struct field creation,
+        # so we check class attributes for _FieldMarker defaults
+        for field_name in getattr(cls, "__struct_fields__", ()):
+            # Check if this field has a default that's a _FieldMarker
+            defaults = getattr(cls, "__struct_defaults__", ())
+            field_idx = cls.__struct_fields__.index(field_name) if field_name in cls.__struct_fields__ else -1
+
+            if field_idx >= 0 and field_idx < len(defaults):
+                default_val = defaults[field_idx]
+                if isinstance(default_val, _FieldMarker):
+                    config = default_val.config
+                    field_configs[field_name] = config
+
+                    if config.read_only:
+                        read_only.add(field_name)
+                    if config.write_only:
+                        write_only.add(field_name)
+                    if config.source:
+                        source_mapping[field_name] = config.source
+
+        # Also check Meta class for read_only/write_only sets (for backwards compatibility)
+        meta = getattr(cls, "Meta", None)
+        if meta:
+            meta_read_only = getattr(meta, "read_only", set())
+            meta_write_only = getattr(meta, "write_only", set())
+            meta_field_sets = getattr(meta, "field_sets", {})
+
+            read_only.update(meta_read_only)
+            write_only.update(meta_write_only)
+
+            # Store field_sets on class for use() method
+            cls.__field_sets__ = meta_field_sets
+
+        cls.__field_configs__ = field_configs
+        cls.__read_only_fields__ = frozenset(read_only)
+        cls.__write_only_fields__ = frozenset(write_only)
+        cls.__source_mapping__ = source_mapping
 
     @classmethod
     def _cache_type_metadata(cls) -> None:
@@ -555,3 +627,556 @@ class Serializer(msgspec.Struct):
 
         validators: dict[str, list[Any]] = {}
         """Additional validators to apply to fields"""
+
+        field_sets: dict[str, list[str]] = {}
+        """
+        Named field sets for dynamic field selection.
+
+        Example:
+            class Meta:
+                field_sets = {
+                    "list": ["id", "name", "email"],
+                    "detail": ["id", "name", "email", "created_at", "posts"],
+                    "create": ["name", "email", "password"],
+                }
+        """
+
+    # -------------------------------------------------------------------------
+    # Dynamic Field Selection Methods
+    # -------------------------------------------------------------------------
+
+    @classmethod
+    def only(cls: type[T], *fields: str) -> SerializerView[T]:
+        """
+        Create a view that only includes the specified fields during serialization.
+
+        This does NOT create a new serializer class - it returns a view object
+        that wraps the serializer and filters fields during dump().
+
+        Args:
+            *fields: Field names to include in output
+
+        Returns:
+            SerializerView that can be used like the serializer but with filtered fields
+
+        Example:
+            # Only include id and name in output
+            UserSerializer.only("id", "name").dump(user)
+            # Returns: {"id": 1, "name": "John"}
+
+            # Chain with dump_many for lists
+            UserSerializer.only("id", "email").dump_many(users)
+        """
+        return SerializerView(cls, include_fields=frozenset(fields))
+
+    @classmethod
+    def exclude(cls: type[T], *fields: str) -> SerializerView[T]:
+        """
+        Create a view that excludes the specified fields during serialization.
+
+        This does NOT create a new serializer class - it returns a view object
+        that wraps the serializer and filters fields during dump().
+
+        Args:
+            *fields: Field names to exclude from output
+
+        Returns:
+            SerializerView that can be used like the serializer but with filtered fields
+
+        Example:
+            # Exclude password from output
+            UserSerializer.exclude("password", "secret_key").dump(user)
+
+            # Chain with dump_many for lists
+            UserSerializer.exclude("internal_notes").dump_many(users)
+        """
+        return SerializerView(cls, exclude_fields=frozenset(fields))
+
+    @classmethod
+    def use(cls: type[T], field_set: str) -> SerializerView[T]:
+        """
+        Create a view using a predefined field set from Meta.field_sets.
+
+        This allows you to define common field combinations once and reuse them.
+
+        Args:
+            field_set: Name of the field set defined in Meta.field_sets
+
+        Returns:
+            SerializerView configured with the predefined field set
+
+        Raises:
+            ValueError: If the field set name is not defined
+
+        Example:
+            class UserSerializer(Serializer):
+                id: int
+                name: str
+                email: str
+                password: str = field(write_only=True)
+                created_at: datetime
+
+                class Meta:
+                    field_sets = {
+                        "list": ["id", "name"],
+                        "detail": ["id", "name", "email", "created_at"],
+                    }
+
+            # Use predefined field sets
+            UserSerializer.use("list").dump_many(users)
+            UserSerializer.use("detail").dump(user)
+        """
+        field_sets = getattr(cls, "__field_sets__", {})
+        if field_set not in field_sets:
+            available = ", ".join(field_sets.keys()) if field_sets else "none defined"
+            raise ValueError(
+                f"Field set '{field_set}' not found in {cls.__name__}.Meta.field_sets. "
+                f"Available field sets: {available}"
+            )
+        return SerializerView(cls, include_fields=frozenset(field_sets[field_set]))
+
+    # -------------------------------------------------------------------------
+    # Dump Methods (Serialization)
+    # -------------------------------------------------------------------------
+
+    def dump(
+        self,
+        *,
+        exclude_none: bool = False,
+        exclude_unset: bool = False,
+        exclude_defaults: bool = False,
+        by_alias: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Serialize this instance to a dictionary.
+
+        This method respects read_only/write_only field configurations and
+        includes computed fields in the output.
+
+        Args:
+            exclude_none: If True, exclude fields with None values
+            exclude_unset: If True, exclude fields that weren't explicitly set
+            exclude_defaults: If True, exclude fields with their default values
+            by_alias: If True, use field aliases as keys (not yet implemented)
+
+        Returns:
+            Dictionary representation of the serializer
+
+        Example:
+            user = UserSerializer(id=1, name="John", email=None)
+            user.dump()  # {"id": 1, "name": "John", "email": None}
+            user.dump(exclude_none=True)  # {"id": 1, "name": "John"}
+        """
+        return self._dump_impl(
+            exclude_none=exclude_none,
+            exclude_unset=exclude_unset,
+            exclude_defaults=exclude_defaults,
+            by_alias=by_alias,
+            include_fields=None,
+            exclude_fields=None,
+        )
+
+    def _dump_impl(
+        self,
+        *,
+        exclude_none: bool = False,
+        exclude_unset: bool = False,
+        exclude_defaults: bool = False,
+        by_alias: bool = False,
+        include_fields: frozenset[str] | None = None,
+        exclude_fields: frozenset[str] | None = None,
+    ) -> dict[str, Any]:
+        """Internal implementation of dump with field filtering."""
+        result: dict[str, Any] = {}
+
+        # Build a mapping of field names to their default values for exclude_defaults
+        # msgspec's __struct_defaults__ is a tuple of defaults for fields WITH defaults,
+        # aligned from the END of the fields list (fields without defaults come first)
+        default_values: dict[str, Any] = {}
+        if exclude_defaults:
+            defaults = self.__struct_defaults__
+            fields = self.__struct_fields__
+            num_fields = len(fields)
+            num_defaults = len(defaults)
+            # Defaults are aligned from the end
+            for i, default_val in enumerate(defaults):
+                field_idx = num_fields - num_defaults + i
+                if field_idx >= 0:
+                    default_values[fields[field_idx]] = default_val
+
+        for field_name in self.__struct_fields__:
+            # Skip write_only fields (they shouldn't appear in output)
+            if field_name in self.__write_only_fields__:
+                continue
+
+            # Apply include/exclude filtering
+            if include_fields is not None and field_name not in include_fields:
+                continue
+            if exclude_fields is not None and field_name in exclude_fields:
+                continue
+
+            # Check field config for exclusion
+            field_config = self.__field_configs__.get(field_name)
+            if field_config and field_config.exclude:
+                continue
+
+            value = getattr(self, field_name)
+
+            # Skip None values if exclude_none
+            if exclude_none and value is None:
+                continue
+
+            # Skip default values if exclude_defaults
+            if exclude_defaults and field_name in default_values:
+                if value == default_values[field_name]:
+                    continue
+
+            # Use alias if by_alias and alias is defined
+            output_key = field_name
+            if by_alias and field_config and field_config.alias:
+                output_key = field_config.alias
+
+            # Handle nested serializers
+            if isinstance(value, Serializer):
+                result[output_key] = value.dump(
+                    exclude_none=exclude_none,
+                    exclude_unset=exclude_unset,
+                    exclude_defaults=exclude_defaults,
+                    by_alias=by_alias,
+                )
+            elif isinstance(value, list):
+                # Check if it's a list of serializers
+                if value and isinstance(value[0], Serializer):
+                    result[output_key] = [
+                        item.dump(
+                            exclude_none=exclude_none,
+                            exclude_unset=exclude_unset,
+                            exclude_defaults=exclude_defaults,
+                            by_alias=by_alias,
+                        )
+                        for item in value
+                    ]
+                else:
+                    result[output_key] = value
+            else:
+                result[output_key] = value
+
+        # Add computed fields
+        if self.__has_computed_fields__:
+            for field_name, config in self.__computed_fields__.items():
+                # Apply include/exclude filtering to computed fields too
+                if include_fields is not None and field_name not in include_fields:
+                    continue
+                if exclude_fields is not None and field_name in exclude_fields:
+                    continue
+
+                # Get the method and call it
+                method = getattr(self, config.method_name, None)
+                if method is not None:
+                    value = method()
+
+                    # Skip None values if exclude_none
+                    if exclude_none and value is None:
+                        continue
+
+                    result[field_name] = value
+
+        return result
+
+    def dump_json(
+        self,
+        *,
+        exclude_none: bool = False,
+        exclude_unset: bool = False,
+        exclude_defaults: bool = False,
+        by_alias: bool = False,
+    ) -> bytes:
+        """
+        Serialize this instance to JSON bytes.
+
+        Uses msgspec for fast JSON encoding.
+
+        Args:
+            exclude_none: If True, exclude fields with None values
+            exclude_unset: If True, exclude fields that weren't explicitly set
+            exclude_defaults: If True, exclude fields with their default values
+            by_alias: If True, use field aliases as keys
+
+        Returns:
+            JSON bytes representation
+        """
+        data = self.dump(
+            exclude_none=exclude_none,
+            exclude_unset=exclude_unset,
+            exclude_defaults=exclude_defaults,
+            by_alias=by_alias,
+        )
+        return msgspec.json.encode(data)
+
+    @classmethod
+    def dump_many(
+        cls: type[T],
+        instances: Iterable[T],
+        *,
+        exclude_none: bool = False,
+        exclude_unset: bool = False,
+        exclude_defaults: bool = False,
+        by_alias: bool = False,
+    ) -> list[dict[str, Any]]:
+        """
+        Serialize multiple instances to a list of dictionaries.
+
+        Args:
+            instances: Iterable of serializer instances to dump
+            exclude_none: If True, exclude fields with None values
+            exclude_unset: If True, exclude fields that weren't explicitly set
+            exclude_defaults: If True, exclude fields with their default values
+            by_alias: If True, use field aliases as keys
+
+        Returns:
+            List of dictionary representations
+
+        Example:
+            users = [UserSerializer.from_model(u) for u in User.objects.all()]
+            UserSerializer.dump_many(users)
+        """
+        return [
+            instance.dump(
+                exclude_none=exclude_none,
+                exclude_unset=exclude_unset,
+                exclude_defaults=exclude_defaults,
+                by_alias=by_alias,
+            )
+            for instance in instances
+        ]
+
+    @classmethod
+    def dump_many_json(
+        cls: type[T],
+        instances: Iterable[T],
+        *,
+        exclude_none: bool = False,
+        exclude_unset: bool = False,
+        exclude_defaults: bool = False,
+        by_alias: bool = False,
+    ) -> bytes:
+        """
+        Serialize multiple instances to JSON bytes.
+
+        Args:
+            instances: Iterable of serializer instances to dump
+            exclude_none: If True, exclude fields with None values
+            exclude_unset: If True, exclude fields that weren't explicitly set
+            exclude_defaults: If True, exclude fields with their default values
+            by_alias: If True, use field aliases as keys
+
+        Returns:
+            JSON bytes representation of the list
+        """
+        data = cls.dump_many(
+            instances,
+            exclude_none=exclude_none,
+            exclude_unset=exclude_unset,
+            exclude_defaults=exclude_defaults,
+            by_alias=by_alias,
+        )
+        return msgspec.json.encode(data)
+
+    # -------------------------------------------------------------------------
+    # Helper for getting value from source path
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _get_value_from_source(obj: Any, source: str) -> Any:
+        """
+        Get a value from an object using a dot-notation source path.
+
+        Args:
+            obj: The object to get the value from
+            source: Dot-notation path (e.g., "author.name")
+
+        Returns:
+            The value at the path, or None if not found
+        """
+        parts = source.split(".")
+        value = obj
+        for part in parts:
+            if value is None:
+                return None
+            if hasattr(value, part):
+                value = getattr(value, part)
+            elif isinstance(value, dict) and part in value:
+                value = value[part]
+            else:
+                return None
+        return value
+
+
+class SerializerView(Iterable[T]):
+    """
+    A view of a serializer with dynamic field selection.
+
+    This class wraps a Serializer and applies field filtering during
+    serialization. It does NOT create new serializer classes - it's
+    a lightweight wrapper that filters fields at dump time.
+
+    SerializerView is created by calling only(), exclude(), or use()
+    on a Serializer class.
+
+    Example:
+        # These all return SerializerView instances:
+        view = UserSerializer.only("id", "name")
+        view = UserSerializer.exclude("password")
+        view = UserSerializer.use("list")
+
+        # Use the view to dump instances:
+        view.dump(user)
+        view.dump_many(users)
+
+        # Or directly from model:
+        view.from_model(user_instance)
+    """
+
+    def __init__(
+        self,
+        serializer_class: type[T],
+        *,
+        include_fields: frozenset[str] | None = None,
+        exclude_fields: frozenset[str] | None = None,
+    ) -> None:
+        self._serializer_class = serializer_class
+        self._include_fields = include_fields
+        self._exclude_fields = exclude_fields
+
+    def __iter__(self):
+        """Allow iteration (returns empty iterator - use dump_many instead)."""
+        return iter([])
+
+    def only(self, *fields: str) -> SerializerView[T]:
+        """Further restrict to only these fields."""
+        new_include = frozenset(fields)
+        if self._include_fields is not None:
+            # Intersection with existing include
+            new_include = self._include_fields & new_include
+        return SerializerView(
+            self._serializer_class,
+            include_fields=new_include,
+            exclude_fields=self._exclude_fields,
+        )
+
+    def exclude(self, *fields: str) -> SerializerView[T]:
+        """Exclude additional fields."""
+        new_exclude = frozenset(fields)
+        if self._exclude_fields is not None:
+            new_exclude = self._exclude_fields | new_exclude
+        return SerializerView(
+            self._serializer_class,
+            include_fields=self._include_fields,
+            exclude_fields=new_exclude,
+        )
+
+    def from_model(self, instance: Model, **kwargs) -> T:
+        """Create a serializer instance from a Django model."""
+        return self._serializer_class.from_model(instance, **kwargs)
+
+    def dump(
+        self,
+        instance: T,
+        *,
+        exclude_none: bool = False,
+        exclude_unset: bool = False,
+        exclude_defaults: bool = False,
+        by_alias: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Serialize an instance with field filtering applied.
+
+        Args:
+            instance: Serializer instance to dump
+            exclude_none: If True, exclude fields with None values
+            exclude_unset: If True, exclude fields that weren't explicitly set
+            exclude_defaults: If True, exclude fields with their default values
+            by_alias: If True, use field aliases as keys
+
+        Returns:
+            Filtered dictionary representation
+        """
+        return instance._dump_impl(
+            exclude_none=exclude_none,
+            exclude_unset=exclude_unset,
+            exclude_defaults=exclude_defaults,
+            by_alias=by_alias,
+            include_fields=self._include_fields,
+            exclude_fields=self._exclude_fields,
+        )
+
+    def dump_many(
+        self,
+        instances: Iterable[T],
+        *,
+        exclude_none: bool = False,
+        exclude_unset: bool = False,
+        exclude_defaults: bool = False,
+        by_alias: bool = False,
+    ) -> list[dict[str, Any]]:
+        """
+        Serialize multiple instances with field filtering applied.
+
+        Args:
+            instances: Iterable of serializer instances
+            exclude_none: If True, exclude fields with None values
+            exclude_unset: If True, exclude fields that weren't explicitly set
+            exclude_defaults: If True, exclude fields with their default values
+            by_alias: If True, use field aliases as keys
+
+        Returns:
+            List of filtered dictionary representations
+        """
+        return [
+            self.dump(
+                instance,
+                exclude_none=exclude_none,
+                exclude_unset=exclude_unset,
+                exclude_defaults=exclude_defaults,
+                by_alias=by_alias,
+            )
+            for instance in instances
+        ]
+
+    def dump_json(
+        self,
+        instance: T,
+        *,
+        exclude_none: bool = False,
+        exclude_unset: bool = False,
+        exclude_defaults: bool = False,
+        by_alias: bool = False,
+    ) -> bytes:
+        """Serialize an instance to JSON bytes with field filtering."""
+        data = self.dump(
+            instance,
+            exclude_none=exclude_none,
+            exclude_unset=exclude_unset,
+            exclude_defaults=exclude_defaults,
+            by_alias=by_alias,
+        )
+        return msgspec.json.encode(data)
+
+    def dump_many_json(
+        self,
+        instances: Iterable[T],
+        *,
+        exclude_none: bool = False,
+        exclude_unset: bool = False,
+        exclude_defaults: bool = False,
+        by_alias: bool = False,
+    ) -> bytes:
+        """Serialize multiple instances to JSON bytes with field filtering."""
+        data = self.dump_many(
+            instances,
+            exclude_none=exclude_none,
+            exclude_unset=exclude_unset,
+            exclude_defaults=exclude_defaults,
+            by_alias=by_alias,
+        )
+        return msgspec.json.encode(data)

@@ -1,15 +1,221 @@
-"""Django field to msgspec type mapping utilities."""
+"""Django field to msgspec type mapping utilities and field configuration."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, Annotated, Literal, Type, get_args
+from typing import Any, Annotated, Callable, Literal, Type, TypeVar, get_args
 from uuid import UUID
 
 import msgspec
 from django.db import models
 from msgspec import Meta
+
+T = TypeVar("T")
+
+# Sentinel for unset default values
+_UNSET = object()
+
+
+@dataclass(frozen=True, slots=True)
+class FieldConfig:
+    """
+    Configuration for a serializer field.
+
+    This is used internally to store field metadata. Users should use the
+    field() function to create field configurations.
+    """
+
+    read_only: bool = False
+    """If True, field is only included in output (dump), not accepted in input (load)."""
+
+    write_only: bool = False
+    """If True, field is only accepted in input (load), not included in output (dump)."""
+
+    source: str | None = None
+    """
+    Source attribute name on the model. Allows mapping API field names to different
+    model attributes. Supports dot notation for nested access (e.g., "author.name").
+    """
+
+    alias: str | None = None
+    """Alternative name for this field in JSON input/output."""
+
+    default: Any = _UNSET
+    """Default value for this field."""
+
+    default_factory: Callable[[], Any] | None = None
+    """Factory function to create default value."""
+
+    description: str | None = None
+    """Description for OpenAPI documentation."""
+
+    title: str | None = None
+    """Title for OpenAPI documentation."""
+
+    examples: list[Any] | None = None
+    """Example values for OpenAPI documentation."""
+
+    deprecated: bool = False
+    """Mark this field as deprecated in OpenAPI documentation."""
+
+    exclude: bool = False
+    """Always exclude this field from serialization."""
+
+    include_in_schema: bool = True
+    """Whether to include this field in OpenAPI schema."""
+
+    def has_default(self) -> bool:
+        """Check if this field has a default value."""
+        return self.default is not _UNSET or self.default_factory is not None
+
+    def get_default(self) -> Any:
+        """Get the default value for this field."""
+        if self.default_factory is not None:
+            return self.default_factory()
+        if self.default is not _UNSET:
+            return self.default
+        raise ValueError("Field has no default value")
+
+
+@dataclass(slots=True)
+class _FieldMarker:
+    """
+    Internal marker class that holds field configuration.
+
+    This is used during class creation to extract field metadata.
+    The marker is replaced with the actual default value (if any)
+    during __init_subclass__.
+    """
+
+    config: FieldConfig
+    meta_kwargs: dict[str, Any]
+
+    def __repr__(self) -> str:
+        parts = []
+        if self.config.read_only:
+            parts.append("read_only=True")
+        if self.config.write_only:
+            parts.append("write_only=True")
+        if self.config.source:
+            parts.append(f"source={self.config.source!r}")
+        if self.config.alias:
+            parts.append(f"alias={self.config.alias!r}")
+        if self.config.has_default():
+            parts.append(f"default={self.config.get_default()!r}")
+        return f"field({', '.join(parts)})"
+
+
+def field(
+    *,
+    read_only: bool = False,
+    write_only: bool = False,
+    source: str | None = None,
+    alias: str | None = None,
+    default: Any = _UNSET,
+    default_factory: Callable[[], Any] | None = None,
+    description: str | None = None,
+    title: str | None = None,
+    examples: list[Any] | None = None,
+    deprecated: bool = False,
+    exclude: bool = False,
+    include_in_schema: bool = True,
+    # msgspec Meta constraints
+    ge: float | int | None = None,
+    gt: float | int | None = None,
+    le: float | int | None = None,
+    lt: float | int | None = None,
+    min_length: int | None = None,
+    max_length: int | None = None,
+    pattern: str | None = None,
+) -> Any:
+    """
+    Configure a serializer field with additional metadata.
+
+    This function returns a value that can be used as a field default in a
+    Serializer class. The returned value contains both the default value
+    (if any) and the field configuration metadata.
+
+    Args:
+        read_only: If True, field is only included in output, not accepted in input.
+                   Use for auto-generated fields like `id`, `created_at`.
+        write_only: If True, field is only accepted in input, not included in output.
+                    Use for sensitive data like `password`.
+        source: Source attribute name on the model. Supports dot notation.
+                Example: source="author.name" maps field to instance.author.name
+        alias: Alternative name for this field in JSON input/output.
+        default: Default value for this field.
+        default_factory: Factory function to create default value (for mutable defaults).
+        description: Description for OpenAPI documentation.
+        title: Title for OpenAPI documentation.
+        examples: Example values for OpenAPI documentation.
+        deprecated: Mark this field as deprecated.
+        exclude: Always exclude this field from serialization.
+        include_in_schema: Whether to include this field in OpenAPI schema.
+        ge: Greater than or equal constraint (for numeric fields).
+        gt: Greater than constraint (for numeric fields).
+        le: Less than or equal constraint (for numeric fields).
+        lt: Less than constraint (for numeric fields).
+        min_length: Minimum length constraint (for string/list fields).
+        max_length: Maximum length constraint (for string/list fields).
+        pattern: Regex pattern constraint (for string fields).
+
+    Returns:
+        A field configuration that can be used as a default value.
+
+    Example:
+        class UserSerializer(Serializer):
+            id: int = field(read_only=True)
+            email: str = field(source="email_address")
+            password: str = field(write_only=True)
+            name: str = field(min_length=1, max_length=100)
+
+        # Usage:
+        # - When dumping: id is included, password is excluded
+        # - When loading: id is ignored, password is accepted
+        # - source="email_address" maps API "email" to model "email_address"
+    """
+    config = FieldConfig(
+        read_only=read_only,
+        write_only=write_only,
+        source=source,
+        alias=alias,
+        default=default,
+        default_factory=default_factory,
+        description=description,
+        title=title,
+        examples=examples,
+        deprecated=deprecated,
+        exclude=exclude,
+        include_in_schema=include_in_schema,
+    )
+
+    # Build msgspec Meta constraints
+    meta_kwargs: dict[str, Any] = {}
+    if ge is not None:
+        meta_kwargs["ge"] = ge
+    if gt is not None:
+        meta_kwargs["gt"] = gt
+    if le is not None:
+        meta_kwargs["le"] = le
+    if lt is not None:
+        meta_kwargs["lt"] = lt
+    if min_length is not None:
+        meta_kwargs["min_length"] = min_length
+    if max_length is not None:
+        meta_kwargs["max_length"] = max_length
+    if pattern is not None:
+        meta_kwargs["pattern"] = pattern
+    if description is not None:
+        meta_kwargs["description"] = description
+    if title is not None:
+        meta_kwargs["title"] = title
+    if examples is not None:
+        meta_kwargs["examples"] = examples
+
+    # Return a special marker object that stores both config and default
+    return _FieldMarker(config=config, meta_kwargs=meta_kwargs)
 
 
 def get_msgspec_type_for_django_field(field: models.Field, **field_kwargs: Any) -> Type:

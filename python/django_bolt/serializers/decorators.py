@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, Any, Callable, Literal, TypeVar
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Callable, Literal, TypeVar, get_type_hints
 
 if TYPE_CHECKING:
     from .base import Serializer
@@ -13,6 +14,106 @@ T = TypeVar("T")
 # Marker attributes for storing validators on classes
 FIELD_VALIDATORS_ATTR = "__field_validators__"
 MODEL_VALIDATORS_ATTR = "__model_validators__"
+COMPUTED_FIELDS_ATTR = "__computed_fields__"
+
+
+@dataclass(frozen=True, slots=True)
+class ComputedFieldConfig:
+    """Configuration for a computed field."""
+
+    method_name: str
+    """Name of the method that computes the value."""
+
+    return_type: Any
+    """Return type of the computed field."""
+
+    description: str | None = None
+    """Description for OpenAPI documentation."""
+
+    alias: str | None = None
+    """Alternative name for this field in JSON output."""
+
+    deprecated: bool = False
+    """Mark this field as deprecated."""
+
+    include_in_schema: bool = True
+    """Whether to include this field in OpenAPI schema."""
+
+
+def computed_field(
+    func: Callable[[Any], Any] | None = None,
+    *,
+    alias: str | None = None,
+    description: str | None = None,
+    deprecated: bool = False,
+    include_in_schema: bool = True,
+) -> Any:
+    """
+    Mark a method as a computed field for serialization output.
+
+    Computed fields are calculated during serialization (dump) and are NOT
+    stored as struct fields. They are similar to DRF's SerializerMethodField
+    or Pydantic's @computed_field.
+
+    Args:
+        func: The method to use for computing the value (if used without parentheses)
+        alias: Alternative name for this field in JSON output.
+        description: Description for OpenAPI documentation.
+        deprecated: Mark this field as deprecated.
+        include_in_schema: Whether to include this field in OpenAPI schema.
+
+    Returns:
+        The decorated method with computed field metadata.
+
+    Example:
+        class UserSerializer(Serializer):
+            first_name: str
+            last_name: str
+
+            @computed_field
+            def full_name(self) -> str:
+                return f"{self.first_name} {self.last_name}"
+
+            @computed_field(alias="displayName")
+            def display_name(self) -> str:
+                return self.full_name.upper()
+
+        # When dumped:
+        # {"first_name": "John", "last_name": "Doe", "full_name": "John Doe", "display_name": "JOHN DOE"}
+
+    Note:
+        - Computed fields are OUTPUT ONLY - they don't exist during parsing/loading
+        - They are calculated fresh on each dump() call
+        - They can access other struct fields and computed fields
+        - Method name becomes the field name (unless alias is specified)
+    """
+
+    def decorator(method: Callable[[Any], Any]) -> Callable[[Any], Any]:
+        # Try to get return type from method annotations
+        return_type = Any
+        try:
+            hints = get_type_hints(method)
+            return_type = hints.get("return", Any)
+        except Exception:
+            pass
+
+        # Store computed field metadata on the method
+        method.__computed_field__ = ComputedFieldConfig(
+            method_name=method.__name__,
+            return_type=return_type,
+            description=description,
+            alias=alias,
+            deprecated=deprecated,
+            include_in_schema=include_in_schema,
+        )
+        return method
+
+    if func is None:
+        # Called with parentheses: @computed_field() or @computed_field(alias="...")
+        return decorator
+    else:
+        # Called without parentheses: @computed_field
+        return decorator(func)
 
 
 def field_validator(
@@ -129,3 +230,26 @@ def collect_model_validators(cls: type[Serializer]) -> list[Callable[[Serializer
                 validators.append(value)
 
     return validators
+
+
+def collect_computed_fields(cls: type[Serializer]) -> dict[str, ComputedFieldConfig]:
+    """
+    Collect all computed fields from a class and its bases.
+
+    Returns a dict mapping field names to their ComputedFieldConfig.
+    """
+    computed: dict[str, ComputedFieldConfig] = {}
+
+    # Walk through MRO to collect computed fields (reverse order so subclass overrides parent)
+    for base in reversed(cls.__mro__):
+        if not hasattr(base, "__dict__"):
+            continue
+
+        for name, value in base.__dict__.items():
+            if callable(value) and hasattr(value, "__computed_field__"):
+                config: ComputedFieldConfig = value.__computed_field__
+                # Use alias if provided, otherwise use method name
+                field_name = config.alias or config.method_name
+                computed[field_name] = config
+
+    return computed

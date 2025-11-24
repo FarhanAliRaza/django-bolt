@@ -29,6 +29,9 @@ if TYPE_CHECKING:
 
 T = TypeVar("T", bound="Serializer")
 
+# Cache for dynamically created subset serializer classes
+_subset_cache: dict[tuple[type, frozenset[str]], type] = {}
+
 
 class Serializer(msgspec.Struct):
     """
@@ -644,6 +647,206 @@ class Serializer(msgspec.Struct):
     # -------------------------------------------------------------------------
     # Dynamic Field Selection Methods
     # -------------------------------------------------------------------------
+
+    @classmethod
+    def subset(cls: type[T], *fields: str, name: str | None = None) -> type[T]:
+        """
+        Create a new Serializer class with only the specified fields.
+
+        This creates a TRUE subclass (not a view) that can be used as a type
+        annotation, response_model, or anywhere a Serializer type is expected.
+        The created class is cached for performance.
+
+        Args:
+            *fields: Field names to include (struct fields and computed fields)
+            name: Optional name for the new class. If not provided, auto-generates one.
+
+        Returns:
+            A new Serializer class with only the specified fields
+
+        Example:
+            class UserSerializer(Serializer):
+                id: int
+                name: str
+                email: str
+                password: str
+                created_at: datetime
+
+                class Meta:
+                    write_only = {"password"}
+
+                @computed_field
+                def display_name(self) -> str:
+                    return f"@{self.name}"
+
+            # Create type-safe mini serializers
+            UserMiniSerializer = UserSerializer.subset("id", "name")
+            UserPublicSerializer = UserSerializer.subset("id", "name", "email", "display_name")
+
+            # Use as response_model (type-safe!)
+            @api.get("/users/{id}", response_model=UserMiniSerializer)
+            async def get_user(id: int) -> UserMiniSerializer:
+                user = await User.objects.aget(id=id)
+                return UserMiniSerializer.from_model(user)
+
+            # Or use from_parent to convert existing instances
+            full_user = UserSerializer.from_model(user)
+            mini_user = UserMiniSerializer.from_parent(full_user)
+
+        Note:
+            - Computed fields are included if their name is in the fields list
+            - write_only fields from Meta are automatically excluded from subsets
+            - The subset inherits validators for included fields
+        """
+        fields_set = frozenset(fields)
+        cache_key = (cls, fields_set)
+
+        # Check cache first
+        if cache_key in _subset_cache:
+            return _subset_cache[cache_key]  # type: ignore
+
+        # Get type hints for the original class
+        hints = cls.__cached_type_hints__
+
+        # Build annotations for the new class (only struct fields, not computed)
+        new_annotations: dict[str, Any] = {}
+        struct_fields_to_include: list[str] = []
+
+        for field_name in cls.__struct_fields__:
+            if field_name in fields_set:
+                if field_name in hints:
+                    new_annotations[field_name] = hints[field_name]
+                struct_fields_to_include.append(field_name)
+
+        # Build class dict
+        class_name = name or f"{cls.__name__}Subset_{hash(fields_set) & 0xFFFFFF:06x}"
+        class_dict: dict[str, Any] = {
+            "__annotations__": new_annotations,
+            "__module__": cls.__module__,
+            "__qualname__": class_name,
+            # Store reference to parent for from_parent()
+            "__parent_serializer__": cls,
+            "__subset_fields__": fields_set,
+        }
+
+        # Handle defaults: msgspec defaults are aligned from the END
+        # We need to set defaults for fields that have them in the parent
+        parent_defaults = cls.__struct_defaults__
+        parent_fields = cls.__struct_fields__
+        num_parent_fields = len(parent_fields)
+        num_defaults = len(parent_defaults)
+
+        # Build parent field -> default mapping
+        parent_default_map: dict[str, Any] = {}
+        for i, default_val in enumerate(parent_defaults):
+            field_idx = num_parent_fields - num_defaults + i
+            if field_idx >= 0:
+                parent_default_map[parent_fields[field_idx]] = default_val
+
+        # Set defaults on the new class for fields that have them
+        for field_name in struct_fields_to_include:
+            if field_name in parent_default_map:
+                class_dict[field_name] = parent_default_map[field_name]
+
+        # Copy computed field methods that are in the fields list
+        computed_to_include: list[str] = []
+        for field_name, config in cls.__computed_fields__.items():
+            if field_name in fields_set:
+                method = getattr(cls, config.method_name)
+                class_dict[config.method_name] = method
+                computed_to_include.append(field_name)
+
+        # Copy field validators for included fields
+        for field_name, validators in cls.__field_validators__.items():
+            if field_name in fields_set:
+                for validator in validators:
+                    class_dict[f"_validator_{field_name}"] = validator
+
+        # Copy Meta with adjusted field_sets (only include subsets of our fields)
+        parent_meta = getattr(cls, "Meta", None)
+        if parent_meta:
+            class Meta:
+                pass
+            # Copy relevant Meta attributes
+            if hasattr(parent_meta, "model"):
+                Meta.model = parent_meta.model  # type: ignore
+            # Adjust write_only/read_only to only include fields we have
+            if hasattr(parent_meta, "write_only"):
+                Meta.write_only = parent_meta.write_only & fields_set  # type: ignore
+            if hasattr(parent_meta, "read_only"):
+                Meta.read_only = parent_meta.read_only & fields_set  # type: ignore
+            class_dict["Meta"] = Meta
+
+        # Create the new Serializer subclass
+        new_cls: type[T] = type(class_name, (Serializer,), class_dict)  # type: ignore
+
+        # Add from_parent class method
+        @classmethod
+        def from_parent(new_cls_ref: type[T], instance: Serializer) -> T:  # type: ignore
+            """Create instance from a parent serializer instance."""
+            data = {}
+            for field_name in new_cls_ref.__struct_fields__:
+                if hasattr(instance, field_name):
+                    data[field_name] = getattr(instance, field_name)
+            return new_cls_ref(**data)
+
+        new_cls.from_parent = from_parent  # type: ignore
+
+        # Cache and return
+        _subset_cache[cache_key] = new_cls
+        return new_cls
+
+    @classmethod
+    def fields(cls: type[T], field_set: str, *, name: str | None = None) -> type[T]:
+        """
+        Create a new Serializer class from a predefined field set.
+
+        This is a convenience method that combines Meta.field_sets with subset().
+        The result is a type-safe Serializer class.
+
+        Args:
+            field_set: Name of the field set defined in Meta.field_sets
+            name: Optional name for the new class
+
+        Returns:
+            A new Serializer class with the fields from the field set
+
+        Raises:
+            ValueError: If the field set name is not defined
+
+        Example:
+            class UserSerializer(Serializer):
+                id: int
+                name: str
+                email: str
+                password: str
+
+                class Meta:
+                    field_sets = {
+                        "list": ["id", "name"],
+                        "detail": ["id", "name", "email"],
+                    }
+
+            # Create type-safe serializers from field sets
+            UserListSerializer = UserSerializer.fields("list")
+            UserDetailSerializer = UserSerializer.fields("detail")
+
+            # Use as response_model
+            @api.get("/users", response_model=list[UserListSerializer])
+            async def list_users() -> list[UserListSerializer]:
+                ...
+        """
+        field_sets = getattr(cls, "__field_sets__", {})
+        if field_set not in field_sets:
+            available = ", ".join(field_sets.keys()) if field_sets else "none defined"
+            raise ValueError(
+                f"Field set '{field_set}' not found in {cls.__name__}.Meta.field_sets. "
+                f"Available field sets: {available}"
+            )
+
+        fields_list = field_sets[field_set]
+        class_name = name or f"{cls.__name__}{field_set.title()}"
+        return cls.subset(*fields_list, name=class_name)
 
     @classmethod
     def only(cls: type[T], *fields: str) -> SerializerView[T]:

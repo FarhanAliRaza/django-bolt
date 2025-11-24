@@ -835,12 +835,76 @@ class UserSerializer(Serializer):
     def display_name(self) -> str:
         return f"@{self.name}"
 
-# Usage in handlers:
+# Usage in handlers (runtime field filtering):
 UserSerializer.use("list").dump_many(users)      # List view
 UserSerializer.use("detail").dump(user)          # Detail view
 UserSerializer.use("admin").dump(user)           # Admin view
 UserSerializer.only("id", "display_name").dump(user)  # Custom view
 ```
+
+### Type-Safe Serializer Subsets
+
+For full type safety with `response_model`, use `subset()` or `fields()` to create actual Serializer classes:
+
+```python
+from django_bolt.serializers import Serializer, computed_field
+
+class UserSerializer(Serializer):
+    id: int
+    name: str
+    email: str
+    password: str
+    created_at: datetime
+    is_staff: bool = False
+
+    class Meta:
+        write_only = {"password"}
+        field_sets = {
+            "list": ["id", "name"],
+            "detail": ["id", "name", "email", "created_at"],
+            "admin": ["id", "name", "email", "created_at", "is_staff"],
+        }
+
+    @computed_field
+    def display_name(self) -> str:
+        return f"@{self.name}"
+
+# Create TYPE-SAFE serializer classes (not views!)
+UserListSerializer = UserSerializer.fields("list")      # From field_set
+UserDetailSerializer = UserSerializer.fields("detail")  # From field_set
+UserAdminSerializer = UserSerializer.fields("admin")    # From field_set
+UserPublicSerializer = UserSerializer.subset("id", "name", "display_name")  # Explicit fields
+
+# These are real Serializer subclasses - use as response_model!
+@api.get("/users", response_model=list[UserListSerializer])
+async def list_users() -> list[UserListSerializer]:
+    users = await User.objects.all()
+    return [UserListSerializer.from_model(u) for u in users]
+
+@api.get("/users/{id}", response_model=UserDetailSerializer)
+async def get_user(id: int) -> UserDetailSerializer:
+    user = await User.objects.aget(id=id)
+    return UserDetailSerializer.from_model(user)
+
+@api.get("/users/{id}/public", response_model=UserPublicSerializer)
+async def get_user_public(id: int) -> UserPublicSerializer:
+    user = await User.objects.aget(id=id)
+    return UserPublicSerializer.from_model(user)
+```
+
+**Key Methods:**
+
+| Method | Returns | Use Case |
+|--------|---------|----------|
+| `subset(*fields)` | New Serializer class | Type-safe class with explicit fields |
+| `fields(set_name)` | New Serializer class | Type-safe class from Meta.field_sets |
+| `only(*fields)` | SerializerView | Runtime field filtering (dump time) |
+| `exclude(*fields)` | SerializerView | Runtime field filtering (dump time) |
+| `use(set_name)` | SerializerView | Runtime field filtering from field_sets |
+
+**When to use which:**
+- Use `subset()`/`fields()` when you need a proper **type** for `response_model` or type annotations
+- Use `only()`/`exclude()`/`use()` for quick **runtime** field filtering without creating new classes
 
 ## Features Inherited from msgspec.Struct
 

@@ -537,3 +537,384 @@ class TestComplexScenarios:
         assert len(result["tags"]) == 2
         assert result["tags"][0] == {"id": 1, "name": "python"}
         assert result["tags"][1] == {"id": 2, "name": "django"}
+
+
+class TestSubsetMethod:
+    """Test the subset() method for creating type-safe serializer subclasses."""
+
+    def test_subset_basic(self):
+        """Test basic subset creation with explicit fields."""
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+            email: str
+            password: str
+            created_at: str
+
+        # Create a subset with only id and name
+        UserMiniSerializer = UserSerializer.subset("id", "name")
+
+        # Verify it's a proper type (subclass of Serializer)
+        assert issubclass(UserMiniSerializer, Serializer)
+
+        # Verify it has only the specified fields
+        assert set(UserMiniSerializer.__struct_fields__) == {"id", "name"}
+
+        # Create an instance
+        mini_user = UserMiniSerializer(id=1, name="John")
+        assert mini_user.id == 1
+        assert mini_user.name == "John"
+
+        # Dump should only have the subset fields
+        result = mini_user.dump()
+        assert result == {"id": 1, "name": "John"}
+
+    def test_subset_is_cached(self):
+        """Test that subset classes are cached."""
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+            email: str
+
+        # Create the same subset twice
+        UserMini1 = UserSerializer.subset("id", "name")
+        UserMini2 = UserSerializer.subset("id", "name")
+
+        # Should be the same class (cached)
+        assert UserMini1 is UserMini2
+
+    def test_subset_different_fields_different_class(self):
+        """Test that different field combinations create different classes."""
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+            email: str
+
+        UserMini = UserSerializer.subset("id", "name")
+        UserEmail = UserSerializer.subset("id", "email")
+
+        # Should be different classes
+        assert UserMini is not UserEmail
+        assert set(UserMini.__struct_fields__) == {"id", "name"}
+        assert set(UserEmail.__struct_fields__) == {"id", "email"}
+
+    def test_subset_with_defaults(self):
+        """Test subset preserves default values."""
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+            role: str = "user"
+            active: bool = True
+
+        UserSubset = UserSerializer.subset("id", "name", "role")
+
+        # Should be able to create instance using default
+        user = UserSubset(id=1, name="John")
+        assert user.id == 1
+        assert user.name == "John"
+        assert user.role == "user"
+
+    def test_subset_with_computed_field(self):
+        """Test subset includes computed fields."""
+
+        class UserSerializer(Serializer):
+            first_name: str
+            last_name: str
+
+            @computed_field
+            def full_name(self) -> str:
+                return f"{self.first_name} {self.last_name}"
+
+        # Include computed field in subset - must include all fields the computed field depends on
+        UserWithFullName = UserSerializer.subset("first_name", "last_name", "full_name")
+
+        user = UserWithFullName(first_name="John", last_name="Doe")
+        result = user.dump()
+
+        assert result["first_name"] == "John"
+        assert result["last_name"] == "Doe"
+        assert result["full_name"] == "John Doe"
+
+    def test_subset_from_parent(self):
+        """Test creating subset instance from parent instance."""
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+            email: str
+            password: str
+
+        UserMini = UserSerializer.subset("id", "name")
+
+        # Create full instance
+        full_user = UserSerializer(id=1, name="John", email="john@example.com", password="secret")
+
+        # Convert to mini using from_parent
+        mini_user = UserMini.from_parent(full_user)
+
+        assert mini_user.id == 1
+        assert mini_user.name == "John"
+        assert mini_user.dump() == {"id": 1, "name": "John"}
+
+    def test_subset_with_custom_name(self):
+        """Test subset with custom class name."""
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+            email: str
+
+        UserListSerializer = UserSerializer.subset("id", "name", name="UserListSerializer")
+
+        # Verify custom name
+        assert UserListSerializer.__name__ == "UserListSerializer"
+
+    def test_subset_type_safety(self):
+        """Test that subset maintains type annotations."""
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+            age: int | None = None
+
+        UserMini = UserSerializer.subset("id", "name", "age")
+
+        # Get type hints from the subset class
+        from typing import get_type_hints
+        hints = get_type_hints(UserMini)
+
+        assert hints["id"] == int
+        assert hints["name"] == str
+
+
+class TestFieldsMethod:
+    """Test the fields() method for creating subsets from field_sets."""
+
+    def test_fields_from_field_set(self):
+        """Test creating subset from a predefined field set."""
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+            email: str
+            password: str
+            created_at: str
+
+            class Meta:
+                field_sets = {
+                    "list": ["id", "name"],
+                    "detail": ["id", "name", "email", "created_at"],
+                }
+
+        # Create serializer from field set
+        UserListSerializer = UserSerializer.fields("list")
+        UserDetailSerializer = UserSerializer.fields("detail")
+
+        # Verify field sets
+        assert set(UserListSerializer.__struct_fields__) == {"id", "name"}
+        assert set(UserDetailSerializer.__struct_fields__) == {"id", "name", "email", "created_at"}
+
+        # Create instances
+        list_user = UserListSerializer(id=1, name="John")
+        assert list_user.dump() == {"id": 1, "name": "John"}
+
+    def test_fields_auto_names(self):
+        """Test that fields() auto-generates sensible class names."""
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+            email: str
+
+            class Meta:
+                field_sets = {
+                    "list": ["id", "name"],
+                    "detail": ["id", "name", "email"],
+                }
+
+        UserList = UserSerializer.fields("list")
+        UserDetail = UserSerializer.fields("detail")
+
+        # Names should be capitalized field set name
+        assert UserList.__name__ == "UserSerializerList"
+        assert UserDetail.__name__ == "UserSerializerDetail"
+
+    def test_fields_custom_name(self):
+        """Test fields() with custom name."""
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+
+            class Meta:
+                field_sets = {"mini": ["id", "name"]}
+
+        UserMini = UserSerializer.fields("mini", name="UserMiniResponse")
+        assert UserMini.__name__ == "UserMiniResponse"
+
+    def test_fields_invalid_field_set(self):
+        """Test fields() raises error for unknown field set."""
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+
+            class Meta:
+                field_sets = {"list": ["id", "name"]}
+
+        with pytest.raises(ValueError) as exc_info:
+            UserSerializer.fields("nonexistent")
+
+        assert "nonexistent" in str(exc_info.value)
+        assert "not found" in str(exc_info.value)
+
+    def test_fields_is_cached(self):
+        """Test that fields() results are cached."""
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+
+            class Meta:
+                field_sets = {"list": ["id", "name"]}
+
+        UserList1 = UserSerializer.fields("list")
+        UserList2 = UserSerializer.fields("list")
+
+        # Should return same cached class
+        assert UserList1 is UserList2
+
+
+class TestSubsetResponseModel:
+    """Test using subset serializers as response_model."""
+
+    def test_subset_as_type_annotation(self):
+        """Test subset can be used as a type annotation."""
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+            email: str
+
+        UserMini = UserSerializer.subset("id", "name")
+
+        # This simulates using it as a return type annotation
+        def get_user() -> UserMini:  # type: ignore
+            return UserMini(id=1, name="John")
+
+        result = get_user()
+        assert isinstance(result, UserMini)
+        assert isinstance(result, Serializer)
+
+    def test_subset_list_type(self):
+        """Test subset can be used in list type annotations."""
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+            email: str
+
+        UserMini = UserSerializer.subset("id", "name")
+
+        def list_users() -> list[UserMini]:  # type: ignore
+            return [
+                UserMini(id=1, name="John"),
+                UserMini(id=2, name="Jane"),
+            ]
+
+        result = list_users()
+        assert len(result) == 2
+        assert all(isinstance(u, UserMini) for u in result)
+
+    def test_subset_with_from_model(self):
+        """Test subset's from_model works correctly."""
+
+        class MockModel:
+            id = 1
+            name = "John"
+            email = "john@example.com"
+            password = "secret"
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+            email: str
+            password: str
+
+        UserMini = UserSerializer.subset("id", "name")
+
+        # from_model should only populate the subset fields
+        mini_user = UserMini.from_model(MockModel())
+        assert mini_user.id == 1
+        assert mini_user.name == "John"
+        assert mini_user.dump() == {"id": 1, "name": "John"}
+
+
+class TestSubsetCompleteWorkflow:
+    """Test complete workflow: one serializer, multiple type-safe variants."""
+
+    def test_complete_drf_replacement_workflow(self):
+        """Test the complete workflow that replaces multiple DRF serializers."""
+
+        class UserSerializer(Serializer):
+            id: int
+            username: str
+            email: str
+            password: str
+            created_at: str
+            last_login: str | None = None
+            is_staff: bool = False
+
+            class Meta:
+                write_only = {"password"}
+                field_sets = {
+                    "list": ["id", "username"],
+                    "detail": ["id", "username", "email", "created_at", "last_login"],
+                    "admin": ["id", "username", "email", "created_at", "last_login", "is_staff"],
+                }
+
+            @computed_field
+            def display_name(self) -> str:
+                return f"@{self.username}"
+
+        # Create type-safe serializers for different views
+        UserListSerializer = UserSerializer.fields("list")
+        UserDetailSerializer = UserSerializer.fields("detail")
+        UserAdminSerializer = UserSerializer.fields("admin")
+        UserPublicSerializer = UserSerializer.subset("id", "username", "display_name")
+
+        # Verify each has correct fields
+        assert set(UserListSerializer.__struct_fields__) == {"id", "username"}
+        assert set(UserDetailSerializer.__struct_fields__) == {"id", "username", "email", "created_at", "last_login"}
+        assert set(UserAdminSerializer.__struct_fields__) == {"id", "username", "email", "created_at", "last_login", "is_staff"}
+        assert set(UserPublicSerializer.__struct_fields__) == {"id", "username"}
+
+        # All are proper Serializer subclasses
+        assert issubclass(UserListSerializer, Serializer)
+        assert issubclass(UserDetailSerializer, Serializer)
+        assert issubclass(UserAdminSerializer, Serializer)
+        assert issubclass(UserPublicSerializer, Serializer)
+
+        # Create instances and verify dumps
+        list_user = UserListSerializer(id=1, username="johndoe")
+        assert list_user.dump() == {"id": 1, "username": "johndoe"}
+
+        detail_user = UserDetailSerializer(
+            id=1, username="johndoe", email="john@example.com",
+            created_at="2024-01-01", last_login=None
+        )
+        result = detail_user.dump()
+        assert result["id"] == 1
+        assert result["email"] == "john@example.com"
+        assert "password" not in result  # write_only excluded
+
+        # Public serializer with computed field
+        public_user = UserPublicSerializer(id=1, username="johndoe")
+        public_result = public_user.dump()
+        assert public_result["id"] == 1
+        assert public_result["username"] == "johndoe"
+        assert public_result["display_name"] == "@johndoe"

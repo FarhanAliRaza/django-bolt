@@ -226,8 +226,8 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         read_only: set[str] = set()
         write_only: set[str] = set()
 
-        # Check Meta class for read_only/write_only sets
-        meta = getattr(cls, "Meta", None)
+        # Check Config class for read_only/write_only sets (renamed from Meta to avoid conflict with msgspec.Meta)
+        meta = getattr(cls, "Config", None)
         if meta:
             meta_read_only = getattr(meta, "read_only", set())
             meta_write_only = getattr(meta, "write_only", set())
@@ -815,8 +815,12 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             setattr(instance, field_name, value)
         return instance
 
-    class Meta:
-        """Configuration for Serializer. Can be overridden in subclasses."""
+    class Config:
+        """Configuration for Serializer. Can be overridden in subclasses.
+
+        Note: Named 'Config' (not 'Meta') to avoid conflict with msgspec.Meta
+        used for type constraints in Annotated[type, Meta(...)].
+        """
 
         model: type[Model] | None = None
         """Associated Django model class (optional)"""
@@ -835,7 +839,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         Named field sets for dynamic field selection.
 
         Example:
-            class Meta:
+            class Config:
                 field_sets = {
                     "list": ["id", "name", "email"],
                     "detail": ["id", "name", "email", "created_at", "posts"],
@@ -870,7 +874,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 password: str
                 created_at: datetime
 
-                class Meta:
+                class Config:
                     write_only = {"password"}
 
                 @computed_field
@@ -956,20 +960,20 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 for validator in validators:
                     class_dict[f"_validator_{field_name}"] = validator
 
-        # Copy Meta with adjusted field_sets (only include subsets of our fields)
-        parent_meta = getattr(cls, "Meta", None)
+        # Copy Config with adjusted field_sets (only include subsets of our fields)
+        parent_meta = getattr(cls, "Config", None)
         if parent_meta:
-            class Meta:
+            class Config:
                 pass
-            # Copy relevant Meta attributes
+            # Copy relevant Config attributes
             if hasattr(parent_meta, "model"):
-                Meta.model = parent_meta.model  # type: ignore
+                Config.model = parent_meta.model  # type: ignore
             # Adjust write_only/read_only to only include fields we have
             if hasattr(parent_meta, "write_only"):
-                Meta.write_only = parent_meta.write_only & fields_set  # type: ignore
+                Config.write_only = parent_meta.write_only & fields_set  # type: ignore
             if hasattr(parent_meta, "read_only"):
-                Meta.read_only = parent_meta.read_only & fields_set  # type: ignore
-            class_dict["Meta"] = Meta
+                Config.read_only = parent_meta.read_only & fields_set  # type: ignore
+            class_dict["Config"] = Config
 
         # Create the new Serializer subclass
         new_cls: type[T] = type(class_name, (Serializer,), class_dict)  # type: ignore
@@ -1014,7 +1018,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 email: str
                 password: str
 
-                class Meta:
+                class Config:
                     field_sets = {
                         "list": ["id", "name"],
                         "detail": ["id", "name", "email"],
@@ -1037,7 +1041,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         if field_set not in field_sets:
             available = ", ".join(field_sets.keys()) if field_sets else "none defined"
             raise ValueError(
-                f"Field set '{field_set}' not found in {cls.__name__}.Meta.field_sets. "
+                f"Field set '{field_set}' not found in {cls.__name__}.Config.field_sets. "
                 f"Available field sets: {available}"
             )
 
@@ -1095,12 +1099,12 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
     @classmethod
     def use(cls: type[T], field_set: str) -> SerializerView[T]:
         """
-        Create a view using a predefined field set from Meta.field_sets.
+        Create a view using a predefined field set from Config.field_sets.
 
         This allows you to define common field combinations once and reuse them.
 
         Args:
-            field_set: Name of the field set defined in Meta.field_sets
+            field_set: Name of the field set defined in Config.field_sets
 
         Returns:
             SerializerView configured with the predefined field set
@@ -1116,7 +1120,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 password: str = field(write_only=True)
                 created_at: datetime
 
-                class Meta:
+                class Config:
                     field_sets = {
                         "list": ["id", "name"],
                         "detail": ["id", "name", "email", "created_at"],
@@ -1130,7 +1134,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         if field_set not in field_sets:
             available = ", ".join(field_sets.keys()) if field_sets else "none defined"
             raise ValueError(
-                f"Field set '{field_set}' not found in {cls.__name__}.Meta.field_sets. "
+                f"Field set '{field_set}' not found in {cls.__name__}.Config.field_sets. "
                 f"Available field sets: {available}"
             )
         return SerializerView(cls, include_fields=frozenset(field_sets[field_set]))

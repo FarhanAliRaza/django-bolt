@@ -1051,7 +1051,7 @@ class AdvancedAuthorSerializer(Serializer):
     email: Email
     bio: str = ""
 
-    class Meta:
+    class Config:
         write_only = {"bio"}
         field_sets = {
             "list": ["id", "name"],
@@ -1115,7 +1115,7 @@ class AdvancedBlogPostSerializer(Serializer):
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
-    class Meta:
+    class Config:
         field_sets = {
             "list": ["id", "title", "published", "created_at", "tag_count"],
             "detail": ["id", "title", "content", "author", "tags", "published", "created_at", "updated_at", "tag_names", "comment_count"],

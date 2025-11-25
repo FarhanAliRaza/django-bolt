@@ -232,7 +232,7 @@ class FullUserSerializer(Serializer):
     website: URL | None = None
     bio: str = ""
 
-    class Meta:
+    class Config:
         field_sets = {
             "list": ["id", "username"],
             "detail": ["id", "email", "username", "website"],

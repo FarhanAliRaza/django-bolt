@@ -102,7 +102,7 @@ class BlogPostSerializer(Serializer):
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
-    class Meta:
+    class Config:
         field_sets = {
             "list": ["id", "title", "published", "created_at"],
             "detail": ["id", "title", "content", "author", "tags", "published", "created_at", "updated_at"],
@@ -129,7 +129,7 @@ class UserSerializer(Serializer):
     is_staff: bool = False
     created_at: datetime | None = None
 
-    class Meta:
+    class Config:
         write_only = {"password_hash"}
         field_sets = {
             "list": ["id", "username", "is_active"],
@@ -1423,9 +1423,9 @@ class ComprehensiveProductSerializer(Serializer):
     )
 
     # -------------------------------------------------------------------------
-    # Meta class configuration
+    # Config class configuration
     # -------------------------------------------------------------------------
-    class Meta:
+    class Config:
         # Fields only in output, never accepted in input
         read_only = {"id", "created_at", "updated_at"}
 

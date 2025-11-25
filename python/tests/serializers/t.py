@@ -77,7 +77,7 @@ class ComprehensiveProductSerializer(Serializer):
     related_tags: Annotated[list[TagSerializer], Nested(TagSerializer, many=True)] = field(
         default_factory=list
     )
-    class Meta:
+    class Config:
         # Fields only in output, never accepted in input
         read_only = {"id", "created_at", "updated_at"}
 

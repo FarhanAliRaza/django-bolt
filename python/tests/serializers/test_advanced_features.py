@@ -26,8 +26,8 @@ class TestFieldFunction:
             name: str
             internal_id: str
 
-            class Meta:
-                # Using Meta.write_only for fields that should only be in input
+            class Config:
+                # Using Config.write_only for fields that should only be in input
                 write_only = {"internal_id"}
 
         user = UserSerializer(id=1, name="John", internal_id="secret123")
@@ -45,7 +45,7 @@ class TestFieldFunction:
             email: str
             password: str
 
-            class Meta:
+            class Config:
                 write_only = {"password"}
 
         user = UserCreateSerializer(email="test@example.com", password="secret123")
@@ -212,7 +212,7 @@ class TestDynamicFieldSelection:
             created_at: str
             updated_at: str
 
-            class Meta:
+            class Config:
                 field_sets = {
                     "list": ["id", "name", "email"],
                     "detail": ["id", "name", "email", "created_at", "updated_at"],
@@ -247,7 +247,7 @@ class TestDynamicFieldSelection:
             id: int
             name: str
 
-            class Meta:
+            class Config:
                 field_sets = {"list": ["id", "name"]}
 
         with pytest.raises(ValueError) as exc_info:
@@ -442,7 +442,7 @@ class TestComplexScenarios:
             is_active: bool = True
             profile_picture: str | None = None
 
-            class Meta:
+            class Config:
                 write_only = {"password_hash"}
                 field_sets = {
                     "list": ["id", "username", "is_active"],
@@ -689,7 +689,7 @@ class TestFieldsMethod:
             password: str
             created_at: str
 
-            class Meta:
+            class Config:
                 field_sets = {
                     "list": ["id", "name"],
                     "detail": ["id", "name", "email", "created_at"],
@@ -715,7 +715,7 @@ class TestFieldsMethod:
             name: str
             email: str
 
-            class Meta:
+            class Config:
                 field_sets = {
                     "list": ["id", "name"],
                     "detail": ["id", "name", "email"],
@@ -735,7 +735,7 @@ class TestFieldsMethod:
             id: int
             name: str
 
-            class Meta:
+            class Config:
                 field_sets = {"mini": ["id", "name"]}
 
         UserMini = UserSerializer.fields("mini", name="UserMiniResponse")
@@ -748,7 +748,7 @@ class TestFieldsMethod:
             id: int
             name: str
 
-            class Meta:
+            class Config:
                 field_sets = {"list": ["id", "name"]}
 
         with pytest.raises(ValueError) as exc_info:
@@ -837,7 +837,7 @@ class TestSubsetCompleteWorkflow:
             last_login: str | None = None
             is_staff: bool = False
 
-            class Meta:
+            class Config:
                 write_only = {"password"}
                 field_sets = {
                     "list": ["id", "username"],

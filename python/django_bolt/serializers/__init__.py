@@ -76,7 +76,7 @@ __all__ = [
     # Field configuration
     "field",
     "FieldConfig",
-    # msgspec Meta for type constraints
+    # msgspec Meta for type constraints (use class Config for serializer configuration)
     "Meta",
     # Decorators
     "field_validator",

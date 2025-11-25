@@ -280,11 +280,11 @@ class TestSerializerInheritance:
         assert admin.is_admin is True
 
 
-class TestMetaConfig:
-    """Test Meta class configuration."""
+class TestConfigClass:
+    """Test Config class configuration."""
 
-    def test_meta_model_reference(self):
-        """Test Meta.model reference."""
+    def test_config_model_reference(self):
+        """Test Config.model reference."""
 
         class DummyModel:
             pass
@@ -292,7 +292,7 @@ class TestMetaConfig:
         class UserSerializer(Serializer):
             username: str
 
-            class Meta:
+            class Config:
                 model = DummyModel
 
-        assert UserSerializer.Meta.model == DummyModel
+        assert UserSerializer.Config.model == DummyModel

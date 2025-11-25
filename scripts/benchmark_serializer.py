@@ -230,7 +230,7 @@ class BoltUserDynamic(Serializer):
     created_at: str = ""
     internal_notes: str = ""
 
-    class Meta:
+    class Config:
         write_only = {"password"}
         field_sets = {
             "list": ["id", "name", "email"],

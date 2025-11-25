@@ -634,7 +634,7 @@ class UserSerializer(Serializer):
     username: str
     email: str
 
-    class Meta:
+    class Config:
         model = User  # Associated Django model
         write_only = {'password'}  # Input-only fields
         read_only = {'id', 'date_joined'}  # Output-only fields
@@ -739,7 +739,7 @@ class UserSerializer(Serializer):
     last_login: datetime
     internal_notes: str
 
-    class Meta:
+    class Config:
         write_only = {"password"}
         field_sets = {
             "list": ["id", "name", "email"],
@@ -811,22 +811,22 @@ Here's how to replace multiple DRF serializers with ONE Django-Bolt serializer:
 ```python
 # BEFORE (DRF style - 4 serializers)
 class UserListSerializer(serializers.ModelSerializer):
-    class Meta:
+    class Config:
         model = User
         fields = ['id', 'name']
 
 class UserDetailSerializer(serializers.ModelSerializer):
-    class Meta:
+    class Config:
         model = User
         fields = ['id', 'name', 'email', 'created_at']
 
 class UserCreateSerializer(serializers.ModelSerializer):
-    class Meta:
+    class Config:
         model = User
         fields = ['name', 'email', 'password']
 
 class UserAdminSerializer(serializers.ModelSerializer):
-    class Meta:
+    class Config:
         model = User
         fields = ['id', 'name', 'email', 'created_at', 'is_staff', 'internal_notes']
 
@@ -843,7 +843,7 @@ class UserSerializer(Serializer):
     is_staff: bool = False
     internal_notes: str | None = None
 
-    class Meta:
+    class Config:
         write_only = {"password"}  # Never include in output
         field_sets = {
             "list": ["id", "name"],
@@ -877,7 +877,7 @@ class UserSerializer(Serializer):
     created_at: datetime
     is_staff: bool = False
 
-    class Meta:
+    class Config:
         write_only = {"password"}
         field_sets = {
             "list": ["id", "name"],
@@ -1329,7 +1329,7 @@ class UserSerializer(Serializer):
     first_name: str
     last_name: str
 
-    class Meta:
+    class Config:
         field_sets = {
             # ❌ display_name won't appear - not in field_set
             "basic": ["first_name", "last_name"],

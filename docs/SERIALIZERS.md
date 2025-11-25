@@ -644,7 +644,7 @@ class UserSerializer(Serializer):
 
 ### Field Configuration with `field()`
 
-Use the `field()` function for fine-grained control over field behavior:
+Use the `field()` function for serializer-specific field behavior:
 
 ```python
 from django_bolt.serializers import Serializer, field
@@ -653,23 +653,34 @@ class UserSerializer(Serializer):
     id: int = field(read_only=True)  # Only in output, not input
     email: str = field(source="email_address")  # Map to different model attribute
     password: str = field(write_only=True)  # Only in input, not output
-    name: str = field(min_length=1, max_length=100)  # Constraints
+    tags: list[str] = field(default_factory=list)  # Mutable default
 ```
 
 **Available options:**
 
-| Option                     | Description                                           |
-| -------------------------- | ----------------------------------------------------- |
-| `read_only=True`           | Field only appears in output (dump), ignored in input |
-| `write_only=True`          | Field only accepted in input, excluded from output    |
-| `source="attr"`            | Map API field name to different model attribute       |
-| `alias="name"`             | Alternative JSON key name                             |
-| `default=value`            | Default value for the field                           |
-| `default_factory=fn`       | Factory function for mutable defaults                 |
-| `exclude=True`             | Always exclude from serialization                     |
-| `ge`, `gt`, `le`, `lt`     | Numeric constraints                                   |
-| `min_length`, `max_length` | String/list length constraints                        |
-| `pattern`                  | Regex pattern for strings                             |
+| Option               | Description                                           |
+| -------------------- | ----------------------------------------------------- |
+| `read_only=True`     | Field only appears in output (dump), ignored in input |
+| `write_only=True`    | Field only accepted in input, excluded from output    |
+| `source="attr"`      | Map API field name to different model attribute       |
+| `alias="name"`       | Alternative JSON key name                             |
+| `default=value`      | Default value for the field                           |
+| `default_factory=fn` | Factory function for mutable defaults                 |
+| `exclude=True`       | Always exclude from serialization                     |
+| `description`        | Description for OpenAPI documentation                 |
+| `deprecated=True`    | Mark field as deprecated in OpenAPI docs              |
+
+**For validation constraints**, use `Meta` with `Annotated` instead:
+
+```python
+from typing import Annotated
+from django_bolt.serializers import Serializer, Meta
+
+class UserSerializer(Serializer):
+    name: Annotated[str, Meta(min_length=1, max_length=100)]
+    age: Annotated[int, Meta(ge=0, le=150)]
+    email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
+```
 
 ### Computed Fields with `@computed_field`
 

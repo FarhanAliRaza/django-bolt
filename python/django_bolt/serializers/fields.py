@@ -90,7 +90,6 @@ class _FieldMarker:
     """
 
     config: FieldConfig
-    meta_kwargs: dict[str, Any]
 
     def __repr__(self) -> str:
         parts = []
@@ -121,14 +120,6 @@ def field(
     deprecated: bool = False,
     exclude: bool = False,
     include_in_schema: bool = True,
-    # msgspec Meta constraints
-    ge: float | int | None = None,
-    gt: float | int | None = None,
-    le: float | int | None = None,
-    lt: float | int | None = None,
-    min_length: int | None = None,
-    max_length: int | None = None,
-    pattern: str | None = None,
 ) -> Any:
     """
     Configure a serializer field with additional metadata.
@@ -136,6 +127,15 @@ def field(
     This function returns a value that can be used as a field default in a
     Serializer class. The returned value contains both the default value
     (if any) and the field configuration metadata.
+
+    For validation constraints (ge, gt, le, lt, min_length, max_length, pattern),
+    use msgspec.Meta with Annotated types instead:
+
+        from typing import Annotated
+        from msgspec import Meta
+
+        name: Annotated[str, Meta(min_length=1, max_length=100)]
+        price: Annotated[float, Meta(ge=0.0)]
 
     Args:
         read_only: If True, field is only included in output, not accepted in input.
@@ -153,13 +153,6 @@ def field(
         deprecated: Mark this field as deprecated.
         exclude: Always exclude this field from serialization.
         include_in_schema: Whether to include this field in OpenAPI schema.
-        ge: Greater than or equal constraint (for numeric fields).
-        gt: Greater than constraint (for numeric fields).
-        le: Less than or equal constraint (for numeric fields).
-        lt: Less than constraint (for numeric fields).
-        min_length: Minimum length constraint (for string/list fields).
-        max_length: Maximum length constraint (for string/list fields).
-        pattern: Regex pattern constraint (for string fields).
 
     Returns:
         A field configuration that can be used as a default value.
@@ -169,12 +162,12 @@ def field(
             id: int = field(read_only=True)
             email: str = field(source="email_address")
             password: str = field(write_only=True)
-            name: str = field(min_length=1, max_length=100)
+            tags: list[str] = field(default_factory=list)
 
-        # Usage:
-        # - When dumping: id is included, password is excluded
-        # - When loading: id is ignored, password is accepted
-        # - source="email_address" maps API "email" to model "email_address"
+        # For constraints, use Annotated + Meta:
+        class ProductSerializer(Serializer):
+            name: Annotated[str, Meta(min_length=1, max_length=100)]
+            price: Annotated[float, Meta(ge=0.0)]
     """
     config = FieldConfig(
         read_only=read_only,
@@ -191,31 +184,7 @@ def field(
         include_in_schema=include_in_schema,
     )
 
-    # Build msgspec Meta constraints
-    meta_kwargs: dict[str, Any] = {}
-    if ge is not None:
-        meta_kwargs["ge"] = ge
-    if gt is not None:
-        meta_kwargs["gt"] = gt
-    if le is not None:
-        meta_kwargs["le"] = le
-    if lt is not None:
-        meta_kwargs["lt"] = lt
-    if min_length is not None:
-        meta_kwargs["min_length"] = min_length
-    if max_length is not None:
-        meta_kwargs["max_length"] = max_length
-    if pattern is not None:
-        meta_kwargs["pattern"] = pattern
-    if description is not None:
-        meta_kwargs["description"] = description
-    if title is not None:
-        meta_kwargs["title"] = title
-    if examples is not None:
-        meta_kwargs["examples"] = examples
-
-    # Return a special marker object that stores both config and default
-    return _FieldMarker(config=config, meta_kwargs=meta_kwargs)
+    return _FieldMarker(config=config)
 
 
 def get_msgspec_type_for_django_field(field: models.Field, **field_kwargs: Any) -> Type:

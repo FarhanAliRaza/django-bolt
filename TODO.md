@@ -70,3 +70,25 @@ Must use Header(alias="X-API-Key") not Header("X-API-Key")
 Same for Cookie(alias="session_id")
 Reason: Parameter naming convention
 Future: Could add FastAPI-style auto-conversion
+
+Now I understand. The Serializer has:
+
+1. **field_configs** - stores our FieldConfig with
+   description, deprecated, read_only, etc.
+2. msgspec's type_info() has Meta constraints like
+   min_length, max_length, ge, pattern, etc.
+
+But the OpenAPI schema generator doesn't use either of
+these. It just uses basic msgspec field info without
+extracting constraints or our FieldConfig.
+
+The OpenAPI schema generator needs to be updated to:
+
+1. Extract Meta constraints from msgspec's type_info()
+   (min_length, max_length, pattern, ge, le, etc.)
+2. Extract FieldConfig attributes from our Serializer's
+   **field_configs** (description, deprecated)
+
+This is a bigger change. Do you want me to update the
+OpenAPI schema generator to properly extract these
+constraints and metadata?

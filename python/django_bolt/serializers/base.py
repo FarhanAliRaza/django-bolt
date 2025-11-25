@@ -70,7 +70,7 @@ def _iter_field_defaults(cls: type) -> list[tuple[str, Any]]:
     return result
 
 
-class Serializer(msgspec.Struct):
+class Serializer(msgspec.Struct, kw_only=True):
     """
     Enhanced msgspec.Struct with validation and Django model integration.
 
@@ -80,10 +80,13 @@ class Serializer(msgspec.Struct):
     - Django model integration (from_model, to_dict, to_model)
     - Full type safety for IDE/type checkers
     - All msgspec.Struct features (frozen, array_like, etc.)
+    - kw_only=True: Allows mixing required and optional fields in any order
+      (like Pydantic and DRF), requiring keyword arguments for instantiation
 
     Example:
         class UserCreate(Serializer):
-            username: str
+            id: int = field(read_only=True)  # Optional field can come first
+            username: str                     # Required field can come after
             email: str
             password: str
 
@@ -98,6 +101,9 @@ class Serializer(msgspec.Struct):
                 from django.contrib.auth.models import User
                 if User.objects.filter(username=self.username).exists():
                     raise ValueError('Username already exists')
+
+        # Must use keyword arguments:
+        user = UserCreate(username="john", email="john@example.com", password="secret")
     """
 
     # Unique marker to identify Serializer instances (for type checking in _convert_serializers)

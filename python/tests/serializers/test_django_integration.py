@@ -28,9 +28,12 @@ from typing import Annotated
 import pytest
 import msgspec
 
+from msgspec import Meta
+
 from django_bolt.serializers import (
     Serializer,
     computed_field,
+    field,
     field_validator,
     model_validator,
     create_serializer,
@@ -1314,3 +1317,991 @@ class TestComplexDjangoScenarios:
             "username": "multiview",
             "display_name": "@multiview",
         }
+
+
+# =============================================================================
+# Comprehensive Serializer showcasing ALL features
+# =============================================================================
+
+
+class ComprehensiveProductSerializer(Serializer, kw_only=True):
+    """
+    A single serializer class demonstrating ALL features of the Serializer system.
+
+    This serializer showcases:
+    1. Basic field types with type annotations
+    2. Reusable validated types (Email, URL, NonEmptyStr, PositiveInt, etc.)
+    3. Annotated constraints with msgspec.Meta (min_length, max_length, ge, le, pattern)
+    4. field() configuration (read_only, write_only, source, alias, default, default_factory)
+    5. @field_validator decorator for field-level validation/transformation
+    6. @model_validator decorator for cross-field validation
+    7. @computed_field decorator for calculated output fields
+    8. Nested serializers with Nested() annotation (single and many=True)
+    9. Meta class configuration (write_only, read_only, field_sets)
+    10. Dynamic field selection (only, exclude, use)
+    11. Type-safe subsets (subset, fields)
+    12. Dump options (exclude_none, exclude_defaults)
+    13. Django model integration (from_model, to_model, update_instance, to_dict)
+    14. Bulk operations (dump_many, dump_many_json)
+    15. JSON serialization (dump_json, model_validate_json, model_validate)
+
+    Note: kw_only=True allows mixing required and optional fields in any order.
+    """
+
+    # -------------------------------------------------------------------------
+    # 1. Basic field with read_only (output-only, auto-generated)
+    # -------------------------------------------------------------------------
+    id: int = field(read_only=True, description="Auto-generated product ID")
+
+    # -------------------------------------------------------------------------
+    # 2. Reusable validated type (NonEmptyStr - min_length=1)
+    # -------------------------------------------------------------------------
+    name: NonEmptyStr
+
+    # -------------------------------------------------------------------------
+    # 3. Annotated constraints with msgspec.Meta
+    # -------------------------------------------------------------------------
+    sku: Annotated[str, Meta(pattern=r"^[A-Z]{2,4}-[0-9]{4,8}$", description="Stock Keeping Unit")]
+
+    # -------------------------------------------------------------------------
+    # 4. Field with alias (JSON uses different name)
+    # -------------------------------------------------------------------------
+    description: Annotated[str, Meta(max_length=2000)] = field(
+        alias="desc",
+        default="",
+        description="Product description",
+    )
+
+    # -------------------------------------------------------------------------
+    # 5. Numeric constraint types
+    # -------------------------------------------------------------------------
+    price: Annotated[float, Meta(ge=0.0, description="Product price in USD")]
+    quantity: PositiveInt  # Must be > 0
+    discount_percent: Percentage = 0.0  # 0-100 range
+
+    # -------------------------------------------------------------------------
+    # 6. Write-only field (input only, never in output)
+    # -------------------------------------------------------------------------
+    internal_cost: float = field(write_only=True, default=0.0)
+
+    # -------------------------------------------------------------------------
+    # 7. Source mapping (API field maps to different model attribute)
+    # -------------------------------------------------------------------------
+    category_name: str = field(source="category.name", default="Uncategorized")
+
+    # -------------------------------------------------------------------------
+    # 8. Field with default_factory (for mutable defaults)
+    # -------------------------------------------------------------------------
+    tags_list: list[str] = field(default_factory=list)
+
+    # -------------------------------------------------------------------------
+    # 9. Optional fields with None
+    # -------------------------------------------------------------------------
+    website: URL | None = None
+    manufacturer_email: Email | None = None
+
+    # -------------------------------------------------------------------------
+    # 10. Datetime fields
+    # -------------------------------------------------------------------------
+    created_at: datetime | None = field(read_only=True, default=None)
+    updated_at: datetime | None = field(read_only=True, default=None)
+
+    # -------------------------------------------------------------------------
+    # 11. Boolean with default
+    # -------------------------------------------------------------------------
+    is_active: bool = True
+    is_featured: bool = False
+
+    # -------------------------------------------------------------------------
+    # 12. Nested serializer (single object - ForeignKey equivalent)
+    # -------------------------------------------------------------------------
+    supplier: Annotated[AuthorSerializer | None, Nested(AuthorSerializer)] = None
+
+    # -------------------------------------------------------------------------
+    # 13. Nested serializer with many=True (ManyToMany equivalent)
+    # -------------------------------------------------------------------------
+    related_tags: Annotated[list[TagSerializer], Nested(TagSerializer, many=True)] = field(
+        default_factory=list
+    )
+
+    # -------------------------------------------------------------------------
+    # Meta class configuration
+    # -------------------------------------------------------------------------
+    class Meta:
+        # Fields only in output, never accepted in input
+        read_only = {"id", "created_at", "updated_at"}
+
+        # Fields only in input, never in output
+        write_only = {"internal_cost"}
+
+        # Predefined field sets for different views
+        field_sets = {
+            "list": ["id", "name", "sku", "price", "is_active"],
+            "detail": [
+                "id", "name", "sku", "description", "price", "quantity",
+                "discount_percent", "website", "is_active", "is_featured",
+                "created_at", "updated_at"
+            ],
+            "admin": [
+                "id", "name", "sku", "description", "price", "quantity",
+                "discount_percent", "internal_cost", "category_name",
+                "tags_list", "website", "manufacturer_email", "is_active",
+                "is_featured", "supplier", "related_tags", "created_at", "updated_at",
+                # Include computed fields explicitly
+                "display_price", "is_on_sale", "tag_count"
+            ],
+            "export": ["id", "name", "sku", "price", "quantity", "is_active"],
+        }
+
+    # -------------------------------------------------------------------------
+    # 14. @field_validator - Transform/validate individual fields
+    # -------------------------------------------------------------------------
+    @field_validator("name")
+    def normalize_name(cls, value: str) -> str:
+        """Normalize product name: strip whitespace, title case."""
+        return value.strip().title()
+
+    @field_validator("sku")
+    def uppercase_sku(cls, value: str) -> str:
+        """Ensure SKU is uppercase."""
+        return value.upper()
+
+    @field_validator("manufacturer_email")
+    def lowercase_email(cls, value: str | None) -> str | None:
+        """Normalize email to lowercase."""
+        if value is not None:
+            return value.lower()
+        return value
+
+    # -------------------------------------------------------------------------
+    # 15. @model_validator - Cross-field validation
+    # -------------------------------------------------------------------------
+    @model_validator
+    def validate_pricing(self) -> "ComprehensiveProductSerializer":
+        """Ensure discount doesn't exceed price logic."""
+        if self.discount_percent > 0 and self.price <= 0:
+            raise ValueError("Cannot apply discount to zero-priced product")
+        if self.discount_percent >= 100:
+            raise ValueError("Discount cannot be 100% or more")
+        return self
+
+    # -------------------------------------------------------------------------
+    # 16. @computed_field - Calculated output-only fields
+    # -------------------------------------------------------------------------
+    @computed_field
+    def display_price(self) -> str:
+        """Formatted price string."""
+        return f"${self.price:.2f}"
+
+    @computed_field
+    def is_on_sale(self) -> bool:
+        """Whether product has an active discount."""
+        return self.discount_percent > 0
+
+    @computed_field
+    def discounted_price(self) -> float | None:
+        """Price after discount, or None if no discount."""
+        if self.discount_percent > 0:
+            return round(self.price * (1 - self.discount_percent / 100), 2)
+        return None
+
+    @computed_field
+    def tag_count(self) -> int:
+        """Number of tags."""
+        return len(self.tags_list)
+
+    @computed_field
+    def full_title(self) -> str:
+        """Full product title with SKU."""
+        return f"{self.name} ({self.sku})"
+
+
+class TestComprehensiveSerializer:
+    """Tests demonstrating ALL features of ComprehensiveProductSerializer."""
+
+    # -------------------------------------------------------------------------
+    # Test 1: Basic instantiation and field validators
+    # -------------------------------------------------------------------------
+    def test_basic_instantiation_with_field_validators(self):
+        """Test that field validators run during direct instantiation."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="  test product  ",  # Will be stripped and title-cased
+            sku="ab-1234",  # Will be uppercased
+            price=99.99,
+            quantity=10,
+        )
+
+        # Field validators should have transformed values
+        assert product.name == "Test Product"  # Stripped and title-cased
+        assert product.sku == "AB-1234"  # Uppercased
+
+    # -------------------------------------------------------------------------
+    # Test 2: Model validator (cross-field validation)
+    # -------------------------------------------------------------------------
+    def test_model_validator_passes(self):
+        """Test model validator allows valid combinations."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Valid Product",
+            sku="XX-9999",
+            price=100.0,
+            quantity=5,
+            discount_percent=25.0,  # 25% off $100 is valid
+        )
+        assert product.discount_percent == 25.0
+
+    def test_model_validator_fails_on_invalid_discount(self):
+        """Test model validator rejects invalid discount on zero price."""
+        with pytest.raises(msgspec.ValidationError, match="Cannot apply discount"):
+            ComprehensiveProductSerializer(
+                id=1,
+                name="Invalid Product",
+                sku="XX-0000",
+                price=0.0,  # Zero price
+                quantity=1,
+                discount_percent=10.0,  # But has discount
+            )
+
+    def test_model_validator_fails_on_100_percent_discount(self):
+        """Test model validator rejects 100% discount."""
+        with pytest.raises(msgspec.ValidationError, match="Discount cannot be 100%"):
+            ComprehensiveProductSerializer(
+                id=1,
+                name="Free Product",
+                sku="XX-0000",
+                price=50.0,
+                quantity=1,
+                discount_percent=100.0,  # 100% discount not allowed
+            )
+
+    # -------------------------------------------------------------------------
+    # Test 3: Computed fields
+    # -------------------------------------------------------------------------
+    def test_computed_fields_in_dump(self):
+        """Test computed fields appear in dump output."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Gadget",
+            sku="GD-1234",
+            price=149.99,
+            quantity=100,
+            discount_percent=20.0,
+            tags_list=["electronics", "sale", "new"],
+        )
+
+        result = product.dump()
+
+        # Computed fields should be in output
+        assert result["display_price"] == "$149.99"
+        assert result["is_on_sale"] is True
+        assert result["discounted_price"] == 119.99  # 149.99 * 0.8
+        assert result["tag_count"] == 3
+        assert result["full_title"] == "Gadget (GD-1234)"
+
+    def test_computed_field_no_discount(self):
+        """Test computed discounted_price is None when no discount."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Regular Item",
+            sku="RI-5555",
+            price=50.0,
+            quantity=10,
+            discount_percent=0.0,
+        )
+
+        result = product.dump()
+        assert result["is_on_sale"] is False
+        assert result["discounted_price"] is None
+
+    # -------------------------------------------------------------------------
+    # Test 4: Write-only fields excluded from dump
+    # -------------------------------------------------------------------------
+    def test_write_only_excluded_from_dump(self):
+        """Test write_only fields are not in dump output."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Secret Cost Product",
+            sku="SC-1111",
+            price=200.0,
+            quantity=5,
+            internal_cost=75.0,  # Write-only field
+        )
+
+        result = product.dump()
+        assert "internal_cost" not in result
+
+    # -------------------------------------------------------------------------
+    # Test 5: Read-only fields (via Meta.read_only)
+    # -------------------------------------------------------------------------
+    def test_read_only_fields_in_output(self):
+        """Test read_only fields appear in output."""
+        now = datetime.now()
+        product = ComprehensiveProductSerializer(
+            id=42,
+            name="Product",
+            sku="PR-4242",
+            price=10.0,
+            quantity=1,
+            created_at=now,
+        )
+
+        result = product.dump()
+        assert result["id"] == 42
+        assert result["created_at"] == now
+
+    # -------------------------------------------------------------------------
+    # Test 6: Optional fields with None
+    # -------------------------------------------------------------------------
+    def test_optional_fields_none(self):
+        """Test optional fields can be None."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Basic",
+            sku="BA-0001",
+            price=5.0,
+            quantity=1,
+            website=None,
+            manufacturer_email=None,
+        )
+
+        result = product.dump()
+        assert result["website"] is None
+        assert result["manufacturer_email"] is None
+
+    def test_optional_fields_with_values(self):
+        """Test optional fields with actual values."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Full Details",
+            sku="FD-9999",
+            price=999.99,
+            quantity=1,
+            website="https://example.com/product",
+            manufacturer_email="CONTACT@MAKER.COM",  # Will be lowercased
+        )
+
+        result = product.dump()
+        assert result["website"] == "https://example.com/product"
+        assert result["manufacturer_email"] == "contact@maker.com"  # Lowercased
+
+    # -------------------------------------------------------------------------
+    # Test 7: Field with default_factory
+    # -------------------------------------------------------------------------
+    def test_default_factory_creates_new_list(self):
+        """Test default_factory creates independent list instances."""
+        p1 = ComprehensiveProductSerializer(id=1, name="P1", sku="P1-0001", price=1.0, quantity=1)
+        p2 = ComprehensiveProductSerializer(id=2, name="P2", sku="P2-0002", price=2.0, quantity=1)
+
+        # Each should have independent list
+        p1.tags_list.append("tag1")
+        assert p1.tags_list == ["tag1"]
+        assert p2.tags_list == []  # Not affected
+
+    # -------------------------------------------------------------------------
+    # Test 8: Nested serializers
+    # -------------------------------------------------------------------------
+    def test_nested_serializer_single(self):
+        """Test nested serializer for single object."""
+        supplier = AuthorSerializer(
+            id=100,
+            name="ACME Corp",
+            email="sales@acme.com",
+            bio="Leading supplier",
+        )
+
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="ACME Widget",
+            sku="AW-1000",
+            price=50.0,
+            quantity=100,
+            supplier=supplier,
+        )
+
+        result = product.dump()
+        assert result["supplier"]["id"] == 100
+        assert result["supplier"]["name"] == "ACME Corp"
+        assert result["supplier"]["display_name"] == "ACME Corp <sales@acme.com>"
+
+    def test_nested_serializer_many(self):
+        """Test nested serializer with many=True."""
+        tags = [
+            TagSerializer(id=1, name="electronics"),
+            TagSerializer(id=2, name="gadgets"),
+            TagSerializer(id=3, name="new-arrivals"),
+        ]
+
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Tagged Product",
+            sku="TP-1111",
+            price=75.0,
+            quantity=50,
+            related_tags=tags,
+        )
+
+        result = product.dump()
+        assert len(result["related_tags"]) == 3
+        assert result["related_tags"][0]["name"] == "electronics"
+        assert result["related_tags"][2]["name"] == "new-arrivals"
+
+    # -------------------------------------------------------------------------
+    # Test 9: Dynamic field selection with only()
+    # -------------------------------------------------------------------------
+    def test_only_specific_fields(self):
+        """Test only() returns specific fields."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Selective",
+            sku="SL-1111",
+            price=100.0,
+            quantity=10,
+            is_active=True,
+            is_featured=True,
+        )
+
+        result = ComprehensiveProductSerializer.only("id", "name", "price").dump(product)
+
+        assert result == {"id": 1, "name": "Selective", "price": 100.0}
+        assert "sku" not in result
+        assert "quantity" not in result
+
+    # -------------------------------------------------------------------------
+    # Test 10: Dynamic field selection with exclude()
+    # -------------------------------------------------------------------------
+    def test_exclude_specific_fields(self):
+        """Test exclude() removes specific fields."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Exclusion Test",
+            sku="EX-1111",
+            price=50.0,
+            quantity=5,
+        )
+
+        result = ComprehensiveProductSerializer.exclude(
+            "created_at", "updated_at", "supplier", "related_tags",
+            "tags_list", "category_name", "website", "manufacturer_email",
+            "is_featured", "discount_percent", "internal_cost"
+        ).dump(product)
+
+        assert "id" in result
+        assert "name" in result
+        assert "created_at" not in result
+        assert "supplier" not in result
+
+    # -------------------------------------------------------------------------
+    # Test 11: Dynamic field selection with use() (predefined field sets)
+    # -------------------------------------------------------------------------
+    def test_use_list_field_set(self):
+        """Test use() with 'list' field set."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="List View",
+            sku="LV-1111",
+            price=25.0,
+            quantity=100,
+            is_active=True,
+        )
+
+        result = ComprehensiveProductSerializer.use("list").dump(product)
+
+        assert set(result.keys()) == {"id", "name", "sku", "price", "is_active"}
+
+    def test_use_detail_field_set(self):
+        """Test use() with 'detail' field set."""
+        now = datetime.now()
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Detail View",
+            sku="DV-2222",
+            description="Full description here",
+            price=150.0,
+            quantity=20,
+            discount_percent=10.0,
+            website="https://example.com",
+            is_active=True,
+            is_featured=True,
+            created_at=now,
+            updated_at=now,
+        )
+
+        result = ComprehensiveProductSerializer.use("detail").dump(product)
+
+        expected_keys = {
+            "id", "name", "sku", "description", "price", "quantity",
+            "discount_percent", "website", "is_active", "is_featured",
+            "created_at", "updated_at"
+        }
+        assert set(result.keys()) == expected_keys
+
+    def test_use_admin_field_set_with_computed(self):
+        """Test use('admin') includes computed fields when explicitly listed."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Admin View",
+            sku="AD-3333",
+            price=500.0,
+            quantity=10,
+            discount_percent=15.0,
+            tags_list=["premium", "featured"],
+        )
+
+        result = ComprehensiveProductSerializer.use("admin").dump(product)
+
+        # Admin field set explicitly includes computed fields
+        assert "display_price" in result
+        assert "is_on_sale" in result
+        assert "tag_count" in result
+        assert result["display_price"] == "$500.00"
+        assert result["tag_count"] == 2
+
+    # -------------------------------------------------------------------------
+    # Test 12: Type-safe subsets with subset() - uses non-kw_only parent
+    # -------------------------------------------------------------------------
+    def test_subset_with_simple_serializer(self):
+        """Test subset() works with serializers that don't use kw_only."""
+        # Use AuthorSerializer which doesn't have kw_only=True
+        AuthorMini = AuthorSerializer.subset("id", "name")
+
+        # Should be a proper class
+        assert isinstance(AuthorMini, type)
+
+        # Can instantiate
+        mini = AuthorMini(id=1, name="Mini Author")
+        assert mini.id == 1
+        assert mini.name == "Mini Author"
+
+        # Dump only has those fields
+        result = mini.dump()
+        assert set(result.keys()) == {"id", "name"}
+
+    def test_subset_with_computed_field_simple(self):
+        """Test subset includes computed fields from simple serializer."""
+        # Use AuthorSerializer which has a display_name computed field
+        AuthorWithDisplay = AuthorSerializer.subset("id", "name", "email", "display_name")
+
+        author = AuthorWithDisplay(id=1, name="John", email="john@example.com")
+        result = author.dump()
+
+        assert result["display_name"] == "John <john@example.com>"
+
+    # -------------------------------------------------------------------------
+    # Test 13: Type-safe subsets with fields() - uses BlogPostSerializer
+    # -------------------------------------------------------------------------
+    def test_fields_from_field_set_simple(self):
+        """Test fields() creates class from Meta.field_sets (simple serializer)."""
+        # BlogPostSerializer has field_sets defined
+        PostList = BlogPostSerializer.fields("list")
+
+        # Instantiate with required fields
+        list_item = PostList(
+            id=1,
+            title="Post Title",
+            published=True,
+            created_at=datetime.now(),
+        )
+
+        result = list_item.dump()
+        assert set(result.keys()) == {"id", "title", "published", "created_at"}
+
+    # -------------------------------------------------------------------------
+    # Test 14: from_parent() to create subset from full instance
+    # -------------------------------------------------------------------------
+    def test_from_parent_with_simple_serializer(self):
+        """Test from_parent() creates subset from parent instance."""
+        full_author = AuthorSerializer(
+            id=42,
+            name="Full Author",
+            email="full@example.com",
+            bio="Full bio text",
+        )
+
+        # For computed fields that depend on other fields, include all required fields
+        AuthorMini = AuthorSerializer.subset("id", "name", "email", "display_name")
+        mini = AuthorMini.from_parent(full_author)
+
+        assert mini.id == 42
+        assert mini.name == "Full Author"
+        result = mini.dump()
+        assert result["display_name"] == "Full Author <full@example.com>"
+
+    # -------------------------------------------------------------------------
+    # Test 15: Dump with exclude_none=True
+    # -------------------------------------------------------------------------
+    def test_dump_exclude_none(self):
+        """Test dump(exclude_none=True) omits None values."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="No Nulls",
+            sku="NN-0001",
+            price=10.0,
+            quantity=1,
+            website=None,  # Will be excluded
+            manufacturer_email=None,  # Will be excluded
+            supplier=None,  # Will be excluded
+        )
+
+        result = product.dump(exclude_none=True)
+
+        assert "website" not in result
+        assert "manufacturer_email" not in result
+        assert "supplier" not in result
+        assert "name" in result  # Non-None fields still present
+
+    # -------------------------------------------------------------------------
+    # Test 16: Dump with exclude_defaults=True
+    # -------------------------------------------------------------------------
+    def test_dump_exclude_defaults(self):
+        """Test dump(exclude_defaults=True) omits default values."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Custom Values",
+            sku="CV-0001",
+            price=100.0,
+            quantity=1,
+            is_active=True,  # Default value
+            is_featured=False,  # Default value
+            discount_percent=0.0,  # Default value
+        )
+
+        result = product.dump(exclude_defaults=True)
+
+        # Default values should be excluded
+        assert "is_active" not in result  # True is default
+        assert "is_featured" not in result  # False is default
+        assert "discount_percent" not in result  # 0.0 is default
+
+        # Non-default values should be present
+        assert "id" in result
+        assert "name" in result
+        assert "price" in result
+
+    # -------------------------------------------------------------------------
+    # Test 17: dump_many for bulk serialization
+    # -------------------------------------------------------------------------
+    def test_dump_many(self):
+        """Test dump_many for multiple instances."""
+        products = [
+            ComprehensiveProductSerializer(id=1, name="Product 1", sku="P1-0001", price=10.0, quantity=1),
+            ComprehensiveProductSerializer(id=2, name="Product 2", sku="P2-0002", price=20.0, quantity=2),
+            ComprehensiveProductSerializer(id=3, name="Product 3", sku="P3-0003", price=30.0, quantity=3),
+        ]
+
+        results = ComprehensiveProductSerializer.dump_many(products)
+
+        assert len(results) == 3
+        assert results[0]["name"] == "Product 1"
+        assert results[1]["price"] == 20.0
+        assert results[2]["quantity"] == 3
+
+    def test_dump_many_with_field_selection(self):
+        """Test dump_many with only() field selection."""
+        products = [
+            ComprehensiveProductSerializer(id=1, name="P1", sku="S1-0001", price=10.0, quantity=1),
+            ComprehensiveProductSerializer(id=2, name="P2", sku="S2-0002", price=20.0, quantity=2),
+        ]
+
+        results = ComprehensiveProductSerializer.only("id", "name").dump_many(products)
+
+        for result in results:
+            assert set(result.keys()) == {"id", "name"}
+
+    # -------------------------------------------------------------------------
+    # Test 18: dump_many_json for JSON bytes output
+    # -------------------------------------------------------------------------
+    def test_dump_many_json(self):
+        """Test dump_many_json returns JSON bytes."""
+        products = [
+            ComprehensiveProductSerializer(id=1, name="Product One", sku="P1-0001", price=10.0, quantity=1),
+            ComprehensiveProductSerializer(id=2, name="Product Two", sku="P2-0002", price=20.0, quantity=2),
+        ]
+
+        json_bytes = ComprehensiveProductSerializer.dump_many_json(products)
+
+        assert isinstance(json_bytes, bytes)
+        # Name validator title-cases, so check for title-cased names
+        assert b"Product One" in json_bytes
+        assert b"Product Two" in json_bytes
+
+    # -------------------------------------------------------------------------
+    # Test 19: dump_json for single instance
+    # -------------------------------------------------------------------------
+    def test_dump_json(self):
+        """Test dump_json returns JSON bytes for single instance."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Single Product",  # Will be title-cased by validator
+            sku="SP-0001",
+            price=50.0,
+            quantity=10,
+        )
+
+        json_bytes = product.dump_json()
+
+        assert isinstance(json_bytes, bytes)
+        assert b"Single Product" in json_bytes
+        assert b'"price":50.0' in json_bytes or b'"price": 50.0' in json_bytes
+
+    # -------------------------------------------------------------------------
+    # Test 20: model_validate_json for JSON parsing with validation
+    # -------------------------------------------------------------------------
+    def test_model_validate_json(self):
+        """Test model_validate_json parses and validates JSON.
+
+        NOTE: msgspec pattern validation runs BEFORE field validators,
+        so the SKU must already match the pattern in the JSON input.
+        The field validator then uppercases it (though already uppercase).
+        """
+        json_data = b'''{
+            "id": 1,
+            "name": "  json parsed  ",
+            "sku": "JP-1234",
+            "price": 99.99,
+            "quantity": 10
+        }'''
+
+        product = ComprehensiveProductSerializer.model_validate_json(json_data)
+
+        # Field validators should have run
+        assert product.name == "Json Parsed"  # Stripped and title-cased
+        assert product.sku == "JP-1234"  # Already uppercase, kept uppercase
+
+    def test_model_validate_json_fails_on_invalid_sku(self):
+        """Test model_validate_json rejects invalid SKU pattern."""
+        json_data = b'''{
+            "id": 1,
+            "name": "Bad SKU",
+            "sku": "invalid-format",
+            "price": 10.0,
+            "quantity": 1
+        }'''
+
+        with pytest.raises(msgspec.ValidationError):
+            ComprehensiveProductSerializer.model_validate_json(json_data)
+
+    # -------------------------------------------------------------------------
+    # Test 21: model_validate for dict parsing with validation
+    # -------------------------------------------------------------------------
+    def test_model_validate_dict(self):
+        """Test model_validate parses dict with validation.
+
+        NOTE: Like JSON parsing, dict parsing via msgspec validates
+        the pattern BEFORE field validators run. So SKU must match pattern.
+        """
+        data = {
+            "id": 1,
+            "name": "  dict parsed  ",
+            "sku": "DP-5678",  # Must match pattern (uppercase)
+            "price": 150.0,
+            "quantity": 5,
+        }
+
+        product = ComprehensiveProductSerializer.model_validate(data)
+
+        assert product.name == "Dict Parsed"
+        assert product.sku == "DP-5678"
+
+    # -------------------------------------------------------------------------
+    # Test 22: to_dict method
+    # -------------------------------------------------------------------------
+    def test_to_dict(self):
+        """Test to_dict returns raw dictionary of struct fields only.
+
+        NOTE: to_dict() returns only struct fields, NOT computed fields.
+        Use dump() if you need computed fields in output.
+        """
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="To Dict",
+            sku="TD-0001",
+            price=25.0,
+            quantity=5,
+        )
+
+        data = product.to_dict()
+
+        assert isinstance(data, dict)
+        assert data["name"] == "To Dict"
+        assert data["sku"] == "TD-0001"
+        assert data["price"] == 25.0
+        # to_dict returns struct fields, NOT computed fields
+        assert "display_price" not in data  # Computed fields not included
+        # All struct fields are included (even write_only)
+        assert "internal_cost" in data
+
+    # -------------------------------------------------------------------------
+    # Test 23: Chained field selection
+    # -------------------------------------------------------------------------
+    def test_chained_field_selection(self):
+        """Test chaining use() with exclude()."""
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Chained",
+            sku="CH-0001",
+            price=100.0,
+            quantity=10,
+            is_active=True,
+        )
+
+        # Start with list field set, then exclude some
+        result = ComprehensiveProductSerializer.use("list").exclude("is_active").dump(product)
+
+        assert set(result.keys()) == {"id", "name", "sku", "price"}
+        assert "is_active" not in result
+
+    # -------------------------------------------------------------------------
+    # Test 24: Validated types (Email, URL, etc.) via JSON parsing
+    # -------------------------------------------------------------------------
+    def test_validated_type_email_valid(self):
+        """Test Email type accepts valid email via JSON parsing."""
+        json_data = b'''{
+            "id": 1,
+            "name": "Email Test",
+            "sku": "ET-0001",
+            "price": 10.0,
+            "quantity": 1,
+            "manufacturer_email": "VALID@EXAMPLE.COM"
+        }'''
+
+        product = ComprehensiveProductSerializer.model_validate_json(json_data)
+        assert product.manufacturer_email == "valid@example.com"  # Lowercased
+
+    def test_validated_type_email_invalid(self):
+        """Test Email type rejects invalid email via JSON parsing."""
+        json_data = b'''{
+            "id": 1,
+            "name": "Bad Email",
+            "sku": "BE-0001",
+            "price": 10.0,
+            "quantity": 1,
+            "manufacturer_email": "not-an-email"
+        }'''
+
+        with pytest.raises(msgspec.ValidationError):
+            ComprehensiveProductSerializer.model_validate_json(json_data)
+
+    def test_validated_type_url_valid(self):
+        """Test URL type accepts valid URL via JSON parsing."""
+        json_data = b'''{
+            "id": 1,
+            "name": "URL Test",
+            "sku": "UT-0001",
+            "price": 10.0,
+            "quantity": 1,
+            "website": "https://example.com/product"
+        }'''
+
+        product = ComprehensiveProductSerializer.model_validate_json(json_data)
+        assert product.website == "https://example.com/product"
+
+    def test_validated_type_positive_int_invalid(self):
+        """Test PositiveInt rejects zero/negative via JSON parsing."""
+        json_data = b'''{
+            "id": 1,
+            "name": "Zero Qty",
+            "sku": "ZQ-0001",
+            "price": 10.0,
+            "quantity": 0
+        }'''
+
+        with pytest.raises(msgspec.ValidationError):
+            ComprehensiveProductSerializer.model_validate_json(json_data)
+
+    # -------------------------------------------------------------------------
+    # Test 25: Integration with Django models
+    # -------------------------------------------------------------------------
+    @pytest.mark.django_db
+    def test_full_integration_with_django_models(self):
+        """Test full integration scenario with Django models."""
+        # Create related models
+        supplier = Author.objects.create(
+            name="Django Supplier",
+            email="supplier@django.test",
+            bio="Test supplier",
+        )
+
+        tag1 = Tag.objects.create(name="integration")
+        tag2 = Tag.objects.create(name="django")
+
+        # Create supplier serializer
+        supplier_serializer = AuthorSerializer.from_model(supplier)
+        tag_serializers = [TagSerializer.from_model(t) for t in [tag1, tag2]]
+
+        # Create comprehensive product
+        product = ComprehensiveProductSerializer(
+            id=1,
+            name="Integration Product",
+            sku="IP-1234",
+            price=299.99,
+            quantity=50,
+            discount_percent=15.0,
+            is_active=True,
+            is_featured=True,
+            supplier=supplier_serializer,
+            related_tags=tag_serializers,
+            tags_list=["test", "integration"],
+        )
+
+        # Full dump
+        full_result = product.dump()
+        assert full_result["name"] == "Integration Product"
+        assert full_result["supplier"]["name"] == "Django Supplier"
+        assert len(full_result["related_tags"]) == 2
+        assert full_result["display_price"] == "$299.99"
+        assert full_result["is_on_sale"] is True
+        assert full_result["discounted_price"] == 254.99  # 299.99 * 0.85
+
+        # List view
+        list_result = ComprehensiveProductSerializer.use("list").dump(product)
+        assert set(list_result.keys()) == {"id", "name", "sku", "price", "is_active"}
+
+        # Admin view with computed
+        admin_result = ComprehensiveProductSerializer.use("admin").dump(product)
+        assert "display_price" in admin_result
+        assert "supplier" in admin_result
+        assert "related_tags" in admin_result
+        assert admin_result["tag_count"] == 2
+
+        # Use only() for public view (runtime field selection)
+        public_result = ComprehensiveProductSerializer.only(
+            "id", "name", "price", "display_price", "is_on_sale"
+        ).dump(product)
+        assert set(public_result.keys()) == {"id", "name", "price", "display_price", "is_on_sale"}
+
+    # -------------------------------------------------------------------------
+    # Test 26: Bulk operations with Django
+    # -------------------------------------------------------------------------
+    @pytest.mark.django_db
+    def test_bulk_operations_with_django(self):
+        """Test bulk operations with Django model data."""
+        # Create multiple authors as suppliers
+        suppliers = [
+            Author.objects.create(name=f"Supplier {i}", email=f"s{i}@test.com")
+            for i in range(3)
+        ]
+
+        # Create products with suppliers
+        products = [
+            ComprehensiveProductSerializer(
+                id=i + 1,
+                name=f"Bulk Product {i + 1}",
+                sku=f"BP-{i + 1:04d}",
+                price=float((i + 1) * 100),
+                quantity=(i + 1) * 10,
+                supplier=AuthorSerializer.from_model(suppliers[i]),
+            )
+            for i in range(3)
+        ]
+
+        # Bulk dump
+        results = ComprehensiveProductSerializer.dump_many(products)
+        assert len(results) == 3
+        assert results[0]["supplier"]["name"] == "Supplier 0"
+        assert results[2]["price"] == 300.0
+
+        # Bulk dump with field selection
+        list_results = ComprehensiveProductSerializer.use("list").dump_many(products)
+        for result in list_results:
+            assert set(result.keys()) == {"id", "name", "sku", "price", "is_active"}

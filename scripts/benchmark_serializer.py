@@ -200,7 +200,7 @@ class PydanticUserWithComputed(BaseModel):
 # ============================================================================
 # Scenario 5: field() with read_only/write_only
 # ============================================================================
-class BoltUserWithFieldConfig(Serializer, kw_only=True):
+class BoltUserWithFieldConfig(Serializer):
     """django-bolt serializer with field() configuration."""
     id: int = field(read_only=True, default=0)
     name: str = field(min_length=1, max_length=100)

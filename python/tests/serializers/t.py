@@ -41,7 +41,7 @@ class TagSerializer(Serializer):
     description: str = ""
 
 
-class ComprehensiveProductSerializer(Serializer, kw_only=True):
+class ComprehensiveProductSerializer(Serializer):
    
     id: int = field(read_only=True, description="Auto-generated product ID")
 

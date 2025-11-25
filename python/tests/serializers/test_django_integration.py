@@ -1324,7 +1324,7 @@ class TestComplexDjangoScenarios:
 # =============================================================================
 
 
-class ComprehensiveProductSerializer(Serializer, kw_only=True):
+class ComprehensiveProductSerializer(Serializer):
     """
     A single serializer class demonstrating ALL features of the Serializer system.
 
@@ -1345,7 +1345,6 @@ class ComprehensiveProductSerializer(Serializer, kw_only=True):
     14. Bulk operations (dump_many, dump_many_json)
     15. JSON serialization (dump_json, model_validate_json, model_validate)
 
-    Note: kw_only=True allows mixing required and optional fields in any order.
     """
 
     # -------------------------------------------------------------------------

@@ -3,10 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-from msgspec import Meta
-
 from django_bolt.serializers import (
     Serializer,
+    Meta,
     field,
     field_validator,
     model_validator,

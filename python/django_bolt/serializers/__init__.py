@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from msgspec import Meta
+
 from .base import Serializer, SerializerView
 from .decorators import computed_field, field_validator, model_validator
 from .fields import FieldConfig, field
@@ -74,6 +76,8 @@ __all__ = [
     # Field configuration
     "field",
     "FieldConfig",
+    # msgspec Meta for type constraints
+    "Meta",
     # Decorators
     "field_validator",
     "model_validator",

@@ -28,10 +28,9 @@ from typing import Annotated
 import pytest
 import msgspec
 
-from msgspec import Meta
-
 from django_bolt.serializers import (
     Serializer,
+    Meta,
     computed_field,
     field,
     field_validator,

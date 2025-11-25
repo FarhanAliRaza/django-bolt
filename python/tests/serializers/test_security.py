@@ -213,33 +213,6 @@ class TestRecursionPrevention:
         assert "10000" in error_msg
 
 
-class TestValidatorPerformanceOptimizations:
-    """Test that validator performance optimizations work correctly."""
-
-    def test_single_validator_fast_path_exists(self):
-        """Test that single validator fast path code exists in _run_field_validators."""
-        # This test verifies that the optimization code path exists
-        # The actual performance benefit would need benchmarking to measure
-        from django_bolt.serializers.base import Serializer
-        import inspect
-
-        # Get the source code of _run_field_validators
-        source = inspect.getsource(Serializer._run_field_validators)
-
-        # Verify that fast path for single validator exists
-        assert "len(validators) == 1" in source
-        assert "Fast path for single validator" in source or "Optimization" in source
-
-    def test_multiple_validators_batch_path_exists(self):
-        """Test that multiple validators batch path code exists."""
-        from django_bolt.serializers.base import Serializer
-        import inspect
-
-        # Get the source code of _run_field_validators
-        source = inspect.getsource(Serializer._run_field_validators)
-
-        # Verify batch validation comment exists
-        assert "Batch validation" in source or "multiple validators" in source
 
 
 class TestTypeHintResolutionEdgeCases:

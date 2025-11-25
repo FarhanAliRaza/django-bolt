@@ -13,9 +13,40 @@ if TYPE_CHECKING:
 ResponseTuple = Tuple[int, List[Tuple[str, str]], bytes]
 
 
+def _convert_serializers(result: Any) -> Any:
+    """
+    Convert Serializer instances to dicts using dump().
+
+    This ensures write_only fields are excluded and computed_field values are included.
+    Uses a unique marker (__is_bolt_serializer__) to identify Serializers, avoiding
+    false positives from duck typing with random objects that happen to have dump().
+
+    Args:
+        result: The handler result to potentially convert
+
+    Returns:
+        Converted result (dict/list if Serializer, original otherwise)
+    """
+    # Check for Serializer instance using unique marker (not duck typing)
+    # __is_bolt_serializer__ is defined on the Serializer base class
+    if getattr(result.__class__, "__is_bolt_serializer__", False) and hasattr(result, "dump"):
+        return result.dump()
+
+    # Handle list of Serializers
+    if isinstance(result, list) and len(result) > 0:
+        first = result[0]
+        if getattr(first.__class__, "__is_bolt_serializer__", False) and hasattr(first, "dump"):
+            return [item.dump() for item in result]
+
+    return result
+
+
 async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTuple:
     """Serialize handler result to HTTP response."""
     response_tp = meta.get("response_type")
+
+    # Convert Serializer instances to dicts (handles write_only, computed_field)
+    result = _convert_serializers(result)
 
     # Check if result is already a raw response tuple (status, headers, body)
     # This is used by ASGI bridge and other low-level handlers
@@ -62,6 +93,9 @@ async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTupl
 def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple:
     """Serialize handler result to HTTP response (sync version for sync handlers)."""
     response_tp = meta.get("response_type")
+
+    # Convert Serializer instances to dicts (handles write_only, computed_field)
+    result = _convert_serializers(result)
 
     # Check if result is already a raw response tuple (status, headers, body)
     if isinstance(result, tuple) and len(result) == 3:

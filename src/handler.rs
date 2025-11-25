@@ -414,8 +414,8 @@ pub async fn handle_request(
 
     match fut.await {
         Ok(result_obj) => {
-            // Fast-path: minimize GIL time for tuple responses (status, headers, body)
-            let fast_tuple: Option<(u16, Vec<(String, String)>, Py<PyAny>, *const u8, usize)> =
+            // Fast-path: extract and copy body in single GIL acquisition (eliminates separate GIL for drop)
+            let fast_tuple: Option<(u16, Vec<(String, String)>, Vec<u8>)> =
                 Python::attach(|py| {
                     let obj = result_obj.bind(py);
                     let tuple = obj.downcast::<PyTuple>().ok()?;
@@ -433,24 +433,15 @@ pub async fn handle_request(
                         .extract::<Vec<(String, String)>>()
                         .ok()?;
 
-                    // 2: body (bytes or bytearray)
-                    let body_obj = match tuple.get_item(2) {
-                        Ok(v) => v,
-                        Err(_) => return None,
-                    };
-                    // Only support bytes (tuple serializer returns bytes)
-                    if let Ok(pybytes) = body_obj.downcast::<PyBytes>() {
-                        let slice = pybytes.as_bytes();
-                        let len = slice.len();
-                        let ptr = slice.as_ptr();
-                        let owner: Py<PyAny> = body_obj.unbind();
-                        Some((status_code, resp_headers, owner, ptr, len))
-                    } else {
-                        None
-                    }
+                    // 2: body (bytes) - copy within GIL, drop Python object before releasing GIL
+                    let body_obj = tuple.get_item(2).ok()?;
+                    let pybytes = body_obj.downcast::<PyBytes>().ok()?;
+                    let body_vec = pybytes.as_bytes().to_vec();
+                    // Python object drops automatically when this scope ends (still holding GIL)
+                    Some((status_code, resp_headers, body_vec))
                 });
 
-            if let Some((status_code, resp_headers, body_owner, body_ptr, body_len)) = fast_tuple {
+            if let Some((status_code, resp_headers, body_bytes)) = fast_tuple {
                 let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
                 let mut file_path: Option<String> = None;
                 let mut headers: Vec<(String, String)> = Vec::with_capacity(resp_headers.len());
@@ -566,6 +557,7 @@ pub async fn handle_request(
                         }
                     };
                 } else {
+                    // Non-file response path: body already copied within GIL scope above
                     let mut builder = HttpResponse::build(status);
                     for (k, v) in headers {
                         builder.append_header((k, v));
@@ -575,23 +567,12 @@ pub async fn handle_request(
                     }
 
                     // HEAD requests must have empty body per RFC 7231
-                    let mut response = if is_head_request {
-                        builder.body(Vec::<u8>::new())
+                    let response_body = if is_head_request {
+                        Vec::new()
                     } else {
-                        // Copy body bytes outside of the GIL
-                        let mut body_vec = Vec::<u8>::with_capacity(body_len);
-                        unsafe {
-                            body_vec.set_len(body_len);
-                            std::ptr::copy_nonoverlapping(
-                                body_ptr,
-                                body_vec.as_mut_ptr(),
-                                body_len,
-                            );
-                        }
-                        // Drop the Python owner with the GIL attached
-                        let _ = Python::attach(|_| drop(body_owner));
-                        builder.body(body_vec)
+                        body_bytes
                     };
+                    let mut response = builder.body(response_body);
 
                     // Add CORS headers if configured (NO GIL - uses Rust-native config)
                     if let Some(ref route_meta) = route_metadata {

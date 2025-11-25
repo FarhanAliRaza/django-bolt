@@ -272,6 +272,7 @@ class UserCreate(Serializer):
 ```
 
 Supported constraints:
+
 - **Strings**: `min_length`, `max_length`, `pattern` (regex)
 - **Numbers**: `gt`, `ge`, `lt`, `le`, `multiple_of`
 - **Collections**: `min_length`, `max_length`
@@ -620,6 +621,293 @@ class UserSerializer(Serializer):
         read_only = {'id', 'date_joined'}  # Output-only fields
 ```
 
+## Advanced Features
+
+### Field Configuration with `field()`
+
+Use the `field()` function for fine-grained control over field behavior:
+
+```python
+from django_bolt.serializers import Serializer, field
+
+class UserSerializer(Serializer):
+    id: int = field(read_only=True)  # Only in output, not input
+    email: str = field(source="email_address")  # Map to different model attribute
+    password: str = field(write_only=True)  # Only in input, not output
+    name: str = field(min_length=1, max_length=100)  # Constraints
+```
+
+**Available options:**
+
+| Option                     | Description                                           |
+| -------------------------- | ----------------------------------------------------- |
+| `read_only=True`           | Field only appears in output (dump), ignored in input |
+| `write_only=True`          | Field only accepted in input, excluded from output    |
+| `source="attr"`            | Map API field name to different model attribute       |
+| `alias="name"`             | Alternative JSON key name                             |
+| `default=value`            | Default value for the field                           |
+| `default_factory=fn`       | Factory function for mutable defaults                 |
+| `exclude=True`             | Always exclude from serialization                     |
+| `ge`, `gt`, `le`, `lt`     | Numeric constraints                                   |
+| `min_length`, `max_length` | String/list length constraints                        |
+| `pattern`                  | Regex pattern for strings                             |
+
+### Computed Fields with `@computed_field`
+
+Add calculated fields that are computed during serialization:
+
+```python
+from django_bolt.serializers import Serializer, computed_field
+
+class UserSerializer(Serializer):
+    first_name: str
+    last_name: str
+
+    @computed_field
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}"
+
+    @computed_field
+    def initials(self) -> str:
+        return f"{self.first_name[0]}{self.last_name[0]}".upper()
+
+# Usage:
+user = UserSerializer(first_name="John", last_name="Doe")
+user.dump()
+# {"first_name": "John", "last_name": "Doe", "full_name": "John Doe", "initials": "JD"}
+```
+
+**Note:** Computed fields are OUTPUT ONLY - they don't exist during parsing/loading.
+
+### Dynamic Field Selection
+
+One of the biggest pain points with DRF is needing multiple serializer classes for different views (list vs detail, admin vs public). Django-Bolt solves this with dynamic field selection:
+
+#### Using `only()` - Include specific fields
+
+```python
+class UserSerializer(Serializer):
+    id: int
+    name: str
+    email: str
+    created_at: datetime
+    internal_notes: str
+
+# For list view - only essential fields
+UserSerializer.only("id", "name", "email").dump_many(users)
+# Returns: [{"id": 1, "name": "John", "email": "john@example.com"}, ...]
+```
+
+#### Using `exclude()` - Remove specific fields
+
+```python
+# Exclude sensitive fields
+UserSerializer.exclude("internal_notes", "created_at").dump(user)
+# Returns: {"id": 1, "name": "John", "email": "john@example.com"}
+```
+
+#### Using `use()` - Predefined field sets
+
+Define common field combinations once, reuse everywhere:
+
+```python
+class UserSerializer(Serializer):
+    id: int
+    name: str
+    email: str
+    password: str
+    created_at: datetime
+    last_login: datetime
+    internal_notes: str
+
+    class Meta:
+        write_only = {"password"}
+        field_sets = {
+            "list": ["id", "name", "email"],
+            "detail": ["id", "name", "email", "created_at", "last_login"],
+            "admin": ["id", "name", "email", "created_at", "last_login", "internal_notes"],
+        }
+
+# In your API handlers:
+@api.get("/users")
+async def list_users():
+    users = await User.objects.all()
+    return UserSerializer.use("list").dump_many([UserSerializer.from_model(u) for u in users])
+
+@api.get("/users/{user_id}")
+async def get_user(user_id: int):
+    user = await User.objects.aget(id=user_id)
+    return UserSerializer.use("detail").dump(UserSerializer.from_model(user))
+
+@api.get("/admin/users/{user_id}")
+async def admin_get_user(user_id: int):
+    user = await User.objects.aget(id=user_id)
+    return UserSerializer.use("admin").dump(UserSerializer.from_model(user))
+```
+
+#### Chaining field selection
+
+```python
+# Start with a field set, then further customize
+UserSerializer.use("detail").exclude("last_login").dump(user)
+
+# Chain multiple exclusions
+UserSerializer.only("id", "name", "email", "phone").exclude("email").dump(user)
+```
+
+### Dump Methods
+
+Serializers now have powerful `dump()` methods with various options:
+
+```python
+class UserSerializer(Serializer):
+    name: str
+    email: str | None = None
+    role: str = "user"
+
+user = UserSerializer(name="John", email=None, role="user")
+
+# Basic dump
+user.dump()  # {"name": "John", "email": None, "role": "user"}
+
+# Exclude None values (great for sparse responses)
+user.dump(exclude_none=True)  # {"name": "John", "role": "user"}
+
+# Exclude default values (great for PATCH responses)
+user.dump(exclude_defaults=True)  # {"name": "John"}
+
+# Dump to JSON bytes (fast, using msgspec)
+user.dump_json()  # b'{"name":"John","email":null,"role":"user"}'
+
+# Dump multiple instances
+users = [UserSerializer(name="John", role="admin"), UserSerializer(name="Jane")]
+UserSerializer.dump_many(users)  # [{"name": "John", ...}, {"name": "Jane", ...}]
+UserSerializer.dump_many_json(users)  # JSON bytes
+```
+
+### Complete Example: One Serializer, Multiple Views
+
+Here's how to replace multiple DRF serializers with ONE Django-Bolt serializer:
+
+```python
+# BEFORE (DRF style - 4 serializers)
+class UserListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'name']
+
+class UserDetailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'name', 'email', 'created_at']
+
+class UserCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['name', 'email', 'password']
+
+class UserAdminSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'name', 'email', 'created_at', 'is_staff', 'internal_notes']
+
+
+# AFTER (Django-Bolt style - 1 serializer)
+from django_bolt.serializers import Serializer, computed_field, field
+
+class UserSerializer(Serializer):
+    id: int
+    name: str
+    email: str
+    password: str
+    created_at: datetime
+    is_staff: bool = False
+    internal_notes: str | None = None
+
+    class Meta:
+        write_only = {"password"}  # Never include in output
+        field_sets = {
+            "list": ["id", "name"],
+            "detail": ["id", "name", "email", "created_at"],
+            "admin": ["id", "name", "email", "created_at", "is_staff", "internal_notes"],
+        }
+
+    @computed_field
+    def display_name(self) -> str:
+        return f"@{self.name}"
+
+# Usage in handlers (runtime field filtering):
+UserSerializer.use("list").dump_many(users)      # List view
+UserSerializer.use("detail").dump(user)          # Detail view
+UserSerializer.use("admin").dump(user)           # Admin view
+UserSerializer.only("id", "display_name").dump(user)  # Custom view
+```
+
+### Type-Safe Serializer Subsets
+
+For full type safety with `response_model`, use `subset()` or `fields()` to create actual Serializer classes:
+
+```python
+from django_bolt.serializers import Serializer, computed_field
+
+class UserSerializer(Serializer):
+    id: int
+    name: str
+    email: str
+    password: str
+    created_at: datetime
+    is_staff: bool = False
+
+    class Meta:
+        write_only = {"password"}
+        field_sets = {
+            "list": ["id", "name"],
+            "detail": ["id", "name", "email", "created_at"],
+            "admin": ["id", "name", "email", "created_at", "is_staff"],
+        }
+
+    @computed_field
+    def display_name(self) -> str:
+        return f"@{self.name}"
+
+# Create TYPE-SAFE serializer classes (not views!)
+UserListSerializer = UserSerializer.fields("list")      # From field_set
+UserDetailSerializer = UserSerializer.fields("detail")  # From field_set
+UserAdminSerializer = UserSerializer.fields("admin")    # From field_set
+UserPublicSerializer = UserSerializer.subset("id", "name", "display_name")  # Explicit fields
+
+# These are real Serializer subclasses - use as response_model!
+@api.get("/users", response_model=list[UserListSerializer])
+async def list_users() -> list[UserListSerializer]:
+    users = await User.objects.all()
+    return [UserListSerializer.from_model(u) for u in users]
+
+@api.get("/users/{id}", response_model=UserDetailSerializer)
+async def get_user(id: int) -> UserDetailSerializer:
+    user = await User.objects.aget(id=id)
+    return UserDetailSerializer.from_model(user)
+
+@api.get("/users/{id}/public", response_model=UserPublicSerializer)
+async def get_user_public(id: int) -> UserPublicSerializer:
+    user = await User.objects.aget(id=id)
+    return UserPublicSerializer.from_model(user)
+```
+
+**Key Methods:**
+
+| Method             | Returns              | Use Case                                |
+| ------------------ | -------------------- | --------------------------------------- |
+| `subset(*fields)`  | New Serializer class | Type-safe class with explicit fields    |
+| `fields(set_name)` | New Serializer class | Type-safe class from Meta.field_sets    |
+| `only(*fields)`    | SerializerView       | Runtime field filtering (dump time)     |
+| `exclude(*fields)` | SerializerView       | Runtime field filtering (dump time)     |
+| `use(set_name)`    | SerializerView       | Runtime field filtering from field_sets |
+
+**When to use which:**
+
+- Use `subset()`/`fields()` when you need a proper **type** for `response_model` or type annotations
+- Use `only()`/`exclude()`/`use()` for quick **runtime** field filtering without creating new classes
+
 ## Features Inherited from msgspec.Struct
 
 Since `Serializer` extends `msgspec.Struct`, you get all msgspec features:
@@ -690,14 +978,14 @@ Benchmark results available in the project repository.
 
 If you're familiar with Django REST Framework:
 
-| Feature | DRF | Django-Bolt |
-|---------|-----|------------|
-| Field declaration | Implicit (Meta.fields) | Explicit annotations |
-| Validation | `validate_<field>()` method | `@field_validator` decorator |
-| Cross-field validation | `validate()` method | `@model_validator` decorator |
-| Model integration | `.create()`, `.update()` | `.from_model()`, `.to_model()`, `.update_instance()` |
-| Type safety | ❌ String-based | ✅ Full type safety |
-| Performance | Baseline | 5-10x faster |
+| Feature                | DRF                         | Django-Bolt                                          |
+| ---------------------- | --------------------------- | ---------------------------------------------------- |
+| Field declaration      | Implicit (Meta.fields)      | Explicit annotations                                 |
+| Validation             | `validate_<field>()` method | `@field_validator` decorator                         |
+| Cross-field validation | `validate()` method         | `@model_validator` decorator                         |
+| Model integration      | `.create()`, `.update()`    | `.from_model()`, `.to_model()`, `.update_instance()` |
+| Type safety            | ❌ String-based             | ✅ Full type safety                                  |
+| Performance            | Baseline                    | 5-10x faster                                         |
 
 ## Troubleshooting
 
@@ -938,6 +1226,293 @@ async def update_user(user_id: int, data: UserUpdateSerializer):
     await user.asave()
     return UserSerializer.from_model(user)
 ```
+
+## Limitations and Caveats
+
+### Validation Timing
+
+**Important:** msgspec's `Meta` constraints (pattern, min_length, max_length, ge, le, etc.) only validate during **parsing**, not during direct Python instantiation:
+
+```python
+from django_bolt.serializers import Serializer, Email, PositiveInt
+
+class UserSerializer(Serializer):
+    email: Email  # Email pattern validation (max 254 chars)
+    age: PositiveInt  # Must be > 0
+
+# ✅ VALIDATES - JSON parsing triggers Meta constraints
+user = UserSerializer.model_validate_json(b'{"email": "invalid", "age": -5}')
+# Raises msgspec.ValidationError
+
+# ✅ VALIDATES - Dict parsing triggers Meta constraints
+user = UserSerializer.model_validate({"email": "invalid", "age": -5})
+# Raises msgspec.ValidationError
+
+# ❌ NO META VALIDATION - Direct instantiation bypasses constraints
+user = UserSerializer(email="invalid", age=-5)
+# No error! Meta constraints are NOT checked
+print(user.email)  # "invalid"
+print(user.age)    # -5
+```
+
+**Why?** This is msgspec's design - `Meta` constraints are for parsing/deserialization, not construction. This provides maximum performance for trusted internal code while still validating external input.
+
+**Custom validators (`@field_validator`, `@model_validator`) DO run on direct instantiation:**
+
+```python
+class UserSerializer(Serializer):
+    username: str
+
+    @field_validator("username")
+    def lowercase_username(cls, value):
+        return value.lower()  # This DOES run
+
+user = UserSerializer(username="UPPERCASE")
+print(user.username)  # "uppercase" - validator ran
+```
+
+### `from_model()` Validation Behavior
+
+The `from_model()` method creates instances via direct instantiation, so:
+
+- ✅ Custom `@field_validator` and `@model_validator` decorators **DO run**
+- ❌ msgspec `Meta` constraints (pattern, min_length, etc.) **DO NOT validate**
+
+```python
+class UserSerializer(Serializer):
+    username: Username  # Has pattern constraint (Django auth compatible)
+    email: Email
+
+    @field_validator("email")
+    def lowercase_email(cls, value):
+        return value.lower()
+
+# If database has invalid data, from_model() won't catch Meta violations
+user_model = User.objects.get(id=1)  # username may have invalid chars
+serializer = UserSerializer.from_model(user_model)
+# No error - Meta pattern not checked
+# But email IS lowercased by the field validator
+```
+
+**Recommendation:** Trust your database constraints, or use `validate()` method to re-validate:
+
+```python
+serializer = UserSerializer.from_model(user_model)
+serializer = serializer.validate()  # Re-runs msgspec validation
+```
+
+### Computed Fields and Field Sets
+
+Computed fields (`@computed_field`) are **not automatically included** in field sets. You must explicitly list them:
+
+```python
+class UserSerializer(Serializer):
+    first_name: str
+    last_name: str
+
+    class Meta:
+        field_sets = {
+            # ❌ display_name won't appear - not in field_set
+            "basic": ["first_name", "last_name"],
+            # ✅ display_name will appear - explicitly included
+            "full": ["first_name", "last_name", "display_name"],
+        }
+
+    @computed_field
+    def display_name(self) -> str:
+        return f"{self.first_name} {self.last_name}"
+
+user = UserSerializer(first_name="John", last_name="Doe")
+
+# "display_name" NOT included - not in field_set
+UserSerializer.use("basic").dump(user)
+# {"first_name": "John", "last_name": "Doe"}
+
+# "display_name" IS included - explicitly in field_set
+UserSerializer.use("full").dump(user)
+# {"first_name": "John", "last_name": "Doe", "display_name": "John Doe"}
+
+# Full dump() always includes computed fields
+user.dump()
+# {"first_name": "John", "last_name": "Doe", "display_name": "John Doe"}
+```
+
+### Subset Validators
+
+When using `subset()` to create derived serializer classes, field validators for included fields are copied, but they reference the **parent class**:
+
+```python
+class UserSerializer(Serializer):
+    username: str
+    email: str
+
+    @field_validator("username")
+    def lowercase_username(cls, value):
+        return value.lower()
+
+UserMini = UserSerializer.subset("username")
+
+# Validator still works
+mini = UserMini(username="UPPER")
+print(mini.username)  # "upper" - validator ran
+```
+
+However, if your validator references other fields that aren't in the subset, it may fail:
+
+```python
+class UserSerializer(Serializer):
+    username: str
+    email: str
+
+    @model_validator
+    def check_domain(self):
+        # References self.email - will fail if email not in subset!
+        if not self.email.endswith("@company.com"):
+            raise ValueError("Must use company email")
+        return self
+
+# ❌ This will fail - model_validator references email which isn't in subset
+UserMini = UserSerializer.subset("username")
+mini = UserMini(username="test")  # AttributeError: 'UserMini' has no attribute 'email'
+```
+
+**Recommendation:** Keep subset serializers simple, or create explicit serializer classes for complex validation needs.
+
+### Nested Serializer Circular References
+
+Circular nested serializers can cause infinite recursion. The `from_model()` method has a `max_depth` parameter (default: 10) to prevent runaway recursion:
+
+```python
+class AuthorSerializer(Serializer):
+    id: int
+    name: str
+    # posts: list[PostSerializer]  # Would create circular reference
+
+class PostSerializer(Serializer):
+    id: int
+    title: str
+    author: Annotated[AuthorSerializer, Nested(AuthorSerializer)]
+    # If AuthorSerializer had 'posts', this would be circular
+```
+
+**Recommendation:** Avoid circular nested serializers. Use separate serializers for different views:
+
+```python
+# For post list - author without posts
+class PostListSerializer(Serializer):
+    id: int
+    title: str
+    author: Annotated[AuthorBasicSerializer, Nested(AuthorBasicSerializer)]
+
+# For author detail - posts without nested author
+class AuthorDetailSerializer(Serializer):
+    id: int
+    name: str
+    posts: Annotated[list[PostBasicSerializer], Nested(PostBasicSerializer, many=True)]
+```
+
+### Async ORM and Nested Serializers
+
+When using `from_model()` with nested serializers in async handlers, you **must** prefetch relationships:
+
+```python
+# ❌ WRONG - Will cause SynchronousOnlyOperation error
+@api.get("/posts/{id}")
+async def get_post(id: int):
+    post = await BlogPost.objects.aget(id=id)
+    return PostSerializer.from_model(post)  # Accesses post.author synchronously!
+
+# ✅ CORRECT - Prefetch all nested relationships
+@api.get("/posts/{id}")
+async def get_post(id: int):
+    post = await (
+        BlogPost.objects
+        .select_related("author")
+        .prefetch_related("tags", "comments__author")
+        .aget(id=id)
+    )
+    return PostSerializer.from_model(post)
+```
+
+### `to_model()` Transfers All Fields
+
+The `to_model()` method transfers **all** serializer fields to the model, including `id`:
+
+```python
+class AuthorSerializer(Serializer):
+    id: int
+    name: str
+    email: str
+
+serializer = AuthorSerializer(id=0, name="New", email="new@example.com")
+author = serializer.to_model(Author)
+
+# author.id is 0, not None!
+print(author.pk)  # 0
+```
+
+**Recommendation:** For create operations, use a serializer without `id`, or exclude it:
+
+```python
+class AuthorCreateSerializer(Serializer):
+    name: str
+    email: str
+
+serializer = AuthorCreateSerializer(name="New", email="new@example.com")
+author = serializer.to_model(Author)
+print(author.pk)  # None - ready to save
+```
+
+### Error Wrapping
+
+Custom validators that raise `ValueError` or `TypeError` are automatically wrapped in `msgspec.ValidationError`:
+
+```python
+class UserSerializer(Serializer):
+    password: str
+    password_confirm: str
+
+    @model_validator
+    def check_passwords(self):
+        if self.password != self.password_confirm:
+            raise ValueError("Passwords don't match")
+        return self
+
+# The ValueError is wrapped
+try:
+    UserSerializer(password="a", password_confirm="b")
+except msgspec.ValidationError as e:  # Not ValueError!
+    print(e)  # "Passwords don't match"
+```
+
+### Performance vs Pydantic
+
+While django-bolt serializers are generally faster than Pydantic v2:
+
+| Operation             | django-bolt   | Pydantic v2 |
+| --------------------- | ------------- | ----------- |
+| Object → Dict         | 3.5-6x faster | baseline    |
+| Object → JSON         | 5-6x faster   | baseline    |
+| Dict → Object (basic) | ~1.15x faster | baseline    |
+| JSON → Object         | ~1.5x faster  | baseline    |
+| Custom validators     | ~1.3x slower  | baseline    |
+
+Custom `@field_validator` execution is slightly slower than Pydantic because Pydantic's validators are implemented in Rust (pydantic-core), while ours execute in Python. However, the overall serialization performance still makes django-bolt faster for most use cases.
+
+### Function-Scoped Serializers
+
+Serializers defined inside functions have limited type hint resolution:
+
+```python
+def my_handler():
+    # ⚠️ Limited support - may not resolve all type hints
+    class LocalSerializer(Serializer):
+        value: SomeComplexType  # May fail to resolve
+
+    return LocalSerializer(value=...)
+```
+
+**Recommendation:** Always define serializers at module level for full type hint resolution and better IDE support.
 
 ## See Also
 

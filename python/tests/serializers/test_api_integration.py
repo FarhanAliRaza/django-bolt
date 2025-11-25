@@ -1034,3 +1034,607 @@ class TestAPI5UserRegistration:
         # Verify in database
         user = User.objects.get(username="testuser")
         assert user.email == "test@example.com"
+
+
+# ============================================================================
+# API 6: Advanced Serializer Features with Full Object Assertions
+# ============================================================================
+
+from datetime import datetime
+from django_bolt.serializers import computed_field, Email, NonEmptyStr
+
+
+class AdvancedAuthorSerializer(Serializer):
+    """Author serializer with computed fields and validators."""
+    id: int
+    name: NonEmptyStr
+    email: Email
+    bio: str = ""
+
+    class Meta:
+        write_only = {"bio"}
+        field_sets = {
+            "list": ["id", "name"],
+            "detail": ["id", "name", "email", "display_name"],
+            "admin": ["id", "name", "email", "bio", "display_name", "email_domain"],
+        }
+
+    @field_validator("name")
+    def validate_name(cls, value: str) -> str:
+        return value.strip().title()
+
+    @field_validator("email")
+    def validate_email(cls, value: str) -> str:
+        return value.lower().strip()
+
+    @computed_field
+    def display_name(self) -> str:
+        return f"{self.name} <{self.email}>"
+
+    @computed_field
+    def email_domain(self) -> str:
+        return self.email.split("@")[-1] if "@" in self.email else ""
+
+
+class AdvancedTagSerializer(Serializer):
+    """Tag serializer with computed fields."""
+    id: int
+    name: str
+    description: str = ""
+
+    @computed_field
+    def slug(self) -> str:
+        return self.name.lower().replace(" ", "-")
+
+
+class AdvancedCommentSerializer(Serializer):
+    """Comment serializer with nested author and computed fields."""
+    id: int
+    text: str
+    author: Annotated[AdvancedAuthorSerializer, Nested(AdvancedAuthorSerializer)]
+    created_at: datetime | None = None
+
+    @computed_field
+    def text_preview(self) -> str:
+        return self.text[:50] + "..." if len(self.text) > 50 else self.text
+
+    @computed_field
+    def word_count(self) -> int:
+        return len(self.text.split())
+
+
+class AdvancedBlogPostSerializer(Serializer):
+    """BlogPost serializer with all advanced features."""
+    id: int
+    title: NonEmptyStr
+    content: str
+    author: Annotated[AdvancedAuthorSerializer, Nested(AdvancedAuthorSerializer)]
+    tags: Annotated[list[AdvancedTagSerializer], Nested(AdvancedTagSerializer, many=True)]
+    comments: Annotated[list[AdvancedCommentSerializer], Nested(AdvancedCommentSerializer, many=True)] = []
+    published: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    class Meta:
+        field_sets = {
+            "list": ["id", "title", "published", "created_at", "tag_count"],
+            "detail": ["id", "title", "content", "author", "tags", "published", "created_at", "updated_at", "tag_names", "comment_count"],
+            "admin": ["id", "title", "content", "author", "tags", "comments", "published", "created_at", "updated_at", "tag_names", "comment_count", "content_preview"],
+        }
+
+    @field_validator("title")
+    def validate_title(cls, value: str) -> str:
+        return value.strip()
+
+    @computed_field
+    def tag_names(self) -> list[str]:
+        return [t.name for t in self.tags]
+
+    @computed_field
+    def tag_count(self) -> int:
+        return len(self.tags)
+
+    @computed_field
+    def comment_count(self) -> int:
+        return len(self.comments)
+
+    @computed_field
+    def content_preview(self) -> str:
+        return self.content[:100] + "..." if len(self.content) > 100 else self.content
+
+
+class AdvancedBlogPostInputSerializer(Serializer):
+    """Input serializer for creating/updating blog posts."""
+    title: Annotated[str, Meta(min_length=3, max_length=300)]
+    content: Annotated[str, Meta(min_length=10)]
+    author: Annotated[AdvancedAuthorSerializer, Nested(AdvancedAuthorSerializer)]
+    tags: Annotated[list[AdvancedTagSerializer], Nested(AdvancedTagSerializer, many=True)] = []
+    published: bool = False
+
+    @field_validator("title")
+    def validate_title(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("content")
+    def validate_content(cls, value: str) -> str:
+        return value.strip()
+
+
+# API 6 endpoints
+api_6_advanced = BoltAPI()
+
+
+@api_6_advanced.get("/posts")
+async def list_posts():
+    """List all posts with minimal fields (list view)."""
+    posts = await sync_to_async(list)(
+        BlogPost.objects.select_related("author").prefetch_related("tags", "comments__author").all()[:20]
+    )
+    serializers = [AdvancedBlogPostSerializer.from_model(p) for p in posts]
+    return AdvancedBlogPostSerializer.use("list").dump_many(serializers)
+
+
+@api_6_advanced.get("/posts/{post_id}")
+async def get_post_detail(post_id: int):
+    """Get post with detail view fields."""
+    post = await (
+        BlogPost.objects
+        .select_related("author")
+        .prefetch_related("tags", "comments__author")
+        .aget(id=post_id)
+    )
+    serializer = AdvancedBlogPostSerializer.from_model(post)
+    return AdvancedBlogPostSerializer.use("detail").dump(serializer)
+
+
+@api_6_advanced.get("/posts/{post_id}/admin")
+async def get_post_admin(post_id: int):
+    """Get post with admin view fields (includes comments)."""
+    post = await (
+        BlogPost.objects
+        .select_related("author")
+        .prefetch_related("tags", "comments__author")
+        .aget(id=post_id)
+    )
+    serializer = AdvancedBlogPostSerializer.from_model(post)
+    return AdvancedBlogPostSerializer.use("admin").dump(serializer)
+
+
+@api_6_advanced.get("/posts/{post_id}/full")
+async def get_post_full(post_id: int):
+    """Get post with all fields (no field_set filtering)."""
+    post = await (
+        BlogPost.objects
+        .select_related("author")
+        .prefetch_related("tags", "comments__author")
+        .aget(id=post_id)
+    )
+    return AdvancedBlogPostSerializer.from_model(post)
+
+
+@api_6_advanced.post("/posts")
+async def create_post_advanced(data: AdvancedBlogPostInputSerializer):
+    """Create a post with validation."""
+    created_post = await BlogPost.objects.acreate(
+        title=data.title,
+        content=data.content,
+        author_id=data.author.id,
+        published=data.published,
+    )
+
+    # Add tags
+    if data.tags:
+        tag_ids = [tag.id for tag in data.tags]
+        await sync_to_async(created_post.tags.set)(tag_ids)
+
+    # Refetch with relationships
+    post = await (
+        BlogPost.objects
+        .select_related("author")
+        .prefetch_related("tags", "comments__author")
+        .aget(id=created_post.id)
+    )
+    return AdvancedBlogPostSerializer.from_model(post)
+
+
+@api_6_advanced.get("/authors/{author_id}")
+async def get_author_detail(author_id: int):
+    """Get author with detail view."""
+    author = await Author.objects.aget(id=author_id)
+    serializer = AdvancedAuthorSerializer.from_model(author)
+    return AdvancedAuthorSerializer.use("detail").dump(serializer)
+
+
+@api_6_advanced.get("/authors/{author_id}/admin")
+async def get_author_admin(author_id: int):
+    """Get author with admin view (includes bio and email_domain)."""
+    author = await Author.objects.aget(id=author_id)
+    serializer = AdvancedAuthorSerializer.from_model(author)
+    return AdvancedAuthorSerializer.use("admin").dump(serializer)
+
+
+@pytest.fixture
+def client_api_6():
+    """TestClient for API 6: Advanced serializer features."""
+    return TestClient(api_6_advanced)
+
+
+class TestAPI6AdvancedSerializerFeatures:
+    """Test API 6: Advanced serializer features with full object assertions."""
+
+    @pytest.mark.django_db(transaction=True)
+    def test_get_post_full_asserts_all_fields(self, client_api_6):
+        """Test full post response with all computed fields and nested objects."""
+        # Create test data
+        author = Author.objects.create(
+            name="  jane doe  ",  # Will be transformed to "Jane Doe"
+            email="JANE@EXAMPLE.COM",  # Will be lowercased
+            bio="A passionate writer about technology and life."
+        )
+        tag1 = Tag.objects.create(name="Python", description="Python programming language")
+        tag2 = Tag.objects.create(name="Django Framework", description="Web framework")
+        post = BlogPost.objects.create(
+            title="  My Awesome Post  ",
+            content="This is a detailed content that is more than one hundred characters long to test the content preview computed field properly.",
+            author=author,
+            published=True,
+        )
+        post.tags.add(tag1, tag2)
+        commenter = Author.objects.create(name="Bob Smith", email="bob@example.com")
+        Comment.objects.create(
+            post=post,
+            author=commenter,
+            text="This is a great post! I really enjoyed reading it and learned a lot from it."
+        )
+
+        # Make request
+        response = client_api_6.get(f"/posts/{post.id}/full")
+
+        # Assert response
+        assert response.status_code == 200
+        data = response.json()
+
+        # Assert main post fields
+        assert data["id"] == post.id
+        assert data["title"] == "My Awesome Post"  # Stripped
+        assert data["content"].startswith("This is a detailed content")
+        assert data["published"] is True
+
+        # Assert computed fields
+        assert data["tag_names"] == ["Python", "Django Framework"]
+        assert data["tag_count"] == 2
+        assert data["comment_count"] == 1
+        assert data["content_preview"].endswith("...")
+        assert len(data["content_preview"]) == 103  # 100 chars + "..."
+
+        # Assert nested author with computed fields
+        assert data["author"]["id"] == author.id
+        assert data["author"]["name"] == "Jane Doe"  # Title-cased
+        assert data["author"]["email"] == "jane@example.com"  # Lowercased
+        assert data["author"]["display_name"] == "Jane Doe <jane@example.com>"
+        assert data["author"]["email_domain"] == "example.com"
+
+        # Assert nested tags with computed fields
+        assert len(data["tags"]) == 2
+        assert data["tags"][0]["name"] == "Python"
+        assert data["tags"][0]["slug"] == "python"
+        assert data["tags"][1]["name"] == "Django Framework"
+        assert data["tags"][1]["slug"] == "django-framework"
+
+        # Assert nested comments with nested authors and computed fields
+        assert len(data["comments"]) == 1
+        comment = data["comments"][0]
+        assert "great post" in comment["text"].lower()
+        assert comment["text_preview"].endswith("...")
+        assert comment["word_count"] == 16
+        assert comment["author"]["name"] == "Bob Smith"
+        assert comment["author"]["email"] == "bob@example.com"
+
+    @pytest.mark.django_db(transaction=True)
+    def test_get_post_list_view_minimal_fields(self, client_api_6):
+        """Test list view returns only minimal fields."""
+        author = Author.objects.create(name="Alice", email="alice@example.com")
+        tag = Tag.objects.create(name="Testing")
+        post = BlogPost.objects.create(
+            title="List View Post",
+            content="Some content here for the list view test",
+            author=author,
+            published=True,
+        )
+        post.tags.add(tag)
+
+        response = client_api_6.get("/posts")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) >= 1
+
+        # Find our post
+        post_data = next((p for p in data if p["id"] == post.id), None)
+        assert post_data is not None
+
+        # List view should only have these fields
+        assert set(post_data.keys()) == {"id", "title", "published", "created_at", "tag_count"}
+        assert post_data["title"] == "List View Post"
+        assert post_data["published"] is True
+        assert post_data["tag_count"] == 1
+
+        # These should NOT be in list view
+        assert "content" not in post_data
+        assert "author" not in post_data
+        assert "tags" not in post_data
+        assert "comments" not in post_data
+
+    @pytest.mark.django_db(transaction=True)
+    def test_get_post_detail_view_fields(self, client_api_6):
+        """Test detail view returns appropriate fields."""
+        author = Author.objects.create(name="Charlie", email="charlie@example.com")
+        tag = Tag.objects.create(name="Detail")
+        post = BlogPost.objects.create(
+            title="Detail View Post",
+            content="Detailed content for the detail view test endpoint",
+            author=author,
+            published=True,
+        )
+        post.tags.add(tag)
+        Comment.objects.create(post=post, author=author, text="A comment")
+
+        response = client_api_6.get(f"/posts/{post.id}")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Detail view should have these fields
+        expected_keys = {"id", "title", "content", "author", "tags", "published", "created_at", "updated_at", "tag_names", "comment_count"}
+        assert set(data.keys()) == expected_keys
+
+        # Should have computed fields
+        assert data["tag_names"] == ["Detail"]
+        assert data["comment_count"] == 1
+
+        # Should NOT have admin-only fields
+        assert "comments" not in data
+        assert "content_preview" not in data
+
+        # Author should be nested but with limited fields (from field_set)
+        assert "author" in data
+        assert data["author"]["name"] == "Charlie"
+
+    @pytest.mark.django_db(transaction=True)
+    def test_get_post_admin_view_all_fields(self, client_api_6):
+        """Test admin view returns all fields including comments."""
+        author = Author.objects.create(name="Admin User", email="admin@example.com", bio="Admin bio")
+        tag = Tag.objects.create(name="Admin Tag")
+        post = BlogPost.objects.create(
+            title="Admin View Post",
+            content="Admin content that is longer than one hundred characters to test the content preview computed field in admin view.",
+            author=author,
+            published=True,
+        )
+        post.tags.add(tag)
+        Comment.objects.create(post=post, author=author, text="Admin comment")
+
+        response = client_api_6.get(f"/posts/{post.id}/admin")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Admin view should have ALL fields including comments
+        expected_keys = {"id", "title", "content", "author", "tags", "comments", "published", "created_at", "updated_at", "tag_names", "comment_count", "content_preview"}
+        assert set(data.keys()) == expected_keys
+
+        # Should have comments (admin-only)
+        assert len(data["comments"]) == 1
+        assert data["comments"][0]["text"] == "Admin comment"
+
+        # Should have content_preview (admin-only computed field)
+        assert "content_preview" in data
+        assert data["content_preview"].endswith("...")
+
+    @pytest.mark.django_db(transaction=True)
+    def test_author_write_only_field_excluded(self, client_api_6):
+        """Test that write_only fields are excluded from response."""
+        author = Author.objects.create(
+            name="Secret Author",
+            email="secret@example.com",
+            bio="This bio should be hidden in detail view"
+        )
+
+        # Detail view should not include bio (write_only)
+        response = client_api_6.get(f"/authors/{author.id}")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Detail view fields
+        assert data["name"] == "Secret Author"
+        assert data["email"] == "secret@example.com"
+        assert data["display_name"] == "Secret Author <secret@example.com>"
+        assert "bio" not in data  # write_only
+
+    @pytest.mark.django_db(transaction=True)
+    def test_author_admin_view_includes_all(self, client_api_6):
+        """Test admin view includes email_domain but bio is still write_only."""
+        author = Author.objects.create(
+            name="Full Author",
+            email="full@company.org",
+            bio="Full bio text here"
+        )
+
+        response = client_api_6.get(f"/authors/{author.id}/admin")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Admin view should have all output fields
+        assert data["name"] == "Full Author"
+        assert data["email"] == "full@company.org"
+        # NOTE: bio is write_only, so it's NEVER included in output even in admin view
+        # write_only takes precedence over field_sets
+        assert "bio" not in data
+        assert data["display_name"] == "Full Author <full@company.org>"
+        assert data["email_domain"] == "company.org"
+
+    @pytest.mark.django_db(transaction=True)
+    def test_create_post_with_validation(self, client_api_6):
+        """Test creating a post with all validations."""
+        author = Author.objects.create(name="Creator", email="creator@example.com")
+        tag = Tag.objects.create(name="New Tag")
+
+        payload = {
+            "title": "  New Post Title  ",  # Will be stripped
+            "content": "This is the content of the new post with enough characters.",
+            "author": {"id": author.id, "name": "Creator", "email": "creator@example.com"},
+            "tags": [{"id": tag.id, "name": "New Tag"}],
+            "published": True,
+        }
+
+        response = client_api_6.post("/posts", json=payload)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify response
+        assert data["title"] == "New Post Title"  # Stripped
+        assert data["published"] is True
+        assert data["tag_count"] == 1
+        assert data["tag_names"] == ["New Tag"]
+        assert data["comment_count"] == 0
+
+        # Verify author transformation
+        assert data["author"]["name"] == "Creator"
+        assert data["author"]["display_name"] == "Creator <creator@example.com>"
+
+        # Verify in database
+        post = BlogPost.objects.get(title="New Post Title")
+        assert post.author_id == author.id
+        assert post.tags.count() == 1
+
+    @pytest.mark.django_db(transaction=True)
+    def test_create_post_validation_fails_short_title(self, client_api_6):
+        """Test that title validation fails for short titles."""
+        author = Author.objects.create(name="Test", email="test@example.com")
+
+        payload = {
+            "title": "AB",  # Too short (< 3)
+            "content": "This content is long enough to pass validation.",
+            "author": {"id": author.id, "name": "Test", "email": "test@example.com"},
+            "tags": [],
+            "published": False,
+        }
+
+        response = client_api_6.post("/posts", json=payload)
+
+        assert response.status_code in [400, 422]
+        assert not BlogPost.objects.filter(title="AB").exists()
+
+    @pytest.mark.django_db(transaction=True)
+    def test_create_post_validation_fails_short_content(self, client_api_6):
+        """Test that content validation fails for short content."""
+        author = Author.objects.create(name="Test", email="test@example.com")
+
+        payload = {
+            "title": "Valid Title",
+            "content": "Short",  # Too short (< 10)
+            "author": {"id": author.id, "name": "Test", "email": "test@example.com"},
+            "tags": [],
+            "published": False,
+        }
+
+        response = client_api_6.post("/posts", json=payload)
+
+        assert response.status_code in [400, 422]
+        assert not BlogPost.objects.filter(title="Valid Title").exists()
+
+    @pytest.mark.django_db(transaction=True)
+    def test_nested_computed_fields_chain(self, client_api_6):
+        """Test that computed fields work correctly through nested serializers."""
+        author = Author.objects.create(
+            name="  nested author  ",  # Will be "Nested Author"
+            email="NESTED@EXAMPLE.COM"  # Will be "nested@example.com"
+        )
+        tag = Tag.objects.create(name="Nested Tag")  # slug: "nested-tag"
+        post = BlogPost.objects.create(
+            title="Nested Test",
+            content="Content for nested test with computed fields",
+            author=author,
+            published=True,
+        )
+        post.tags.add(tag)
+        Comment.objects.create(
+            post=post,
+            author=author,
+            text="This is a longer comment to test word count"  # 9 words
+        )
+
+        response = client_api_6.get(f"/posts/{post.id}/full")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check author computed fields
+        assert data["author"]["name"] == "Nested Author"
+        assert data["author"]["email"] == "nested@example.com"
+        assert data["author"]["display_name"] == "Nested Author <nested@example.com>"
+        assert data["author"]["email_domain"] == "example.com"
+
+        # Check tag computed fields
+        assert data["tags"][0]["slug"] == "nested-tag"
+
+        # Check comment computed fields
+        assert data["comments"][0]["word_count"] == 9
+        assert data["comments"][0]["author"]["display_name"] == "Nested Author <nested@example.com>"
+
+    @pytest.mark.django_db(transaction=True)
+    def test_dump_many_with_field_set(self, client_api_6):
+        """Test dump_many with field_set returns consistent structure."""
+        author = Author.objects.create(name="Bulk Author", email="bulk@example.com")
+
+        # Create multiple posts
+        for i in range(5):
+            post = BlogPost.objects.create(
+                title=f"Bulk Post {i}",
+                content=f"Content for bulk post {i} with enough text",
+                author=author,
+                published=i % 2 == 0,
+            )
+            tag = Tag.objects.create(name=f"Tag {i}")
+            post.tags.add(tag)
+
+        response = client_api_6.get("/posts")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should have at least 5 posts
+        assert len(data) >= 5
+
+        # All posts should have consistent structure (list view)
+        for post in data:
+            assert set(post.keys()) == {"id", "title", "published", "created_at", "tag_count"}
+            assert isinstance(post["tag_count"], int)
+
+    @pytest.mark.django_db(transaction=True)
+    def test_empty_nested_collections(self, client_api_6):
+        """Test that empty nested collections are handled correctly."""
+        author = Author.objects.create(name="Solo Author", email="solo@example.com")
+        post = BlogPost.objects.create(
+            title="Solo Post",
+            content="A post with no tags and no comments",
+            author=author,
+            published=False,
+        )
+
+        response = client_api_6.get(f"/posts/{post.id}/full")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Empty collections
+        assert data["tags"] == []
+        assert data["comments"] == []
+
+        # Computed fields should handle empty collections
+        assert data["tag_names"] == []
+        assert data["tag_count"] == 0
+        assert data["comment_count"] == 0

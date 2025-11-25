@@ -12,6 +12,7 @@ from django.db.models import Model as DjangoModel
 import msgspec
 from msgspec import ValidationError as MsgspecValidationError
 from msgspec import structs as msgspec_structs
+from msgspec._core import StructMeta
 
 from .decorators import (
     ComputedFieldConfig,
@@ -70,7 +71,21 @@ def _iter_field_defaults(cls: type) -> list[tuple[str, Any]]:
     return result
 
 
-class Serializer(msgspec.Struct, kw_only=True):
+class _SerializerMeta(StructMeta):
+    """
+    Custom metaclass that forces kw_only=True for all Serializer subclasses.
+
+    This allows mixing required and optional fields in any order (like Pydantic/DRF),
+    without requiring users to add kw_only=True to every serializer class.
+    """
+
+    def __new__(mcs, name: str, bases: tuple, namespace: dict, **kwargs):
+        # Force kw_only=True for all Serializer subclasses
+        kwargs.setdefault("kw_only", True)
+        return super().__new__(mcs, name, bases, namespace, **kwargs)
+
+
+class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
     """
     Enhanced msgspec.Struct with validation and Django model integration.
 
@@ -80,13 +95,12 @@ class Serializer(msgspec.Struct, kw_only=True):
     - Django model integration (from_model, to_dict, to_model)
     - Full type safety for IDE/type checkers
     - All msgspec.Struct features (frozen, array_like, etc.)
-    - kw_only=True: Allows mixing required and optional fields in any order
-      (like Pydantic and DRF), requiring keyword arguments for instantiation
+    - kw_only=True by default: Mix required and optional fields in any order (like Pydantic/DRF)
 
     Example:
         class UserCreate(Serializer):
             id: int = field(read_only=True)  # Optional field can come first
-            username: str                     # Required field can come after
+            username: str                     # Required field can come after - OK!
             email: str
             password: str
 
@@ -102,7 +116,7 @@ class Serializer(msgspec.Struct, kw_only=True):
                 if User.objects.filter(username=self.username).exists():
                     raise ValueError('Username already exists')
 
-        # Must use keyword arguments:
+        # Must use keyword arguments for instantiation:
         user = UserCreate(username="john", email="john@example.com", password="secret")
     """
 

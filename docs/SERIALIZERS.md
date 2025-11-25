@@ -8,10 +8,14 @@ The `Serializer` class extends `msgspec.Struct` with:
 
 - **Field-level validation** via `@field_validator` decorator
 - **Model-level validation** via `@model_validator` decorator
+- **Computed fields** via `@computed_field` decorator
 - **Nested serializers** with `Nested()` annotation for relationships
 - **Django model integration** with `.from_model()`, `.to_dict()`, `.to_model()`
+- **Dynamic field selection** with `only()`, `exclude()`, `use()` and field sets
+- **Type-safe subsets** with `subset()` and `fields()` for response models
 - **Async and sync support** - Works seamlessly with both `async def` and `def` handlers
 - **100% type safety** - full IDE autocomplete and type checker support
+- **Built-in validated types** - `Email`, `URL`, `Slug`, `PositiveInt`, `Percentage`, etc.
 - **Leverage Django validators** - Use existing Django validation utilities
 - **Helper functions** - Auto-generate serializers from models with `create_serializer()`
 
@@ -32,6 +36,21 @@ class UserCreate(Serializer):
         if '@' not in value:
             raise ValueError('Invalid email address')
         return value.lower()
+```
+
+### Field Ordering (Like Pydantic/DRF)
+
+Unlike raw msgspec, django-bolt Serializers automatically enable `kw_only=True`, so you can mix required and optional fields in any order - just like Pydantic and DRF:
+
+```python
+class UserSerializer(Serializer):
+    id: int = field(read_only=True)  # Optional field
+    username: str                     # Required field - OK after optional!
+    email: str
+    bio: str | None = None
+
+# Must use keyword arguments for instantiation:
+user = UserSerializer(username="john", email="john@example.com")
 ```
 
 ### Using in API Routes

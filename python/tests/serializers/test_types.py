@@ -1,4 +1,4 @@
-"""Tests for serializer types (Email, HttpUrl, etc.).
+"""Tests for serializer types (Email, URL, etc.).
 
 NOTE: msgspec Meta constraints (pattern, ge, le, min_length, etc.) only validate
 during JSON decoding, not during direct Python instantiation. This is by design.
@@ -20,9 +20,9 @@ import msgspec
 from django_bolt.serializers import (
     Serializer,
     Email,
-    HttpUrl,
-    HttpsUrl,
-    PhoneNumber,
+    URL,
+    HttpsURL,
+    Phone,
     Slug,
     Username,
     NonEmptyStr,
@@ -35,7 +35,7 @@ from django_bolt.serializers.types import (
     Longitude,
     Port,
     HexColor,
-    UUIDString,
+    UUID,
 )
 
 
@@ -72,14 +72,14 @@ class TestEmailType:
             UserSerializer.model_validate_json(to_json({"email": "missing@domain"}))
 
 
-class TestHttpUrlType:
-    """Test HttpUrl type validation."""
+class TestURLType:
+    """Test URL type validation."""
 
     def test_valid_http_url(self):
         """Test valid HTTP/HTTPS URLs pass validation."""
 
         class LinkSerializer(Serializer):
-            url: HttpUrl
+            url: URL
 
         link = LinkSerializer.model_validate_json(to_json({"url": "https://example.com"}))
         assert link.url == "https://example.com"
@@ -91,7 +91,7 @@ class TestHttpUrlType:
         """Test invalid URLs fail validation."""
 
         class LinkSerializer(Serializer):
-            url: HttpUrl
+            url: URL
 
         with pytest.raises(msgspec.ValidationError):
             LinkSerializer.model_validate_json(to_json({"url": "not-a-url"}))
@@ -100,14 +100,14 @@ class TestHttpUrlType:
             LinkSerializer.model_validate_json(to_json({"url": "ftp://example.com"}))
 
 
-class TestHttpsUrlType:
-    """Test HttpsUrl type validation (HTTPS only)."""
+class TestHttpsURLType:
+    """Test HttpsURL type validation (HTTPS only)."""
 
     def test_valid_https_url(self):
         """Test valid HTTPS URLs pass validation."""
 
         class SecureLinkSerializer(Serializer):
-            url: HttpsUrl
+            url: HttpsURL
 
         link = SecureLinkSerializer.model_validate_json(to_json({"url": "https://example.com"}))
         assert link.url == "https://example.com"
@@ -116,20 +116,20 @@ class TestHttpsUrlType:
         """Test HTTP URLs are rejected."""
 
         class SecureLinkSerializer(Serializer):
-            url: HttpsUrl
+            url: HttpsURL
 
         with pytest.raises(msgspec.ValidationError):
             SecureLinkSerializer.model_validate_json(to_json({"url": "http://example.com"}))
 
 
-class TestPhoneNumberType:
-    """Test PhoneNumber type validation."""
+class TestPhoneType:
+    """Test Phone type validation."""
 
     def test_valid_phone_number(self):
         """Test valid phone numbers pass validation."""
 
         class ContactSerializer(Serializer):
-            phone: PhoneNumber
+            phone: Phone
 
         contact = ContactSerializer.model_validate_json(to_json({"phone": "+14155551234"}))
         assert contact.phone == "+14155551234"
@@ -141,7 +141,7 @@ class TestPhoneNumberType:
         """Test invalid phone numbers fail validation."""
 
         class ContactSerializer(Serializer):
-            phone: PhoneNumber
+            phone: Phone
 
         with pytest.raises(msgspec.ValidationError):
             ContactSerializer.model_validate_json(to_json({"phone": "555-1234"}))
@@ -165,6 +165,10 @@ class TestSlugType:
         post2 = PostSerializer.model_validate_json(to_json({"slug": "post123"}))
         assert post2.slug == "post123"
 
+        # Underscores are also valid in slugs
+        post3 = PostSerializer.model_validate_json(to_json({"slug": "post_123"}))
+        assert post3.slug == "post_123"
+
     def test_invalid_slug(self):
         """Test invalid slugs fail validation."""
 
@@ -175,7 +179,7 @@ class TestSlugType:
             PostSerializer.model_validate_json(to_json({"slug": "My Blog Post"}))
 
         with pytest.raises(msgspec.ValidationError):
-            PostSerializer.model_validate_json(to_json({"slug": "post_123"}))
+            PostSerializer.model_validate_json(to_json({"slug": "post@123"}))
 
 
 class TestUsernameType:
@@ -193,17 +197,19 @@ class TestUsernameType:
         user2 = UserSerializer.model_validate_json(to_json({"username": "user-123"}))
         assert user2.username == "user-123"
 
+        # @ is valid in Django usernames
+        user3 = UserSerializer.model_validate_json(to_json({"username": "user@example"}))
+        assert user3.username == "user@example"
+
     def test_invalid_username(self):
         """Test invalid usernames fail validation."""
 
         class UserSerializer(Serializer):
             username: Username
 
+        # Space is not valid
         with pytest.raises(msgspec.ValidationError):
-            UserSerializer.model_validate_json(to_json({"username": "ab"}))  # Too short
-
-        with pytest.raises(msgspec.ValidationError):
-            UserSerializer.model_validate_json(to_json({"username": "user@name"}))  # Invalid char
+            UserSerializer.model_validate_json(to_json({"username": "user name"}))
 
 
 class TestNonEmptyStrType:
@@ -423,14 +429,14 @@ class TestHexColorType:
             ThemeSerializer.model_validate_json(to_json({"color": "#FFF"}))  # Too short
 
 
-class TestUUIDStringType:
-    """Test UUIDString type validation."""
+class TestUUIDType:
+    """Test UUID type validation."""
 
     def test_valid_uuid(self):
         """Test valid UUID strings pass validation."""
 
         class EntitySerializer(Serializer):
-            id: UUIDString
+            id: UUID
 
         e = EntitySerializer.model_validate_json(to_json({"id": "550e8400-e29b-41d4-a716-446655440000"}))
         assert e.id == "550e8400-e29b-41d4-a716-446655440000"
@@ -439,7 +445,7 @@ class TestUUIDStringType:
         """Test invalid UUID strings fail validation."""
 
         class EntitySerializer(Serializer):
-            id: UUIDString
+            id: UUID
 
         with pytest.raises(msgspec.ValidationError):
             EntitySerializer.model_validate_json(to_json({"id": "not-a-uuid"}))
@@ -455,7 +461,7 @@ class TestTypesWithSubset:
             id: PositiveInt
             email: Email
             username: Username
-            website: HttpUrl | None = None
+            website: URL | None = None
 
         UserMini = UserSerializer.subset("id", "email")
 

@@ -570,21 +570,6 @@ class TestSubsetMethod:
         result = mini_user.dump()
         assert result == {"id": 1, "name": "John"}
 
-    def test_subset_is_cached(self):
-        """Test that subset classes are cached."""
-
-        class UserSerializer(Serializer):
-            id: int
-            name: str
-            email: str
-
-        # Create the same subset twice
-        UserMini1 = UserSerializer.subset("id", "name")
-        UserMini2 = UserSerializer.subset("id", "name")
-
-        # Should be the same class (cached)
-        assert UserMini1 is UserMini2
-
     def test_subset_different_fields_different_class(self):
         """Test that different field combinations create different classes."""
 
@@ -771,23 +756,6 @@ class TestFieldsMethod:
 
         assert "nonexistent" in str(exc_info.value)
         assert "not found" in str(exc_info.value)
-
-    def test_fields_is_cached(self):
-        """Test that fields() results are cached."""
-
-        class UserSerializer(Serializer):
-            id: int
-            name: str
-
-            class Meta:
-                field_sets = {"list": ["id", "name"]}
-
-        UserList1 = UserSerializer.fields("list")
-        UserList2 = UserSerializer.fields("list")
-
-        # Should return same cached class
-        assert UserList1 is UserList2
-
 
 class TestSubsetResponseModel:
     """Test using subset serializers as response_model."""

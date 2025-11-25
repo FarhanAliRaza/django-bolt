@@ -29,40 +29,45 @@ if TYPE_CHECKING:
 
 T = TypeVar("T", bound="Serializer")
 
-# Cache for dynamically created subset serializer classes
-_subset_cache: dict[tuple[type, frozenset[str]], type] = {}
+
+def _is_serializer_type(field_type: Any) -> bool:
+    """Check if a type is a Serializer subclass (for dump fast path detection)."""
+    try:
+        # Check if it's a class and subclass of msgspec.Struct with __is_bolt_serializer__
+        if isinstance(field_type, type):
+            return (
+                issubclass(field_type, msgspec.Struct)
+                and getattr(field_type, "__is_bolt_serializer__", False)
+            )
+    except TypeError:
+        pass
+    return False
 
 
-def clear_subset_cache() -> int:
+def _iter_field_defaults(cls: type) -> list[tuple[str, Any]]:
     """
-    Clear the cache of dynamically created subset serializer classes.
+    Iterate over (field_name, default_value) pairs for a msgspec.Struct class.
 
-    In long-running processes that create many dynamic subsets, the cache can
-    grow unbounded. Call this function periodically to free memory if needed.
+    msgspec stores defaults aligned from the END of the fields list, so we need
+    to compute the correct field index for each default.
+
+    Args:
+        cls: A msgspec.Struct subclass
 
     Returns:
-        The number of cached classes that were cleared.
-
-    Example:
-        from django_bolt.serializers.base import clear_subset_cache
-
-        # Clear cache and get count
-        count = clear_subset_cache()
-        print(f"Cleared {count} cached subset serializers")
+        List of (field_name, default_value) tuples
     """
-    count = len(_subset_cache)
-    _subset_cache.clear()
-    return count
+    defaults = getattr(cls, "__struct_defaults__", ())
+    fields = getattr(cls, "__struct_fields__", ())
+    num_fields = len(fields)
+    num_defaults = len(defaults)
 
-
-def get_subset_cache_size() -> int:
-    """
-    Get the current size of the subset serializer cache.
-
-    Returns:
-        The number of cached subset serializer classes.
-    """
-    return len(_subset_cache)
+    result = []
+    for i, default_val in enumerate(defaults):
+        field_idx = num_fields - num_defaults + i
+        if 0 <= field_idx < num_fields:
+            result.append((fields[field_idx], default_val))
+    return result
 
 
 class Serializer(msgspec.Struct):
@@ -101,6 +106,8 @@ class Serializer(msgspec.Struct):
     # Class attributes for validators (populated by __init_subclass__)
     __field_validators__: ClassVar[dict[str, list[Any]]] = {}
     __model_validators__: ClassVar[list[Any]] = []
+    # Pre-computed tuple of (field_name, validators_tuple) for faster iteration
+    __field_validators_tuple__: ClassVar[tuple[tuple[str, tuple[Any, ...]], ...]] = ()
 
     # Cached type hints and metadata (populated by __init_subclass__)
     __cached_type_hints__: ClassVar[dict[str, Any]] = {}
@@ -125,6 +132,15 @@ class Serializer(msgspec.Struct):
     __has_model_validators__: ClassVar[bool] = False  # Has model validators
     __has_computed_fields__: ClassVar[bool] = False  # Has computed fields
     __has_field_markers__: ClassVar[bool] = False  # Has fields defined with field()
+    __field_configs_collected__: ClassVar[bool] = False  # Lazy config collection done
+
+    # Pre-computed default values mapping for dump() (populated lazily on first use)
+    # None = not cached yet, {} = cached (even if empty)
+    __default_values_map__: ClassVar[dict[str, Any] | None] = None
+    # Fast-path flag for dump: True if dump can use simple/fast path
+    __dump_fast_path__: ClassVar[bool] = True
+    # Track if any field is a Serializer type (requires recursive dump)
+    __has_serializer_fields__: ClassVar[bool] = False
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Collect validators and cache type hints when a subclass is created."""
@@ -134,8 +150,15 @@ class Serializer(msgspec.Struct):
         cls.__model_validators__ = collect_model_validators(cls)
         cls.__computed_fields__ = collect_computed_fields(cls)
 
-        # Collect field configurations from _FieldMarker defaults
-        cls._collect_field_configs()
+        # Pre-compute validators as tuple for faster iteration (no dict overhead)
+        cls.__field_validators_tuple__ = tuple(
+            (field_name, tuple(validators))
+            for field_name, validators in cls.__field_validators__.items()
+        )
+
+        # Collect configuration from Meta class (read_only, write_only, field_sets)
+        # Note: _FieldMarker processing is deferred to _lazy_collect_field_configs
+        cls._collect_meta_config()
 
         # Cache type hints and field metadata (expensive - do once!)
         cls._cache_type_metadata()
@@ -153,62 +176,37 @@ class Serializer(msgspec.Struct):
             or cls.__has_model_validators__
         )
 
+        # Note: default values map is cached lazily on first dump(exclude_defaults=True)
+        # because __struct_defaults__ may not be set yet in __init_subclass__
+
+        # Determine if dump can use fast path (no special handling needed)
+        # Fast path requires:
+        # - No computed fields
+        # - No write_only fields
+        # - No field configs with exclude
+        # - No nested serializer fields (with Nested() annotation)
+        # - No serializer-typed fields (they need recursive dump)
+        cls.__dump_fast_path__ = (
+            not cls.__has_computed_fields__
+            and not cls.__write_only_fields__
+            and not cls.__nested_fields__
+            and not cls.__has_serializer_fields__
+            and not any(cfg.exclude for cfg in cls.__field_configs__.values())
+        )
+
     @classmethod
-    def _collect_field_configs(cls) -> None:
+    def _collect_meta_config(cls) -> None:
         """
-        Collect field configurations from _FieldMarker defaults.
+        Collect configuration from Meta class (read_only, write_only, field_sets).
 
-        This processes fields defined with the field() function and extracts
-        their configuration (read_only, write_only, source, etc.).
-
-        Also extracts actual default values from _FieldMarker instances so they
-        can be applied in __post_init__ (since msgspec stores the _FieldMarker
-        as the default, not the actual default value).
+        This is called in __init_subclass__ to handle Meta class attributes.
+        The _FieldMarker processing is done lazily in _lazy_collect_field_configs
+        because __struct_defaults__ isn't populated yet at class definition time.
         """
-        field_configs: dict[str, FieldConfig] = {}
-        field_marker_defaults: dict[str, Any] = {}
         read_only: set[str] = set()
         write_only: set[str] = set()
-        source_mapping: dict[str, str] = {}
 
-        # Build a mapping from field name to default value position
-        # msgspec stores defaults aligned from the END of the fields list
-        defaults = getattr(cls, "__struct_defaults__", ())
-        fields = getattr(cls, "__struct_fields__", ())
-        num_fields = len(fields)
-        num_defaults = len(defaults)
-
-        # Walk through class annotations to find field markers
-        # Note: We can't actually intercept msgspec.Struct field creation,
-        # so we check class attributes for _FieldMarker defaults
-        for i, default_val in enumerate(defaults):
-            # Calculate which field this default belongs to
-            field_idx = num_fields - num_defaults + i
-            if field_idx < 0 or field_idx >= num_fields:
-                continue
-
-            field_name = fields[field_idx]
-
-            if isinstance(default_val, _FieldMarker):
-                config = default_val.config
-                field_configs[field_name] = config
-
-                # Extract the actual default value from the _FieldMarker
-                if config.has_default():
-                    field_marker_defaults[field_name] = config.get_default()
-                else:
-                    # No explicit default - field is required but user didn't provide
-                    # We'll use the _FieldMarker itself as a sentinel
-                    field_marker_defaults[field_name] = _UNSET
-
-                if config.read_only:
-                    read_only.add(field_name)
-                if config.write_only:
-                    write_only.add(field_name)
-                if config.source:
-                    source_mapping[field_name] = config.source
-
-        # Also check Meta class for read_only/write_only sets (for backwards compatibility)
+        # Check Meta class for read_only/write_only sets
         meta = getattr(cls, "Meta", None)
         if meta:
             meta_read_only = getattr(meta, "read_only", set())
@@ -221,12 +219,13 @@ class Serializer(msgspec.Struct):
             # Store field_sets on class for use() method
             cls.__field_sets__ = meta_field_sets
 
-        cls.__field_configs__ = field_configs
-        cls.__field_marker_defaults__ = field_marker_defaults
+        # Initialize with Meta values (will be updated by _lazy_collect_field_configs)
+        cls.__field_configs__ = {}
+        cls.__field_marker_defaults__ = {}
         cls.__read_only_fields__ = frozenset(read_only)
         cls.__write_only_fields__ = frozenset(write_only)
-        cls.__source_mapping__ = source_mapping
-        cls.__has_field_markers__ = bool(field_marker_defaults)
+        cls.__source_mapping__ = {}
+        cls.__has_field_markers__ = False
 
     @classmethod
     def _cache_type_metadata(cls) -> None:
@@ -293,6 +292,7 @@ class Serializer(msgspec.Struct):
         # Pre-compute nested field configurations
         nested_fields = {}
         literal_fields = {}
+        has_serializer_fields = False  # Track if any field is a Serializer (for dump optimization)
 
         for field_name, field_type in hints.items():
             # Check if field has NestedConfig metadata
@@ -307,8 +307,41 @@ class Serializer(msgspec.Struct):
                 # Convert to frozenset for O(1) membership testing (optimization #3)
                 literal_fields[field_name] = frozenset(allowed_values)
 
+            # Check if field type is a Serializer subclass (for dump fast path)
+            # This handles cases like `address: AddressSerializer` without Nested()
+            if not has_serializer_fields:
+                # Check direct type
+                if _is_serializer_type(field_type):
+                    has_serializer_fields = True
+                # Check list[Serializer]
+                elif origin is list:
+                    args = get_args(field_type)
+                    if args and _is_serializer_type(args[0]):
+                        has_serializer_fields = True
+
         cls.__nested_fields__ = nested_fields
         cls.__literal_fields__ = literal_fields
+        cls.__has_serializer_fields__ = has_serializer_fields
+
+    @classmethod
+    def _cache_default_values_map(cls) -> None:
+        """
+        Pre-compute the default values mapping for dump(exclude_defaults=True).
+
+        This is called lazily on first dump with exclude_defaults=True.
+        Moving this computation from per-dump to per-class provides significant
+        performance improvement for dump_many and repeated dump calls.
+        """
+        # None = not cached yet, {} = cached (even if empty)
+        if cls.__default_values_map__ is not None:
+            return
+
+        default_values: dict[str, Any] = {}
+        # Use helper to iterate over (field_name, default_value) pairs
+        for field_name, default_val in _iter_field_defaults(cls):
+            default_values[field_name] = default_val
+
+        cls.__default_values_map__ = default_values
 
     def __post_init__(self) -> None:
         """
@@ -318,21 +351,27 @@ class Serializer(msgspec.Struct):
         as the default value, so we need to replace it with the actual default.
 
         Validators are executed in order:
-        1. Fix _FieldMarker defaults (always runs to check for field() usage)
+        1. Fix _FieldMarker defaults (only if field() is used)
         2. Field validators with mode='before'
         3. Field validators with mode='after'
         4. Model validators with mode='before'
         5. Model validators with mode='after'
         """
-        # ALWAYS check for and fix _FieldMarker defaults
-        # This handles the case where field() was used but the value wasn't provided
-        # Note: __has_field_markers__ can't be reliably set in __init_subclass__
-        # because msgspec hasn't processed the class yet at that point
-        self._fix_field_marker_defaults()
+        cls = self.__class__
+
+        # Lazy field config collection - run once per class when first instance is created
+        # This is needed because __init_subclass__ runs BEFORE msgspec sets __struct_defaults__
+        if not cls.__field_configs_collected__:
+            cls._lazy_collect_field_configs()
+
+        # OPTIMIZATION: Only check for _FieldMarker defaults if the class uses field()
+        # This avoids iterating through all fields for simple serializers
+        if cls.__has_field_markers__:
+            self._fix_field_marker_defaults_impl()
 
         # Fast path: skip validation if there are no validators
         # This avoids function call overhead when there's nothing to validate
-        if self.__skip_validation__:
+        if cls.__skip_validation__:
             return
 
         # Run field validators
@@ -341,7 +380,7 @@ class Serializer(msgspec.Struct):
         # Run model validators
         self._run_model_validators()
 
-    def _fix_field_marker_defaults(self) -> None:
+    def _fix_field_marker_defaults_impl(self) -> None:
         """
         Replace _FieldMarker instances with their actual default values.
 
@@ -349,17 +388,10 @@ class Serializer(msgspec.Struct):
         This method checks if any field values are _FieldMarker instances and
         replaces them with the configured default value.
 
-        Also lazily collects field configs (read_only, write_only, etc.) on first
-        instance creation, since __init_subclass__ runs before msgspec sets
-        __struct_defaults__.
+        This method is only called when __has_field_markers__ is True (set at class
+        creation time), avoiding the loop for simple serializers without field().
         """
-        cls = self.__class__
         _setattr = msgspec_structs.force_setattr
-
-        # Lazy field config collection - run once per class when first instance is created
-        # This is needed because __init_subclass__ runs BEFORE msgspec sets __struct_defaults__
-        if not getattr(cls, "__field_configs_collected__", False):
-            cls._lazy_collect_field_configs()
 
         for field_name in self.__struct_fields__:
             current_value = getattr(self, field_name)
@@ -391,18 +423,8 @@ class Serializer(msgspec.Struct):
         write_only: set[str] = set()
         source_mapping: dict[str, str] = {}
 
-        defaults = getattr(cls, "__struct_defaults__", ())
-        fields = getattr(cls, "__struct_fields__", ())
-        num_fields = len(fields)
-        num_defaults = len(defaults)
-
-        for i, default_val in enumerate(defaults):
-            field_idx = num_fields - num_defaults + i
-            if field_idx < 0 or field_idx >= num_fields:
-                continue
-
-            field_name = fields[field_idx]
-
+        # Use helper to iterate over (field_name, default_value) pairs
+        for field_name, default_val in _iter_field_defaults(cls):
             if isinstance(default_val, _FieldMarker):
                 config = default_val.config
                 field_configs[field_name] = config
@@ -420,6 +442,20 @@ class Serializer(msgspec.Struct):
         cls.__write_only_fields__ = cls.__write_only_fields__ | frozenset(write_only)
         cls.__source_mapping__.update(source_mapping)
 
+        # Update the has_field_markers flag based on actual _FieldMarker defaults found
+        cls.__has_field_markers__ = bool(field_configs)
+
+        # Recalculate __dump_fast_path__ now that we have the actual field configs
+        # This is needed because write_only fields from _FieldMarker weren't available
+        # in __init_subclass__ when __dump_fast_path__ was first computed
+        cls.__dump_fast_path__ = (
+            not cls.__has_computed_fields__
+            and not cls.__write_only_fields__
+            and not cls.__nested_fields__
+            and not cls.__has_serializer_fields__
+            and not any(cfg.exclude for cfg in cls.__field_configs__.values())
+        )
+
         # Mark as collected so we don't run again
         cls.__field_configs_collected__ = True
 
@@ -431,43 +467,32 @@ class Serializer(msgspec.Struct):
 
         # Then run custom field validators if any exist
         if self.__has_field_validators__:
-            # Cache attribute lookups (optimization #2: ~20-40ns savings per field)
+            # Cache lookups at method level (class reference is from __post_init__)
             _class = self.__class__
             _setattr = msgspec_structs.force_setattr
+            _getattr = getattr
 
-            for field_name, validators in self.__field_validators__.items():
+            # Use pre-computed tuple for faster iteration (no dict.items() overhead)
+            for field_name, validators in _class.__field_validators_tuple__:
                 try:
-                    # Optimization #4: Fast path for single validator (skip loop overhead)
-                    if len(validators) == 1:
-                        validator = validators[0]
-                        current_value = getattr(self, field_name)
-                        new_value = validator(_class, current_value)
+                    # Get current value once
+                    current_value = _getattr(self, field_name)
+
+                    # Run all validators for this field
+                    # Note: validators MUST return the value (not None for pass-through)
+                    for validator in validators:
+                        result = validator(_class, current_value)
                         # If validator returns None, keep the original value
                         # This allows validators to validate without transforming
-                        if new_value is None:
-                            new_value = current_value
-                        _setattr(self, field_name, new_value)
-                    else:
-                        # Batch validation: getattr once, setattr once per field (optimization #1)
-                        # Saves ~80-150ns per field with multiple validators
-                        current_value = getattr(self, field_name)
+                        if result is not None:
+                            current_value = result
 
-                        # Run all validators for this field, accumulating the value
-                        for validator in validators:
-                            result = validator(_class, current_value)
-                            # If validator returns None, keep the current value
-                            if result is not None:
-                                current_value = result
-
-                        # Update the field once with the final value
-                        _setattr(self, field_name, current_value)
+                    # Update the field once with the final value
+                    _setattr(self, field_name, current_value)
 
                 except (ValueError, TypeError) as e:
                     # Convert to ValidationError with field context
-                    raise MsgspecValidationError(f"{field_name}: {str(e)}") from e
-                except Exception as e:
-                    # Re-raise other exceptions
-                    raise
+                    raise MsgspecValidationError(f"{field_name}: {e}") from e
 
     def _validate_nested_and_literal_fields(self) -> None:
         """
@@ -809,7 +834,6 @@ class Serializer(msgspec.Struct):
 
         This creates a TRUE subclass (not a view) that can be used as a type
         annotation, response_model, or anywhere a Serializer type is expected.
-        The created class is cached for performance.
 
         Args:
             *fields: Field names to include (struct fields and computed fields)
@@ -851,13 +875,9 @@ class Serializer(msgspec.Struct):
             - Computed fields are included if their name is in the fields list
             - write_only fields from Meta are automatically excluded from subsets
             - The subset inherits validators for included fields
+            - Always define subsets at module level, not inside view functions
         """
         fields_set = frozenset(fields)
-        cache_key = (cls, fields_set)
-
-        # Check cache first
-        if cache_key in _subset_cache:
-            return _subset_cache[cache_key]  # type: ignore
 
         # Get type hints for the original class
         hints = cls.__cached_type_hints__
@@ -946,8 +966,6 @@ class Serializer(msgspec.Struct):
 
         new_cls.from_parent = from_parent  # type: ignore
 
-        # Cache and return
-        _subset_cache[cache_key] = new_cls
         return new_cls
 
     @classmethod
@@ -1129,6 +1147,19 @@ class Serializer(msgspec.Struct):
             user.dump()  # {"id": 1, "name": "John", "email": None}
             user.dump(exclude_none=True)  # {"id": 1, "name": "John"}
         """
+        # FAST PATH: If no special handling is needed, use msgspec.structs.asdict directly
+        # This is significantly faster than iterating through fields in Python
+        cls = self.__class__
+        if (
+            cls.__dump_fast_path__
+            and not exclude_none
+            and not exclude_defaults
+            and not exclude_unset
+            and not by_alias
+        ):
+            return msgspec_structs.asdict(self)
+
+        # SLOW PATH: Need special handling
         return self._dump_impl(
             exclude_none=exclude_none,
             exclude_unset=exclude_unset,
@@ -1149,26 +1180,30 @@ class Serializer(msgspec.Struct):
         exclude_fields: frozenset[str] | None = None,
     ) -> dict[str, Any]:
         """Internal implementation of dump with field filtering."""
+        # Cache class attributes locally for faster access in the loop
+        cls = self.__class__
+        struct_fields = cls.__struct_fields__
+        write_only_fields = cls.__write_only_fields__
+        field_configs = cls.__field_configs__
+        has_computed = cls.__has_computed_fields__
+        computed_fields = cls.__computed_fields__
+
+        # Use pre-computed default values map (computed once per class, not per call)
+        default_values = None
+        if exclude_defaults:
+            # Lazy cache the default values map on first use (None = not cached)
+            if cls.__default_values_map__ is None:
+                cls._cache_default_values_map()
+            default_values = cls.__default_values_map__
+
         result: dict[str, Any] = {}
 
-        # Build a mapping of field names to their default values for exclude_defaults
-        # msgspec's __struct_defaults__ is a tuple of defaults for fields WITH defaults,
-        # aligned from the END of the fields list (fields without defaults come first)
-        default_values: dict[str, Any] = {}
-        if exclude_defaults:
-            defaults = self.__struct_defaults__
-            fields = self.__struct_fields__
-            num_fields = len(fields)
-            num_defaults = len(defaults)
-            # Defaults are aligned from the end
-            for i, default_val in enumerate(defaults):
-                field_idx = num_fields - num_defaults + i
-                if field_idx >= 0:
-                    default_values[fields[field_idx]] = default_val
+        # Local reference to getattr for micro-optimization
+        _getattr = getattr
 
-        for field_name in self.__struct_fields__:
+        for field_name in struct_fields:
             # Skip write_only fields (they shouldn't appear in output)
-            if field_name in self.__write_only_fields__:
+            if field_name in write_only_fields:
                 continue
 
             # Apply include/exclude filtering
@@ -1178,18 +1213,18 @@ class Serializer(msgspec.Struct):
                 continue
 
             # Check field config for exclusion
-            field_config = self.__field_configs__.get(field_name)
+            field_config = field_configs.get(field_name)
             if field_config and field_config.exclude:
                 continue
 
-            value = getattr(self, field_name)
+            value = _getattr(self, field_name)
 
             # Skip None values if exclude_none
             if exclude_none and value is None:
                 continue
 
-            # Skip default values if exclude_defaults
-            if exclude_defaults and field_name in default_values:
+            # Skip default values if exclude_defaults (using pre-computed map)
+            if default_values is not None and field_name in default_values:
                 if value == default_values[field_name]:
                     continue
 
@@ -1224,8 +1259,8 @@ class Serializer(msgspec.Struct):
                 result[output_key] = value
 
         # Add computed fields
-        if self.__has_computed_fields__:
-            for field_name, config in self.__computed_fields__.items():
+        if has_computed:
+            for field_name, config in computed_fields.items():
                 # Apply include/exclude filtering to computed fields too
                 if include_fields is not None and field_name not in include_fields:
                     continue
@@ -1233,7 +1268,7 @@ class Serializer(msgspec.Struct):
                     continue
 
                 # Get the method and call it
-                method = getattr(self, config.method_name, None)
+                method = _getattr(self, config.method_name, None)
                 if method is not None:
                     value = method()
 
@@ -1302,6 +1337,20 @@ class Serializer(msgspec.Struct):
             users = [UserSerializer.from_model(u) for u in User.objects.all()]
             UserSerializer.dump_many(users)
         """
+        # FAST PATH: If no special handling is needed, use msgspec.structs.asdict directly
+        # This is significantly faster than iterating through fields in Python
+        if (
+            cls.__dump_fast_path__
+            and not exclude_none
+            and not exclude_defaults
+            and not exclude_unset
+            and not by_alias
+        ):
+            # Use msgspec's optimized asdict - much faster than Python iteration
+            _asdict = msgspec_structs.asdict
+            return [_asdict(instance) for instance in instances]
+
+        # SLOW PATH: Need special handling (computed fields, write_only, exclude_*, etc.)
         return [
             instance.dump(
                 exclude_none=exclude_none,

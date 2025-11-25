@@ -1,6 +1,6 @@
 """Integration tests for serializer types with TestClient.
 
-These tests verify that custom validated types (Email, HttpUrl, PositiveInt, etc.)
+These tests verify that custom validated types (Email, URL, PositiveInt, etc.)
 work correctly through the full HTTP request/response cycle:
 - Request body validation (POST/PUT)
 - Response serialization (GET)
@@ -15,9 +15,9 @@ from django_bolt.api import BoltAPI
 from django_bolt.serializers import (
     Serializer,
     Email,
-    HttpUrl,
-    HttpsUrl,
-    PhoneNumber,
+    URL,
+    HttpsURL,
+    Phone,
     Slug,
     Username,
     NonEmptyStr,
@@ -31,8 +31,8 @@ from django_bolt.serializers.types import (
     Longitude,
     Port,
     HexColor,
-    UUIDString,
-    IPv4Address,
+    UUID,
+    IPv4,
 )
 from django_bolt.testing import TestClient
 
@@ -47,7 +47,7 @@ class UserInputSerializer(Serializer):
 
     email: Email
     username: Username
-    website: HttpUrl | None = None
+    website: URL | None = None
 
 
 class UserOutputSerializer(Serializer):
@@ -56,7 +56,7 @@ class UserOutputSerializer(Serializer):
     id: PositiveInt
     email: Email
     username: Username
-    website: HttpUrl | None = None
+    website: URL | None = None
 
 
 class ContactSerializer(Serializer):
@@ -64,7 +64,7 @@ class ContactSerializer(Serializer):
 
     name: NonEmptyStr
     email: Email
-    phone: PhoneNumber
+    phone: Phone
 
 
 class LocationSerializer(Serializer):
@@ -79,7 +79,7 @@ class ServerConfigSerializer(Serializer):
     """Server config with port and IP validation."""
 
     name: str
-    host: IPv4Address
+    host: IPv4
     port: Port
 
 
@@ -101,7 +101,7 @@ class ProgressSerializer(Serializer):
 class EntitySerializer(Serializer):
     """Entity with UUID validation."""
 
-    id: UUIDString
+    id: UUID
     name: str
 
 
@@ -110,7 +110,7 @@ class BlogPostSerializer(Serializer):
 
     title: str
     slug: Slug
-    external_url: HttpsUrl | None = None
+    external_url: HttpsURL | None = None
 
 
 class PaginationSerializer(Serializer):
@@ -228,8 +228,8 @@ class FullUserSerializer(Serializer):
     id: PositiveInt
     email: Email
     username: Username
-    phone: PhoneNumber | None = None
-    website: HttpUrl | None = None
+    phone: Phone | None = None
+    website: URL | None = None
     bio: str = ""
 
     class Meta:
@@ -443,21 +443,11 @@ class TestInvalidTypeInput:
 
         assert response.status_code in [400, 422]
 
-    def test_create_user_invalid_username_too_short(self, client):
-        """Test that username too short is rejected."""
+    def test_create_user_invalid_username_with_space(self, client):
+        """Test that username with space is rejected."""
         payload = {
             "email": "test@example.com",
-            "username": "ab",  # Min 3 chars
-        }
-        response = client.post("/users", json=payload)
-
-        assert response.status_code in [400, 422]
-
-    def test_create_user_invalid_username_chars(self, client):
-        """Test that username with invalid chars is rejected."""
-        payload = {
-            "email": "test@example.com",
-            "username": "user@name",  # @ not allowed
+            "username": "user name",  # Space not allowed
         }
         response = client.post("/users", json=payload)
 

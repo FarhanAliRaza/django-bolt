@@ -296,6 +296,22 @@ async def read_10k():
     """
     return test_data.JSON_10K
 
+@api.get("/1k-json")
+async def read_1k():
+    """
+    Endpoint that returns 10k JSON objects.
+
+    """
+    return test_data.JSON_1K
+
+@api.get("/100k-json")
+async def read_100k():
+    """
+    Endpoint that returns 10k JSON objects.
+
+    """
+    return test_data.JSON_100K
+
 
 @api.get("/sync-10k-json")
 def read_10k_sync():

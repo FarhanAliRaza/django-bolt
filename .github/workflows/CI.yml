@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.14t"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -66,7 +66,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64
-          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14 3.14t
+          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
           sccache: "true"
           manylinux: auto
           docker-options: --pull always
@@ -89,7 +89,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: universal2-apple-darwin
-          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14 3.14t
+          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
           sccache: "true"
 
       - name: Upload wheels
@@ -110,7 +110,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x64
-          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14 3.14t
+          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13 3.14
           sccache: "true"
 
       - name: Upload wheels

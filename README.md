@@ -3,6 +3,7 @@
 </div>
 
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/django-bolt?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/django-bolt)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/FarhanAliRaza/django-bolt)
 
 # High-Performance Fully Typed API Framework for Django
 

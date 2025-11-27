@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.6]
+
+### Fixed
+
+- **CORS preflight for non-existent routes** - OPTIONS preflight requests to non-existent routes now return 204 (success) instead of 404, allowing browsers to proceed with the actual request and display proper error messages.
+- **CORS headers on 404 responses** - Non-existent routes now include CORS headers using global config, so browsers can read error responses.
+
+### Changed
+
+- Updated CORS documentation to emphasize Django settings-based configuration as the preferred approach.
+
+## [0.3.5]
+
+### Changed
+
+- **Extended Serializer class** - Added more features like write_only, more built-in types to better work with django models.
+- **Serializer Config class** - Renamed `Meta` to `Config` to avoid conflicts with `msgspec.Meta`.
+- **Field configuration** - Removed direct Meta constraints from `field()` function; validation constraints now require `Annotated` and `Meta`.
+
+### Fixed
+
+- Fixed Python 3.14 annotation errors.
+
+## [0.3.4]
+
+### Added
+
+- Python 3.14 support with msgspec 0.20.
+- Advanced Serializer features including `kw_only` support.
+
+### Changed
+
+- Refactored concurrency handling in `sync_to_thread` function.
+- Updated logging levels to DEBUG for improved debugging.
+
 ## [0.3.3]
 
 ### Added

@@ -1,14 +1,24 @@
-import os
-import sys
 from pathlib import Path
 import click
-
-from .api import BoltAPI
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def main():
     """Django-Bolt command line interface."""
+
+
+@main.command()
+def version():
+    """Show Django-Bolt version."""
+    import tomllib
+
+    cli_dir = Path(__file__).parent.resolve()
+    toml_file = cli_dir / "../../pyproject.toml"
+
+    with toml_file.open("rb") as f:
+        pyproject = tomllib.load(f)
+
+    click.echo(f"Django-Bolt version: {pyproject['project']['version']}")
 
 
 @main.command()
@@ -21,25 +31,25 @@ def init():
         if (path / "manage.py").exists():
             project_root = path
             break
-    
+
     if not project_root:
         click.echo("Error: No Django project found (manage.py not found)", err=True)
         click.echo("Please run this command from within a Django project directory.")
         return
-    
+
     click.echo(f"Found Django project at: {project_root}")
-    
+
     # Find settings.py to determine project name
     settings_files = list(project_root.glob("*/settings.py"))
     if not settings_files:
         click.echo("Error: Could not find settings.py", err=True)
         return
-    
+
     project_name = settings_files[0].parent.name
     settings_file = settings_files[0]
-    
+
     click.echo(f"Project name: {project_name}")
-    
+
     # 1. Add django_bolt to INSTALLED_APPS
     settings_content = settings_file.read_text()
     if "'django_bolt'" not in settings_content and '"django_bolt"' not in settings_content:
@@ -49,7 +59,7 @@ def init():
             new_lines = []
             in_installed_apps = False
             added = False
-            
+
             for line in lines:
                 if "INSTALLED_APPS" in line and "=" in line:
                     in_installed_apps = True
@@ -63,9 +73,9 @@ def init():
                         new_lines.append('    "django_bolt",')
                         added = True
                         in_installed_apps = False
-                
+
                 new_lines.append(line)
-            
+
             if added:
                 settings_file.write_text("\n".join(new_lines))
                 click.echo("✓ Added 'django_bolt' to INSTALLED_APPS")
@@ -75,7 +85,7 @@ def init():
             click.echo("Warning: INSTALLED_APPS not found in settings.py. Please add 'django_bolt' manually.")
     else:
         click.echo("✓ 'django_bolt' already in INSTALLED_APPS")
-    
+
     # 2. Create api.py template
     api_file = project_root / project_name / "api.py"
     if not api_file.exists():
@@ -122,12 +132,10 @@ async def create_item(item: Item):
         click.echo(f"✓ Created {api_file.relative_to(project_root)}")
     else:
         click.echo(f"✓ {api_file.relative_to(project_root)} already exists")
-    
+
     click.echo("\n🚀 Django-Bolt initialization complete!")
     click.echo("\nNext steps:")
     click.echo("1. Run migrations: python manage.py migrate")
     click.echo("2. Start the server: python manage.py runbolt")
     click.echo(f"3. Edit your API routes in {project_name}/api.py")
-    click.echo("\nFor more information, visit: https://github.com/yourusername/django-bolt")
-
-
+    click.echo("\nFor more information, visit: https://github.com/FarhanAliRaza/django-bolt")

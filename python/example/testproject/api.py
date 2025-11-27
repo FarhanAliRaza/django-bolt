@@ -82,6 +82,11 @@ async def health():
     return {"status": "healthy", "timestamp": time.time()}
 
 
+@api.post("/items")
+async def create_item(item: Item):
+    """Create a new item."""
+    return {"item": item, "created": True}
+
 class CustomRequest(Request, Protocol):
     """Extended Request type with custom properties"""
 
@@ -272,7 +277,6 @@ async def generate_token(token_req: TokenRequest):
 
 
 @api.get("/", tags=["root"], summary="summary", description="description")
-@cors()  # Uses global CORS_ALLOWED_ORIGINS from Django settings
 async def read_root():
     """
     Endpoint that returns a simple "Hello World" dictionary.
@@ -280,7 +284,6 @@ async def read_root():
     return {"message": "Hello World"}
 
 @api.get("/sync", tags=["root"], summary="summary", description="description")
-@cors()  # Uses global CORS_ALLOWED_ORIGINS from Django settings
 def read_root():
     """
     Endpoint that returns a simple "Hello World" dictionary.

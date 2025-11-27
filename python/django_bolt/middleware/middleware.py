@@ -119,27 +119,51 @@ def cors(
     max_age: int = 3600
 ):
     """
-    CORS configuration decorator.
+    CORS configuration decorator for route-level CORS configuration.
 
     Args:
-        origins: Allowed origins. Use Django setting BOLT_CORS_ALLOWED_ORIGINS for global config.
-                 Default is empty list (no origins allowed) for security.
-        methods: Allowed methods
+        origins: Allowed origins (REQUIRED). Use ["*"] for all origins, or specific origins
+                 like ["https://example.com"]. For global config, use Django settings instead.
+        methods: Allowed methods (default: GET, POST, PUT, PATCH, DELETE, OPTIONS)
         headers: Allowed headers
         credentials: Allow credentials (cannot be combined with wildcard "*")
-        max_age: Preflight cache duration
+        max_age: Preflight cache duration in seconds (default: 3600)
 
-    Security Notes:
-        - Default changed from ["*"] to [] (empty) for better security
-        - Wildcard "*" with credentials=True is not allowed (violates CORS spec)
-        - Configure BOLT_CORS_ALLOWED_ORIGINS in Django settings for global origins
+    Examples:
+        @cors(origins=["https://example.com"])
+        async def my_endpoint(): ...
+
+        @cors(origins=["*"])  # Allow all origins
+        async def public_endpoint(): ...
+
+        @cors(origins=["https://app.example.com"], credentials=True)
+        async def with_cookies(): ...
+
+    Note:
+        If you want to use global CORS settings from Django (CORS_ALLOWED_ORIGINS),
+        do NOT use the @cors decorator - the global config will apply automatically.
+        The @cors decorator is for route-specific CORS overrides only.
+
+    Raises:
+        ValueError: If origins is not specified (empty @cors() is not allowed)
     """
     def decorator(func):
+        # SECURITY: Require explicit origins - empty @cors() is a common mistake
+        if origins is None:
+            raise ValueError(
+                "@cors() requires 'origins' argument. Examples:\n"
+                "  @cors(origins=['https://example.com'])  # Specific origin\n"
+                "  @cors(origins=['*'])  # Allow all origins\n"
+                "\n"
+                "If you want to use global CORS settings from Django (CORS_ALLOWED_ORIGINS),\n"
+                "simply remove the @cors decorator - global config applies automatically."
+            )
+
         if not hasattr(func, '__bolt_middleware__'):
             func.__bolt_middleware__ = []
 
         # Parse origins
-        origin_list = origins if isinstance(origins, list) else [origins] if origins else []
+        origin_list = origins if isinstance(origins, list) else [origins]
 
         # SECURITY: Validate wildcard + credentials
         if "*" in origin_list and credentials:

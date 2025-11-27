@@ -8,7 +8,8 @@ use pyo3::types::PyDict;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::metadata::RouteMetadata;
+use crate::cors::{add_cors_response_headers, add_preflight_headers_simple};
+use crate::metadata::{CorsConfig, RouteMetadata};
 use crate::middleware::auth::{authenticate, populate_auth_context};
 use crate::permissions::{evaluate_guards, GuardResult};
 use crate::request::PyRequest;
@@ -17,8 +18,7 @@ use crate::router::{parse_query_string, Router};
 // Actix testing imports
 use actix_web::dev::Service;
 use actix_web::http::header::{
-    ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
-    ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE, VARY,
+    ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN, VARY,
 };
 use actix_web::{test, web, App, HttpResponse};
 use bytes::Bytes;
@@ -39,7 +39,7 @@ pub struct TestApp {
     pub route_metadata: AHashMap<usize, RouteMetadata>,  // parsed Rust metadata
     pub dispatch: Py<PyAny>,
     pub event_loop: Option<Py<PyAny>>, // store loop; create TaskLocals per call
-    pub cors_allowed_origins: Vec<String>, // global CORS origins for testing
+    pub global_cors_config: Option<CorsConfig>, // global CORS config for testing (same as production)
 }
 
 static TEST_REGISTRY: OnceCell<DashMap<u64, Arc<RwLock<TestApp>>>> = OnceCell::new();
@@ -50,23 +50,133 @@ fn registry() -> &'static DashMap<u64, Arc<RwLock<TestApp>>> {
 }
 
 #[pyfunction]
+#[pyo3(signature = (dispatch, _debug, cors_config=None))]
 pub fn create_test_app(
     py: Python<'_>,
     dispatch: Py<PyAny>,
     _debug: bool,
-    cors_allowed_origins: Option<Vec<String>>,
+    cors_config: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<u64> {
+    // Parse CORS config from Python dict (same format as production server)
+    let global_cors_config = if let Some(cors_dict) = cors_config {
+        Some(parse_cors_config_from_dict(cors_dict)?)
+    } else {
+        None
+    };
+
     let app = TestApp {
         router: Router::new(),
         middleware_metadata: AHashMap::new(),
         route_metadata: AHashMap::new(),
         dispatch: dispatch.clone_ref(py),
         event_loop: None,
-        cors_allowed_origins: cors_allowed_origins.unwrap_or_default(),
+        global_cors_config,
     };
     let id = TEST_ID_GEN.fetch_add(1, Ordering::Relaxed);
     registry().insert(id, Arc::new(RwLock::new(app)));
     Ok(id)
+}
+
+/// Parse CORS config from a Python dict
+fn parse_cors_config_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<CorsConfig> {
+    use actix_web::http::header::HeaderValue;
+    use ahash::AHashSet;
+
+    // Extract origins
+    let origins: Vec<String> = dict
+        .get_item("origins")?
+        .map(|v| v.extract().unwrap_or_default())
+        .unwrap_or_default();
+
+    // Build origin_set for O(1) lookup
+    let origin_set: AHashSet<String> = origins.iter().cloned().collect();
+
+    // Check for wildcard
+    let allow_all_origins = origins.iter().any(|o| o == "*");
+
+    // Extract credentials
+    let credentials: bool = dict
+        .get_item("credentials")?
+        .map(|v| v.extract().unwrap_or(false))
+        .unwrap_or(false);
+
+    // Extract methods with defaults
+    let methods: Vec<String> = dict
+        .get_item("methods")?
+        .map(|v| v.extract().unwrap_or_default())
+        .unwrap_or_else(|| vec![
+            "GET".to_string(),
+            "POST".to_string(),
+            "PUT".to_string(),
+            "PATCH".to_string(),
+            "DELETE".to_string(),
+            "OPTIONS".to_string(),
+        ]);
+
+    // Extract headers with defaults
+    let headers: Vec<String> = dict
+        .get_item("headers")?
+        .map(|v| v.extract().unwrap_or_default())
+        .unwrap_or_else(|| vec![
+            "accept".to_string(),
+            "accept-encoding".to_string(),
+            "authorization".to_string(),
+            "content-type".to_string(),
+            "dnt".to_string(),
+            "origin".to_string(),
+            "user-agent".to_string(),
+            "x-csrftoken".to_string(),
+            "x-requested-with".to_string(),
+        ]);
+
+    // Extract expose_headers
+    let expose_headers: Vec<String> = dict
+        .get_item("expose_headers")?
+        .map(|v| v.extract().unwrap_or_default())
+        .unwrap_or_default();
+
+    // Extract max_age
+    let max_age: u32 = dict
+        .get_item("max_age")?
+        .map(|v| v.extract().unwrap_or(86400))
+        .unwrap_or(86400);
+
+    // Build pre-computed strings
+    let methods_str = methods.join(", ");
+    let headers_str = headers.join(", ");
+    let expose_headers_str = expose_headers.join(", ");
+    let max_age_str = max_age.to_string();
+
+    // Build cached HeaderValues
+    let methods_header = HeaderValue::from_str(&methods_str).ok();
+    let headers_header = HeaderValue::from_str(&headers_str).ok();
+    let expose_headers_header = if !expose_headers_str.is_empty() {
+        HeaderValue::from_str(&expose_headers_str).ok()
+    } else {
+        None
+    };
+    let max_age_header = HeaderValue::from_str(&max_age_str).ok();
+
+    Ok(CorsConfig {
+        origins,
+        origin_regexes: vec![],  // TODO: support regex in tests if needed
+        compiled_origin_regexes: vec![],
+        origin_set,
+        allow_all_origins,
+        credentials,
+        methods,
+        headers,
+        expose_headers,
+        max_age,
+        methods_str,
+        headers_str,
+        expose_headers_str,
+        max_age_str,
+        methods_header,
+        headers_header,
+        expose_headers_header,
+        max_age_header,
+    })
 }
 
 #[pyfunction]
@@ -622,14 +732,14 @@ pub fn handle_actix_http_request(
                     && request_origin.is_some()
                     && req.headers().contains_key("access-control-request-method");
 
-                // Get middleware config from route metadata and global CORS origins
+                // Get middleware config from route metadata and global CORS config
                 let (
                     cors_config,
                     rate_limit_config,
                     handler_id_opt,
                     should_skip_cors,
                     should_skip_compression,
-                    global_cors_origins,
+                    global_cors_config,
                 ) = Python::attach(
                     |_py| -> (
                         Option<crate::metadata::CorsConfig>,
@@ -637,15 +747,15 @@ pub fn handle_actix_http_request(
                         Option<usize>,
                         bool,
                         bool,
-                        Vec<String>,
+                        Option<crate::metadata::CorsConfig>,
                     ) {
                         let Some(entry) = registry().get(&app_id) else {
-                            return (None, None, None, false, false, vec![]);
+                            return (None, None, None, false, false, None);
                         };
                         let app = entry.read();
 
-                        // Capture global CORS origins
-                        let global_origins = app.cors_allowed_origins.clone();
+                        // Capture global CORS config (same structure as production)
+                        let global_cors = app.global_cors_config.clone();
 
                         // For preflight, we need to check the actual route method, not OPTIONS
                         let lookup_method = if is_preflight {
@@ -680,132 +790,94 @@ pub fn handle_actix_http_request(
                                     Some(handler_id),
                                     skip_cors,
                                     skip_compression,
-                                    global_origins,
+                                    global_cors,
                                 );
                             }
                         }
-                        (None, None, None, false, false, global_origins)
+                        (None, None, None, false, false, global_cors)
                     },
                 );
 
                 // Handle CORS preflight - MUST validate origin per RFC 6454
                 if is_preflight && !should_skip_cors {
-                    if let Some(ref cors_cfg) = cors_config {
-                        // Merge route-specific origins with global origins
-                        let origins = if !cors_cfg.origins.is_empty() {
-                            &cors_cfg.origins
-                        } else if !global_cors_origins.is_empty() {
-                            &global_cors_origins
-                        } else {
-                            // No CORS configured - reject preflight
-                            return Ok(HttpResponse::Forbidden()
-                                .content_type("text/plain; charset=utf-8")
-                                .body("CORS not configured"));
-                        };
+                    // Get effective CORS config: route-level, then global
+                    let effective_config = cors_config.as_ref().or(global_cors_config.as_ref());
 
-                        let is_wildcard = origins.iter().any(|o| o == "*");
+                    let Some(cors_cfg) = effective_config else {
+                        // No CORS configured - reject preflight
+                        return Ok(HttpResponse::Forbidden()
+                            .content_type("text/plain; charset=utf-8")
+                            .body("CORS not configured"));
+                    };
 
-                        // Wildcard + credentials is invalid per CORS spec
-                        if is_wildcard && cors_cfg.credentials {
-                            // Reflect origin instead of using wildcard
-                            if let Some(req_origin) = request_origin.as_deref() {
-                                let mut response = HttpResponse::NoContent();
-                                response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, req_origin));
-                                response.insert_header((VARY, "Origin"));
-                                response.insert_header((ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
-                                response.insert_header((
-                                    ACCESS_CONTROL_ALLOW_METHODS,
-                                    cors_cfg.methods.join(", "),
-                                ));
-                                response.insert_header((
-                                    ACCESS_CONTROL_ALLOW_HEADERS,
-                                    cors_cfg.headers.join(", "),
-                                ));
-                                response.insert_header((
-                                    ACCESS_CONTROL_MAX_AGE,
-                                    cors_cfg.max_age.to_string(),
-                                ));
-                                // CRITICAL: Add Vary headers for preflight (RFC 7234)
-                                response.insert_header((
-                                    VARY,
-                                    "Access-Control-Request-Method, Access-Control-Request-Headers",
-                                ));
-                                return Ok(response.finish());
-                            }
-                            // No origin header, reject
-                            return Ok(HttpResponse::Forbidden().finish());
-                        }
+                    // Get effective origins (route-level or global)
+                    let effective_origins = if !cors_cfg.origins.is_empty() {
+                        &cors_cfg.origins
+                    } else if let Some(ref global) = global_cors_config {
+                        &global.origins
+                    } else {
+                        &cors_cfg.origins
+                    };
 
-                        // Handle wildcard without credentials
-                        if is_wildcard {
+                    let is_wildcard = cors_cfg.allow_all_origins || effective_origins.iter().any(|o| o == "*");
+
+                    // Wildcard + credentials is invalid per CORS spec
+                    if is_wildcard && cors_cfg.credentials {
+                        // Reflect origin instead of using wildcard
+                        if let Some(req_origin) = request_origin.as_deref() {
                             let mut response = HttpResponse::NoContent();
-                            response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, "*"));
-                            response.insert_header((
-                                ACCESS_CONTROL_ALLOW_METHODS,
-                                cors_cfg.methods.join(", "),
-                            ));
-                            response.insert_header((
-                                ACCESS_CONTROL_ALLOW_HEADERS,
-                                cors_cfg.headers.join(", "),
-                            ));
-                            response.insert_header((
-                                ACCESS_CONTROL_MAX_AGE,
-                                cors_cfg.max_age.to_string(),
-                            ));
-                            // CRITICAL: Add Vary headers for preflight (RFC 7234)
-                            response.insert_header((
-                                VARY,
-                                "Access-Control-Request-Method, Access-Control-Request-Headers",
-                            ));
-                            return Ok(response.finish());
+                            response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, req_origin));
+                            response.insert_header((VARY, "Origin"));
+                            response.insert_header((ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
+                            // Use shared helper for preflight headers
+                            let mut resp = response.finish();
+                            add_preflight_headers_simple(&mut resp, &cors_cfg.methods, &cors_cfg.headers, cors_cfg.max_age as u64);
+                            return Ok(resp);
                         }
+                        // No origin header, reject
+                        return Ok(HttpResponse::Forbidden().finish());
+                    }
 
-                        // CRITICAL: Validate origin from request header
-                        let req_origin = match request_origin.as_deref() {
-                            Some(o) => o,
-                            None => {
-                                // No origin header, reject preflight
-                                return Ok(HttpResponse::Forbidden()
-                                    .content_type("text/plain; charset=utf-8")
-                                    .body("Missing Origin header"));
-                            }
-                        };
+                    // Handle wildcard without credentials
+                    if is_wildcard {
+                        let mut response = HttpResponse::NoContent();
+                        response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, "*"));
+                        let mut resp = response.finish();
+                        add_preflight_headers_simple(&mut resp, &cors_cfg.methods, &cors_cfg.headers, cors_cfg.max_age as u64);
+                        return Ok(resp);
+                    }
 
-                        // Check if request origin is in allowed origins list
-                        if !origins.iter().any(|o| o == req_origin) {
-                            // CRITICAL: Origin not allowed, reject preflight
+                    // CRITICAL: Validate origin from request header
+                    let req_origin = match request_origin.as_deref() {
+                        Some(o) => o,
+                        None => {
+                            // No origin header, reject preflight
                             return Ok(HttpResponse::Forbidden()
                                 .content_type("text/plain; charset=utf-8")
-                                .body("Origin not allowed"));
+                                .body("Missing Origin header"));
                         }
+                    };
 
-                        // Origin validated - add preflight headers
-                        let mut response = HttpResponse::NoContent();
-                        response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, req_origin));
-                        response.insert_header((VARY, "Origin"));
-                        response.insert_header((
-                            ACCESS_CONTROL_ALLOW_METHODS,
-                            cors_cfg.methods.join(", "),
-                        ));
-                        response.insert_header((
-                            ACCESS_CONTROL_ALLOW_HEADERS,
-                            cors_cfg.headers.join(", "),
-                        ));
-                        response
-                            .insert_header((ACCESS_CONTROL_MAX_AGE, cors_cfg.max_age.to_string()));
-
-                        if cors_cfg.credentials {
-                            response.insert_header((ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
-                        }
-
-                        // CRITICAL: Add Vary headers for preflight per RFC 7234
-                        response.insert_header((
-                            VARY,
-                            "Access-Control-Request-Method, Access-Control-Request-Headers",
-                        ));
-
-                        return Ok(response.finish());
+                    // Check if request origin is in allowed origins list
+                    if !effective_origins.iter().any(|o| o == req_origin) {
+                        // CRITICAL: Origin not allowed, reject preflight
+                        return Ok(HttpResponse::Forbidden()
+                            .content_type("text/plain; charset=utf-8")
+                            .body("Origin not allowed"));
                     }
+
+                    // Origin validated - add preflight headers
+                    let mut response = HttpResponse::NoContent();
+                    response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, req_origin));
+                    response.insert_header((VARY, "Origin"));
+
+                    if cors_cfg.credentials {
+                        response.insert_header((ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
+                    }
+
+                    let mut resp = response.finish();
+                    add_preflight_headers_simple(&mut resp, &cors_cfg.methods, &cors_cfg.headers, cors_cfg.max_age as u64);
+                    return Ok(resp);
                 }
 
                 // Check rate limiting
@@ -859,62 +931,27 @@ pub fn handle_actix_http_request(
 
                         // Add CORS headers to response if not skipped
                         if !should_skip_cors {
-                            if let Some(ref cors_cfg) = cors_config {
-                                // Merge route-specific origins with global origins
-                                let origins = if !cors_cfg.origins.is_empty() {
+                            // Get effective CORS config: route-level, then global
+                            let effective_config = cors_config.as_ref().or(global_cors_config.as_ref());
+
+                            if let Some(cors_cfg) = effective_config {
+                                // Get effective values
+                                let effective_origins = if !cors_cfg.origins.is_empty() {
                                     &cors_cfg.origins
-                                } else if !global_cors_origins.is_empty() {
-                                    &global_cors_origins
+                                } else if let Some(ref global) = global_cors_config {
+                                    &global.origins
                                 } else {
-                                    // No CORS configured, skip
-                                    return Ok::<_, actix_web::Error>(http_response);
+                                    &cors_cfg.origins
                                 };
 
-                                let is_wildcard = origins.iter().any(|o| o == "*");
-                                if is_wildcard && cors_cfg.credentials {
-                                    // Invalid configuration - skip adding headers
-                                    return Ok::<_, actix_web::Error>(http_response);
-                                }
-
-                                // Determine origin to use
-                                let origin_to_use = if is_wildcard {
-                                    "*"
-                                } else if let Some(req_origin) = request_origin.as_deref() {
-                                    if origins.iter().any(|o| o == req_origin) {
-                                        req_origin
-                                    } else {
-                                        return Ok::<_, actix_web::Error>(http_response);
-                                        // Origin not allowed
-                                    }
-                                } else {
-                                    origins.first().map(|s| s.as_str()).unwrap_or("*")
-                                };
-
-                                // Add headers
-                                http_response.headers_mut().insert(
-                                    ACCESS_CONTROL_ALLOW_ORIGIN,
-                                    origin_to_use.parse().unwrap(),
+                                // Use shared helper function
+                                add_cors_response_headers(
+                                    &mut http_response,
+                                    request_origin.as_deref(),
+                                    effective_origins,
+                                    cors_cfg.credentials,
+                                    &cors_cfg.expose_headers,
                                 );
-
-                                if origin_to_use != "*" {
-                                    http_response
-                                        .headers_mut()
-                                        .insert(VARY, "Origin".parse().unwrap());
-                                }
-
-                                if cors_cfg.credentials {
-                                    http_response.headers_mut().insert(
-                                        ACCESS_CONTROL_ALLOW_CREDENTIALS,
-                                        "true".parse().unwrap(),
-                                    );
-                                }
-
-                                if !cors_cfg.expose_headers.is_empty() {
-                                    http_response.headers_mut().insert(
-                                        ACCESS_CONTROL_EXPOSE_HEADERS,
-                                        cors_cfg.expose_headers.join(", ").parse().unwrap(),
-                                    );
-                                }
                             }
                         }
 

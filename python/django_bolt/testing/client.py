@@ -131,26 +131,64 @@ class TestClient(httpx.Client):
     __test__ = False  # Tell pytest this is not a test class
 
     @staticmethod
-    def _read_cors_settings_from_django() -> list[str] | None:
-        """Read CORS_ALLOWED_ORIGINS from Django settings (same as production server).
+    def _read_cors_settings_from_django() -> dict | None:
+        """Read all CORS settings from Django settings (same as production server).
 
         Returns:
-            List of allowed origins from Django settings, or None if not configured
+            Dict with CORS config from Django settings, or None if not configured.
+            Keys: origins, credentials, methods, headers, expose_headers, max_age
         """
         try:
             from django.conf import settings
 
-            # Check if CORS_ALLOWED_ORIGINS is defined
-            if hasattr(settings, 'CORS_ALLOWED_ORIGINS'):
+            # Check if any CORS setting is defined
+            has_origins = hasattr(settings, 'CORS_ALLOWED_ORIGINS')
+            has_all_origins = hasattr(settings, 'CORS_ALLOW_ALL_ORIGINS') and settings.CORS_ALLOW_ALL_ORIGINS
+
+            if not has_origins and not has_all_origins:
+                return None
+
+            # Build CORS config dict matching production server format
+            cors_config = {}
+
+            # Origins
+            if has_all_origins:
+                cors_config['origins'] = ["*"]
+            elif has_origins:
                 origins = settings.CORS_ALLOWED_ORIGINS
                 if isinstance(origins, (list, tuple)):
-                    return list(origins)
+                    cors_config['origins'] = list(origins)
+                else:
+                    cors_config['origins'] = []
+            else:
+                cors_config['origins'] = []
 
-            # Check for CORS_ALLOW_ALL_ORIGINS (wildcard)
-            if hasattr(settings, 'CORS_ALLOW_ALL_ORIGINS') and settings.CORS_ALLOW_ALL_ORIGINS:
-                return ["*"]
+            # Credentials
+            cors_config['credentials'] = getattr(settings, 'CORS_ALLOW_CREDENTIALS', False)
 
-            return None
+            # Methods
+            if hasattr(settings, 'CORS_ALLOW_METHODS'):
+                methods = settings.CORS_ALLOW_METHODS
+                if isinstance(methods, (list, tuple)):
+                    cors_config['methods'] = list(methods)
+
+            # Headers
+            if hasattr(settings, 'CORS_ALLOW_HEADERS'):
+                headers = settings.CORS_ALLOW_HEADERS
+                if isinstance(headers, (list, tuple)):
+                    cors_config['headers'] = list(headers)
+
+            # Expose headers
+            if hasattr(settings, 'CORS_EXPOSE_HEADERS'):
+                expose = settings.CORS_EXPOSE_HEADERS
+                if isinstance(expose, (list, tuple)):
+                    cors_config['expose_headers'] = list(expose)
+
+            # Max age
+            if hasattr(settings, 'CORS_PREFLIGHT_MAX_AGE'):
+                cors_config['max_age'] = settings.CORS_PREFLIGHT_MAX_AGE
+
+            return cors_config
         except (ImportError, AttributeError):
             # Django not configured or settings not available
             return None
@@ -175,19 +213,24 @@ class TestClient(httpx.Client):
                            CORS, rate limiting, compression). Default False for fast tests.
             cors_allowed_origins: Global CORS allowed origins for testing.
                                   If None and read_django_settings=True, reads from Django settings.
-            read_django_settings: If True, read CORS_ALLOWED_ORIGINS from Django settings
+            read_django_settings: If True, read CORS settings from Django settings
                                  when cors_allowed_origins is None. Default True.
             **kwargs: Additional arguments passed to httpx.Client
         """
         from django_bolt import _core
 
-        # If cors_allowed_origins not provided and read_django_settings=True,
-        # read from Django settings (same as production server does)
-        if cors_allowed_origins is None and read_django_settings:
-            cors_allowed_origins = self._read_cors_settings_from_django()
+        # Build CORS config dict for Rust
+        cors_config = None
 
-        # Create test app instance
-        self.app_id = _core.create_test_app(api._dispatch, False, cors_allowed_origins)
+        if cors_allowed_origins is not None:
+            # Explicit origins provided - create minimal config
+            cors_config = {'origins': cors_allowed_origins}
+        elif read_django_settings:
+            # Read full CORS config from Django settings (same as production server)
+            cors_config = self._read_cors_settings_from_django()
+
+        # Create test app instance with full CORS config
+        self.app_id = _core.create_test_app(api._dispatch, False, cors_config)
 
         # Register routes
         rust_routes = [

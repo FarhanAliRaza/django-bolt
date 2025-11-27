@@ -14,30 +14,37 @@ Django-Bolt provides a high-performance middleware pipeline that executes primar
 ## Quick Start
 
 ```python
+# settings.py - Configure CORS globally (recommended)
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+]
+CORS_ALLOW_CREDENTIALS = True
+```
+
+```python
+# api.py
 from django_bolt import BoltAPI
 from django_bolt.middleware import rate_limit, cors
 from django_bolt.auth import JWTAuthentication, IsAuthenticated
 
-# Global middleware via config
-api = BoltAPI(
-    middleware_config={
-        'cors': {
-            'origins': ['http://localhost:3000'],
-            'credentials': True
-        }
-    }
-)
+api = BoltAPI()
 
-# Per-route middleware via decorators
+# Per-route rate limiting via decorator
 @api.get("/limited")
 @rate_limit(rps=100, burst=200)
 async def limited_endpoint():
     return {"status": "ok"}
 
+# Route-level CORS override (optional - overrides Django settings)
+@api.get("/special")
+@cors(origins=["https://special.com"], credentials=False)
+async def special_endpoint():
+    return {"data": "custom CORS"}
+
 # Authentication using auth parameter (NOT decorator)
 @api.get("/protected", auth=[JWTAuthentication()], guards=[IsAuthenticated()])
 async def protected_endpoint(request: dict):
-    # Access auth context
     auth = request.get("auth", {})
     user_id = auth.get("user_id")
     return {"user_id": user_id}
@@ -86,31 +93,98 @@ async def tenant_data():
 
 ### CORS
 
-CORS handling with pre-compiled header strings for zero-allocation responses.
+Django-Bolt provides CORS handling with pre-compiled header strings for zero-allocation responses. CORS is compatible with `django-cors-headers` settings.
+
+#### Django Settings (Recommended)
+
+The **preferred approach** is to configure CORS globally via Django settings. This is compatible with `django-cors-headers` and applies to all routes automatically:
 
 ```python
+# settings.py
+
+# List of allowed origins (MUST include scheme - http:// or https://)
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://example.com",
+]
+
+# Or use regex patterns for dynamic subdomains
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://\w+\.example\.com$",  # Allow any subdomain of example.com
+]
+
+# Allow all origins (use with caution, not recommended for production)
+# CORS_ALLOW_ALL_ORIGINS = True
+
+# Allow credentials (cookies, authorization headers)
+CORS_ALLOW_CREDENTIALS = True
+
+# Allowed HTTP methods
+CORS_ALLOW_METHODS = [
+    "DELETE",
+    "GET",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+]
+
+# Allowed request headers
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+]
+
+# Headers exposed to the browser
+CORS_EXPOSE_HEADERS = []
+
+# Preflight cache duration (seconds)
+CORS_PREFLIGHT_MAX_AGE = 3600
+```
+
+**Important:** Origins must include the scheme (`http://` or `https://`). The browser sends `Origin: http://localhost:3000`, so `"localhost:3000"` without the scheme will NOT match.
+
+#### Route-Level Override (Optional)
+
+Use the `@cors` decorator to override global settings for specific routes:
+
+```python
+from django_bolt.middleware import cors
+
+@api.get("/special")
 @cors(
-    origins=["https://example.com", "https://app.example.com"],
-    methods=["GET", "POST", "PUT", "DELETE"],
+    origins=["https://special.com"],
+    methods=["GET", "POST"],
     headers=["Content-Type", "Authorization"],
-    credentials=True,
-    max_age=3600
+    credentials=False,
+    max_age=7200
 )
-async def cors_endpoint():
-    return {"data": "with CORS"}
+async def special_endpoint():
+    return {"data": "with custom CORS"}
 ```
 
 **Parameters:**
-- `origins`: List of allowed origins (default: empty list for security)
+- `origins`: List of allowed origins (overrides global settings)
 - `methods`: Allowed HTTP methods (default: GET, POST, PUT, PATCH, DELETE, OPTIONS)
 - `headers`: Allowed headers (default: Content-Type, Authorization)
 - `credentials`: Allow credentials (default: False)
 - `max_age`: Preflight cache duration in seconds (default: 3600)
 
-**Security Notes:**
-- Default changed from `["*"]` to `[]` (empty) for better security
-- Wildcard `"*"` with `credentials=True` is rejected (violates CORS spec)
-- Configure `BOLT_CORS_ALLOWED_ORIGINS` in Django settings for global origins
+#### Security Notes
+
+- **Always specify origins explicitly** - avoid `CORS_ALLOW_ALL_ORIGINS = True` in production
+- **Wildcard + credentials is invalid** - `CORS_ALLOW_ALL_ORIGINS = True` with `CORS_ALLOW_CREDENTIALS = True` violates CORS spec; Django-Bolt will reflect the request origin instead
+- **Include the scheme** - origins must be full URLs like `http://localhost:3000`, not `localhost:3000`
+
+#### How It Works
 
 **Pre-compiled Headers:**
 At server startup, CORS config is compiled into pre-computed header strings:
@@ -121,7 +195,13 @@ At server startup, CORS config is compiled into pre-computed header strings:
 This eliminates per-request string allocations.
 
 **Automatic OPTIONS Handling:**
-Django-Bolt automatically handles OPTIONS preflight requests for routes with CORS configured. No explicit OPTIONS handler needed.
+Django-Bolt automatically handles OPTIONS preflight requests:
+- For existing routes: Returns 204 with CORS headers
+- For non-existent routes: Returns 204 with CORS headers (allows browser to show 404 error)
+
+**Origin Matching:**
+- Exact match: O(1) hash set lookup
+- Regex match: Compiled at startup for fast matching
 
 #### Testing CORS with TestClient
 

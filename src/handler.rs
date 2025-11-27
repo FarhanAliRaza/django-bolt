@@ -249,9 +249,34 @@ pub async fn handle_request(
                 }
             }
 
-            return HttpResponse::NotFound()
-                .content_type("text/plain; charset=utf-8")
-                .body("Not Found");
+            // Handle OPTIONS preflight for non-existent routes
+            // IMPORTANT: Preflight MUST return 2xx status for browser to proceed with actual request
+            // Browsers reject preflight responses with non-2xx status codes (like 404)
+            if method == "OPTIONS" {
+                if let Some(ref global_cors) = state.global_cors_config {
+                    let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+                    let mut response = HttpResponse::NoContent().finish();
+                    let origin_allowed = add_cors_headers_rust(&mut response, origin, global_cors, &state);
+                    if origin_allowed {
+                        add_cors_preflight_headers(&mut response, global_cors);
+                    }
+                    return response;
+                }
+            }
+
+            // Route not found - return 404 with CORS headers if global CORS is configured
+            // This ensures browsers can read the 404 error message
+            let mut response = HttpResponse::NotFound()
+                .content_type("application/json")
+                .body(r#"{"detail":"Not Found"}"#);
+
+            // Add CORS headers using global config for 404 responses
+            if let Some(ref global_cors) = state.global_cors_config {
+                let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+                add_cors_headers_rust(&mut response, origin, global_cors, &state);
+            }
+
+            return response;
         }
     };
 

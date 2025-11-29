@@ -2,6 +2,7 @@ from .api import BoltAPI
 from .responses import Response, JSON, StreamingResponse
 from .middleware import CompressionConfig
 from .types import Request, UserType, AuthContext, DjangoModel
+from .params import Depends
 
 # Views module
 from .views import (
@@ -89,6 +90,7 @@ __all__ = [
     "JSON",
     "StreamingResponse",
     "CompressionConfig",
+    "Depends",
     # Views
     "APIView",
     "ViewSet",

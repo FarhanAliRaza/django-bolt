@@ -1,0 +1,299 @@
+# Django-Bolt LLM Quick Reference
+
+Django-Bolt is a Rust-powered API framework for Django with 60k+ RPS performance.
+For detailed docs, see: docs/README.md
+
+## Installation & Setup
+
+```bash
+pip install django-bolt
+python -m django_bolt init  # Creates api.py, updates settings
+python manage.py runbolt --host 0.0.0.0 --port 8000
+```
+
+## Basic API
+
+```python
+from django_bolt import BoltAPI
+
+api = BoltAPI()
+
+@api.get("/hello")
+async def hello():
+    return {"message": "Hello, World!"}
+```
+
+
+## Route Parameters
+
+```python
+# Path parameters - automatically typed
+@api.get("/users/{user_id}")
+async def get_user(user_id: int):
+    return {"id": user_id}
+
+# Query parameters - use defaults for optional
+@api.get("/search")
+async def search(q: str, page: int = 1):
+    return {"query": q, "page": page}
+
+# Headers, cookies, form data
+from django_bolt.params import Header, Cookie, Form
+
+@api.get("/protected")
+async def protected(x_api_key: str = Header("X-API-Key")):
+    return {"key": x_api_key}
+```
+
+## Serializers (Request/Response Validation)
+
+Use `Serializer` for validation with field validators (5-10x faster than Pydantic):
+
+```python
+from django_bolt.serializers import Serializer, field_validator
+
+class UserCreate(Serializer):
+    name: str
+    email: str
+
+    @field_validator('email')
+    def validate_email(cls, value):
+        if '@' not in value:
+            raise ValueError('Invalid email')
+        return value.lower()
+
+class UserResponse(Serializer):
+    id: int
+    name: str
+
+@api.post("/users", response_model=UserResponse)
+async def create_user(data: UserCreate):
+    user = await User.objects.acreate(**data.to_dict())
+    return UserResponse.from_model(user)
+```
+
+Key methods:
+- `from_model(obj)` - Convert Django model to serializer
+- `to_dict()` - Convert serializer to dict
+- `@field_validator('field')` - Single field validation
+- `@model_validator` - Cross-field validation
+
+Invalid requests return 422 with validation errors. See docs/SERIALIZERS.md for details.
+
+## Response Types
+
+```python
+from django_bolt.responses import PlainText, HTML, Redirect, FileResponse, StreamingResponse
+
+@api.get("/text")
+async def text():
+    return PlainText("Hello")
+
+@api.get("/download")
+async def download():
+    return FileResponse("/path/to/file.pdf")  # Streaming, for large files
+
+@api.get("/events")
+async def sse():
+    async def generate():
+        for i in range(10):
+            yield f"data: Event {i}\n\n"
+    return StreamingResponse(generate(), media_type="text/event-stream")
+```
+
+## Django ORM (Async)
+
+Use Django's async ORM methods (prefixed with `a`):
+
+```python
+@api.get("/users/{user_id}")
+async def get_user(user_id: int):
+    user = await User.objects.aget(pk=user_id)
+    return {"id": user.id, "name": user.username}
+
+@api.get("/users")
+async def list_users():
+    users = []
+    async for user in User.objects.all():
+        users.append({"id": user.id, "name": user.username})
+    return users
+```
+
+## Authentication
+
+```python
+from django_bolt.auth import JWTAuthentication, IsAuthenticated
+
+jwt_auth = JWTAuthentication(secret="your-secret")
+
+@api.get("/protected", auth=[jwt_auth], guards=[IsAuthenticated()])
+async def protected(request):
+    user_id = request.get("auth", {}).get("user_id")
+    return {"user_id": user_id}
+```
+
+Guards: `IsAuthenticated()`, `IsAdminUser()`, `IsStaff()`, `HasPermission("perm")`
+
+## Rate Limiting
+
+```python
+from django_bolt.middleware import rate_limit
+
+@api.get("/api/data")
+@rate_limit(rps=100, burst=200, key="ip")
+async def get_data():
+    return {"data": "example"}
+```
+
+Keys: `"ip"` (default), `"user_id"`, `"api_key"`, or header name.
+
+## CORS
+
+Set in Django settings (recommended):
+
+```python
+CORS_ALLOWED_ORIGINS = ["http://localhost:3000", "https://example.com"]
+CORS_ALLOW_CREDENTIALS = True
+```
+
+## Compression
+
+Enabled by default (brotli with gzip fallback). Disable per-route:
+
+```python
+from django_bolt.compression import no_compress
+
+@api.get("/stream")
+@no_compress
+async def stream():
+    ...
+```
+
+For config details, see docs/COMPRESSION.md
+
+## Dependency Injection
+
+```python
+from django_bolt import Depends
+
+async def get_db_session():
+    return await get_session()
+
+@api.get("/items")
+async def get_items(session = Depends(get_db_session)):
+    return await session.execute(...)
+```
+
+## Class-Based Views
+
+```python
+from django_bolt.viewsets import ViewSet
+from django_bolt.viewsets import action
+
+@api.viewset("/users")
+class UserViewSet(ViewSet):
+    async def list(self, request):
+        """GET /users"""
+        return [...]
+
+    async def retrieve(self, request, pk: int):
+        """GET /users/{pk}"""
+        return {...}
+
+    async def create(self, request, data: UserCreate):
+        """POST /users"""
+        return {...}
+
+    @action(methods=["POST"], detail=True)
+    async def activate(self, request, pk: int):
+        """POST /users/{pk}/activate"""
+        return {...}
+```
+
+## Pagination
+
+```python
+from django_bolt import paginate, PageNumberPagination
+
+@api.get("/articles")
+@paginate(PageNumberPagination)
+async def list_articles(request):
+    return Article.objects.all()
+
+# Usage: GET /articles?page=2&page_size=20
+```
+
+Options: `PageNumberPagination`, `LimitOffsetPagination`, `CursorPagination`
+
+## Error Handling
+
+```python
+from django_bolt.exceptions import NotFound, BadRequest, Unauthorized
+
+@api.get("/users/{user_id}")
+async def get_user(user_id: int):
+    user = await User.objects.filter(pk=user_id).afirst()
+    if not user:
+        raise NotFound(detail=f"User {user_id} not found")
+    return user
+```
+
+## OpenAPI Documentation
+
+Auto-generated at `/schema` by default:
+
+```python
+from django_bolt.openapi import OpenAPIConfig
+
+api = BoltAPI(
+    openapi_config=OpenAPIConfig(
+        title="My API",
+        version="1.0.0"
+    )
+)
+```
+
+## Testing
+
+```python
+from django_bolt.testing import TestClient
+
+def test_hello():
+    with TestClient(api) as client:
+        response = client.get("/hello")
+        assert response.status_code == 200
+        assert response.json() == {"message": "Hello, World!"}
+```
+
+## Logging
+
+```python
+from django_bolt.logging import LoggingConfig
+
+api = BoltAPI(
+    logging_config=LoggingConfig(
+        request_log_fields={"method", "path"},
+        response_log_fields={"status_code", "duration"},
+        skip_paths={"/health"},
+    )
+)
+```
+
+## Running the Server
+
+```bash
+# Development (auto-reload)
+python manage.py runbolt --dev
+
+# Production (multi-process)
+python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 4 --workers 1
+```
+
+## Key Points
+
+- All handlers must be `async def`
+- Use `Serializer` for request/response schemas with validation
+- Use Django async ORM: `aget()`, `acreate()`, `afilter()`, `async for`
+- Auth/guards run in Rust (no Python GIL overhead)
+- Compression enabled by default
+- OpenAPI docs at `/schema`

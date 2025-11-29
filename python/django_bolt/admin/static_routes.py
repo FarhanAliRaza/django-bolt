@@ -99,5 +99,15 @@ class StaticRouteRegistrar:
             "sig": sig,
             "fields": [path_field],
             "path_params": {"path"},
+            "is_async": True,  # static_handler is async
         }
+
+        # Create injector for static handler (extracts path param from request)
+        def static_injector(request):
+            path_value = request["params"].get("path", "")
+            return ([path_value], {})
+
+        meta["injector"] = static_injector
+        meta["injector_is_async"] = False
+
         self.api._handler_meta[handler] = meta

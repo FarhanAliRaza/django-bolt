@@ -260,3 +260,110 @@ def test_asgi_bridge_with_cookies():
             break
 
     assert has_csrf, "Response should include CSRF token cookie"
+
+
+class TestStaticRouteMetadata:
+    """Tests for static route registration metadata.
+
+    These tests verify that the static route registrar properly creates
+    handler metadata with injectors, which is required by the dispatch system.
+    """
+
+    def test_static_route_has_injector(self):
+        """Test that static routes are registered with an injector in metadata.
+
+        This test verifies the fix for KeyError: 'injector' when accessing
+        static files. The _dispatch method requires an injector for non-request-only
+        handlers.
+        """
+        api = BoltAPI()
+        # First register admin routes (required before static routes)
+        api._register_admin_routes('127.0.0.1', 8000)
+        # Then register static routes
+        api._register_static_routes()
+
+        # Find the static handler
+        static_handler = None
+        for method, path, handler_id, handler in api._routes:
+            if '/static/' in path and '{path:path}' in path:
+                static_handler = handler
+                break
+
+        assert static_handler is not None, "Static route should be registered"
+
+        # Get metadata for the static handler
+        meta = api._handler_meta.get(static_handler)
+        assert meta is not None, "Static handler should have metadata"
+
+        # Verify injector exists (this is the key fix)
+        assert "injector" in meta, "Static handler metadata must have 'injector' key"
+        assert callable(meta["injector"]), "Injector must be callable"
+        assert "injector_is_async" in meta, "Static handler metadata must have 'injector_is_async' key"
+        assert meta["injector_is_async"] is False, "Static injector should be synchronous"
+
+        # Verify other required metadata
+        assert meta.get("mode") == "mixed", "Static handler should be in 'mixed' mode"
+        assert meta.get("is_async") is True, "Static handler should be marked as async"
+        assert "path" in meta.get("path_params", set()), "Static handler should have 'path' as path param"
+
+    def test_static_injector_extracts_path(self):
+        """Test that the static injector correctly extracts the path parameter."""
+        api = BoltAPI()
+        api._register_admin_routes('127.0.0.1', 8000)
+        api._register_static_routes()
+
+        # Find the static handler
+        static_handler = None
+        for method, path, handler_id, handler in api._routes:
+            if '/static/' in path and '{path:path}' in path:
+                static_handler = handler
+                break
+
+        assert static_handler is not None, "Static route should be registered"
+
+        meta = api._handler_meta[static_handler]
+        injector = meta["injector"]
+
+        # Test the injector with a mock request
+        mock_request = {
+            "params": {"path": "admin/css/base.css"},
+            "query": {},
+            "headers": {},
+            "cookies": {},
+        }
+
+        args, kwargs = injector(mock_request)
+
+        assert args == ["admin/css/base.css"], f"Injector should extract path, got {args}"
+        assert kwargs == {}, f"Injector should return empty kwargs, got {kwargs}"
+
+    def test_static_injector_handles_empty_path(self):
+        """Test that the static injector handles missing path gracefully."""
+        api = BoltAPI()
+        api._register_admin_routes('127.0.0.1', 8000)
+        api._register_static_routes()
+
+        # Find the static handler
+        static_handler = None
+        for method, path, handler_id, handler in api._routes:
+            if '/static/' in path and '{path:path}' in path:
+                static_handler = handler
+                break
+
+        assert static_handler is not None, "Static route should be registered"
+
+        meta = api._handler_meta[static_handler]
+        injector = meta["injector"]
+
+        # Test with missing path param
+        mock_request = {
+            "params": {},
+            "query": {},
+            "headers": {},
+            "cookies": {},
+        }
+
+        args, kwargs = injector(mock_request)
+
+        assert args == [""], f"Injector should return empty string for missing path, got {args}"
+        assert kwargs == {}, f"Injector should return empty kwargs, got {kwargs}"

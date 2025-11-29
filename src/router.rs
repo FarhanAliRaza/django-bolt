@@ -2,9 +2,12 @@ use ahash::AHashMap;
 use matchit::{Match, Router as MatchRouter};
 use pyo3::prelude::*;
 
+/// Route metadata stored in the router.
+/// Note: We intentionally do NOT store Py<PyAny> handler here to avoid
+/// requiring GIL acquisition during route lookup in the hot path.
+/// Handlers are stored separately in HANDLERS static and looked up by handler_id.
 pub struct Route {
-    pub handler: Py<PyAny>,
-    pub handler_id: usize, // Store handler_id for middleware metadata lookup
+    pub handler_id: usize,
 }
 
 /// Convert FastAPI-style paths like /items/{id} and /files/{path:path}
@@ -85,13 +88,11 @@ impl Router {
         method: &str,
         path: &str,
         handler_id: usize,
-        handler: Py<PyAny>,
     ) -> PyResult<()> {
         // Convert path from FastAPI syntax to matchit syntax
         let converted_path = convert_path(path);
 
         let route = Route {
-            handler,
             handler_id,
         };
 
@@ -118,11 +119,14 @@ impl Router {
         Ok(())
     }
 
+    /// Find a route for the given method and path.
+    /// Returns (path_params, handler_id) - handler is looked up separately from HANDLERS static.
+    /// This design eliminates GIL acquisition during route lookup.
     pub fn find(
         &self,
         method: &str,
         path: &str,
-    ) -> Option<(&Route, AHashMap<String, String>, usize)> {
+    ) -> Option<(AHashMap<String, String>, usize)> {
         let router = match method {
             "GET" => &self.get,
             "POST" => &self.post,
@@ -140,7 +144,7 @@ impl Router {
                 for (key, value) in params.iter() {
                     path_params.insert(key.to_string(), value.to_string());
                 }
-                Some((value, path_params, value.handler_id))
+                Some((path_params, value.handler_id))
             }
             Err(_) => None,
         }

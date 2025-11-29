@@ -23,6 +23,11 @@ pub static TASK_LOCALS: OnceCell<TaskLocals> = OnceCell::new(); // reuse global 
 pub static ROUTE_METADATA: OnceCell<Arc<AHashMap<usize, RouteMetadata>>> = OnceCell::new();
 pub static ROUTE_METADATA_TEMP: OnceCell<AHashMap<usize, RouteMetadata>> = OnceCell::new(); // Temporary storage before CORS injection
 
+/// Handler storage - indexed by handler_id for O(1) lookup without GIL.
+/// This is populated at route registration time and never modified during request handling.
+/// By storing handlers separately from Route, we avoid needing GIL during route lookup.
+pub static HANDLERS: OnceCell<Arc<Vec<Py<PyAny>>>> = OnceCell::new();
+
 // Sync streaming thread limiting to prevent thread exhaustion DoS
 // Tracks number of active sync streaming threads (each uses an OS thread)
 pub static ACTIVE_SYNC_STREAMING_THREADS: AtomicU64 = AtomicU64::new(0);

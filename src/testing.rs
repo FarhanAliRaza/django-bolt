@@ -14,7 +14,7 @@ use crate::middleware;
 use crate::middleware::auth::populate_auth_context;
 use crate::request::PyRequest;
 use crate::router::parse_query_string;
-use crate::state::{GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
+use crate::state::{GLOBAL_ROUTER, HANDLERS, ROUTE_METADATA, TASK_LOCALS};
 use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
 
 /// Convert HttpResponse to test tuple format (status, headers, body)
@@ -68,10 +68,10 @@ pub fn handle_test_request(
         .get()
         .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Router not initialized"))?;
 
-    // Route matching
-    let (route, path_params, handler_id) = {
-        if let Some((route, params, id)) = router.find(&method, &path) {
-            (route.handler.clone_ref(py), params, id)
+    // Route matching - GIL-free lookup
+    let (path_params, handler_id) = {
+        if let Some((params, id)) = router.find(&method, &path) {
+            (params, id)
         } else {
             return Ok((
                 404,
@@ -83,6 +83,17 @@ pub fn handle_test_request(
             ));
         }
     };
+
+    // Get handler from HANDLERS static
+    let handlers = HANDLERS
+        .get()
+        .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Handlers not initialized"))?;
+    let route = handlers
+        .get(handler_id)
+        .ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Handler {} not found", handler_id))
+        })?
+        .clone_ref(py);
 
     // Parse query string
     let query_params = if let Some(q) = query_string {

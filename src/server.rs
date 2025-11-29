@@ -11,7 +11,7 @@ use crate::middleware::compression::CompressionMiddleware;
 use crate::handler::handle_request;
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
 use crate::router::Router;
-use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, ROUTE_METADATA_TEMP, TASK_LOCALS};
+use crate::state::{AppState, GLOBAL_ROUTER, HANDLERS, ROUTE_METADATA, ROUTE_METADATA_TEMP, TASK_LOCALS};
 
 #[pyfunction]
 pub fn register_routes(
@@ -19,12 +19,32 @@ pub fn register_routes(
     routes: Vec<(String, String, usize, Py<PyAny>)>,
 ) -> PyResult<()> {
     let mut router = Router::new();
-    for (method, path, handler_id, handler) in routes {
-        router.register(&method, &path, handler_id, handler.into())?;
+
+    // Pre-allocate handlers vector based on max handler_id
+    let max_handler_id = routes.iter().map(|(_, _, id, _)| *id).max().unwrap_or(0);
+    let mut handlers: Vec<Py<PyAny>> = Vec::with_capacity(max_handler_id + 1);
+
+    // Initialize with None placeholders (will be replaced with actual handlers)
+    for _ in 0..=max_handler_id {
+        handlers.push(_py.None().into());
     }
+
+    for (method, path, handler_id, handler) in routes {
+        // Register route without handler (handler is stored separately)
+        router.register(&method, &path, handler_id)?;
+        // Store handler at its index for O(1) lookup
+        handlers[handler_id] = handler;
+    }
+
     GLOBAL_ROUTER
         .set(Arc::new(router))
         .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Router already initialized"))?;
+
+    // Store handlers separately - accessed during request handling without GIL for lookup
+    HANDLERS
+        .set(Arc::new(handlers))
+        .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Handlers already initialized"))?;
+
     Ok(())
 }
 

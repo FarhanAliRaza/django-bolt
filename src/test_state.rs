@@ -35,6 +35,7 @@ macro_rules! test_debug {
 /// Test-only application state stored per instance (identified by app_id)
 pub struct TestApp {
     pub router: Router,
+    pub handlers: AHashMap<usize, Py<PyAny>>, // handlers stored separately from router for GIL-free lookup
     pub middleware_metadata: AHashMap<usize, Py<PyAny>>, // raw Python metadata for compatibility
     pub route_metadata: AHashMap<usize, RouteMetadata>,  // parsed Rust metadata
     pub dispatch: Py<PyAny>,
@@ -66,6 +67,7 @@ pub fn create_test_app(
 
     let app = TestApp {
         router: Router::new(),
+        handlers: AHashMap::new(),
         middleware_metadata: AHashMap::new(),
         route_metadata: AHashMap::new(),
         dispatch: dispatch.clone_ref(py),
@@ -196,7 +198,8 @@ pub fn register_test_routes(
     };
     let mut app = entry.write();
     for (method, path, handler_id, handler) in routes {
-        app.router.register(&method, &path, handler_id, handler)?;
+        app.router.register(&method, &path, handler_id)?;
+        app.handlers.insert(handler_id, handler);
     }
     Ok(())
 }
@@ -285,7 +288,7 @@ pub fn handle_test_request_for(
         query_string
     );
     let dispatch: Py<PyAny>;
-    let (route, path_params, handler_id): (Py<PyAny>, AHashMap<String, String>, usize);
+    let (handler, path_params, handler_id): (Py<PyAny>, AHashMap<String, String>, usize);
     let route_meta_opt: Option<RouteMetadata>;
     let middleware_present: bool;
     let event_loop_obj_opt: Option<Py<PyAny>>;
@@ -293,9 +296,12 @@ pub fn handle_test_request_for(
         let app = entry.read();
         dispatch = app.dispatch.clone_ref(py);
 
-        // Route matching
-        if let Some((r, params, id)) = app.router.find(&method, &path) {
-            route = r.handler.clone_ref(py);
+        // Route matching - now GIL-free lookup
+        if let Some((params, id)) = app.router.find(&method, &path) {
+            // Get handler from separate handlers map
+            handler = app.handlers.get(&id)
+                .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err(format!("Handler {} not found", id)))?
+                .clone_ref(py);
             path_params = params;
             handler_id = id;
         } else {
@@ -464,7 +470,7 @@ pub fn handle_test_request_for(
     // All handlers (sync and async) go through async dispatch
     // Sync handlers are executed in thread pool via sync_to_thread() in Python layer
     test_debug!("[test_state] calling dispatch");
-    let coroutine = dispatch.call1(py, (route, request_obj, handler_id))?;
+    let coroutine = dispatch.call1(py, (handler, request_obj, handler_id))?;
     test_debug!("[test_state] obtained coroutine");
 
     test_debug!("[test_state] running coroutine with run_until_complete");
@@ -770,7 +776,7 @@ pub fn handle_actix_http_request(
                         };
 
                         // Find the route to get handler_id
-                        if let Some((_route, _params, handler_id)) =
+                        if let Some((_params, handler_id)) =
                             app.router.find(&lookup_method, &path)
                         {
                             // Get route metadata

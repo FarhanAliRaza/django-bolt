@@ -8,21 +8,15 @@
 //! Both the production Actix server and the test infrastructure use these functions
 //! to ensure consistent CORS behavior.
 
-use actix_web::http::header::{HeaderValue, ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE, VARY};
+use actix_web::http::header::{
+    HeaderValue, ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
+    ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
+    ACCESS_CONTROL_MAX_AGE, VARY,
+};
 use actix_web::HttpResponse;
 
 use crate::metadata::CorsConfig;
 use crate::state::AppState;
-
-/// Check if an origin is allowed based on the origin set
-pub fn is_origin_allowed(origin: &str, origin_set: &ahash::AHashSet<String>) -> bool {
-    origin_set.contains(origin)
-}
-
-/// Check if an origin matches any of the compiled regex patterns
-pub fn is_origin_allowed_by_regex(origin: &str, regexes: &[regex::Regex]) -> bool {
-    regexes.iter().any(|re| re.is_match(origin))
-}
 
 /// Add CORS headers to response using Rust-native config (NO GIL required)
 /// Returns true if CORS headers were added (origin was allowed), false otherwise
@@ -43,10 +37,9 @@ pub fn add_cors_headers_rust(
                     .insert(ACCESS_CONTROL_ALLOW_ORIGIN, val);
             }
             // Add Vary: Origin when reflecting origin
-            response.headers_mut().insert(
-                VARY,
-                HeaderValue::from_static("Origin"),
-            );
+            response
+                .headers_mut()
+                .insert(VARY, HeaderValue::from_static("Origin"));
 
             response.headers_mut().insert(
                 ACCESS_CONTROL_ALLOW_CREDENTIALS,
@@ -55,10 +48,9 @@ pub fn add_cors_headers_rust(
 
             // Add exposed headers using cached HeaderValue
             if let Some(ref cached_val) = cors_config.expose_headers_header {
-                response.headers_mut().insert(
-                    ACCESS_CONTROL_EXPOSE_HEADERS,
-                    cached_val.clone(),
-                );
+                response
+                    .headers_mut()
+                    .insert(ACCESS_CONTROL_EXPOSE_HEADERS, cached_val.clone());
             }
             return true; // Origin allowed
         }
@@ -68,17 +60,15 @@ pub fn add_cors_headers_rust(
 
     // Handle allow_all_origins (wildcard) without credentials
     if cors_config.allow_all_origins {
-        response.headers_mut().insert(
-            ACCESS_CONTROL_ALLOW_ORIGIN,
-            HeaderValue::from_static("*"),
-        );
+        response
+            .headers_mut()
+            .insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
 
         // Add exposed headers using cached HeaderValue
         if let Some(ref cached_val) = cors_config.expose_headers_header {
-            response.headers_mut().insert(
-                ACCESS_CONTROL_EXPOSE_HEADERS,
-                cached_val.clone(),
-            );
+            response
+                .headers_mut()
+                .insert(ACCESS_CONTROL_EXPOSE_HEADERS, cached_val.clone());
         }
         return true; // Origin allowed (wildcard)
     }
@@ -129,10 +119,9 @@ pub fn add_cors_headers_rust(
     }
 
     // Always add Vary: Origin when reflecting origin
-    response.headers_mut().insert(
-        VARY,
-        HeaderValue::from_static("Origin"),
-    );
+    response
+        .headers_mut()
+        .insert(VARY, HeaderValue::from_static("Origin"));
 
     // Add credentials header if enabled
     if cors_config.credentials {
@@ -144,10 +133,9 @@ pub fn add_cors_headers_rust(
 
     // Add exposed headers using cached HeaderValue (zero allocations)
     if let Some(ref cached_val) = cors_config.expose_headers_header {
-        response.headers_mut().insert(
-            ACCESS_CONTROL_EXPOSE_HEADERS,
-            cached_val.clone(),
-        );
+        response
+            .headers_mut()
+            .insert(ACCESS_CONTROL_EXPOSE_HEADERS, cached_val.clone());
     }
 
     true // Origin allowed
@@ -157,26 +145,23 @@ pub fn add_cors_headers_rust(
 pub fn add_cors_preflight_headers(response: &mut HttpResponse, cors_config: &CorsConfig) {
     // Use cached HeaderValue for methods (zero allocations)
     if let Some(ref cached_val) = cors_config.methods_header {
-        response.headers_mut().insert(
-            ACCESS_CONTROL_ALLOW_METHODS,
-            cached_val.clone(),
-        );
+        response
+            .headers_mut()
+            .insert(ACCESS_CONTROL_ALLOW_METHODS, cached_val.clone());
     }
 
     // Use cached HeaderValue for headers (zero allocations)
     if let Some(ref cached_val) = cors_config.headers_header {
-        response.headers_mut().insert(
-            ACCESS_CONTROL_ALLOW_HEADERS,
-            cached_val.clone(),
-        );
+        response
+            .headers_mut()
+            .insert(ACCESS_CONTROL_ALLOW_HEADERS, cached_val.clone());
     }
 
     // Use cached HeaderValue for max_age (zero allocations)
     if let Some(ref cached_val) = cors_config.max_age_header {
-        response.headers_mut().insert(
-            ACCESS_CONTROL_MAX_AGE,
-            cached_val.clone(),
-        );
+        response
+            .headers_mut()
+            .insert(ACCESS_CONTROL_MAX_AGE, cached_val.clone());
     }
 
     // Add Vary headers for preflight requests
@@ -203,14 +188,23 @@ pub fn add_cors_response_headers(
         // Reflect origin instead of using wildcard
         if let Some(req_origin) = request_origin {
             if let Ok(val) = HeaderValue::from_str(req_origin) {
-                response.headers_mut().insert(ACCESS_CONTROL_ALLOW_ORIGIN, val);
+                response
+                    .headers_mut()
+                    .insert(ACCESS_CONTROL_ALLOW_ORIGIN, val);
             }
-            response.headers_mut().insert(VARY, HeaderValue::from_static("Origin"));
-            response.headers_mut().insert(ACCESS_CONTROL_ALLOW_CREDENTIALS, HeaderValue::from_static("true"));
+            response
+                .headers_mut()
+                .insert(VARY, HeaderValue::from_static("Origin"));
+            response.headers_mut().insert(
+                ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                HeaderValue::from_static("true"),
+            );
 
             if !expose_headers.is_empty() {
                 if let Ok(val) = HeaderValue::from_str(&expose_headers.join(", ")) {
-                    response.headers_mut().insert(ACCESS_CONTROL_EXPOSE_HEADERS, val);
+                    response
+                        .headers_mut()
+                        .insert(ACCESS_CONTROL_EXPOSE_HEADERS, val);
                 }
             }
             return true;
@@ -220,10 +214,14 @@ pub fn add_cors_response_headers(
 
     // Handle wildcard without credentials
     if is_wildcard {
-        response.headers_mut().insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+        response
+            .headers_mut()
+            .insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
         if !expose_headers.is_empty() {
             if let Ok(val) = HeaderValue::from_str(&expose_headers.join(", ")) {
-                response.headers_mut().insert(ACCESS_CONTROL_EXPOSE_HEADERS, val);
+                response
+                    .headers_mut()
+                    .insert(ACCESS_CONTROL_EXPOSE_HEADERS, val);
             }
         }
         return true;
@@ -241,17 +239,26 @@ pub fn add_cors_response_headers(
 
     // Add headers
     if let Ok(val) = HeaderValue::from_str(req_origin) {
-        response.headers_mut().insert(ACCESS_CONTROL_ALLOW_ORIGIN, val);
+        response
+            .headers_mut()
+            .insert(ACCESS_CONTROL_ALLOW_ORIGIN, val);
     }
-    response.headers_mut().insert(VARY, HeaderValue::from_static("Origin"));
+    response
+        .headers_mut()
+        .insert(VARY, HeaderValue::from_static("Origin"));
 
     if credentials {
-        response.headers_mut().insert(ACCESS_CONTROL_ALLOW_CREDENTIALS, HeaderValue::from_static("true"));
+        response.headers_mut().insert(
+            ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            HeaderValue::from_static("true"),
+        );
     }
 
     if !expose_headers.is_empty() {
         if let Ok(val) = HeaderValue::from_str(&expose_headers.join(", ")) {
-            response.headers_mut().insert(ACCESS_CONTROL_EXPOSE_HEADERS, val);
+            response
+                .headers_mut()
+                .insert(ACCESS_CONTROL_EXPOSE_HEADERS, val);
         }
     }
 
@@ -268,13 +275,17 @@ pub fn add_preflight_headers_simple(
 ) {
     if !methods.is_empty() {
         if let Ok(val) = HeaderValue::from_str(&methods.join(", ")) {
-            response.headers_mut().insert(ACCESS_CONTROL_ALLOW_METHODS, val);
+            response
+                .headers_mut()
+                .insert(ACCESS_CONTROL_ALLOW_METHODS, val);
         }
     }
 
     if !headers.is_empty() {
         if let Ok(val) = HeaderValue::from_str(&headers.join(", ")) {
-            response.headers_mut().insert(ACCESS_CONTROL_ALLOW_HEADERS, val);
+            response
+                .headers_mut()
+                .insert(ACCESS_CONTROL_ALLOW_HEADERS, val);
         }
     }
 

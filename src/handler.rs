@@ -16,7 +16,7 @@ use crate::middleware;
 use crate::middleware::auth::populate_auth_context;
 use crate::request::PyRequest;
 use crate::router::parse_query_string;
-use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
+use crate::state::{AppState, GLOBAL_ROUTER, HANDLERS, ROUTE_METADATA, TASK_LOCALS};
 use crate::streaming::{create_python_stream, create_sse_stream};
 use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
 
@@ -37,13 +37,10 @@ pub async fn handle_request(
     let router = GLOBAL_ROUTER.get().expect("Router not initialized");
 
     // Find the route for the requested method and path
-    let (route_handler, path_params, handler_id) = {
-        if let Some((route, path_params, handler_id)) = router.find(&method, &path) {
-            (
-                Python::attach(|py| route.handler.clone_ref(py)),
-                path_params,
-                handler_id,
-            )
+    // NOTE: This is now GIL-free! Handler is looked up separately in HANDLERS static.
+    let (path_params, handler_id) = {
+        if let Some((path_params, handler_id)) = router.find(&method, &path) {
+            (path_params, handler_id)
         } else {
             // No explicit handler found - check for automatic OPTIONS
             if method == "OPTIONS" {
@@ -61,10 +58,10 @@ pub async fn handle_request(
                     let mut found_cors = false;
 
                     for try_method in methods_to_try {
-                        if let Some((_, _, handler_id)) = router.find(try_method, &path) {
+                        if let Some((_, cors_handler_id)) = router.find(try_method, &path) {
                             let route_meta = ROUTE_METADATA
                                 .get()
-                                .and_then(|meta_map| meta_map.get(&handler_id).cloned());
+                                .and_then(|meta_map| meta_map.get(&cors_handler_id).cloned());
 
                             if let Some(ref meta) = route_meta {
                                 if let Some(ref cors_cfg) = meta.cors_config {
@@ -226,7 +223,21 @@ pub async fn handle_request(
     // Sync handlers are executed in thread pool via sync_to_thread() in Python layer
     let fut = match Python::attach(|py| -> PyResult<_> {
         let dispatch = state.dispatch.clone_ref(py);
-        let handler = route_handler.clone_ref(py);
+
+        // Get handler from HANDLERS static (populated at registration time)
+        // This is the only place we access the handler - no earlier GIL needed!
+        let handlers = HANDLERS.get().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Handlers not initialized")
+        })?;
+        let handler = handlers
+            .get(handler_id)
+            .ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Handler {} not found",
+                    handler_id
+                ))
+            })?
+            .clone_ref(py);
 
         // Create context dict only if auth context is present
         let context = if let Some(ref auth) = auth_ctx {

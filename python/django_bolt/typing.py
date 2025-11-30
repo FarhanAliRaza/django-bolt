@@ -113,6 +113,27 @@ class HandlerMetadata(TypedDict, total=False):
     preload_user: bool
     """Whether to eagerly load user at dispatch time (default: True if auth configured)"""
 
+    # Sucrose-style analysis flags (skip unused parsing)
+    # These are computed at route registration time by analyzing handler parameters
+    needs_body: bool
+    """Whether handler needs request body parsing (has body/form/file params)"""
+
+    needs_query: bool
+    """Whether handler needs query string parsing (has query params)"""
+
+    needs_headers: bool
+    """Whether handler needs header extraction (has header params)"""
+
+    needs_cookies: bool
+    """Whether handler needs cookie parsing (has cookie params)"""
+
+    needs_path_params: bool
+    """Whether handler needs path parameter extraction (has path params)"""
+
+    # Static route optimization
+    is_static_route: bool
+    """Whether route has no path parameters (can use O(1) lookup)"""
+
 
 # Simple scalar types that map to query parameters
 SIMPLE_TYPES = (str, int, float, bool, bytes)

@@ -35,7 +35,7 @@ from .typing import is_msgspec_struct, is_optional, unwrap_optional
 from .request_parsing import parse_form_data
 from .dependencies import resolve_dependency
 from .serialization import serialize_response
-from .middleware.compiler import compile_middleware_meta
+from .middleware.compiler import compile_middleware_meta, add_sucrose_flags_to_metadata
 from .types import Request
 from .concurrency import sync_to_thread
 from .views import APIView, ViewSet
@@ -823,6 +823,11 @@ class BoltAPI:
                 self.middleware, self.middleware_config,
                 guards=guards, auth=auth
             )
+
+            # Add Sucrose-style optimization flags to middleware metadata
+            # These are parsed by Rust's RouteMetadata::from_python() to skip unused parsing
+            middleware_meta = add_sucrose_flags_to_metadata(middleware_meta, meta)
+
             if middleware_meta:
                 self._handler_middleware[handler_id] = middleware_meta
                 # Also store actual auth backend instances for user resolution
@@ -985,6 +990,18 @@ class BoltAPI:
         needs_form_parsing = any(f.source in ("form", "file") for f in field_definitions)
         meta["needs_form_parsing"] = needs_form_parsing
 
+        # Sucrose-style analysis: Determine which request components are actually used
+        # This allows skipping unused parsing at request time (inspired by Elysia's sucrose.ts)
+        meta["needs_body"] = any(f.source in ("body", "form", "file") for f in field_definitions)
+        meta["needs_query"] = any(f.source == "query" for f in field_definitions)
+        # Note: Form/File parsing depends on Content-Type header, so needs_headers must include form handlers
+        meta["needs_headers"] = any(f.source == "header" for f in field_definitions) or needs_form_parsing
+        meta["needs_cookies"] = any(f.source == "cookie" for f in field_definitions)
+        meta["needs_path_params"] = any(f.source == "path" for f in field_definitions)
+
+        # Static route detection: routes without path params can use O(1) lookup
+        meta["is_static_route"] = len(path_params) == 0
+
         return meta
 
     async def _build_handler_arguments(self, meta: HandlerMetadata, request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
@@ -1060,6 +1077,7 @@ class BoltAPI:
             - Pre-compiles all parameter extraction logic
             - Reduces branching with specialized paths for common cases
             - Better CPU cache locality with single inline function
+            - Sucrose-style optimization: skips unused request data access
         """
         fields = meta.get("fields", [])
         mode = meta.get("mode", "mixed")
@@ -1079,9 +1097,13 @@ class BoltAPI:
                 return ([], {})
             return injector_no_params
 
-        # General path: Build custom injector based on field types
-        # Pre-analyze fields to determine what maps we need
+        # Sucrose-style analysis: Pre-compute which request components are needed
+        # This avoids accessing unused data at request time (inspired by Elysia's sucrose.ts)
         needs_form = meta.get("needs_form_parsing", False)
+        needs_query = meta.get("needs_query", True)  # Default True for backward compat
+        needs_headers = meta.get("needs_headers", True)
+        needs_cookies = meta.get("needs_cookies", True)
+        needs_path_params = meta.get("needs_path_params", True)
         has_deps = any(f.source == "dependency" for f in fields)
 
         # If handler has dependencies, must be async to resolve them
@@ -1091,11 +1113,11 @@ class BoltAPI:
                 args: List[Any] = []
                 kwargs: Dict[str, Any] = {}
 
-                # Pre-fetch request maps
-                params_map = request["params"]
-                query_map = request["query"]
-                headers_map = request.get("headers", {})
-                cookies_map = request.get("cookies", {})
+                # Sucrose optimization: Only access request data that's actually needed
+                params_map = request["params"] if needs_path_params else {}
+                query_map = request["query"] if needs_query else {}
+                headers_map = request.get("headers", {}) if needs_headers else {}
+                cookies_map = request.get("cookies", {}) if needs_cookies else {}
 
                 # Parse form data only if needed
                 if needs_form:
@@ -1137,16 +1159,18 @@ class BoltAPI:
             return injector_with_deps
 
         # Sync version for handlers without dependencies (faster - no async overhead)
+        # Uses Sucrose-style optimization to skip unused request data access
         def injector_sync(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
-            """Optimized synchronous injector (no dependencies)."""
+            """Optimized synchronous injector (no dependencies, Sucrose-optimized)."""
             args: List[Any] = []
             kwargs: Dict[str, Any] = {}
 
-            # Pre-fetch request maps (direct access - no .get())
-            params_map = request["params"]
-            query_map = request["query"]
-            headers_map = request.get("headers", {})
-            cookies_map = request.get("cookies", {})
+            # Sucrose optimization: Only access request data that's actually needed
+            # This avoids dict lookups and object creation for unused data
+            params_map = request["params"] if needs_path_params else {}
+            query_map = request["query"] if needs_query else {}
+            headers_map = request.get("headers", {}) if needs_headers else {}
+            cookies_map = request.get("cookies", {}) if needs_cookies else {}
 
             # Parse form data only if needed
             if needs_form:

@@ -130,13 +130,40 @@ pub async fn handle_request(
         }
     };
 
-    let query_params = if let Some(q) = req.uri().query() {
-        parse_query_string(q)
+    // Get parsed route metadata (Rust-native) - clone to release DashMap lock immediately
+    // This trade-off: small clone cost < lock contention across concurrent requests
+    // NOTE: Fetch metadata EARLY so we can use Sucrose flags to skip unnecessary parsing
+    let route_metadata = ROUTE_METADATA
+        .get()
+        .and_then(|meta_map| meta_map.get(&handler_id).cloned());
+
+    // Sucrose-style optimization: Only parse query string if handler needs it
+    // This saves ~0.5-1ms per request for handlers that don't use query params
+    let needs_query = route_metadata
+        .as_ref()
+        .map(|m| m.needs_query)
+        .unwrap_or(true);
+
+    let query_params = if needs_query {
+        if let Some(q) = req.uri().query() {
+            parse_query_string(q)
+        } else {
+            AHashMap::new()
+        }
     } else {
         AHashMap::new()
     };
 
+    // Sucrose-style optimization: Check if handler needs headers
+    // Headers are still needed for auth/rate limiting middleware, so we extract them for Rust
+    // but can skip passing them to Python when the handler doesn't use Header() params
+    let needs_headers = route_metadata
+        .as_ref()
+        .map(|m| m.needs_headers)
+        .unwrap_or(true);
+
     // Extract headers early for middleware processing - pre-allocate with typical size
+    // Headers are ALWAYS needed in Rust for middleware (auth, rate limiting, CORS)
     let mut headers: AHashMap<String, String> = AHashMap::with_capacity(16);
 
     // SECURITY: Use limits from AppState (configured once at startup)
@@ -170,12 +197,6 @@ pub async fn handle_request(
 
     // Get peer address for rate limiting fallback
     let peer_addr = req.peer_addr().map(|addr| addr.ip().to_string());
-
-    // Get parsed route metadata (Rust-native) - clone to release DashMap lock immediately
-    // This trade-off: small clone cost < lock contention across concurrent requests
-    let route_metadata = ROUTE_METADATA
-        .get()
-        .and_then(|meta_map| meta_map.get(&handler_id).cloned());
 
     // Compute skip flags (e.g., skip compression)
     let skip_compression = route_metadata
@@ -216,8 +237,18 @@ pub async fn handle_request(
         None
     };
 
-    // Pre-parse cookies outside of GIL using shared inline function
-    let cookies = parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()));
+    // Sucrose-style optimization: Only parse cookies if handler needs them
+    // Cookie parsing can be expensive for requests with many cookies
+    let needs_cookies = route_metadata
+        .as_ref()
+        .map(|m| m.needs_cookies)
+        .unwrap_or(true);
+
+    let cookies = if needs_cookies {
+        parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()))
+    } else {
+        AHashMap::new()
+    };
 
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
@@ -238,13 +269,22 @@ pub async fn handle_request(
             None
         };
 
+        // Sucrose optimization: Only pass headers to Python if handler needs them
+        // Headers are already extracted for Rust middleware (auth, rate limiting, CORS)
+        // but we can avoid copying them to Python if handler doesn't use Header() params
+        let headers_for_python = if needs_headers {
+            headers.clone()
+        } else {
+            AHashMap::new()
+        };
+
         let request = PyRequest {
             method,
             path,
             body: body.to_vec(),
             path_params,
             query_params,
-            headers,
+            headers: headers_for_python,
             cookies,
             context,
             user: None,

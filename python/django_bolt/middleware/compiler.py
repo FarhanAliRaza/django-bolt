@@ -118,6 +118,37 @@ def compile_middleware_meta(
     return result
 
 
+def add_sucrose_flags_to_metadata(
+    metadata: Dict[str, Any],
+    handler_meta: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Add Sucrose-style optimization flags to middleware metadata.
+
+    These flags indicate which request components the handler actually needs,
+    allowing Rust to skip parsing unused data (inspired by Elysia's sucrose.ts).
+
+    Args:
+        metadata: Existing middleware metadata dict
+        handler_meta: Handler metadata containing the Sucrose flags
+
+    Returns:
+        Updated metadata dict with Sucrose flags
+    """
+    if metadata is None:
+        metadata = {}
+
+    # Copy Sucrose flags from handler metadata to middleware metadata
+    # These will be parsed by Rust's RouteMetadata::from_python()
+    metadata['needs_query'] = handler_meta.get('needs_query', True)
+    metadata['needs_headers'] = handler_meta.get('needs_headers', True)
+    metadata['needs_cookies'] = handler_meta.get('needs_cookies', True)
+    metadata['needs_path_params'] = handler_meta.get('needs_path_params', True)
+    metadata['is_static_route'] = handler_meta.get('is_static_route', False)
+
+    return metadata
+
+
 def middleware_to_dict(mw: Any) -> Optional[Dict[str, Any]]:
     """Convert middleware specification to dictionary."""
     if isinstance(mw, dict):

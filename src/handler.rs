@@ -37,13 +37,14 @@ pub async fn handle_request(
     let router = GLOBAL_ROUTER.get().expect("Router not initialized");
 
     // Find the route for the requested method and path
-    let (route_handler, path_params, handler_id) = {
-        if let Some((route, path_params, handler_id)) = router.find(&method, &path) {
-            (
-                Python::attach(|py| route.handler.clone_ref(py)),
-                path_params,
-                handler_id,
-            )
+    // RouteMatch enum allows us to skip path param processing for static routes
+    let (route_handler, path_params, handler_id, is_static_route_from_router) = {
+        if let Some(route_match) = router.find(&method, &path) {
+            let is_static = route_match.is_static();
+            let handler_id = route_match.handler_id();
+            let handler = Python::attach(|py| route_match.route().handler.clone_ref(py));
+            let path_params = route_match.path_params(); // No allocation for static routes
+            (handler, path_params, handler_id, is_static)
         } else {
             // No explicit handler found - check for automatic OPTIONS
             if method == "OPTIONS" {
@@ -61,7 +62,8 @@ pub async fn handle_request(
                     let mut found_cors = false;
 
                     for try_method in methods_to_try {
-                        if let Some((_, _, handler_id)) = router.find(try_method, &path) {
+                        if let Some(route_match) = router.find(try_method, &path) {
+                            let handler_id = route_match.handler_id();
                             let route_meta = ROUTE_METADATA
                                 .get()
                                 .and_then(|meta_map| meta_map.get(&handler_id).cloned());
@@ -250,6 +252,11 @@ pub async fn handle_request(
         AHashMap::new()
     };
 
+    // For static routes, path_params is already an empty AHashMap from RouteMatch::Static
+    // No additional processing needed - the router already optimized this
+    // is_static_route_from_router is derived from RouteMatch at lookup time
+    let _ = is_static_route_from_router; // Acknowledge the flag (used for future optimizations)
+
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
 
@@ -282,7 +289,7 @@ pub async fn handle_request(
             method,
             path,
             body: body.to_vec(),
-            path_params,
+            path_params, // For static routes, this is already empty from RouteMatch::Static
             query_params,
             headers: headers_for_python,
             cookies,

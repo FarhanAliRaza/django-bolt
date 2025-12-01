@@ -134,6 +134,10 @@ class HandlerMetadata(TypedDict, total=False):
     is_static_route: bool
     """Whether route has no path parameters (can use O(1) lookup)"""
 
+    # ORM analysis (Sucrose-style static analysis)
+    is_blocking: bool
+    """Whether handler is likely to block (ORM usage or blocking I/O) - runs in thread pool"""
+
 
 # Simple scalar types that map to query parameters
 SIMPLE_TYPES = (str, int, float, bool, bytes)

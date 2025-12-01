@@ -50,6 +50,7 @@ from .admin.static_routes import StaticRouteRegistrar
 from .admin.admin_detection import detect_admin_url_prefix
 from .auth import get_default_authentication_classes, register_auth_backend
 from .auth.user_loader import load_user
+from .analysis import analyze_handler, warn_blocking_handler
 
 from . import _json
 
@@ -767,6 +768,13 @@ class BoltAPI:
             # Store sync/async metadata
             meta["is_async"] = is_async
 
+            # Sucrose-style ORM analysis: Detect blocking operations at registration time
+            handler_analysis = analyze_handler(fn)
+            meta["is_blocking"] = handler_analysis.is_blocking
+
+            # Emit warning for sync handlers with ORM (will run in thread pool)
+            warn_blocking_handler(fn, full_path, is_async, handler_analysis)
+
             # Determine final response type with proper priority:
             # 1. response_model parameter (explicit, takes precedence)
             # 2. sig.return_annotation (fallback if response_model not provided)
@@ -1323,7 +1331,11 @@ class BoltAPI:
                 if meta.get("is_async", True):
                     result = await handler(request)
                 else:
-                    result = await sync_to_thread(handler, request)
+                    # Smart thread pool: only use for blocking handlers
+                    if meta.get("is_blocking", False):
+                        result = await sync_to_thread(handler, request)
+                    else:
+                        result = handler(request)
             else:
                 # 4. Use pre-compiled injector (sync or async based on needs)
                 if meta.get("injector_is_async", False):
@@ -1335,8 +1347,16 @@ class BoltAPI:
                 if meta.get("is_async", True):
                     result = await handler(*args, **kwargs)
                 else:
-                    # Run sync handler in thread pool to enable concurrent I/O
-                    result = await sync_to_thread(handler, *args, **kwargs)
+                    # Sync handler execution with smart thread pool usage:
+                    # - is_blocking=True (ORM/IO detected): Use thread pool to avoid blocking event loop
+                    # - is_blocking=False (pure CPU): Call directly for maximum performance
+                    if meta.get("is_blocking", False):
+                        # Handler does blocking I/O (ORM, file, network) - use thread pool
+                        result = await sync_to_thread(handler, *args, **kwargs)
+                    else:
+                        # Pure sync handler (no blocking I/O) - call directly
+                        # This avoids thread pool overhead per request
+                        result = handler(*args, **kwargs)
 
             # 6. Serialize response
             response = await serialize_response(result, meta)

@@ -71,7 +71,10 @@ def list_full_10_sync() -> List[UserFull]:
 @api.get("/sync-mini10")
 def list_mini_10_sync() -> List[UserMini]:
     # Already optimized: only() fetches just id and username
-    return User.objects.only("id", "username")[:10]
+    users = User.objects.only("id", "username")[:10]
+    # evaludate query inside of sync context
+    users = list(users)
+    return users
 
 
 

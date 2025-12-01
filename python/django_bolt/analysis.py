@@ -1,12 +1,12 @@
 """
-Static analysis module for handler functions (Sucrose-style).
+Static analysis module for handler functions.
 
 Performs AST-based analysis of handler source code to detect:
 - Django ORM usage patterns
 - Blocking I/O operations
-- Database access patterns
 
-This enables compile-time optimization decisions and developer warnings.
+This enables compile-time optimization decisions (e.g., running sync handlers
+with ORM usage in a thread pool) and developer warnings.
 """
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 """
-Tests for static analysis module (Sucrose-style ORM detection).
+Tests for static analysis module.
 
 Tests the AST-based analysis of handler functions for:
 - Django ORM usage detection

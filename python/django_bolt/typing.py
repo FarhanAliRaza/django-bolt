@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import inspect
 import msgspec
-from dataclasses import dataclass, is_dataclass
-from typing import Any, get_origin, get_args, Union, Optional, List, Dict, Annotated, TypedDict
+from dataclasses import dataclass, field, is_dataclass
+from enum import Enum
+from typing import Any, Callable, get_origin, get_args, Union, Optional, List, Dict, Annotated, TypedDict
 
 # Import Param and Depends for use in from_parameter method
 # Note: Imported here to avoid circular imports at module level
@@ -20,6 +21,7 @@ if False:  # TYPE_CHECKING equivalent but doesn't require TYPE_CHECKING block
 __all__ = [
     "FieldDefinition",
     "HandlerMetadata",
+    "HandlerPattern",
     "is_msgspec_struct",
     "is_simple_type",
     "is_sequence_type",
@@ -27,6 +29,23 @@ __all__ = [
     "unwrap_optional",
     "infer_param_source",
 ]
+
+
+class HandlerPattern(Enum):
+    """
+    Handler pattern classification for specialized injector selection.
+
+    Each pattern enables a specific fast path in the argument injector,
+    eliminating unnecessary checks and data access at request time.
+    """
+    REQUEST_ONLY = "request_only"  # Single request parameter
+    NO_PARAMS = "no_params"        # No parameters at all
+    PATH_ONLY = "path_only"        # Only path parameters
+    QUERY_ONLY = "query_only"      # Only query parameters
+    BODY_ONLY = "body_only"        # Single JSON body parameter
+    SIMPLE = "simple"              # Path + query combination
+    WITH_DEPS = "with_deps"        # Has dependency injection (async)
+    FULL = "full"                  # Complex: headers, cookies, form, file, or mixed
 
 
 class HandlerMetadata(TypedDict, total=False):
@@ -113,7 +132,7 @@ class HandlerMetadata(TypedDict, total=False):
     preload_user: bool
     """Whether to eagerly load user at dispatch time (default: True if auth configured)"""
 
-    # Sucrose-style analysis flags (skip unused parsing)
+    # Static analysis flags (skip unused parsing)
     # These are computed at route registration time by analyzing handler parameters
     needs_body: bool
     """Whether handler needs request body parsing (has body/form/file params)"""
@@ -134,9 +153,13 @@ class HandlerMetadata(TypedDict, total=False):
     is_static_route: bool
     """Whether route has no path parameters (can use O(1) lookup)"""
 
-    # ORM analysis (Sucrose-style static analysis)
+    # ORM analysis (static analysis for blocking detection)
     is_blocking: bool
     """Whether handler is likely to block (ORM usage or blocking I/O) - runs in thread pool"""
+
+    # Handler pattern classification (for specialized fast paths)
+    handler_pattern: HandlerPattern
+    """Handler pattern for specialized injector selection at registration time."""
 
 
 # Simple scalar types that map to query parameters
@@ -282,6 +305,15 @@ class FieldDefinition:
 
     kind: inspect._ParameterKind = inspect.Parameter.POSITIONAL_OR_KEYWORD
     """Parameter kind (positional, keyword-only, etc.)"""
+
+    # Pre-compiled extractor function (set at registration time)
+    extractor: Optional[Callable[..., Any]] = None
+    """Pre-compiled extractor function for this parameter.
+
+    Created at route registration time by the appropriate factory
+    (create_path_extractor, create_query_extractor, etc.).
+    Eliminates per-request source type checking.
+    """
 
     # Cached type properties for performance
     _is_optional: Optional[bool] = None

@@ -20,8 +20,17 @@ from .exceptions import HTTPException, RequestValidationError, parse_msgspec_dec
 __all__ = [
     "convert_primitive",
     "create_extractor",
+    "create_extractor_for_field",
+    "create_path_extractor",
+    "create_query_extractor",
+    "create_header_extractor",
+    "create_cookie_extractor",
+    "create_form_extractor",
+    "create_file_extractor",
+    "create_body_extractor",
     "coerce_to_response_type",
     "coerce_to_response_type_async",
+    "get_msgspec_decoder",
 ]
 
 
@@ -86,7 +95,7 @@ def create_path_extractor(name: str, annotation: Any, alias: Optional[str] = Non
 
     def extract(params_map: Dict[str, Any]) -> Any:
         if key not in params_map:
-            raise ValueError(f"Missing required path parameter: {key}")
+            raise HTTPException(status_code=400, detail=f"Missing required path parameter: {key}")
         return converter(params_map[key])
 
     return extract
@@ -110,7 +119,7 @@ def create_query_extractor(
     else:
         def extract(query_map: Dict[str, Any]) -> Any:
             if key not in query_map:
-                raise ValueError(f"Missing required query parameter: {key}")
+                raise HTTPException(status_code=400, detail=f"Missing required query parameter: {key}")
             return converter(query_map[key])
 
     return extract
@@ -134,7 +143,7 @@ def create_header_extractor(
     else:
         def extract(headers_map: Dict[str, str]) -> Any:
             if key not in headers_map:
-                raise ValueError(f"Missing required header: {key}")
+                raise HTTPException(status_code=400, detail=f"Missing required header: {key}")
             return converter(headers_map[key])
 
     return extract
@@ -158,7 +167,7 @@ def create_cookie_extractor(
     else:
         def extract(cookies_map: Dict[str, str]) -> Any:
             if key not in cookies_map:
-                raise ValueError(f"Missing required cookie: {key}")
+                raise HTTPException(status_code=400, detail=f"Missing required cookie: {key}")
             return converter(cookies_map[key])
 
     return extract
@@ -182,7 +191,7 @@ def create_form_extractor(
     else:
         def extract(form_map: Dict[str, Any]) -> Any:
             if key not in form_map:
-                raise ValueError(f"Missing required form field: {key}")
+                raise HTTPException(status_code=400, detail=f"Missing required form field: {key}")
             return converter(form_map[key])
 
     return extract
@@ -205,7 +214,7 @@ def create_file_extractor(
     else:
         def extract(files_map: Dict[str, Any]) -> Any:
             if key not in files_map:
-                raise ValueError(f"Missing required file: {key}")
+                raise HTTPException(status_code=400, detail=f"Missing required file: {key}")
             return files_map[key]
 
     return extract
@@ -252,6 +261,58 @@ def create_body_extractor(name: str, annotation: Any) -> Callable:
                 ) from e
 
     return extract
+
+
+def create_extractor_for_field(field: "FieldDefinition") -> Optional[Callable]:
+    """
+    Create a pre-compiled extractor function for a FieldDefinition.
+
+    This is the preferred factory that works with FieldDefinition objects.
+    The returned function is specialized based on the parameter source,
+    eliminating runtime type checking.
+
+    Args:
+        field: FieldDefinition object
+
+    Returns:
+        Extractor function, or None for 'request' and 'dependency' sources
+        (which are handled specially by the injector)
+    """
+    # Import here to avoid circular imports
+    from .typing import FieldDefinition
+
+    source = field.source
+    name = field.name
+    annotation = field.annotation
+    default = field.default
+    alias = field.alias
+
+    # Return appropriate extractor based on source
+    if source == "path":
+        return create_path_extractor(name, annotation, alias)
+    elif source == "query":
+        return create_query_extractor(name, annotation, default, alias)
+    elif source == "header":
+        return create_header_extractor(name, annotation, default, alias)
+    elif source == "cookie":
+        return create_cookie_extractor(name, annotation, default, alias)
+    elif source == "form":
+        return create_form_extractor(name, annotation, default, alias)
+    elif source == "file":
+        return create_file_extractor(name, annotation, default, alias)
+    elif source == "body":
+        return create_body_extractor(name, annotation)
+    elif source == "request":
+        # Request source is handled directly in the injector
+        return None
+    elif source == "dependency":
+        # Dependencies are handled specially in the injector
+        return None
+    else:
+        # Fallback for unknown sources
+        if default is not inspect.Parameter.empty:
+            return lambda *args, **kwargs: default
+        return None
 
 
 def create_extractor(field: Dict[str, Any]) -> Callable:

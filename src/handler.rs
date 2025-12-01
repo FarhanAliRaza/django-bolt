@@ -132,12 +132,12 @@ pub async fn handle_request(
 
     // Get parsed route metadata (Rust-native) - clone to release DashMap lock immediately
     // This trade-off: small clone cost < lock contention across concurrent requests
-    // NOTE: Fetch metadata EARLY so we can use Sucrose flags to skip unnecessary parsing
+    // NOTE: Fetch metadata EARLY so we can use optimization flags to skip unnecessary parsing
     let route_metadata = ROUTE_METADATA
         .get()
         .and_then(|meta_map| meta_map.get(&handler_id).cloned());
 
-    // Sucrose-style optimization: Only parse query string if handler needs it
+    // Optimization: Only parse query string if handler needs it
     // This saves ~0.5-1ms per request for handlers that don't use query params
     let needs_query = route_metadata
         .as_ref()
@@ -154,7 +154,7 @@ pub async fn handle_request(
         AHashMap::new()
     };
 
-    // Sucrose-style optimization: Check if handler needs headers
+    // Optimization: Check if handler needs headers
     // Headers are still needed for auth/rate limiting middleware, so we extract them for Rust
     // but can skip passing them to Python when the handler doesn't use Header() params
     let needs_headers = route_metadata
@@ -237,7 +237,7 @@ pub async fn handle_request(
         None
     };
 
-    // Sucrose-style optimization: Only parse cookies if handler needs them
+    // Optimization: Only parse cookies if handler needs them
     // Cookie parsing can be expensive for requests with many cookies
     let needs_cookies = route_metadata
         .as_ref()
@@ -269,7 +269,7 @@ pub async fn handle_request(
             None
         };
 
-        // Sucrose optimization: Only pass headers to Python if handler needs them
+        // Optimization: Only pass headers to Python if handler needs them
         // Headers are already extracted for Rust middleware (auth, rate limiting, CORS)
         // but we can avoid copying them to Python if handler doesn't use Header() params
         let headers_for_python = if needs_headers {

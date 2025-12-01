@@ -4,9 +4,13 @@ Django admin route registration for BoltAPI.
 This module handles the registration of Django admin routes via ASGI bridge,
 keeping the BoltAPI class lean and focused.
 """
+
 from typing import TYPE_CHECKING
 
-from django_bolt.admin.admin_detection import should_enable_admin, get_admin_route_patterns
+from django_bolt.admin.admin_detection import (
+    get_admin_route_patterns,
+    should_enable_admin,
+)
 from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
 
 if TYPE_CHECKING:
@@ -16,7 +20,7 @@ if TYPE_CHECKING:
 class AdminRouteRegistrar:
     """Handles registration of Django admin routes via ASGI bridge."""
 
-    def __init__(self, api: 'BoltAPI'):
+    def __init__(self, api: "BoltAPI"):
         """Initialize the registrar with a BoltAPI instance.
 
         Args:
@@ -65,11 +69,13 @@ class AdminRouteRegistrar:
             method: HTTP method (GET, POST, etc.)
             path_pattern: URL path pattern
         """
+
         # Create handler that delegates to ASGI bridge
         # NOTE: We need to create a new function for each route to avoid closure issues
         def make_admin_handler(asgi_handler):
             async def admin_handler(request):
                 return await asgi_handler.handle_request(request)
+
             return admin_handler
 
         admin_handler = make_admin_handler(self.api._asgi_handler)

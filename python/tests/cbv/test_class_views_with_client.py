@@ -14,27 +14,24 @@ Tests cover:
 - ViewSet
 - HTTP method handling
 """
-import pytest
-import msgspec
 import time
+
 import jwt
+import msgspec
+import pytest
+
 from django_bolt import BoltAPI
+from django_bolt.auth.backends import JWTAuthentication
+from django_bolt.auth.guards import IsAdminUser, IsAuthenticated
+from django_bolt.exceptions import HTTPException
+from django_bolt.params import Depends
 from django_bolt.testing import TestClient
 from django_bolt.views import (
     APIView,
-    ViewSet,
     ListMixin,
     RetrieveMixin,
-    CreateMixin,
-    UpdateMixin,
-    PartialUpdateMixin,
-    DestroyMixin,
+    ViewSet,
 )
-from django_bolt.params import Depends
-from django_bolt.exceptions import HTTPException
-from django_bolt.auth.guards import IsAuthenticated, IsAdminUser
-from django_bolt.auth.backends import JWTAuthentication
-
 
 # --- Test Fixtures ---
 

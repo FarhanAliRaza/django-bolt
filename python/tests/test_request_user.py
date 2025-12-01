@@ -7,19 +7,21 @@ for different authentication backends via actual HTTP requests.
 from __future__ import annotations
 
 import time
-from django.contrib.auth.models import User
 
 import jwt
 import pytest
+from django.contrib.auth.models import User
+
 from django_bolt import BoltAPI
 from django_bolt.auth import (
-    JWTAuthentication,
     APIKeyAuthentication,
-    SessionAuthentication,
     IsAuthenticated,
+    JWTAuthentication,
+    SessionAuthentication,
 )
-from django_bolt.testing import TestClient
 from django_bolt.exceptions import HTTPException
+from django_bolt.testing import TestClient
+
 
 def create_jwt_token(user_id="testuser", **kwargs):
     """Helper to create JWT tokens with user_id in sub claim."""

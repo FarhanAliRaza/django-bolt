@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import functools
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Literal, TypeVar, get_type_hints
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, get_type_hints
 
 if TYPE_CHECKING:
     from .base import Serializer
@@ -119,7 +119,9 @@ def computed_field(
 def field_validator(
     field_name: str,
     mode: Literal["before", "after"] = "after",
-) -> Callable[[Callable[[type[Serializer], Any], Any]], Callable[[type[Serializer], Any], Any]]:
+) -> Callable[
+    [Callable[[type[Serializer], Any], Any]], Callable[[type[Serializer], Any], Any]
+]:
     """
     Decorator to validate a specific field in a Serializer.
 
@@ -189,7 +191,9 @@ def model_validator(
         return func
 
 
-def collect_field_validators(cls: type[Serializer]) -> dict[str, list[Callable[[Any], Any]]]:
+def collect_field_validators(
+    cls: type[Serializer],
+) -> dict[str, list[Callable[[Any], Any]]]:
     """
     Collect all field validators from a class and its bases.
 
@@ -202,7 +206,7 @@ def collect_field_validators(cls: type[Serializer]) -> dict[str, list[Callable[[
         if not hasattr(base, "__dict__"):
             continue
 
-        for name, value in base.__dict__.items():
+        for value in base.__dict__.values():
             if callable(value) and hasattr(value, "__validator_field__"):
                 field_name = value.__validator_field__
                 if field_name not in validators:
@@ -212,7 +216,9 @@ def collect_field_validators(cls: type[Serializer]) -> dict[str, list[Callable[[
     return validators
 
 
-def collect_model_validators(cls: type[Serializer]) -> list[Callable[[Serializer], Serializer]]:
+def collect_model_validators(
+    cls: type[Serializer],
+) -> list[Callable[[Serializer], Serializer]]:
     """
     Collect all model validators from a class and its bases.
 
@@ -225,9 +231,11 @@ def collect_model_validators(cls: type[Serializer]) -> list[Callable[[Serializer
         if not hasattr(base, "__dict__"):
             continue
 
-        for name, value in base.__dict__.items():
-            if callable(value) and hasattr(value, "__model_validator__"):
-                validators.append(value)
+        validators.extend(
+            value
+            for value in base.__dict__.values()
+            if callable(value) and hasattr(value, "__model_validator__")
+        )
 
     return validators
 
@@ -245,7 +253,7 @@ def collect_computed_fields(cls: type[Serializer]) -> dict[str, ComputedFieldCon
         if not hasattr(base, "__dict__"):
             continue
 
-        for name, value in base.__dict__.items():
+        for value in base.__dict__.values():
             if callable(value) and hasattr(value, "__computed_field__"):
                 config: ComputedFieldConfig = value.__computed_field__
                 # Use alias if provided, otherwise use method name

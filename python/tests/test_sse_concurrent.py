@@ -8,7 +8,7 @@ responses fully. Therefore, they CANNOT test:
 
 For testing those fixes, use the load test script:
     uv run python scripts/sse_load.py --url http://localhost:8000/sync-sse --clients 5000 --duration 10
-then immediately run again. If the view hangs then we have the issue. 
+then immediately run again. If the view hangs then we have the issue.
     uv run python scripts/sse_load.py --url http://localhost:8000/sync-sse --clients 5000 --duration 10
 
 The load test will:
@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+
 import pytest
+
 from django_bolt import BoltAPI, StreamingResponse
 from django_bolt.testing import TestClient
 
@@ -366,13 +368,13 @@ def test_concurrent_async_sse(client):
 
     # Make 3 concurrent-like requests (sequential in test, but tests server handles them)
     responses = []
-    for req_num in range(3):
+    for _req_num in range(3):
         response = client.get("/sse-async-basic")
         assert response.status_code == 200
         responses.append(response)
 
     # Verify all responses are complete and correct
-    for resp_num, response in enumerate(responses):
+    for _resp_num, response in enumerate(responses):
         content = response.content.decode()
         data = parse_sse_data(content)
         assert len(data) == 5
@@ -541,7 +543,7 @@ def test_streaming_with_iter_content(client):
 
     # Iterate over chunks
     chunks = []
-    for i, chunk in enumerate(response.iter_content(chunk_size=32, decode_unicode=True)):
+    for _i, chunk in enumerate(response.iter_content(chunk_size=32, decode_unicode=True)):
         if chunk:
             chunks.append(chunk)
 

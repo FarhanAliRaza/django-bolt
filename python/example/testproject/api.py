@@ -1,16 +1,24 @@
 import asyncio
-import json
 import os
 import time
-from typing import Annotated, List, Optional, Protocol
+from typing import Annotated, Protocol
 
 import msgspec
-from msgspec import Meta, ValidationError
-
+import test_data
 from django.contrib.auth import aauthenticate, get_user_model
+from msgspec import Meta
+from users.api import UserMini
+from users.models import User
 
-from django_bolt import BoltAPI, CompressionConfig, JSON, OpenAPIConfig, RedocRenderPlugin, SwaggerRenderPlugin, action
-from django_bolt.auth import JWTAuthentication, IsAuthenticated, create_jwt_for_user, get_current_user
+from django_bolt import (
+    BoltAPI,
+)
+from django_bolt.auth import (
+    IsAuthenticated,
+    JWTAuthentication,
+    create_jwt_for_user,
+    get_current_user,
+)
 from django_bolt.exceptions import (
     BadRequest,
     HTTPException,
@@ -19,17 +27,20 @@ from django_bolt.exceptions import (
     Unauthorized,
     UnprocessableEntity,
 )
-from django_bolt.health import add_health_check, register_health_checks
-from django_bolt.middleware import cors, no_compress
+from django_bolt.health import add_health_check
+from django_bolt.middleware import no_compress
 from django_bolt.param_functions import Cookie, Depends, File, Form, Header
-from django_bolt.responses import FileResponse, HTML, PlainText, Redirect, StreamingResponse
-from django_bolt.serializers import Serializer, field_validator, model_validator
+from django_bolt.responses import (
+    HTML,
+    FileResponse,
+    PlainText,
+    Redirect,
+    StreamingResponse,
+)
+from django_bolt.serializers import Serializer, field_validator
 from django_bolt.types import Request
 from django_bolt.views import APIView, ViewSet
 
-import test_data
-from users.api import UserMini
-from users.models import User
 # OpenAPI is enabled by default at /docs with Swagger UI
 # You can customize it by passing openapi_config:
 #
@@ -73,7 +84,7 @@ api = BoltAPI()
 class Item(msgspec.Struct):
     name: str
     price: float
-    is_offer: Optional[bool] = None
+    is_offer: bool | None = None
 
 
 @api.get("/health")
@@ -95,7 +106,7 @@ class CustomRequest(Request, Protocol):
     # - get(), __getitem__()
 
     # If you add custom request properties via middleware:
-    tenant_id: Optional[str]
+    tenant_id: str | None
     request_id: str
 
 
@@ -251,7 +262,7 @@ async def generate_token(token_req: TokenRequest):
     }
     ```
     """
-    User = get_user_model()
+    get_user_model()
 
     # Authenticate the user
     user = await aauthenticate(username=token_req.username, password=token_req.password)
@@ -363,13 +374,13 @@ async def read_10k_sync() -> list[UserMini]:
     return users
     # users = list(users)
     # return users
-    
+
     return User.objects.all()[:100]
 
 
 
 @api.get("/items/{item_id}")
-async def read_item(item_id: int, q: Optional[str] = None):
+async def read_item(item_id: int, q: str | None = None):
     return {"item_id": item_id, "q": q}
 
 
@@ -390,19 +401,18 @@ async def items100() -> list[Item]:
 class BenchPayload(msgspec.Struct):
     title: str
     count: int
-    items: List[Item]
+    items: list[Item]
 
 
 @api.post("/bench/parse")
 async def bench_parse(req: Request, payload: BenchPayload):
     # msgspec validates and decodes in one pass; just return minimal data
-   
-    context = req.context
+
     return {"ok": True, "n": len(payload.items), "count": payload.count}
 
 
 @api.get("/bench/slow")
-async def bench_slow(ms: Optional[int] = 100):
+async def bench_slow(ms: int | None = 100):
     # Simulate slow I/O (network) with asyncio.sleep
     delay = max(0, (ms or 0)) / 1000.0
     await asyncio.sleep(delay)
@@ -460,7 +470,7 @@ async def handle_upload(
 async def handle_mixed(
     title: Annotated[str, Form()],
     description: Annotated[str, Form()],
-    attachments: Annotated[list[dict], File(alias="file")] = None
+    attachments: Annotated[list[dict] | None, File(alias="file")] = None
 ):
     result = {
         "title": title,
@@ -485,12 +495,12 @@ async def file_static():
     return FileResponse("/path/to/nonexistent/file.txt", filename="asdfasd.py")
 
 # ==== Streaming endpoints for benchmarks ====
-#TODO: Add proper api for streaming files 
+#TODO: Add proper api for streaming files
 @api.get("/stream")
 @no_compress
 async def stream_plain():
     def gen():
-        for i in range(100):
+        for _i in range(100):
             yield "x"
     return StreamingResponse(gen(), media_type="text/plain")
 
@@ -529,7 +539,7 @@ class ChatMessage(msgspec.Struct):
 
 class ChatCompletionRequest(msgspec.Struct):
     model: str = "gpt-4o-mini"
-    messages: List[ChatMessage] = []
+    messages: list[ChatMessage] = []
     stream: bool = True
     n_chunks: int = 50
     token: str = " hello"
@@ -538,18 +548,18 @@ class ChatCompletionRequest(msgspec.Struct):
 
 # Optimized msgspec structs for streaming responses (zero-allocation serialization)
 class ChatCompletionChunkDelta(msgspec.Struct):
-    content: Optional[str] = None
+    content: str | None = None
 
 class ChatCompletionChunkChoice(msgspec.Struct):
     index: int
     delta: ChatCompletionChunkDelta
-    finish_reason: Optional[str] = None
+    finish_reason: str | None = None
 
 class ChatCompletionChunk(msgspec.Struct):
     id: str
     created: int
     model: str
-    choices: List[ChatCompletionChunkChoice]
+    choices: list[ChatCompletionChunkChoice]
     object: str = "chat.completion.chunk"
 
 
@@ -616,7 +626,7 @@ async def error_not_found(resource_id: int):
 
 
 @api.get("/errors/bad-request")
-async def error_bad_request(value: Optional[int] = None):
+async def error_bad_request(value: int | None = None):
     """Example of BadRequest exception."""
     if value is None or value < 0:
         raise BadRequest(detail="Value must be a positive integer")
@@ -675,7 +685,7 @@ async def error_validation(user: UserCreate):
 @api.get("/errors/internal")
 async def error_internal():
     """Example of generic exception that triggers debug mode behavior.
-    
+
     In DEBUG=True: Returns 500 with full traceback
     In DEBUG=False: Returns 500 with generic message
     """
@@ -710,7 +720,7 @@ async def check_external_api():
         await asyncio.sleep(0.001)
         return True, "External API OK"
     except Exception as e:
-        return False, f"External API error: {str(e)}"
+        return False, f"External API error: {e!s}"
 
 
 # Add custom health check to /ready endpoint
@@ -854,7 +864,7 @@ class SimpleAPIView(APIView):
 class ItemAPIView(APIView):
     """APIView for item operations."""
 
-    async def get(self, request, item_id: int, q: Optional[str] = None):
+    async def get(self, request, item_id: int, q: str | None = None):
         """GET /cbv-items/{item_id} - Get item with optional query param."""
         return {"item_id": item_id, "q": q, "cbv": True}
 
@@ -945,7 +955,7 @@ class StreamViewSet(ViewSet):
     async def get(self, request):
         """GET /cbv-stream - Stream plain text."""
         def gen():
-            for i in range(100):
+            for _i in range(100):
                 yield "x"
         return StreamingResponse(gen(), media_type="text/plain")
 
@@ -977,7 +987,7 @@ class ChatCompletionsViewSet(ViewSet):
         if payload.stream:
             async def agen():
                 delay = max(0, payload.delay_ms or 0) / 1000.0
-                for i in range(max(1, payload.n_chunks)):
+                for _i in range(max(1, payload.n_chunks)):
                     chunk = ChatCompletionChunk(
                         id=chat_id,
                         created=created,

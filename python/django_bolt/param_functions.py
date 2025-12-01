@@ -1,14 +1,14 @@
 from typing import Any
 
 from .params import (
-    Query as _Query,
-    Path as _Path,
     Body as _Body,
-    Header as _Header,
     Cookie as _Cookie,
     Depends as _Depends,
-    Form as _Form,
     File as _File,
+    Form as _Form,
+    Header as _Header,
+    Path as _Path,
+    Query as _Query,
 )
 
 
@@ -44,6 +44,4 @@ def File(*args: Any, **kwargs: Any) -> Any:  # noqa: N802
     return _File(*args, **kwargs)
 
 
-__all__ = ["Query", "Path", "Body", "Header", "Cookie", "Depends", "Form", "File"]
-
-
+__all__ = ["Body", "Cookie", "Depends", "File", "Form", "Header", "Path", "Query"]

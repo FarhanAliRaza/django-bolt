@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import click
 
 
@@ -27,7 +28,7 @@ def init():
     # Find Django project root (look for manage.py)
     current_dir = Path.cwd()
     project_root = None
-    for path in [current_dir] + list(current_dir.parents):
+    for path in [current_dir, *list(current_dir.parents)]:
         if (path / "manage.py").exists():
             project_root = path
             break
@@ -52,7 +53,10 @@ def init():
 
     # 1. Add django_bolt to INSTALLED_APPS
     settings_content = settings_file.read_text()
-    if "'django_bolt'" not in settings_content and '"django_bolt"' not in settings_content:
+    if (
+        "'django_bolt'" not in settings_content
+        and '"django_bolt"' not in settings_content
+    ):
         if "INSTALLED_APPS" in settings_content:
             # Find INSTALLED_APPS and add django_bolt
             lines = settings_content.splitlines()
@@ -80,9 +84,13 @@ def init():
                 settings_file.write_text("\n".join(new_lines))
                 click.echo("✓ Added 'django_bolt' to INSTALLED_APPS")
             else:
-                click.echo("Warning: Could not automatically add to INSTALLED_APPS. Please add 'django_bolt' manually.")
+                click.echo(
+                    "Warning: Could not automatically add to INSTALLED_APPS. Please add 'django_bolt' manually."
+                )
         else:
-            click.echo("Warning: INSTALLED_APPS not found in settings.py. Please add 'django_bolt' manually.")
+            click.echo(
+                "Warning: INSTALLED_APPS not found in settings.py. Please add 'django_bolt' manually."
+            )
     else:
         click.echo("✓ 'django_bolt' already in INSTALLED_APPS")
 
@@ -138,4 +146,6 @@ async def create_item(item: Item):
     click.echo("1. Run migrations: python manage.py migrate")
     click.echo("2. Start the server: python manage.py runbolt")
     click.echo(f"3. Edit your API routes in {project_name}/api.py")
-    click.echo("\nFor more information, visit: https://github.com/FarhanAliRaza/django-bolt")
+    click.echo(
+        "\nFor more information, visit: https://github.com/FarhanAliRaza/django-bolt"
+    )

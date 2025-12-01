@@ -1,12 +1,11 @@
 """
 Tests for OpenAPI tags, summary, and description metadata.
 """
-import pytest
 from django_bolt import BoltAPI
+from django_bolt.decorators import ActionHandler, action
 from django_bolt.openapi import OpenAPIConfig
 from django_bolt.openapi.schema_generator import SchemaGenerator
 from django_bolt.openapi.spec import Tag
-from django_bolt.decorators import action, ActionHandler
 from django_bolt.views import ViewSet
 
 
@@ -243,7 +242,7 @@ def test_action_metadata_passed_to_route():
 
     # Find the registered handler
     deactivate_route = None
-    for method, path, handler_id, handler in api._routes:
+    for _method, path, _handler_id, handler in api._routes:
         if path == "/users/{pk}/deactivate":
             deactivate_route = handler
             break

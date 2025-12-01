@@ -4,18 +4,15 @@ Type definitions for Django-Bolt.
 This module provides type hints and protocols for Django-Bolt objects,
 enabling full IDE autocomplete and static type checking.
 """
+
 from __future__ import annotations
 
 from typing import (
-    Protocol,
     Any,
-    Dict,
-    Optional,
+    Protocol,
     overload,
     runtime_checkable,
 )
-
-
 
 
 @runtime_checkable
@@ -40,15 +37,37 @@ class DjangoModel(Protocol):
     """
 
     # ORM methods
-    def save(self, force_insert: bool = False, force_update: bool = False, using: Optional[str] = None, update_fields: Optional[list[str]] = None) -> None: ...
-    def delete(self, using: Optional[str] = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]: ...
-    def refresh_from_db(self, using: Optional[str] = None, fields: Optional[list[str]] = None) -> None: ...
-    def full_clean(self, exclude: Optional[list[str]] = None, validate_unique: bool = True) -> None: ...
+    def save(
+        self,
+        force_insert: bool = False,
+        force_update: bool = False,
+        using: str | None = None,
+        update_fields: list[str] | None = None,
+    ) -> None: ...
+    def delete(
+        self, using: str | None = None, keep_parents: bool = False
+    ) -> tuple[int, dict[str, int]]: ...
+    def refresh_from_db(
+        self, using: str | None = None, fields: list[str] | None = None
+    ) -> None: ...
+    def full_clean(
+        self, exclude: list[str] | None = None, validate_unique: bool = True
+    ) -> None: ...
 
     # Async ORM methods
-    async def asave(self, force_insert: bool = False, force_update: bool = False, using: Optional[str] = None, update_fields: Optional[list[str]] = None) -> None: ...
-    async def adelete(self, using: Optional[str] = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]: ...
-    async def arefresh_from_db(self, using: Optional[str] = None, fields: Optional[list[str]] = None) -> None: ...
+    async def asave(
+        self,
+        force_insert: bool = False,
+        force_update: bool = False,
+        using: str | None = None,
+        update_fields: list[str] | None = None,
+    ) -> None: ...
+    async def adelete(
+        self, using: str | None = None, keep_parents: bool = False
+    ) -> tuple[int, dict[str, int]]: ...
+    async def arefresh_from_db(
+        self, using: str | None = None, fields: list[str] | None = None
+    ) -> None: ...
 
 
 class UserType(DjangoModel, Protocol):
@@ -87,7 +106,7 @@ class UserType(DjangoModel, Protocol):
     def is_authenticated(self) -> bool: ...
 
     # User auth methods
-    def set_password(self, raw_password: Optional[str]) -> None: ...
+    def set_password(self, raw_password: str | None) -> None: ...
     def check_password(self, raw_password: str) -> bool: ...
     def set_unusable_password(self) -> None: ...
     def has_usable_password(self) -> bool: ...
@@ -121,7 +140,7 @@ class AuthContext(Protocol):
     """
 
     # Core fields
-    user_id: Optional[str]
+    user_id: str | None
     """User identifier extracted from credentials (user ID, API key ID, etc.)"""
 
     is_staff: bool
@@ -134,10 +153,10 @@ class AuthContext(Protocol):
     """Authentication backend used: 'jwt', 'api_key', 'session', etc."""
 
     # Optional fields
-    permissions: Optional[set[str]]
+    permissions: set[str] | None
     """User permissions/scopes (optional, may be provided by some backends)"""
 
-    claims: Optional[Dict[str, Any]]
+    claims: dict[str, Any] | None
     """Full claims dict (optional, e.g., JWT claims for JWT authentication)"""
 
 
@@ -273,7 +292,7 @@ class Request(Protocol):
         ...
 
     @property
-    def context(self) -> Optional[AuthContext]:
+    def context(self) -> AuthContext | None:
         """
         Authentication/middleware context with full type information.
 
@@ -302,7 +321,7 @@ class Request(Protocol):
         ...
 
     @property
-    def user(self) -> Optional[UserType]:
+    def user(self) -> UserType | None:
         """
         Lazy-loaded Django user object from authentication context.
 
@@ -430,4 +449,4 @@ class Request(Protocol):
         ...
 
 
-__all__ = ["Request", "UserType", "AuthContext", "DjangoModel"]
+__all__ = ["AuthContext", "DjangoModel", "Request", "UserType"]

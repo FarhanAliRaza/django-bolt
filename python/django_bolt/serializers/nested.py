@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, Union, get_args, get_origin
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
     from .base import Serializer
@@ -153,7 +153,9 @@ def validate_nested_field(
     if nested_config.many:
         return _validate_many_nested(value, serializer_class, nested_config, field_name)
     else:
-        return _validate_single_nested(value, serializer_class, nested_config, field_name)
+        return _validate_single_nested(
+            value, serializer_class, nested_config, field_name
+        )
 
 
 def _validate_single_nested(

@@ -1,154 +1,155 @@
 from .api import BoltAPI
-from .responses import Response, JSON, StreamingResponse
-from .middleware import CompressionConfig
-from .types import Request, UserType, AuthContext, DjangoModel
-from .params import Depends
 
-# Views module
-from .views import (
-    APIView,
-    ViewSet,
-    ModelViewSet,
-    ReadOnlyModelViewSet,
-    ListMixin,
-    RetrieveMixin,
-    CreateMixin,
-    UpdateMixin,
-    PartialUpdateMixin,
-    DestroyMixin,
-)
-
-# Pagination module
-from .pagination import (
-    PaginationBase,
-    PageNumberPagination,
-    LimitOffsetPagination,
-    CursorPagination,
-    PaginatedResponse,
-    paginate,
+# Auth module
+from .auth import (
+    # Guards/Permissions
+    AllowAny,
+    # Authentication backends
+    APIKeyAuthentication,
+    HasAllPermissions,
+    HasAnyPermission,
+    HasPermission,
+    IsAdminUser,
+    IsAuthenticated,
+    IsStaff,
+    JWTAuthentication,
+    SessionAuthentication,  # Session authentication is not implemented
+    # JWT Token & Utilities
+    Token,
+    create_jwt_for_user,
+    extract_user_id_from_context,
+    get_auth_context,
+    get_current_user,
 )
 
 # Decorators module
 from .decorators import action
 
-# Auth module
-from .auth import (
-    # Authentication backends
-    JWTAuthentication,
-    APIKeyAuthentication,
-    SessionAuthentication, # Session authentication is not implemented
-    AuthContext,
-    # Guards/Permissions
-    AllowAny,
-    IsAuthenticated,
-    IsAdminUser,
-    IsStaff,
-    HasPermission,
-    HasAnyPermission,
-    HasAllPermissions,
-    # JWT Token & Utilities
-    Token,
-    create_jwt_for_user,
-    get_current_user,
-    extract_user_id_from_context,
-    get_auth_context,
-)
-
 # Middleware module
 from .middleware import (
-    Middleware,
-    MiddlewareGroup,
-    MiddlewareConfig,
-    middleware,
-    rate_limit,
-    cors,
-    skip_middleware,
-    no_compress,
+    CompressionConfig,
     CORSMiddleware,
+    Middleware,
+    MiddlewareConfig,
+    MiddlewareGroup,
     RateLimitMiddleware,
+    cors,
+    middleware,
+    no_compress,
+    rate_limit,
+    skip_middleware,
 )
 
 # OpenAPI module
 from .openapi import (
+    JsonRenderPlugin,
     OpenAPIConfig,
-    SwaggerRenderPlugin,
+    RapidocRenderPlugin,
     RedocRenderPlugin,
     ScalarRenderPlugin,
-    RapidocRenderPlugin,
     StoplightRenderPlugin,
-    JsonRenderPlugin,
+    SwaggerRenderPlugin,
     YamlRenderPlugin,
 )
 
+# Pagination module
+from .pagination import (
+    CursorPagination,
+    LimitOffsetPagination,
+    PageNumberPagination,
+    PaginatedResponse,
+    PaginationBase,
+    paginate,
+)
+from .params import Depends
+from .responses import JSON, Response, StreamingResponse
+from .types import AuthContext, DjangoModel, Request, UserType
+
+# Views module
+from .views import (
+    APIView,
+    CreateMixin,
+    DestroyMixin,
+    ListMixin,
+    ModelViewSet,
+    PartialUpdateMixin,
+    ReadOnlyModelViewSet,
+    RetrieveMixin,
+    UpdateMixin,
+    ViewSet,
+)
+
 __all__ = [
-    "BoltAPI",
-    "Request",
-    "UserType",
-    "AuthContext",
-    "DjangoModel",
-    "Response",
     "JSON",
-    "StreamingResponse",
-    "CompressionConfig",
-    "Depends",
+    "APIKeyAuthentication",
     # Views
     "APIView",
-    "ViewSet",
-    "ModelViewSet",
-    "ReadOnlyModelViewSet",
-    "ListMixin",
-    "RetrieveMixin",
-    "CreateMixin",
-    "UpdateMixin",
-    "PartialUpdateMixin",
-    "DestroyMixin",
-    # Pagination
-    "PaginationBase",
-    "PageNumberPagination",
-    "LimitOffsetPagination",
-    "CursorPagination",
-    "PaginatedResponse",
-    "paginate",
-    # Decorators
-    "action",
-    # Auth - Authentication
-    "JWTAuthentication",
-    "APIKeyAuthentication",
-    "SessionAuthentication", # Session authentication is not implemented
-    "AuthContext",
     # Auth - Guards/Permissions
     "AllowAny",
-    "IsAuthenticated",
-    "IsAdminUser",
-    "IsStaff",
-    "HasPermission",
-    "HasAnyPermission",
-    "HasAllPermissions",
-    # Middleware
-    "middleware",
-    "rate_limit",
-    "cors",
-    "skip_middleware",
-    "no_compress",
+    # Types
+    "AuthContext",
+    # Core
+    "BoltAPI",
     "CORSMiddleware",
-    "RateLimitMiddleware",
-    # Auth - JWT Token & Utilities
-    "Token",
-    "create_jwt_for_user",
-    "get_current_user",
-    "extract_user_id_from_context",
-    "get_auth_context",
+    "CompressionConfig",
+    "CreateMixin",
+    "CursorPagination",
+    "Depends",
+    "DestroyMixin",
+    "DjangoModel",
+    "HasAllPermissions",
+    "HasAnyPermission",
+    "HasPermission",
+    "IsAdminUser",
+    "IsAuthenticated",
+    "IsStaff",
+    # Auth - Authentication backends
+    "JWTAuthentication",
+    "JsonRenderPlugin",
+    "LimitOffsetPagination",
+    "ListMixin",
+    # Middleware
+    "Middleware",
+    "MiddlewareConfig",
+    "MiddlewareGroup",
+    "ModelViewSet",
     # OpenAPI
     "OpenAPIConfig",
-    "SwaggerRenderPlugin",
-    "RedocRenderPlugin",
-    "ScalarRenderPlugin",
+    "PageNumberPagination",
+    "PaginatedResponse",
+    # Pagination
+    "PaginationBase",
+    "PartialUpdateMixin",
     "RapidocRenderPlugin",
+    "RateLimitMiddleware",
+    "ReadOnlyModelViewSet",
+    "RedocRenderPlugin",
+    "Request",
+    "Response",
+    "RetrieveMixin",
+    "ScalarRenderPlugin",
+    "SessionAuthentication",
     "StoplightRenderPlugin",
-    "JsonRenderPlugin",
+    "StreamingResponse",
+    "SwaggerRenderPlugin",
+    # Auth - JWT Token & Utilities
+    "Token",
+    "UpdateMixin",
+    "UserType",
+    "ViewSet",
     "YamlRenderPlugin",
+    # Decorators
+    "action",
+    "cors",
+    "create_jwt_for_user",
+    "extract_user_id_from_context",
+    "get_auth_context",
+    "get_current_user",
+    "middleware",
+    "no_compress",
+    "paginate",
+    "rate_limit",
+    "skip_middleware",
 ]
 
-default_app_config = 'django_bolt.apps.DjangoBoltConfig'
-
-
+default_app_config = "django_bolt.apps.DjangoBoltConfig"

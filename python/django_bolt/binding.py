@@ -4,38 +4,52 @@ Parameter binding and extraction with pre-compiled extractors.
 This module provides high-performance parameter extraction using pre-compiled
 extractor functions that avoid runtime type checking.
 """
+
 from __future__ import annotations
 
-
 import inspect
+from collections.abc import Callable
+from typing import (
+    Any,
+    get_args,
+    get_origin,
+)
+
 import msgspec
-from typing import Any, Dict, List, Tuple, Callable, Optional, TYPE_CHECKING, get_origin, get_args
 from asgiref.sync import sync_to_async
 
-from .typing import is_msgspec_struct, is_optional, unwrap_optional
-from .typing import HandlerMetadata
-from .concurrency import sync_to_thread
-from .exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
+from .exceptions import (
+    HTTPException,
+    RequestValidationError,
+    parse_msgspec_decode_error,
+)
+from .typing import (
+    FieldDefinition,
+    HandlerMetadata,
+    is_msgspec_struct,
+    is_optional,
+    unwrap_optional,
+)
 
 __all__ = [
-    "convert_primitive",
-    "create_extractor",
-    "create_extractor_for_field",
-    "create_path_extractor",
-    "create_query_extractor",
-    "create_header_extractor",
-    "create_cookie_extractor",
-    "create_form_extractor",
-    "create_file_extractor",
-    "create_body_extractor",
     "coerce_to_response_type",
     "coerce_to_response_type_async",
+    "convert_primitive",
+    "create_body_extractor",
+    "create_cookie_extractor",
+    "create_extractor",
+    "create_extractor_for_field",
+    "create_file_extractor",
+    "create_form_extractor",
+    "create_header_extractor",
+    "create_path_extractor",
+    "create_query_extractor",
     "get_msgspec_decoder",
 ]
 
 
 # Cache for msgspec decoders (performance optimization)
-_DECODER_CACHE: Dict[Any, msgspec.json.Decoder] = {}
+_DECODER_CACHE: dict[Any, msgspec.json.Decoder] = {}
 
 
 def get_msgspec_decoder(type_: Any) -> msgspec.json.Decoder:
@@ -88,120 +102,135 @@ def convert_primitive(value: str, annotation: Any) -> Any:
         return value
 
 
-def create_path_extractor(name: str, annotation: Any, alias: Optional[str] = None) -> Callable:
+def create_path_extractor(
+    name: str, annotation: Any, alias: str | None = None
+) -> Callable:
     """Create a pre-compiled extractor for path parameters."""
     key = alias or name
-    converter = lambda v: convert_primitive(str(v), annotation)
 
-    def extract(params_map: Dict[str, Any]) -> Any:
+    def converter(v):
+        return convert_primitive(str(v), annotation)
+
+    def extract(params_map: dict[str, Any]) -> Any:
         if key not in params_map:
-            raise HTTPException(status_code=400, detail=f"Missing required path parameter: {key}")
+            raise HTTPException(
+                status_code=400, detail=f"Missing required path parameter: {key}"
+            )
         return converter(params_map[key])
 
     return extract
 
 
 def create_query_extractor(
-    name: str,
-    annotation: Any,
-    default: Any,
-    alias: Optional[str] = None
+    name: str, annotation: Any, default: Any, alias: str | None = None
 ) -> Callable:
     """Create a pre-compiled extractor for query parameters."""
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
-    converter = lambda v: convert_primitive(str(v), annotation)
+
+    def converter(v):
+        return convert_primitive(str(v), annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
-        def extract(query_map: Dict[str, Any]) -> Any:
+
+        def extract(query_map: dict[str, Any]) -> Any:
             return converter(query_map[key]) if key in query_map else default_value
     else:
-        def extract(query_map: Dict[str, Any]) -> Any:
+
+        def extract(query_map: dict[str, Any]) -> Any:
             if key not in query_map:
-                raise HTTPException(status_code=400, detail=f"Missing required query parameter: {key}")
+                raise HTTPException(
+                    status_code=400, detail=f"Missing required query parameter: {key}"
+                )
             return converter(query_map[key])
 
     return extract
 
 
 def create_header_extractor(
-    name: str,
-    annotation: Any,
-    default: Any,
-    alias: Optional[str] = None
+    name: str, annotation: Any, default: Any, alias: str | None = None
 ) -> Callable:
     """Create a pre-compiled extractor for HTTP headers."""
     key = (alias or name).lower()
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
-    converter = lambda v: convert_primitive(str(v), annotation)
+
+    def converter(v):
+        return convert_primitive(str(v), annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
-        def extract(headers_map: Dict[str, str]) -> Any:
+
+        def extract(headers_map: dict[str, str]) -> Any:
             return converter(headers_map[key]) if key in headers_map else default_value
     else:
-        def extract(headers_map: Dict[str, str]) -> Any:
+
+        def extract(headers_map: dict[str, str]) -> Any:
             if key not in headers_map:
-                raise HTTPException(status_code=400, detail=f"Missing required header: {key}")
+                raise HTTPException(
+                    status_code=400, detail=f"Missing required header: {key}"
+                )
             return converter(headers_map[key])
 
     return extract
 
 
 def create_cookie_extractor(
-    name: str,
-    annotation: Any,
-    default: Any,
-    alias: Optional[str] = None
+    name: str, annotation: Any, default: Any, alias: str | None = None
 ) -> Callable:
     """Create a pre-compiled extractor for cookies."""
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
-    converter = lambda v: convert_primitive(str(v), annotation)
+
+    def converter(v):
+        return convert_primitive(str(v), annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
-        def extract(cookies_map: Dict[str, str]) -> Any:
+
+        def extract(cookies_map: dict[str, str]) -> Any:
             return converter(cookies_map[key]) if key in cookies_map else default_value
     else:
-        def extract(cookies_map: Dict[str, str]) -> Any:
+
+        def extract(cookies_map: dict[str, str]) -> Any:
             if key not in cookies_map:
-                raise HTTPException(status_code=400, detail=f"Missing required cookie: {key}")
+                raise HTTPException(
+                    status_code=400, detail=f"Missing required cookie: {key}"
+                )
             return converter(cookies_map[key])
 
     return extract
 
 
 def create_form_extractor(
-    name: str,
-    annotation: Any,
-    default: Any,
-    alias: Optional[str] = None
+    name: str, annotation: Any, default: Any, alias: str | None = None
 ) -> Callable:
     """Create a pre-compiled extractor for form fields."""
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
-    converter = lambda v: convert_primitive(str(v), annotation)
+
+    def converter(v):
+        return convert_primitive(str(v), annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
-        def extract(form_map: Dict[str, Any]) -> Any:
+
+        def extract(form_map: dict[str, Any]) -> Any:
             return converter(form_map[key]) if key in form_map else default_value
     else:
-        def extract(form_map: Dict[str, Any]) -> Any:
+
+        def extract(form_map: dict[str, Any]) -> Any:
             if key not in form_map:
-                raise HTTPException(status_code=400, detail=f"Missing required form field: {key}")
+                raise HTTPException(
+                    status_code=400, detail=f"Missing required form field: {key}"
+                )
             return converter(form_map[key])
 
     return extract
 
 
 def create_file_extractor(
-    name: str,
-    annotation: Any,
-    default: Any,
-    alias: Optional[str] = None
+    name: str, annotation: Any, default: Any, alias: str | None = None
 ) -> Callable:
     """Create a pre-compiled extractor for file uploads."""
     key = alias or name
@@ -209,12 +238,16 @@ def create_file_extractor(
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
-        def extract(files_map: Dict[str, Any]) -> Any:
+
+        def extract(files_map: dict[str, Any]) -> Any:
             return files_map.get(key, default_value)
     else:
-        def extract(files_map: Dict[str, Any]) -> Any:
+
+        def extract(files_map: dict[str, Any]) -> Any:
             if key not in files_map:
-                raise HTTPException(status_code=400, detail=f"Missing required file: {key}")
+                raise HTTPException(
+                    status_code=400, detail=f"Missing required file: {key}"
+                )
             return files_map[key]
 
     return extract
@@ -229,6 +262,7 @@ def create_body_extractor(name: str, annotation: Any) -> Callable:
     """
     if is_msgspec_struct(annotation):
         decoder = get_msgspec_decoder(annotation)
+
         def extract(body_bytes: bytes) -> Any:
             try:
                 return decoder.decode(body_bytes)
@@ -263,7 +297,7 @@ def create_body_extractor(name: str, annotation: Any) -> Callable:
     return extract
 
 
-def create_extractor_for_field(field: "FieldDefinition") -> Optional[Callable]:
+def create_extractor_for_field(field: FieldDefinition) -> Callable | None:
     """
     Create a pre-compiled extractor function for a FieldDefinition.
 
@@ -279,7 +313,6 @@ def create_extractor_for_field(field: "FieldDefinition") -> Optional[Callable]:
         (which are handled specially by the injector)
     """
     # Import here to avoid circular imports
-    from .typing import FieldDefinition
 
     source = field.source
     name = field.name
@@ -315,7 +348,7 @@ def create_extractor_for_field(field: "FieldDefinition") -> Optional[Callable]:
         return None
 
 
-def create_extractor(field: Dict[str, Any]) -> Callable:
+def create_extractor(field: dict[str, Any]) -> Callable:
     """
     Create an optimized extractor function for a parameter field.
 
@@ -359,10 +392,13 @@ def create_extractor(field: Dict[str, Any]) -> Callable:
             if default is not inspect.Parameter.empty:
                 return default
             raise ValueError(f"Cannot extract parameter {name} with source {source}")
+
         return extract
 
 
-async def coerce_to_response_type_async(value: Any, annotation: Any, meta: HandlerMetadata | None = None) -> Any:
+async def coerce_to_response_type_async(
+    value: Any, annotation: Any, meta: HandlerMetadata | None = None
+) -> Any:
     """
     Async version that handles Django QuerySets.
 
@@ -375,7 +411,12 @@ async def coerce_to_response_type_async(value: Any, annotation: Any, meta: Handl
         Coerced value
     """
     # Check if value is a QuerySet AND we have pre-computed field names
-    if meta and "response_field_names" in meta and hasattr(value, '_iterable_class') and hasattr(value, 'model'):
+    if (
+        meta
+        and "response_field_names" in meta
+        and hasattr(value, "_iterable_class")
+        and hasattr(value, "model")
+    ):
         # Use pre-computed field names (computed at route registration time)
         field_names = meta["response_field_names"]
 
@@ -408,7 +449,9 @@ async def coerce_to_response_type_async(value: Any, annotation: Any, meta: Handl
     return coerce_to_response_type(value, annotation, meta)
 
 
-def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata | None = None) -> Any:
+def coerce_to_response_type(
+    value: Any, annotation: Any, meta: HandlerMetadata | None = None
+) -> Any:
     """
     Coerce arbitrary Python objects (including Django models) into the
     declared response type using msgspec.
@@ -429,7 +472,12 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
     """
     # Handle Django QuerySets - convert to list using .values()
     # Works for both sync and async handlers (sync handlers run in thread pool)
-    if meta and "response_field_names" in meta and hasattr(value, '_iterable_class') and hasattr(value, 'model'):
+    if (
+        meta
+        and "response_field_names" in meta
+        and hasattr(value, "_iterable_class")
+        and hasattr(value, "model")
+    ):
         # Use pre-computed field names (computed at route registration time)
         field_names = meta["response_field_names"]
 
@@ -448,8 +496,27 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
     # just return the value without validation. Validation only makes sense for
     # structured types like msgspec.Struct or parameterized generics.
     # Handle both the actual type AND string annotations (PEP 563)
-    if annotation in (dict, list, str, int, float, bool, bytes, bytearray, type(None)) or \
-       annotation in ('dict', 'list', 'str', 'int', 'float', 'bool', 'bytes', 'bytearray', 'None'):
+    if annotation in (
+        dict,
+        list,
+        str,
+        int,
+        float,
+        bool,
+        bytes,
+        bytearray,
+        type(None),
+    ) or annotation in (
+        "dict",
+        "list",
+        "str",
+        "int",
+        "float",
+        "bool",
+        "bytes",
+        "bytearray",
+        "None",
+    ):
         # These are primitive types - no validation needed, return as-is
         return value
 
@@ -459,11 +526,11 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
         origin = get_origin(annotation)
 
         # Handle List[T]
-        if origin in (list, List):
+        if origin in (list, list):
             # Check if value is actually a list/iterable
             if not isinstance(value, (list, tuple)) and value is not None:
                 args = get_args(annotation)
-                elem_name = args[0].__name__ if args else 'Any'
+                elem_name = args[0].__name__ if args else "Any"
                 raise TypeError(
                     f"Response type mismatch: expected list[{elem_name}], "
                     f"but handler returned {type(value).__name__}. "
@@ -530,10 +597,10 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
 
     # Fallback: Check if it's a list without metadata
     origin = get_origin(annotation)
-    if origin in (list, List):
+    if origin in (list, list):
         if not isinstance(value, (list, tuple)) and value is not None:
             args = get_args(annotation)
-            elem_name = args[0].__name__ if args else 'Any'
+            elem_name = args[0].__name__ if args else "Any"
             raise TypeError(
                 f"Response type mismatch: expected list[{elem_name}], "
                 f"but handler returned {type(value).__name__}. "
@@ -546,6 +613,4 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
     try:
         return msgspec.convert(value, annotation)
     except msgspec.ValidationError as e:
-        raise TypeError(
-            f"Response validation failed: {e}"
-        ) from e
+        raise TypeError(f"Response validation failed: {e}") from e

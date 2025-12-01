@@ -3,10 +3,12 @@ Test JWT Token class for Django-Bolt.
 
 Tests the Token dataclass for encoding/decoding JWTs with performance focus.
 """
-import pytest
 from datetime import datetime, timedelta, timezone
-from django_bolt.auth import Token
+
 import jwt as pyjwt
+import pytest
+
+from django_bolt.auth import Token
 
 
 class TestTokenCreation:

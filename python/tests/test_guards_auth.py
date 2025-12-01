@@ -3,23 +3,25 @@ Test guards and authentication system for Django-Bolt.
 
 Tests the new DRF-inspired guards and authentication classes.
 """
-import jwt
 import time
-import pytest
+
 import django
+import jwt
+import pytest
 from django.conf import settings
+
 from django_bolt import BoltAPI
 from django_bolt.auth import (
-    JWTAuthentication,
+    AllowAny,
     APIKeyAuthentication,
     AuthContext,
-    AllowAny,
-    IsAuthenticated,
-    IsAdminUser,
-    IsStaff,
-    HasPermission,
+    HasAllPermissions,
     HasAnyPermission,
-    HasAllPermissions
+    HasPermission,
+    IsAdminUser,
+    IsAuthenticated,
+    IsStaff,
+    JWTAuthentication,
 )
 
 

@@ -104,30 +104,34 @@ fn parse_cors_config_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<CorsConfig>
     let methods: Vec<String> = dict
         .get_item("methods")?
         .map(|v| v.extract().unwrap_or_default())
-        .unwrap_or_else(|| vec![
-            "GET".to_string(),
-            "POST".to_string(),
-            "PUT".to_string(),
-            "PATCH".to_string(),
-            "DELETE".to_string(),
-            "OPTIONS".to_string(),
-        ]);
+        .unwrap_or_else(|| {
+            vec![
+                "GET".to_string(),
+                "POST".to_string(),
+                "PUT".to_string(),
+                "PATCH".to_string(),
+                "DELETE".to_string(),
+                "OPTIONS".to_string(),
+            ]
+        });
 
     // Extract headers with defaults
     let headers: Vec<String> = dict
         .get_item("headers")?
         .map(|v| v.extract().unwrap_or_default())
-        .unwrap_or_else(|| vec![
-            "accept".to_string(),
-            "accept-encoding".to_string(),
-            "authorization".to_string(),
-            "content-type".to_string(),
-            "dnt".to_string(),
-            "origin".to_string(),
-            "user-agent".to_string(),
-            "x-csrftoken".to_string(),
-            "x-requested-with".to_string(),
-        ]);
+        .unwrap_or_else(|| {
+            vec![
+                "accept".to_string(),
+                "accept-encoding".to_string(),
+                "authorization".to_string(),
+                "content-type".to_string(),
+                "dnt".to_string(),
+                "origin".to_string(),
+                "user-agent".to_string(),
+                "x-csrftoken".to_string(),
+                "x-requested-with".to_string(),
+            ]
+        });
 
     // Extract expose_headers
     let expose_headers: Vec<String> = dict
@@ -159,7 +163,7 @@ fn parse_cors_config_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<CorsConfig>
 
     Ok(CorsConfig {
         origins,
-        origin_regexes: vec![],  // TODO: support regex in tests if needed
+        origin_regexes: vec![], // TODO: support regex in tests if needed
         compiled_origin_regexes: vec![],
         origin_set,
         allow_all_origins,
@@ -469,7 +473,9 @@ pub fn handle_test_request_for(
     test_debug!("[test_state] obtained coroutine");
 
     test_debug!("[test_state] running coroutine with run_until_complete");
-    let result_obj = loop_obj.call_method1("run_until_complete", (coroutine,))?.unbind();
+    let result_obj = loop_obj
+        .call_method1("run_until_complete", (coroutine,))?
+        .unbind();
 
     // Debug: check what type we got back
     let type_name = result_obj
@@ -819,7 +825,8 @@ pub fn handle_actix_http_request(
                         &cors_cfg.origins
                     };
 
-                    let is_wildcard = cors_cfg.allow_all_origins || effective_origins.iter().any(|o| o == "*");
+                    let is_wildcard =
+                        cors_cfg.allow_all_origins || effective_origins.iter().any(|o| o == "*");
 
                     // Wildcard + credentials is invalid per CORS spec
                     if is_wildcard && cors_cfg.credentials {
@@ -831,7 +838,12 @@ pub fn handle_actix_http_request(
                             response.insert_header((ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
                             // Use shared helper for preflight headers
                             let mut resp = response.finish();
-                            add_preflight_headers_simple(&mut resp, &cors_cfg.methods, &cors_cfg.headers, cors_cfg.max_age as u64);
+                            add_preflight_headers_simple(
+                                &mut resp,
+                                &cors_cfg.methods,
+                                &cors_cfg.headers,
+                                cors_cfg.max_age as u64,
+                            );
                             return Ok(resp);
                         }
                         // No origin header, reject
@@ -843,7 +855,12 @@ pub fn handle_actix_http_request(
                         let mut response = HttpResponse::NoContent();
                         response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, "*"));
                         let mut resp = response.finish();
-                        add_preflight_headers_simple(&mut resp, &cors_cfg.methods, &cors_cfg.headers, cors_cfg.max_age as u64);
+                        add_preflight_headers_simple(
+                            &mut resp,
+                            &cors_cfg.methods,
+                            &cors_cfg.headers,
+                            cors_cfg.max_age as u64,
+                        );
                         return Ok(resp);
                     }
 
@@ -876,7 +893,12 @@ pub fn handle_actix_http_request(
                     }
 
                     let mut resp = response.finish();
-                    add_preflight_headers_simple(&mut resp, &cors_cfg.methods, &cors_cfg.headers, cors_cfg.max_age as u64);
+                    add_preflight_headers_simple(
+                        &mut resp,
+                        &cors_cfg.methods,
+                        &cors_cfg.headers,
+                        cors_cfg.max_age as u64,
+                    );
                     return Ok(resp);
                 }
 
@@ -916,7 +938,8 @@ pub fn handle_actix_http_request(
                     Ok((status_code, mut resp_headers, resp_body)) => {
                         // Add Content-Encoding: identity header if compression should be skipped
                         if should_skip_compression {
-                            resp_headers.push(("content-encoding".to_string(), "identity".to_string()));
+                            resp_headers
+                                .push(("content-encoding".to_string(), "identity".to_string()));
                         }
 
                         let mut response = actix_web::HttpResponse::build(
@@ -932,7 +955,8 @@ pub fn handle_actix_http_request(
                         // Add CORS headers to response if not skipped
                         if !should_skip_cors {
                             // Get effective CORS config: route-level, then global
-                            let effective_config = cors_config.as_ref().or(global_cors_config.as_ref());
+                            let effective_config =
+                                cors_config.as_ref().or(global_cors_config.as_ref());
 
                             if let Some(cors_cfg) = effective_config {
                                 // Get effective values

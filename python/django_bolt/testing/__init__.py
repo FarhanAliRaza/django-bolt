@@ -18,6 +18,7 @@ Usage:
     for line in response.iter_lines():
         process(line)
 """
+
 from django_bolt.testing.client import TestClient
 
 __all__ = [

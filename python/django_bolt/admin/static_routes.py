@@ -4,6 +4,7 @@ Static file route registration for Django admin.
 This module handles the registration of static file serving routes
 needed by Django admin and other Django apps.
 """
+
 import inspect
 import sys
 from typing import TYPE_CHECKING
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
 class StaticRouteRegistrar:
     """Handles registration of static file serving routes."""
 
-    def __init__(self, api: 'BoltAPI'):
+    def __init__(self, api: "BoltAPI"):
         """Initialize the registrar with a BoltAPI instance.
 
         Args:
@@ -44,15 +45,15 @@ class StaticRouteRegistrar:
 
         try:
             # Check if static files are configured
-            if not hasattr(settings, 'STATIC_URL') or not settings.STATIC_URL:
+            if not hasattr(settings, "STATIC_URL") or not settings.STATIC_URL:
                 return
 
-            static_url = settings.STATIC_URL.strip('/')
+            static_url = settings.STATIC_URL.strip("/")
             if not static_url:
-                static_url = 'static'
+                static_url = "static"
 
             # Register catch-all route for static files
-            route_pattern = f'/{static_url}/{{path:path}}'
+            route_pattern = f"/{static_url}/{{path:path}}"
 
             # Create static file handler
             async def static_handler(path: str):
@@ -65,7 +66,10 @@ class StaticRouteRegistrar:
             self.api._static_routes_registered = True
 
         except Exception as e:
-            print(f"[django-bolt] Warning: Failed to register static routes: {e}", file=sys.stderr)
+            print(
+                f"[django-bolt] Warning: Failed to register static routes: {e}",
+                file=sys.stderr,
+            )
 
     def _register_static_route(self, route_pattern: str, handler) -> None:
         """Register a static file serving route.

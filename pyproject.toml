@@ -70,5 +70,92 @@ dev = [
     "pytest-django>=4.9.0",
     "pydantic>=2",
     "pyyaml>=6.0",
-    "maturin>=1.9.6"
+    "maturin>=1.9.6",
+    "ruff>=0.8",
+    "pre-commit>=4.0",
 ]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "target",
+    "ignore",
+    "*.egg-info",
+    ".eggs",
+    "migrations",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "UP",     # pyupgrade
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "C90",    # mccabe complexity
+    "RUF",    # ruff-specific rules
+    "SIM",    # flake8-simplify
+    "TCH",    # flake8-type-checking
+    "TID",    # flake8-tidy-imports
+    "PIE",    # flake8-pie
+    "PGH",    # pygrep-hooks
+    "PERF",   # perflint
+    "PLC0415",  # import outside toplevel (no imports inside functions)
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # do not perform function calls in argument defaults (needed for Depends)
+    "B904",   # raise without from (sometimes intentional)
+    "RUF100", # unused noqa (can be noisy during development)
+    "UP007",  # use X | Y for type union (keep Optional for clarity)
+    "TID252", # relative imports from parent modules (standard for packages)
+    "TCH003", # move stdlib import into type-checking block (reduces runtime overhead but adds complexity)
+    "TCH001", # move first-party import into type-checking block
+    "TCH002", # move third-party import into type-checking block
+    "SIM102", # nested if statements (sometimes clearer than combined)
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+[tool.ruff.lint.isort]
+known-first-party = ["django_bolt"]
+known-third-party = ["django"]
+combine-as-imports = true
+force-wrap-aliases = true
+
+[tool.ruff.lint.per-file-ignores]
+"python/tests/**/*" = [
+    "B011",    # assert false
+    "B018",    # useless expression
+    "C901",    # too complex
+    "RUF012",  # mutable class attributes
+    "RUF059",  # unpacked variable never used (common in tests)
+    "F841",    # local variable assigned but never used (common in tests)
+    "E712",    # comparison to True/False (sometimes clearer in tests)
+    "E721",    # type comparisons (common in type checking tests)
+    "PERF401", # use list comprehension (not always clearer)
+    "RUF043",  # regex pattern metacharacters (pytest patterns)
+    "PGH003",  # use specific rule codes for type: ignore (test code)
+]
+"python/example/**/*" = [
+    "RUF012", # mutable class attributes (Django models)
+]
+"**/conftest.py" = [
+    "F401",   # unused import (fixtures)
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

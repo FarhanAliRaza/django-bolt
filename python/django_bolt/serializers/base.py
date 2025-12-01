@@ -5,13 +5,24 @@ from __future__ import annotations
 import inspect
 import logging
 import sys
-from typing import TYPE_CHECKING, Any, ClassVar, Iterable, Literal, TypeVar, get_args, get_origin, get_type_hints
-
-from django.db.models import Model as DjangoModel
+from collections.abc import Iterable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Literal,
+    TypeVar,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 import msgspec
-from msgspec import ValidationError as MsgspecValidationError
-from msgspec import structs as msgspec_structs
+from django.db.models import Model as DjangoModel
+from msgspec import (
+    ValidationError as MsgspecValidationError,
+    structs as msgspec_structs,
+)
 from msgspec._core import StructMeta
 
 from .decorators import (
@@ -20,7 +31,7 @@ from .decorators import (
     collect_field_validators,
     collect_model_validators,
 )
-from .fields import FieldConfig, _FieldMarker, _UNSET
+from .fields import FieldConfig, _FieldMarker
 from .nested import get_nested_config, validate_nested_field
 
 logger = logging.getLogger(__name__)
@@ -36,9 +47,8 @@ def _is_serializer_type(field_type: Any) -> bool:
     try:
         # Check if it's a class and subclass of msgspec.Struct with __is_bolt_serializer__
         if isinstance(field_type, type):
-            return (
-                issubclass(field_type, msgspec.Struct)
-                and getattr(field_type, "__is_bolt_serializer__", False)
+            return issubclass(field_type, msgspec.Struct) and getattr(
+                field_type, "__is_bolt_serializer__", False
             )
     except TypeError:
         pass
@@ -132,18 +142,26 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
     # Cached type hints and metadata (populated by __init_subclass__)
     __cached_type_hints__: ClassVar[dict[str, Any]] = {}
     __nested_fields__: ClassVar[dict[str, Any]] = {}
-    __literal_fields__: ClassVar[dict[str, frozenset[Any]]] = {}  # Frozenset for O(1) lookup
+    __literal_fields__: ClassVar[
+        dict[str, frozenset[Any]]
+    ] = {}  # Frozenset for O(1) lookup
 
     # Field configuration (populated by __init_subclass__)
     __field_configs__: ClassVar[dict[str, FieldConfig]] = {}
     __computed_fields__: ClassVar[dict[str, ComputedFieldConfig]] = {}
     __read_only_fields__: ClassVar[frozenset[str]] = frozenset()
     __write_only_fields__: ClassVar[frozenset[str]] = frozenset()
-    __source_mapping__: ClassVar[dict[str, str]] = {}  # API field name -> source attribute
-    __field_sets__: ClassVar[dict[str, list[str]]] = {}  # Named field sets for use() method
+    __source_mapping__: ClassVar[
+        dict[str, str]
+    ] = {}  # API field name -> source attribute
+    __field_sets__: ClassVar[
+        dict[str, list[str]]
+    ] = {}  # Named field sets for use() method
 
     # _FieldMarker default resolution (populated by __init_subclass__)
-    __field_marker_defaults__: ClassVar[dict[str, Any]] = {}  # field_name -> actual default value
+    __field_marker_defaults__: ClassVar[
+        dict[str, Any]
+    ] = {}  # field_name -> actual default value
 
     # Fast-path flags: Control which validation runs (set at class definition time)
     __skip_validation__: ClassVar[bool] = True  # Skip all validation
@@ -184,7 +202,9 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         cls._cache_type_metadata()
 
         # Set fast-path flags to control which validation runs
-        cls.__has_nested_or_literal__ = bool(cls.__nested_fields__ or cls.__literal_fields__)
+        cls.__has_nested_or_literal__ = bool(
+            cls.__nested_fields__ or cls.__literal_fields__
+        )
         cls.__has_field_validators__ = bool(cls.__field_validators__)
         cls.__has_model_validators__ = bool(cls.__model_validators__)
         cls.__has_computed_fields__ = bool(cls.__computed_fields__)
@@ -284,12 +304,17 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
 
             # Resolve type hints with local namespace
             if sys.version_info >= (3, 11):
-                hints = get_type_hints(cls, globalns=None, localns=localns, include_extras=True)
+                hints = get_type_hints(
+                    cls, globalns=None, localns=localns, include_extras=True
+                )
             else:
                 # For Python < 3.11, try typing_extensions first
                 try:
                     from typing_extensions import get_type_hints as get_type_hints_ext
-                    hints = get_type_hints_ext(cls, globalns=None, localns=localns, include_extras=True)
+
+                    hints = get_type_hints_ext(
+                        cls, globalns=None, localns=localns, include_extras=True
+                    )
                 except ImportError:
                     hints = get_type_hints(cls, globalns=None, localns=localns)
 
@@ -312,7 +337,9 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         # Pre-compute nested field configurations
         nested_fields = {}
         literal_fields = {}
-        has_serializer_fields = False  # Track if any field is a Serializer (for dump optimization)
+        has_serializer_fields = (
+            False  # Track if any field is a Serializer (for dump optimization)
+        )
 
         for field_name, field_type in hints.items():
             # Check if field has NestedConfig metadata
@@ -356,12 +383,8 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         if cls.__default_values_map__ is not None:
             return
 
-        default_values: dict[str, Any] = {}
-        # Use helper to iterate over (field_name, default_value) pairs
-        for field_name, default_val in _iter_field_defaults(cls):
-            default_values[field_name] = default_val
-
-        cls.__default_values_map__ = default_values
+        # Use dict comprehension for better performance
+        cls.__default_values_map__ = dict(_iter_field_defaults(cls))
 
     def __post_init__(self) -> None:
         """
@@ -538,7 +561,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     _setattr(self, field_name, validated_value)
             except (ValueError, TypeError) as e:
                 raise MsgspecValidationError(str(e)) from e
-            except Exception as e:
+            except Exception:
                 raise
 
         # Validate literal (choice) fields (now with O(1) frozenset lookup - optimization #3)
@@ -552,7 +575,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     )
             except (ValueError, TypeError) as e:
                 raise MsgspecValidationError(str(e)) from e
-            except Exception as e:
+            except Exception:
                 raise
 
     def _run_model_validators(self) -> None:
@@ -567,7 +590,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     pass
             except (ValueError, TypeError) as e:
                 raise MsgspecValidationError(str(e)) from e
-            except Exception as e:
+            except Exception:
                 raise
 
     def validate(self: T) -> T:
@@ -699,19 +722,16 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 if nested_config.many:
                     # Many-to-many or reverse relationship
                     if hasattr(value, "all") and callable(getattr(value, "all", None)):
-                        # Convert each related object to a dict for the nested serializer
-                        items = []
-                        for item in value.all():
-                            if isinstance(item, DjangoModel):
-                                # Recursively call from_model with depth tracking
-                                items.append(
-                                    nested_config.serializer_class.from_model(
-                                        item,
-                                        _depth=_depth + 1,
-                                        max_depth=max_depth,
-                                    )
-                                )
-                        data[field_name] = items
+                        # Convert each related object using list comprehension
+                        data[field_name] = [
+                            nested_config.serializer_class.from_model(
+                                item,
+                                _depth=_depth + 1,
+                                max_depth=max_depth,
+                            )
+                            for item in value.all()
+                            if isinstance(item, DjangoModel)
+                        ]
                     elif isinstance(value, list):
                         data[field_name] = value
                     else:
@@ -822,19 +842,19 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         used for type constraints in Annotated[type, Meta(...)].
         """
 
-        model: type[Model] | None = None
+        model: ClassVar[type[Model] | None] = None
         """Associated Django model class (optional)"""
 
-        write_only: set[str] = set()
+        write_only: ClassVar[set[str]] = set()
         """Field names that should only be accepted on input, not returned"""
 
-        read_only: set[str] = set()
+        read_only: ClassVar[set[str]] = set()
         """Field names that should only be returned, not accepted on input"""
 
-        validators: dict[str, list[Any]] = {}
+        validators: ClassVar[dict[str, list[Any]]] = {}
         """Additional validators to apply to fields"""
 
-        field_sets: dict[str, list[str]] = {}
+        field_sets: ClassVar[dict[str, list[str]]] = {}
         """
         Named field sets for dynamic field selection.
 
@@ -963,24 +983,26 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         # Copy Config with adjusted field_sets (only include subsets of our fields)
         parent_meta = getattr(cls, "Config", None)
         if parent_meta:
+
             class Config:
                 pass
+
             # Copy relevant Config attributes
             if hasattr(parent_meta, "model"):
-                Config.model = parent_meta.model  # type: ignore
+                Config.model = parent_meta.model  # type: ignore[attr-defined]
             # Adjust write_only/read_only to only include fields we have
             if hasattr(parent_meta, "write_only"):
-                Config.write_only = parent_meta.write_only & fields_set  # type: ignore
+                Config.write_only = parent_meta.write_only & fields_set  # type: ignore[attr-defined]
             if hasattr(parent_meta, "read_only"):
-                Config.read_only = parent_meta.read_only & fields_set  # type: ignore
+                Config.read_only = parent_meta.read_only & fields_set  # type: ignore[attr-defined]
             class_dict["Config"] = Config
 
         # Create the new Serializer subclass
-        new_cls: type[T] = type(class_name, (Serializer,), class_dict)  # type: ignore
+        new_cls: type[T] = type(class_name, (Serializer,), class_dict)  # type: ignore[assignment]
 
         # Add from_parent class method
         @classmethod
-        def from_parent(new_cls_ref: type[T], instance: Serializer) -> T:  # type: ignore
+        def from_parent(new_cls_ref: type[T], instance: Serializer) -> T:  # type: ignore[misc]
             """Create instance from a parent serializer instance."""
             data = {}
             for field_name in new_cls_ref.__struct_fields__:
@@ -988,7 +1010,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     data[field_name] = getattr(instance, field_name)
             return new_cls_ref(**data)
 
-        new_cls.from_parent = from_parent  # type: ignore
+        new_cls.from_parent = from_parent  # type: ignore[method-assign]
 
         return new_cls
 

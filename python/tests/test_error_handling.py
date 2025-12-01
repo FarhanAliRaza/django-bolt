@@ -1,32 +1,34 @@
 """Tests for Django-Bolt error handling system."""
 
-import pytest
 import json
-import msgspec
-import django
-from django.conf import settings
 from unittest.mock import patch
-from django_bolt.exceptions import (
-    HTTPException,
-    BadRequest,
-    Unauthorized,
-    Forbidden,
-    NotFound,
-    UnprocessableEntity,
-    TooManyRequests,
-    InternalServerError,
-    ServiceUnavailable,
-    RequestValidationError,
-    ResponseValidationError,
-)
+
+import django
+import msgspec
+import pytest
+from django.conf import settings
+
 from django_bolt.error_handlers import (
     format_error_response,
-    http_exception_handler,
-    request_validation_error_handler,
-    response_validation_error_handler,
-    msgspec_validation_error_to_dict,
     generic_exception_handler,
     handle_exception,
+    http_exception_handler,
+    msgspec_validation_error_to_dict,
+    request_validation_error_handler,
+    response_validation_error_handler,
+)
+from django_bolt.exceptions import (
+    BadRequest,
+    Forbidden,
+    HTTPException,
+    InternalServerError,
+    NotFound,
+    RequestValidationError,
+    ResponseValidationError,
+    ServiceUnavailable,
+    TooManyRequests,
+    Unauthorized,
+    UnprocessableEntity,
 )
 
 

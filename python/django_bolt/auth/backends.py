@@ -13,15 +13,20 @@ The authentication flow:
 
 Performance: ~60k+ RPS with JWT validation happening entirely in Rust.
 """
+
 import sys
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Set
 from dataclasses import dataclass
-from django.contrib.auth import get_user_model
+from collections.abc import Callable
+from typing import Any
+
 from asgiref.sync import sync_to_async
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
+
 from .revocation import create_revocation_handler
+
 
 @dataclass
 class AuthContext:
@@ -30,12 +35,13 @@ class AuthContext:
 
     This is populated in Rust and passed to Python handlers via request.context.
     """
-    user_id: Optional[str] = None
+
+    user_id: str | None = None
     is_staff: bool = False
     is_superuser: bool = False
     backend: str = "none"
-    claims: Optional[Dict[str, Any]] = None
-    permissions: Optional[Set[str]] = None
+    claims: dict[str, Any] | None = None
+    permissions: set[str] | None = None
 
 
 class BaseAuthentication(ABC):
@@ -50,18 +56,18 @@ class BaseAuthentication(ABC):
     @abstractmethod
     def scheme_name(self) -> str:
         """Return the authentication scheme name (e.g., 'jwt', 'api_key')"""
-        pass
 
     @abstractmethod
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         """
         Compile this authentication backend into metadata for Rust.
 
         Returns a dict that will be parsed by Rust into typed enums.
         """
-        pass
 
-    async def get_user(self, user_id: Optional[str], auth_context: Dict[str, Any]) -> Optional[Any]:
+    async def get_user(
+        self, user_id: str | None, auth_context: dict[str, Any]
+    ) -> Any | None:
         """
         Resolve a User instance from the authentication context.
 
@@ -102,13 +108,13 @@ class JWTAuthentication(BaseAuthentication):
 
     def __init__(
         self,
-        secret: Optional[str] = None,
-        algorithms: Optional[List[str]] = None,
+        secret: str | None = None,
+        algorithms: list[str] | None = None,
         header: str = "authorization",
-        audience: Optional[str] = None,
-        issuer: Optional[str] = None,
-        revoked_token_handler: Optional[callable] = None,
-        revocation_store: Optional[Any] = None,
+        audience: str | None = None,
+        issuer: str | None = None,
+        revoked_token_handler: Callable[..., bool] | None = None,
+        revocation_store: Any | None = None,
         require_jti: bool = False,
     ):
         self.secret = secret
@@ -120,7 +126,7 @@ class JWTAuthentication(BaseAuthentication):
         # If no secret provided, try to get Django's SECRET_KEY
         if self.secret is None:
             try:
-                if not hasattr(settings, 'SECRET_KEY'):
+                if not hasattr(settings, "SECRET_KEY"):
                     raise ImproperlyConfigured(
                         "JWTAuthentication requires a 'secret' parameter or Django's SECRET_KEY setting. "
                         "Neither was provided."
@@ -128,7 +134,7 @@ class JWTAuthentication(BaseAuthentication):
 
                 self.secret = settings.SECRET_KEY
 
-                if not self.secret or self.secret == '':
+                if not self.secret or self.secret == "":
                     raise ImproperlyConfigured(
                         "JWTAuthentication secret cannot be empty. "
                         "Please provide a non-empty 'secret' parameter or set Django's SECRET_KEY."
@@ -156,7 +162,7 @@ class JWTAuthentication(BaseAuthentication):
     def scheme_name(self) -> str:
         return "jwt"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         metadata = {
             "type": "jwt",
             "secret": self.secret,
@@ -173,7 +179,9 @@ class JWTAuthentication(BaseAuthentication):
 
         return metadata
 
-    async def get_user(self, user_id: Optional[str], auth_context: Dict[str, Any]) -> Optional[Any]:
+    async def get_user(
+        self, user_id: str | None, auth_context: dict[str, Any]
+    ) -> Any | None:
         """
         Load user from database using the user_id from JWT token.
 
@@ -183,19 +191,23 @@ class JWTAuthentication(BaseAuthentication):
         if not user_id:
             return None
 
-
         User = get_user_model()
 
         try:
             # Use sync_to_async wrapper for proper thread-safety and database context
             # Ensures Django's connection pooling is used correctly
-            return await sync_to_async(User.objects.get, thread_sensitive=False)(pk=user_id)
+            return await sync_to_async(User.objects.get, thread_sensitive=False)(
+                pk=user_id
+            )
         except User.DoesNotExist:
             # User not found - this is expected in some cases
             return None
         except Exception as e:
             # Unexpected error - log it for debugging
-            print(f"Error loading user {user_id} in JWTAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
+            print(
+                f"Error loading user {user_id} in JWTAuthentication: {type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
             return None
 
 
@@ -214,9 +226,9 @@ class APIKeyAuthentication(BaseAuthentication):
 
     def __init__(
         self,
-        api_keys: Optional[Set[str]] = None,
+        api_keys: set[str] | None = None,
         header: str = "x-api-key",
-        key_permissions: Optional[Dict[str, Set[str]]] = None,
+        key_permissions: dict[str, set[str]] | None = None,
     ):
         self.api_keys = api_keys or set()
         self.header = header
@@ -226,14 +238,12 @@ class APIKeyAuthentication(BaseAuthentication):
     def scheme_name(self) -> str:
         return "api_key"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         return {
             "type": "api_key",
             "api_keys": list(self.api_keys),
             "header": self.header.lower(),
-            "key_permissions": {
-                k: list(v) for k, v in self.key_permissions.items()
-            },
+            "key_permissions": {k: list(v) for k, v in self.key_permissions.items()},
         }
 
 
@@ -255,12 +265,14 @@ class SessionAuthentication(BaseAuthentication):
     def scheme_name(self) -> str:
         return "session"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         return {
             "type": "session",
         }
 
-    async def get_user(self, user_id: Optional[str], auth_context: Dict[str, Any]) -> Optional[Any]:
+    async def get_user(
+        self, user_id: str | None, auth_context: dict[str, Any]
+    ) -> Any | None:
         """
         Load user from database using the user_id from session.
 
@@ -274,17 +286,22 @@ class SessionAuthentication(BaseAuthentication):
         try:
             # Use sync_to_async wrapper for proper thread-safety and database context
             # Ensures Django's connection pooling is used correctly
-            return await sync_to_async(User.objects.get, thread_sensitive=False)(pk=user_id)
+            return await sync_to_async(User.objects.get, thread_sensitive=False)(
+                pk=user_id
+            )
         except User.DoesNotExist:
             # User not found - this is expected in some cases
             return None
         except Exception as e:
             # Unexpected error - log it for debugging
-            print(f"Error loading user {user_id} in SessionAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
+            print(
+                f"Error loading user {user_id} in SessionAuthentication: {type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
             return None
 
 
-def get_default_authentication_classes() -> List[BaseAuthentication]:
+def get_default_authentication_classes() -> list[BaseAuthentication]:
     """
     Get default authentication classes from Django settings.
 
@@ -292,9 +309,8 @@ def get_default_authentication_classes() -> List[BaseAuthentication]:
     returns an empty list (no authentication by default).
     """
     try:
-        
         try:
-            if hasattr(settings, 'BOLT_AUTHENTICATION_CLASSES'):
+            if hasattr(settings, "BOLT_AUTHENTICATION_CLASSES"):
                 return settings.BOLT_AUTHENTICATION_CLASSES
         except ImproperlyConfigured:
             # Settings not configured, return empty list

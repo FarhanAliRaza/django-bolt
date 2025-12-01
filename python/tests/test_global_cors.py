@@ -1,6 +1,7 @@
 """Tests for global CORS origins fallback functionality."""
 
 import pytest
+
 from django_bolt import BoltAPI
 from django_bolt.middleware import cors
 from django_bolt.testing import TestClient

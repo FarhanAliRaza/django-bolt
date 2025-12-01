@@ -5,30 +5,30 @@ Provides decorators and classes for adding middleware to routes.
 Middleware can be global or per-route.
 """
 
-from .middleware import (
-    Middleware,
-    MiddlewareGroup,
-    MiddlewareConfig,
-    middleware,
-    rate_limit,
-    cors,
-    skip_middleware,
-    no_compress,
-    CORSMiddleware,
-    RateLimitMiddleware,
-)
 from .compression import CompressionConfig
+from .middleware import (
+    CORSMiddleware,
+    Middleware,
+    MiddlewareConfig,
+    MiddlewareGroup,
+    RateLimitMiddleware,
+    cors,
+    middleware,
+    no_compress,
+    rate_limit,
+    skip_middleware,
+)
 
 __all__ = [
-    "Middleware",
-    "MiddlewareGroup",
-    "MiddlewareConfig",
-    "middleware",
-    "rate_limit",
-    "cors",
-    "skip_middleware",
-    "no_compress",
     "CORSMiddleware",
-    "RateLimitMiddleware",
     "CompressionConfig",
+    "Middleware",
+    "MiddlewareConfig",
+    "MiddlewareGroup",
+    "RateLimitMiddleware",
+    "cors",
+    "middleware",
+    "no_compress",
+    "rate_limit",
+    "skip_middleware",
 ]

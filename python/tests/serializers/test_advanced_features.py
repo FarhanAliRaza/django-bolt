@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import pytest
 
 from django_bolt.serializers import (
     Serializer,
     SerializerView,
     computed_field,
-    field,
-    field_validator,
 )
 
 
@@ -56,7 +52,6 @@ class TestFieldFunction:
 
     def test_field_alias(self):
         """Test field alias for JSON output."""
-        from django_bolt.serializers.fields import FieldConfig
 
         # Create a serializer with field config
         class UserSerializer(Serializer):

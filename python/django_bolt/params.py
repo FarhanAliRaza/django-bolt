@@ -3,21 +3,23 @@ Parameter markers and validation constraints for Django-Bolt.
 
 Provides explicit parameter source annotations and validation metadata.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Pattern
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 __all__ = [
-    "Param",
-    "Query",
-    "Path",
     "Body",
-    "Header",
     "Cookie",
-    "Form",
-    "File",
     "Depends",
+    "File",
+    "Form",
+    "Header",
+    "Param",
+    "Path",
+    "Query",
 ]
 
 
@@ -32,40 +34,40 @@ class Param:
     source: str
     """Parameter source: 'query', 'path', 'body', 'header', 'cookie', 'form', 'file'"""
 
-    alias: Optional[str] = None
+    alias: str | None = None
     """Alternative name for the parameter in the request"""
 
-    embed: Optional[bool] = None
+    embed: bool | None = None
     """Whether to embed body parameter in wrapper object"""
 
     # Numeric constraints
-    gt: Optional[float] = None
+    gt: float | None = None
     """Greater than (exclusive minimum)"""
 
-    ge: Optional[float] = None
+    ge: float | None = None
     """Greater than or equal (inclusive minimum)"""
 
-    lt: Optional[float] = None
+    lt: float | None = None
     """Less than (exclusive maximum)"""
 
-    le: Optional[float] = None
+    le: float | None = None
     """Less than or equal (inclusive maximum)"""
 
-    multiple_of: Optional[float] = None
+    multiple_of: float | None = None
     """Value must be multiple of this number"""
 
     # String/collection constraints
-    min_length: Optional[int] = None
+    min_length: int | None = None
     """Minimum length for strings or collections"""
 
-    max_length: Optional[int] = None
+    max_length: int | None = None
     """Maximum length for strings or collections"""
 
-    pattern: Optional[str] = None
+    pattern: str | None = None
     """Regex pattern for string validation"""
 
     # Metadata
-    description: Optional[str] = None
+    description: str | None = None
     """Parameter description for documentation"""
 
     example: Any = None
@@ -78,15 +80,15 @@ class Param:
 def Query(
     default: Any = ...,
     *,
-    alias: Optional[str] = None,
-    gt: Optional[float] = None,
-    ge: Optional[float] = None,
-    lt: Optional[float] = None,
-    le: Optional[float] = None,
-    min_length: Optional[int] = None,
-    max_length: Optional[int] = None,
-    pattern: Optional[str] = None,
-    description: Optional[str] = None,
+    alias: str | None = None,
+    gt: float | None = None,
+    ge: float | None = None,
+    lt: float | None = None,
+    le: float | None = None,
+    min_length: int | None = None,
+    max_length: int | None = None,
+    pattern: str | None = None,
+    description: str | None = None,
     example: Any = None,
     deprecated: bool = False,
 ) -> Any:
@@ -129,15 +131,15 @@ def Query(
 def Path(
     default: Any = ...,
     *,
-    alias: Optional[str] = None,
-    gt: Optional[float] = None,
-    ge: Optional[float] = None,
-    lt: Optional[float] = None,
-    le: Optional[float] = None,
-    min_length: Optional[int] = None,
-    max_length: Optional[int] = None,
-    pattern: Optional[str] = None,
-    description: Optional[str] = None,
+    alias: str | None = None,
+    gt: float | None = None,
+    ge: float | None = None,
+    lt: float | None = None,
+    le: float | None = None,
+    min_length: int | None = None,
+    max_length: int | None = None,
+    pattern: str | None = None,
+    description: str | None = None,
     example: Any = None,
     deprecated: bool = False,
 ) -> Any:
@@ -183,9 +185,9 @@ def Path(
 def Body(
     default: Any = ...,
     *,
-    alias: Optional[str] = None,
+    alias: str | None = None,
     embed: bool = False,
-    description: Optional[str] = None,
+    description: str | None = None,
     example: Any = None,
 ) -> Any:
     """
@@ -213,8 +215,8 @@ def Body(
 def Header(
     default: Any = ...,
     *,
-    alias: Optional[str] = None,
-    description: Optional[str] = None,
+    alias: str | None = None,
+    description: str | None = None,
     example: Any = None,
     deprecated: bool = False,
 ) -> Any:
@@ -243,8 +245,8 @@ def Header(
 def Cookie(
     default: Any = ...,
     *,
-    alias: Optional[str] = None,
-    description: Optional[str] = None,
+    alias: str | None = None,
+    description: str | None = None,
     example: Any = None,
     deprecated: bool = False,
 ) -> Any:
@@ -273,8 +275,8 @@ def Cookie(
 def Form(
     default: Any = ...,
     *,
-    alias: Optional[str] = None,
-    description: Optional[str] = None,
+    alias: str | None = None,
+    description: str | None = None,
     example: Any = None,
 ) -> Any:
     """
@@ -300,8 +302,8 @@ def Form(
 def File(
     default: Any = ...,
     *,
-    alias: Optional[str] = None,
-    description: Optional[str] = None,
+    alias: str | None = None,
+    description: str | None = None,
 ) -> Any:
     """
     Mark parameter as file upload.
@@ -330,7 +332,7 @@ class Depends:
     by calling the specified function.
     """
 
-    dependency: Optional[Callable[..., Any]] = None
+    dependency: Callable[..., Any] | None = None
     """Function to call for dependency resolution"""
 
     use_cache: bool = True

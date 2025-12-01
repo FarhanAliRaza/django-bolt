@@ -73,8 +73,12 @@ pub async fn handle_request(
                                     let origin =
                                         req.headers().get("origin").and_then(|v| v.to_str().ok());
 
-                                    let origin_allowed =
-                                        add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
+                                    let origin_allowed = add_cors_headers_rust(
+                                        &mut response,
+                                        origin,
+                                        cors_cfg,
+                                        &state,
+                                    );
 
                                     if origin_allowed {
                                         add_cors_preflight_headers(&mut response, cors_cfg);
@@ -90,7 +94,8 @@ pub async fn handle_request(
                     if !found_cors {
                         if let Some(ref global_cors) = state.global_cors_config {
                             let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-                            let origin_allowed = add_cors_headers_rust(&mut response, origin, global_cors, &state);
+                            let origin_allowed =
+                                add_cors_headers_rust(&mut response, origin, global_cors, &state);
                             if origin_allowed {
                                 add_cors_preflight_headers(&mut response, global_cors);
                             }
@@ -108,7 +113,8 @@ pub async fn handle_request(
                 if let Some(ref global_cors) = state.global_cors_config {
                     let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
                     let mut response = HttpResponse::NoContent().finish();
-                    let origin_allowed = add_cors_headers_rust(&mut response, origin, global_cors, &state);
+                    let origin_allowed =
+                        add_cors_headers_rust(&mut response, origin, global_cors, &state);
                     if origin_allowed {
                         add_cors_preflight_headers(&mut response, global_cors);
                     }
@@ -337,31 +343,30 @@ pub async fn handle_request(
     match fut.await {
         Ok(result_obj) => {
             // Fast-path: extract and copy body in single GIL acquisition (eliminates separate GIL for drop)
-            let fast_tuple: Option<(u16, Vec<(String, String)>, Vec<u8>)> =
-                Python::attach(|py| {
-                    let obj = result_obj.bind(py);
-                    let tuple = obj.downcast::<PyTuple>().ok()?;
-                    if tuple.len() != 3 {
-                        return None;
-                    }
+            let fast_tuple: Option<(u16, Vec<(String, String)>, Vec<u8>)> = Python::attach(|py| {
+                let obj = result_obj.bind(py);
+                let tuple = obj.downcast::<PyTuple>().ok()?;
+                if tuple.len() != 3 {
+                    return None;
+                }
 
-                    // 0: status
-                    let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
+                // 0: status
+                let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
 
-                    // 1: headers
-                    let resp_headers: Vec<(String, String)> = tuple
-                        .get_item(1)
-                        .ok()?
-                        .extract::<Vec<(String, String)>>()
-                        .ok()?;
+                // 1: headers
+                let resp_headers: Vec<(String, String)> = tuple
+                    .get_item(1)
+                    .ok()?
+                    .extract::<Vec<(String, String)>>()
+                    .ok()?;
 
-                    // 2: body (bytes) - copy within GIL, drop Python object before releasing GIL
-                    let body_obj = tuple.get_item(2).ok()?;
-                    let pybytes = body_obj.downcast::<PyBytes>().ok()?;
-                    let body_vec = pybytes.as_bytes().to_vec();
-                    // Python object drops automatically when this scope ends (still holding GIL)
-                    Some((status_code, resp_headers, body_vec))
-                });
+                // 2: body (bytes) - copy within GIL, drop Python object before releasing GIL
+                let body_obj = tuple.get_item(2).ok()?;
+                let pybytes = body_obj.downcast::<PyBytes>().ok()?;
+                let body_vec = pybytes.as_bytes().to_vec();
+                // Python object drops automatically when this scope ends (still holding GIL)
+                Some((status_code, resp_headers, body_vec))
+            });
 
             if let Some((status_code, resp_headers, body_bytes)) = fast_tuple {
                 let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
@@ -591,19 +596,17 @@ pub async fn handle_request(
                                 };
                                 builder.body(response_body)
                             }
-                            Err(e) => {
-                                match e.kind() {
-                                    ErrorKind::NotFound => HttpResponse::NotFound()
-                                        .content_type("text/plain; charset=utf-8")
-                                        .body("File not found"),
-                                    ErrorKind::PermissionDenied => HttpResponse::Forbidden()
-                                        .content_type("text/plain; charset=utf-8")
-                                        .body("Permission denied"),
-                                    _ => HttpResponse::InternalServerError()
-                                        .content_type("text/plain; charset=utf-8")
-                                        .body(format!("File error: {}", e)),
-                                }
-                            }
+                            Err(e) => match e.kind() {
+                                ErrorKind::NotFound => HttpResponse::NotFound()
+                                    .content_type("text/plain; charset=utf-8")
+                                    .body("File not found"),
+                                ErrorKind::PermissionDenied => HttpResponse::Forbidden()
+                                    .content_type("text/plain; charset=utf-8")
+                                    .body("Permission denied"),
+                                _ => HttpResponse::InternalServerError()
+                                    .content_type("text/plain; charset=utf-8")
+                                    .body(format!("File error: {}", e)),
+                            },
                         };
                     } else {
                         let mut builder = HttpResponse::build(status);
@@ -676,10 +679,18 @@ pub async fn handle_request(
                         .getattr("is_async_generator")
                         .and_then(|v| v.extract())
                         .unwrap_or(false);
-                    Some((status_code, headers, media_type, content_obj, is_async_generator))
+                    Some((
+                        status_code,
+                        headers,
+                        media_type,
+                        content_obj,
+                        is_async_generator,
+                    ))
                 });
 
-                if let Some((status_code, headers, media_type, content_obj, is_async_generator)) = streaming {
+                if let Some((status_code, headers, media_type, content_obj, is_async_generator)) =
+                    streaming
+                {
                     let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
                     let mut builder = HttpResponse::build(status);
                     for (k, v) in headers {

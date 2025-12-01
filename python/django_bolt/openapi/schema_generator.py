@@ -1,28 +1,36 @@
 from __future__ import annotations
 
 import inspect
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    get_args,
+    get_origin,
+)
+
 import msgspec
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, get_type_hints, get_origin, get_args, Annotated
 
 from ..typing import is_msgspec_struct, is_optional
-from ..params import Param
 from .spec import (
     OpenAPI,
-    Operation,
-    PathItem,
-    Parameter,
-    RequestBody,
-    OpenAPIResponse,
     OpenAPIMediaType,
-    Schema,
+    OpenAPIResponse,
+    Operation,
+    Parameter,
+    PathItem,
     Reference,
-    SecurityRequirement,
+    RequestBody,
+    Schema,
     Tag,
 )
 
 if TYPE_CHECKING:
     from ..api import BoltAPI
     from .config import OpenAPIConfig
+
+# Type alias for OpenAPI security requirement objects
+SecurityReq = dict[str, list[str]]
 
 __all__ = ("SchemaGenerator",)
 
@@ -39,7 +47,7 @@ class SchemaGenerator:
         """
         self.api = api
         self.config = config
-        self.schemas: Dict[str, Schema] = {}  # Component schemas registry
+        self.schemas: dict[str, Schema] = {}  # Component schemas registry
 
     def generate(self) -> OpenAPI:
         """Generate complete OpenAPI schema.
@@ -50,7 +58,7 @@ class SchemaGenerator:
         openapi = self.config.to_openapi_schema()
 
         # Generate path items from routes and collect tags
-        paths: Dict[str, PathItem] = {}
+        paths: dict[str, PathItem] = {}
         collected_tags: set[str] = set()
 
         for method, path, handler_id, handler in self.api._routes:
@@ -107,7 +115,7 @@ class SchemaGenerator:
         handler: Any,
         method: str,
         path: str,
-        meta: Dict[str, Any],
+        meta: dict[str, Any],
         handler_id: int,
     ) -> Operation:
         """Create OpenAPI Operation for a route handler.
@@ -127,7 +135,11 @@ class SchemaGenerator:
         description = meta.get("openapi_description")
 
         # Fallback to docstring if not explicitly set
-        if (summary is None or description is None) and self.config.use_handler_docstrings and handler.__doc__:
+        if (
+            (summary is None or description is None)
+            and self.config.use_handler_docstrings
+            and handler.__doc__
+        ):
             doc = inspect.cleandoc(handler.__doc__)
             lines = doc.split("\n", 1)
             if summary is None:
@@ -166,9 +178,7 @@ class SchemaGenerator:
 
         return operation
 
-    def _extract_parameters(
-        self, meta: Dict[str, Any], path: str
-    ) -> List[Parameter]:
+    def _extract_parameters(self, meta: dict[str, Any], path: str) -> list[Parameter]:
         """Extract OpenAPI parameters from handler metadata.
 
         Args:
@@ -178,7 +188,7 @@ class SchemaGenerator:
         Returns:
             List of Parameter objects.
         """
-        parameters: List[Parameter] = []
+        parameters: list[Parameter] = []
         fields = meta.get("fields", [])
 
         for field in fields:
@@ -224,7 +234,7 @@ class SchemaGenerator:
 
         return parameters
 
-    def _extract_request_body(self, meta: Dict[str, Any]) -> Optional[RequestBody]:
+    def _extract_request_body(self, meta: dict[str, Any]) -> RequestBody | None:
         """Extract OpenAPI RequestBody from handler metadata.
 
         Args:
@@ -260,7 +270,9 @@ class SchemaGenerator:
 
                     properties[name] = schema
 
-                    if default == inspect.Parameter.empty and not is_optional(annotation):
+                    if default == inspect.Parameter.empty and not is_optional(
+                        annotation
+                    ):
                         required.append(name)
 
                 schema = Schema(
@@ -273,7 +285,9 @@ class SchemaGenerator:
                     description="Form data",
                     content={
                         "multipart/form-data": OpenAPIMediaType(schema=schema),
-                        "application/x-www-form-urlencoded": OpenAPIMediaType(schema=schema),
+                        "application/x-www-form-urlencoded": OpenAPIMediaType(
+                            schema=schema
+                        ),
                     },
                     required=bool(required),
                 )
@@ -292,8 +306,8 @@ class SchemaGenerator:
         )
 
     def _extract_responses(
-        self, meta: Dict[str, Any], handler_id: int
-    ) -> Dict[str, OpenAPIResponse]:
+        self, meta: dict[str, Any], handler_id: int
+    ) -> dict[str, OpenAPIResponse]:
         """Extract OpenAPI responses from handler metadata.
 
         Args:
@@ -303,7 +317,7 @@ class SchemaGenerator:
         Returns:
             Dictionary mapping status codes to Response objects.
         """
-        responses: Dict[str, OpenAPIResponse] = {}
+        responses: dict[str, OpenAPIResponse] = {}
 
         # Get response type
         response_type = meta.get("response_type")
@@ -324,9 +338,7 @@ class SchemaGenerator:
             responses["200"] = OpenAPIResponse(
                 description="Successful response",
                 content={
-                    "application/json": OpenAPIMediaType(
-                        schema=Schema(type="object")
-                    ),
+                    "application/json": OpenAPIMediaType(schema=Schema(type="object")),
                 },
             )
 
@@ -334,8 +346,7 @@ class SchemaGenerator:
         if self.config.include_error_responses:
             # Check if request body is present (for 422 validation errors)
             has_request_body = meta.get("body_struct_param") or any(
-                f.source in ("body", "form", "file")
-                for f in meta.get("fields", [])
+                f.source in ("body", "form", "file") for f in meta.get("fields", [])
             )
 
             if has_request_body:
@@ -400,7 +411,7 @@ class SchemaGenerator:
             required=["detail"],
         )
 
-    def _extract_security(self, handler_id: int) -> Optional[List[SecurityReq]]:
+    def _extract_security(self, handler_id: int) -> list[SecurityReq] | None:
         """Extract security requirements from handler middleware.
 
         Args:
@@ -416,7 +427,7 @@ class SchemaGenerator:
             return None
 
         # Convert auth backends to security requirements
-        security: List[SecurityReq] = []
+        security: list[SecurityReq] = []
         for auth_backend in auth_config:
             backend_name = auth_backend.__class__.__name__
 
@@ -429,7 +440,7 @@ class SchemaGenerator:
 
         return security or None
 
-    def _extract_tags(self, handler: Any) -> Optional[List[str]]:
+    def _extract_tags(self, handler: Any) -> list[str] | None:
         """Extract tags for grouping operations.
 
         Args:
@@ -453,7 +464,7 @@ class SchemaGenerator:
 
         return None
 
-    def _collect_tags(self, collected_tag_names: set[str]) -> Optional[List[Tag]]:
+    def _collect_tags(self, collected_tag_names: set[str]) -> list[Tag] | None:
         """Collect and merge tags from operations with config tags.
 
         Args:
@@ -466,7 +477,7 @@ class SchemaGenerator:
             return None
 
         # Start with existing tags from config
-        tag_objects: Dict[str, Tag] = {}
+        tag_objects: dict[str, Tag] = {}
         if self.config.tags:
             for tag in self.config.tags:
                 tag_objects[tag.name] = tag
@@ -498,30 +509,32 @@ class SchemaGenerator:
 
         # Handle msgspec type info objects (IntType, StrType, BoolType, etc.)
         type_name = type(type_annotation).__name__
-        if hasattr(type_annotation, '__class__') and type_name.endswith('Type'):
+        if hasattr(type_annotation, "__class__") and type_name.endswith("Type"):
             # Map msgspec type objects to OpenAPI schemas
             msgspec_type_map = {
-                'IntType': Schema(type="integer"),
-                'StrType': Schema(type="string"),
-                'FloatType': Schema(type="number"),
-                'BoolType': Schema(type="boolean"),
-                'BytesType': Schema(type="string", format="binary"),
-                'DateTimeType': Schema(type="string", format="date-time"),
-                'DateType': Schema(type="string", format="date"),
-                'TimeType': Schema(type="string", format="time"),
-                'UUIDType': Schema(type="string", format="uuid"),
+                "IntType": Schema(type="integer"),
+                "StrType": Schema(type="string"),
+                "FloatType": Schema(type="number"),
+                "BoolType": Schema(type="boolean"),
+                "BytesType": Schema(type="string", format="binary"),
+                "DateTimeType": Schema(type="string", format="date-time"),
+                "DateType": Schema(type="string", format="date"),
+                "TimeType": Schema(type="string", format="time"),
+                "UUIDType": Schema(type="string", format="uuid"),
             }
             if type_name in msgspec_type_map:
                 return msgspec_type_map[type_name]
             # For list/array types from msgspec
-            if type_name == 'ListType':
-                item_type = getattr(type_annotation, 'item_type', None)
+            if type_name == "ListType":
+                item_type = getattr(type_annotation, "item_type", None)
                 if item_type:
-                    item_schema = self._type_to_schema(item_type, register_component=register_component)
+                    item_schema = self._type_to_schema(
+                        item_type, register_component=register_component
+                    )
                     return Schema(type="array", items=item_schema)
                 return Schema(type="array", items=Schema(type="object"))
             # For dict types from msgspec
-            if type_name == 'DictType':
+            if type_name == "DictType":
                 return Schema(type="object", additional_properties=True)
 
         # Unwrap Optional
@@ -551,13 +564,15 @@ class SchemaGenerator:
                 return self._struct_to_schema(type_annotation)
 
         # Handle list/List
-        if origin in (list, List):
+        if origin in (list, list):
             item_type = args[0] if args else Any
-            item_schema = self._type_to_schema(item_type, register_component=register_component)
+            item_schema = self._type_to_schema(
+                item_type, register_component=register_component
+            )
             return Schema(type="array", items=item_schema)
 
         # Handle dict/Dict
-        if origin in (dict, Dict):
+        if origin in (dict, dict):
             return Schema(type="object", additional_properties=True)
 
         # Handle primitive types

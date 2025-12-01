@@ -15,23 +15,20 @@ Tests cover:
 - DestroyMixin with obj.adelete()
 - End-to-end CRUD workflows
 """
-import pytest
 import msgspec
+import pytest
+
 from django_bolt import BoltAPI
 from django_bolt.testing import TestClient
 from django_bolt.views import (
     APIView,
-    ViewSet,
+    DestroyMixin,
     ListMixin,
     RetrieveMixin,
-    CreateMixin,
-    UpdateMixin,
-    PartialUpdateMixin,
-    DestroyMixin,
+    ViewSet,
 )
-from django_bolt.exceptions import HTTPException
-from ..test_models import Article
 
+from ..test_models import Article
 
 # --- Fixtures ---
 

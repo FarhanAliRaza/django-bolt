@@ -2,22 +2,22 @@
 
 from .config import OpenAPIConfig
 from .plugins import (
-    SwaggerRenderPlugin,
+    JsonRenderPlugin,
+    RapidocRenderPlugin,
     RedocRenderPlugin,
     ScalarRenderPlugin,
-    RapidocRenderPlugin,
     StoplightRenderPlugin,
-    JsonRenderPlugin,
+    SwaggerRenderPlugin,
     YamlRenderPlugin,
 )
 
 __all__ = [
+    "JsonRenderPlugin",
     "OpenAPIConfig",
-    "SwaggerRenderPlugin",
+    "RapidocRenderPlugin",
     "RedocRenderPlugin",
     "ScalarRenderPlugin",
-    "RapidocRenderPlugin",
     "StoplightRenderPlugin",
-    "JsonRenderPlugin",
+    "SwaggerRenderPlugin",
     "YamlRenderPlugin",
 ]

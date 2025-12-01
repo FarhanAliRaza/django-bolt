@@ -51,45 +51,46 @@ seed-data:
 
 # Save baseline vs dev benchmark comparison
 save-bench:
-	@if [ ! -f BENCHMARK_BASELINE.md ]; then \
+	@mkdir -p bench
+	@if [ ! -f bench/BENCHMARK_BASELINE.md ]; then \
 		echo "Creating baseline benchmark..."; \
-		P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > BENCHMARK_BASELINE.md; \
-		echo "✅ Baseline saved to BENCHMARK_BASELINE.md"; \
-	elif [ ! -f BENCHMARK_DEV.md ]; then \
+		P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > bench/BENCHMARK_BASELINE.md; \
+		echo "✅ Baseline saved to bench/BENCHMARK_BASELINE.md"; \
+	elif [ ! -f bench/BENCHMARK_DEV.md ]; then \
 		echo "Creating dev benchmark..."; \
-		P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > BENCHMARK_DEV.md; \
-		echo "✅ Dev version saved to BENCHMARK_DEV.md"; \
+		P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > bench/BENCHMARK_DEV.md; \
+		echo "✅ Dev version saved to bench/BENCHMARK_DEV.md"; \
 		echo ""; \
 		echo "=== PERFORMANCE COMPARISON ==="; \
 		echo "Baseline:"; \
-		grep "Requests per second" BENCHMARK_BASELINE.md | head -2; \
+		grep "Requests per second" bench/BENCHMARK_BASELINE.md | head -2; \
 		echo "Dev:"; \
-		grep "Requests per second" BENCHMARK_DEV.md | head -2; \
+		grep "Requests per second" bench/BENCHMARK_DEV.md | head -2; \
 		echo ""; \
 		echo "Streaming (Plain) RPS - Dev:"; \
-		awk '/### Streaming Plain/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' BENCHMARK_DEV.md || true; \
+		awk '/### Streaming Plain/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' bench/BENCHMARK_DEV.md || true; \
 		echo "Streaming (SSE) RPS - Dev:"; \
-		awk '/### Server-Sent Events/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' BENCHMARK_DEV.md || true; \
+		awk '/### Server-Sent Events/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' bench/BENCHMARK_DEV.md || true; \
 	else \
 		echo "Rotating benchmarks: dev -> baseline, new -> dev"; \
-		mv BENCHMARK_DEV.md BENCHMARK_BASELINE.md; \
-		P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > BENCHMARK_DEV.md; \
+		mv bench/BENCHMARK_DEV.md bench/BENCHMARK_BASELINE.md; \
+		P=$(P) WORKERS=$(WORKERS) C=$(C) N=$(N) HOST=$(HOST) PORT=$(PORT) ./scripts/benchmark.sh > bench/BENCHMARK_DEV.md; \
 		echo "✅ New dev version saved, old dev moved to baseline"; \
 		echo ""; \
 		echo "=== PERFORMANCE COMPARISON ==="; \
 		echo "Baseline (old dev):"; \
-		grep "Requests per second" BENCHMARK_BASELINE.md | head -2; \
+		grep "Requests per second" bench/BENCHMARK_BASELINE.md | head -2; \
 		echo "Dev (current):"; \
-		grep "Requests per second" BENCHMARK_DEV.md | head -2; \
+		grep "Requests per second" bench/BENCHMARK_DEV.md | head -2; \
 		echo ""; \
 		echo "Streaming (Plain) RPS - Baseline:"; \
-		awk '/### Streaming Plain/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' BENCHMARK_BASELINE.md || true; \
+		awk '/### Streaming Plain/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' bench/BENCHMARK_BASELINE.md || true; \
 		echo "Streaming (SSE) RPS - Baseline:"; \
-		awk '/### Server-Sent Events/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' BENCHMARK_BASELINE.md || true; \
+		awk '/### Server-Sent Events/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' bench/BENCHMARK_BASELINE.md || true; \
 		echo "Streaming (Plain) RPS - Dev:"; \
-		awk '/### Streaming Plain/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' BENCHMARK_DEV.md || true; \
+		awk '/### Streaming Plain/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' bench/BENCHMARK_DEV.md || true; \
 		echo "Streaming (SSE) RPS - Dev:"; \
-		awk '/### Server-Sent Events/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' BENCHMARK_DEV.md || true; \
+		awk '/### Server-Sent Events/{flag=1;next} /###/{flag=0} flag && /Requests per second/{print}' bench/BENCHMARK_DEV.md || true; \
 	fi
 
 

@@ -202,8 +202,8 @@ pub struct RouteMetadata {
     pub cors_config: Option<CorsConfig>,
     pub rate_limit_config: Option<RateLimitConfig>,
 
-    // Sucrose-style optimization flags (skip unused parsing)
-    // These are computed in Python at route registration time
+    // Optimization flags (skip unused parsing)
+    // These are computed in Python at route registration time via static analysis
     pub needs_query: bool,
     pub needs_headers: bool,
     pub needs_cookies: bool,
@@ -273,7 +273,7 @@ impl RouteMetadata {
             }
         }
 
-        // Parse Sucrose-style optimization flags (default to true for backward compatibility)
+        // Parse optimization flags (default to true for backward compatibility)
         // These flags indicate which request components the handler actually needs
         let needs_query = py_meta
             .get_item("needs_query")

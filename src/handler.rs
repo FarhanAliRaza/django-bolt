@@ -37,13 +37,14 @@ pub async fn handle_request(
     let router = GLOBAL_ROUTER.get().expect("Router not initialized");
 
     // Find the route for the requested method and path
-    let (route_handler, path_params, handler_id) = {
-        if let Some((route, path_params, handler_id)) = router.find(&method, &path) {
-            (
-                Python::attach(|py| route.handler.clone_ref(py)),
-                path_params,
-                handler_id,
-            )
+    // RouteMatch enum allows us to skip path param processing for static routes
+    let (route_handler, path_params, handler_id, is_static_route_from_router) = {
+        if let Some(route_match) = router.find(&method, &path) {
+            let is_static = route_match.is_static();
+            let handler_id = route_match.handler_id();
+            let handler = Python::attach(|py| route_match.route().handler.clone_ref(py));
+            let path_params = route_match.path_params(); // No allocation for static routes
+            (handler, path_params, handler_id, is_static)
         } else {
             // No explicit handler found - check for automatic OPTIONS
             if method == "OPTIONS" {
@@ -61,7 +62,8 @@ pub async fn handle_request(
                     let mut found_cors = false;
 
                     for try_method in methods_to_try {
-                        if let Some((_, _, handler_id)) = router.find(try_method, &path) {
+                        if let Some(route_match) = router.find(try_method, &path) {
+                            let handler_id = route_match.handler_id();
                             let route_meta = ROUTE_METADATA
                                 .get()
                                 .and_then(|meta_map| meta_map.get(&handler_id).cloned());
@@ -132,12 +134,12 @@ pub async fn handle_request(
 
     // Get parsed route metadata (Rust-native) - clone to release DashMap lock immediately
     // This trade-off: small clone cost < lock contention across concurrent requests
-    // NOTE: Fetch metadata EARLY so we can use Sucrose flags to skip unnecessary parsing
+    // NOTE: Fetch metadata EARLY so we can use optimization flags to skip unnecessary parsing
     let route_metadata = ROUTE_METADATA
         .get()
         .and_then(|meta_map| meta_map.get(&handler_id).cloned());
 
-    // Sucrose-style optimization: Only parse query string if handler needs it
+    // Optimization: Only parse query string if handler needs it
     // This saves ~0.5-1ms per request for handlers that don't use query params
     let needs_query = route_metadata
         .as_ref()
@@ -154,7 +156,7 @@ pub async fn handle_request(
         AHashMap::new()
     };
 
-    // Sucrose-style optimization: Check if handler needs headers
+    // Optimization: Check if handler needs headers
     // Headers are still needed for auth/rate limiting middleware, so we extract them for Rust
     // but can skip passing them to Python when the handler doesn't use Header() params
     let needs_headers = route_metadata
@@ -237,7 +239,7 @@ pub async fn handle_request(
         None
     };
 
-    // Sucrose-style optimization: Only parse cookies if handler needs them
+    // Optimization: Only parse cookies if handler needs them
     // Cookie parsing can be expensive for requests with many cookies
     let needs_cookies = route_metadata
         .as_ref()
@@ -249,6 +251,11 @@ pub async fn handle_request(
     } else {
         AHashMap::new()
     };
+
+    // For static routes, path_params is already an empty AHashMap from RouteMatch::Static
+    // No additional processing needed - the router already optimized this
+    // is_static_route_from_router is derived from RouteMatch at lookup time
+    let _ = is_static_route_from_router; // Acknowledge the flag (used for future optimizations)
 
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
@@ -269,7 +276,7 @@ pub async fn handle_request(
             None
         };
 
-        // Sucrose optimization: Only pass headers to Python if handler needs them
+        // Optimization: Only pass headers to Python if handler needs them
         // Headers are already extracted for Rust middleware (auth, rate limiting, CORS)
         // but we can avoid copying them to Python if handler doesn't use Header() params
         let headers_for_python = if needs_headers {
@@ -282,7 +289,7 @@ pub async fn handle_request(
             method,
             path,
             body: body.to_vec(),
-            path_params,
+            path_params, // For static routes, this is already empty from RouteMatch::Static
             query_params,
             headers: headers_for_python,
             cookies,

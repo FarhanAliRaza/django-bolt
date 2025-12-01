@@ -70,8 +70,12 @@ pub fn handle_test_request(
 
     // Route matching
     let (route, path_params, handler_id) = {
-        if let Some((route, params, id)) = router.find(&method, &path) {
-            (route.handler.clone_ref(py), params, id)
+        if let Some(route_match) = router.find(&method, &path) {
+            // Get handler_id and handler first (borrows), then path_params (moves)
+            let handler_id = route_match.handler_id();
+            let handler = route_match.route().handler.clone_ref(py);
+            let path_params = route_match.path_params(); // Consumes route_match
+            (handler, path_params, handler_id)
         } else {
             return Ok((
                 404,

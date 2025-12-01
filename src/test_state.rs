@@ -294,10 +294,11 @@ pub fn handle_test_request_for(
         dispatch = app.dispatch.clone_ref(py);
 
         // Route matching
-        if let Some((r, params, id)) = app.router.find(&method, &path) {
-            route = r.handler.clone_ref(py);
-            path_params = params;
-            handler_id = id;
+        if let Some(route_match) = app.router.find(&method, &path) {
+            // Get handler_id first (borrows), then handler (borrows), then path_params (moves)
+            handler_id = route_match.handler_id();
+            route = route_match.route().handler.clone_ref(py);
+            path_params = route_match.path_params(); // Consumes route_match
         } else {
             // Automatic OPTIONS handling: if no explicit OPTIONS handler exists,
             // check if other methods are registered for this path and return Allow header
@@ -770,9 +771,8 @@ pub fn handle_actix_http_request(
                         };
 
                         // Find the route to get handler_id
-                        if let Some((_route, _params, handler_id)) =
-                            app.router.find(&lookup_method, &path)
-                        {
+                        if let Some(route_match) = app.router.find(&lookup_method, &path) {
+                            let handler_id = route_match.handler_id();
                             // Get route metadata
                             if let Some(route_meta) = app.route_metadata.get(&handler_id) {
                                 // Check if CORS is skipped

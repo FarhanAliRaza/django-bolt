@@ -22,20 +22,22 @@ from django_bolt import _core
 from .responses import StreamingResponse
 from .exceptions import HTTPException
 from .params import Param, Depends as DependsMarker
-from .typing import FieldDefinition, HandlerMetadata
+from .typing import FieldDefinition, HandlerMetadata, HandlerPattern
 from .middleware import CompressionConfig
 from .logging.middleware import create_logging_middleware, LoggingMiddleware
 from .exceptions import RequestValidationError, parse_msgspec_decode_error
 # Import modularized components
 from .binding import (
     convert_primitive,
-    get_msgspec_decoder
+    get_msgspec_decoder,
+    create_extractor_for_field,
+    create_body_extractor,
 )
 from .typing import is_msgspec_struct, is_optional, unwrap_optional
 from .request_parsing import parse_form_data
 from .dependencies import resolve_dependency
 from .serialization import serialize_response
-from .middleware.compiler import compile_middleware_meta, add_sucrose_flags_to_metadata
+from .middleware.compiler import compile_middleware_meta, add_optimization_flags_to_metadata
 from .types import Request
 from .concurrency import sync_to_thread
 from .views import APIView, ViewSet
@@ -768,7 +770,7 @@ class BoltAPI:
             # Store sync/async metadata
             meta["is_async"] = is_async
 
-            # Sucrose-style ORM analysis: Detect blocking operations at registration time
+            # Static ORM analysis: Detect blocking operations at registration time
             handler_analysis = analyze_handler(fn)
             meta["is_blocking"] = handler_analysis.is_blocking
 
@@ -832,9 +834,9 @@ class BoltAPI:
                 guards=guards, auth=auth
             )
 
-            # Add Sucrose-style optimization flags to middleware metadata
+            # Add optimization flags to middleware metadata
             # These are parsed by Rust's RouteMetadata::from_python() to skip unused parsing
-            middleware_meta = add_sucrose_flags_to_metadata(middleware_meta, meta)
+            middleware_meta = add_optimization_flags_to_metadata(middleware_meta, meta)
 
             if middleware_meta:
                 self._handler_middleware[handler_id] = middleware_meta
@@ -884,6 +886,57 @@ class BoltAPI:
                     metadata["response_field_names"] = list(fields.keys())
 
         return metadata
+
+    def _classify_handler_pattern(
+        self,
+        fields: List[FieldDefinition],
+        meta: HandlerMetadata,
+        needs_form_parsing: bool
+    ) -> HandlerPattern:
+        """
+        Classify handler into a pattern for specialized injector selection.
+
+        This enables optimized fast paths for common handler patterns,
+        eliminating unnecessary checks at request time.
+
+        Returns:
+            HandlerPattern enum value for specialized injector selection
+        """
+        # Check field sources once
+        sources = {f.source for f in fields}
+        has_deps = "dependency" in sources
+        has_request = "request" in sources
+        has_headers = "header" in sources
+
+        # Get flags from metadata
+        has_path = meta["needs_path_params"]
+        has_query = meta["needs_query"]
+        has_body = meta["needs_body"]
+        has_cookies = meta["needs_cookies"]
+
+        # Priority-ordered pattern matching
+        if has_deps:
+            return HandlerPattern.WITH_DEPS
+        if not fields:
+            return HandlerPattern.NO_PARAMS
+        if has_request or needs_form_parsing:
+            return HandlerPattern.FULL
+
+        # Check for simple patterns (no headers/cookies)
+        if has_headers or has_cookies:
+            return HandlerPattern.FULL
+
+        # Single-source patterns
+        if has_body and not has_path and not has_query:
+            return HandlerPattern.BODY_ONLY
+        if has_path and not has_query and not has_body:
+            return HandlerPattern.PATH_ONLY
+        if has_query and not has_path and not has_body:
+            return HandlerPattern.QUERY_ONLY
+        if (has_path or has_query) and not has_body:
+            return HandlerPattern.SIMPLE
+
+        return HandlerPattern.FULL
 
     def _compile_binder(self, fn: Callable, http_method: str = "", path: str = "") -> HandlerMetadata:
         """
@@ -963,6 +1016,13 @@ class BoltAPI:
                 explicit_marker=explicit_marker,
             )
 
+            # Attach pre-compiled extractor to field (performance optimization)
+            # This allows the injector to call the extractor directly without source checking
+            extractor = create_extractor_for_field(field)
+            if extractor is not None:
+                # Use object.__setattr__ since FieldDefinition is frozen
+                object.__setattr__(field, "extractor", extractor)
+
             field_definitions.append(field)
 
         # HTTP Method Validation: Ensure GET/HEAD/DELETE/OPTIONS don't have body params
@@ -998,8 +1058,8 @@ class BoltAPI:
         needs_form_parsing = any(f.source in ("form", "file") for f in field_definitions)
         meta["needs_form_parsing"] = needs_form_parsing
 
-        # Sucrose-style analysis: Determine which request components are actually used
-        # This allows skipping unused parsing at request time (inspired by Elysia's sucrose.ts)
+        # Static analysis: Determine which request components are actually used
+        # This allows skipping unused parsing at request time
         meta["needs_body"] = any(f.source in ("body", "form", "file") for f in field_definitions)
         meta["needs_query"] = any(f.source == "query" for f in field_definitions)
         # Note: Form/File parsing depends on Content-Type header, so needs_headers must include form handlers
@@ -1009,6 +1069,11 @@ class BoltAPI:
 
         # Static route detection: routes without path params can use O(1) lookup
         meta["is_static_route"] = len(path_params) == 0
+
+        # Classify handler pattern for specialized injector selection
+        meta["handler_pattern"] = self._classify_handler_pattern(
+            field_definitions, meta, needs_form_parsing
+        )
 
         return meta
 
@@ -1085,60 +1150,140 @@ class BoltAPI:
             - Pre-compiles all parameter extraction logic
             - Reduces branching with specialized paths for common cases
             - Better CPU cache locality with single inline function
-            - Sucrose-style optimization: skips unused request data access
+            - Skips unused request data access based on static analysis
+            - Uses pre-compiled extractors (eliminates source type checking)
         """
         fields = meta.get("fields", [])
         mode = meta.get("mode", "mixed")
+        pattern = meta.get("handler_pattern", HandlerPattern.FULL)
 
         # Fast path 1: Request-only mode (single request parameter)
-        # Note: Sync function - no async overhead
         if mode == "request_only":
             def injector_request_only(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
-                # Should never be called for request_only mode, but provide fallback
                 return ([request], {})
             return injector_request_only
 
         # Fast path 2: No parameters
-        # Note: Sync function - no async overhead
-        if not fields:
+        if not fields or pattern is HandlerPattern.NO_PARAMS:
             def injector_no_params(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
                 return ([], {})
             return injector_no_params
 
-        # Sucrose-style analysis: Pre-compute which request components are needed
-        # This avoids accessing unused data at request time (inspired by Elysia's sucrose.ts)
-        needs_form = meta.get("needs_form_parsing", False)
-        needs_query = meta.get("needs_query", True)  # Default True for backward compat
-        needs_headers = meta.get("needs_headers", True)
-        needs_cookies = meta.get("needs_cookies", True)
-        needs_path_params = meta.get("needs_path_params", True)
-        has_deps = any(f.source == "dependency" for f in fields)
+        # Fast path 3: Path-only parameters (e.g., GET /users/{id})
+        # Uses pre-compiled extractors directly on params_map
+        if pattern is HandlerPattern.PATH_ONLY:
+            # Pre-compute extractors list for direct access
+            extractors = [(f.extractor, f.kind, f.name) for f in fields]
 
-        # If handler has dependencies, must be async to resolve them
-        if has_deps:
+            def injector_path_only(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+                params_map = request["params"]
+                args: List[Any] = []
+                kwargs: Dict[str, Any] = {}
+                for extractor, kind, name in extractors:
+                    value = extractor(params_map)
+                    if kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                        args.append(value)
+                    else:
+                        kwargs[name] = value
+                return args, kwargs
+            return injector_path_only
+
+        # Fast path 4: Query-only parameters (e.g., GET /search?q=...)
+        if pattern is HandlerPattern.QUERY_ONLY:
+            extractors = [(f.extractor, f.kind, f.name) for f in fields]
+
+            def injector_query_only(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+                query_map = request["query"]
+                args: List[Any] = []
+                kwargs: Dict[str, Any] = {}
+                for extractor, kind, name in extractors:
+                    value = extractor(query_map)
+                    if kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                        args.append(value)
+                    else:
+                        kwargs[name] = value
+                return args, kwargs
+            return injector_query_only
+
+        # Fast path 5: Body-only parameters (e.g., POST with single JSON struct)
+        if pattern is HandlerPattern.BODY_ONLY and len(fields) == 1:
+            field = fields[0]
+            body_extractor = field.extractor
+            is_positional = field.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            field_name = field.name
+
+            if is_positional:
+                def injector_body_only_positional(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+                    body_bytes = request["body"]
+                    return ([body_extractor(body_bytes)], {})
+                return injector_body_only_positional
+            else:
+                def injector_body_only_kwarg(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+                    body_bytes = request["body"]
+                    return ([], {field_name: body_extractor(body_bytes)})
+                return injector_body_only_kwarg
+
+        # Fast path 6: Simple pattern (path + query, no body/headers/cookies)
+        if pattern is HandlerPattern.SIMPLE:
+            # Pre-categorize fields by source for direct access
+            path_fields = [(f.extractor, f.kind, f.name) for f in fields if f.source == "path"]
+            query_fields = [(f.extractor, f.kind, f.name) for f in fields if f.source == "query"]
+            # Maintain original field order for args
+            field_order = [(f.source, i) for i, f in enumerate(fields)]
+
+            def injector_simple(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+                params_map = request["params"]
+                query_map = request["query"]
+                args: List[Any] = []
+                kwargs: Dict[str, Any] = {}
+
+                # Extract in original field order
+                path_idx = 0
+                query_idx = 0
+                for source, _ in field_order:
+                    if source == "path":
+                        extractor, kind, name = path_fields[path_idx]
+                        value = extractor(params_map)
+                        path_idx += 1
+                    else:  # query
+                        extractor, kind, name = query_fields[query_idx]
+                        value = extractor(query_map)
+                        query_idx += 1
+
+                    if kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                        args.append(value)
+                    else:
+                        kwargs[name] = value
+                return args, kwargs
+            return injector_simple
+
+        # Dependency injection path (async required)
+        if pattern is HandlerPattern.WITH_DEPS:
+            needs_form = meta.get("needs_form_parsing", False)
+            needs_query = meta.get("needs_query", True)
+            needs_headers = meta.get("needs_headers", True)
+            needs_cookies = meta.get("needs_cookies", True)
+            needs_path_params = meta.get("needs_path_params", True)
+
             async def injector_with_deps(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
                 """Optimized argument injector with dependency support."""
                 args: List[Any] = []
                 kwargs: Dict[str, Any] = {}
 
-                # Sucrose optimization: Only access request data that's actually needed
                 params_map = request["params"] if needs_path_params else {}
                 query_map = request["query"] if needs_query else {}
                 headers_map = request.get("headers", {}) if needs_headers else {}
                 cookies_map = request.get("cookies", {}) if needs_cookies else {}
 
-                # Parse form data only if needed
                 if needs_form:
                     form_map, files_map = parse_form_data(request, headers_map)
                 else:
                     form_map, files_map = {}, {}
 
-                # Body decode cache
                 body_obj: Any = None
                 body_loaded: bool = False
                 dep_cache: Dict[Any, Any] = {}
 
-                # Extract each parameter
                 for field in fields:
                     if field.source == "request":
                         value = request
@@ -1151,13 +1296,37 @@ class BoltAPI:
                             self._handler_meta, self._compile_binder,
                             meta.get("http_method", ""), meta.get("path", "")
                         )
+                    elif field.extractor is not None:
+                        # Use pre-compiled extractor
+                        source = field.source
+                        if source == "path":
+                            value = field.extractor(params_map)
+                        elif source == "query":
+                            value = field.extractor(query_map)
+                        elif source == "header":
+                            value = field.extractor(headers_map)
+                        elif source == "cookie":
+                            value = field.extractor(cookies_map)
+                        elif source == "form":
+                            value = field.extractor(form_map)
+                        elif source == "file":
+                            value = field.extractor(files_map)
+                        elif source == "body":
+                            if not body_loaded:
+                                body_obj = field.extractor(request["body"])
+                                body_loaded = True
+                            value = body_obj
+                        else:
+                            value, body_obj, body_loaded = extract_parameter_value(
+                                field, request, params_map, query_map, headers_map, cookies_map,
+                                form_map, files_map, meta, body_obj, body_loaded
+                            )
                     else:
                         value, body_obj, body_loaded = extract_parameter_value(
                             field, request, params_map, query_map, headers_map, cookies_map,
                             form_map, files_map, meta, body_obj, body_loaded
                         )
 
-                    # Build args/kwargs based on parameter kind
                     if field.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
                         args.append(value)
                     else:
@@ -1166,41 +1335,68 @@ class BoltAPI:
                 return args, kwargs
             return injector_with_deps
 
-        # Sync version for handlers without dependencies (faster - no async overhead)
-        # Uses Sucrose-style optimization to skip unused request data access
-        def injector_sync(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
-            """Optimized synchronous injector (no dependencies, Sucrose-optimized)."""
+        # Full pattern (form, headers, cookies, or complex combinations)
+        # Uses pre-compiled extractors with source-based dispatch
+        needs_form = meta.get("needs_form_parsing", False)
+        needs_query = meta.get("needs_query", True)
+        needs_headers = meta.get("needs_headers", True)
+        needs_cookies = meta.get("needs_cookies", True)
+        needs_path_params = meta.get("needs_path_params", True)
+
+        def injector_full(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+            """Full injector with pre-compiled extractors."""
             args: List[Any] = []
             kwargs: Dict[str, Any] = {}
 
-            # Sucrose optimization: Only access request data that's actually needed
-            # This avoids dict lookups and object creation for unused data
             params_map = request["params"] if needs_path_params else {}
             query_map = request["query"] if needs_query else {}
             headers_map = request.get("headers", {}) if needs_headers else {}
             cookies_map = request.get("cookies", {}) if needs_cookies else {}
 
-            # Parse form data only if needed
             if needs_form:
                 form_map, files_map = parse_form_data(request, headers_map)
             else:
                 form_map, files_map = {}, {}
 
-            # Body decode cache
             body_obj: Any = None
             body_loaded: bool = False
 
-            # Extract each parameter
             for field in fields:
                 if field.source == "request":
                     value = request
+                elif field.extractor is not None:
+                    # Use pre-compiled extractor based on source
+                    source = field.source
+                    if source == "path":
+                        value = field.extractor(params_map)
+                    elif source == "query":
+                        value = field.extractor(query_map)
+                    elif source == "header":
+                        value = field.extractor(headers_map)
+                    elif source == "cookie":
+                        value = field.extractor(cookies_map)
+                    elif source == "form":
+                        value = field.extractor(form_map)
+                    elif source == "file":
+                        value = field.extractor(files_map)
+                    elif source == "body":
+                        if not body_loaded:
+                            body_obj = field.extractor(request["body"])
+                            body_loaded = True
+                        value = body_obj
+                    else:
+                        # Fallback for unknown sources
+                        value, body_obj, body_loaded = extract_parameter_value(
+                            field, request, params_map, query_map, headers_map, cookies_map,
+                            form_map, files_map, meta, body_obj, body_loaded
+                        )
                 else:
+                    # No pre-compiled extractor, use generic extraction
                     value, body_obj, body_loaded = extract_parameter_value(
                         field, request, params_map, query_map, headers_map, cookies_map,
                         form_map, files_map, meta, body_obj, body_loaded
                     )
 
-                # Build args/kwargs based on parameter kind
                 if field.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
                     args.append(value)
                 else:
@@ -1208,7 +1404,7 @@ class BoltAPI:
 
             return args, kwargs
 
-        return injector_sync
+        return injector_full
 
 
     def _handle_http_exception(self, he: HTTPException) -> Response:

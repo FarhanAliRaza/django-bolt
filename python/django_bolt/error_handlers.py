@@ -4,10 +4,11 @@ Provides default exception handlers that convert Python exceptions into
 structured HTTP error responses.
 """
 
-import msgspec
 import re
 import traceback
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any
+
+import msgspec
 
 # Django import - may fail if Django not configured
 try:
@@ -23,16 +24,15 @@ from .exceptions import (
     RequestValidationError,
     ResponseValidationError,
     ValidationException,
-    InternalServerError,
 )
 
 
 def format_error_response(
     status_code: int,
     detail: Any,
-    headers: Optional[Dict[str, str]] = None,
-    extra: Optional[Dict[str, Any] | List[Any]] = None,
-) -> Tuple[int, List[Tuple[str, str]], bytes]:
+    headers: dict[str, str] | None = None,
+    extra: dict[str, Any] | list[Any] | None = None,
+) -> tuple[int, list[tuple[str, str]], bytes]:
     """Format an error response.
 
     Args:
@@ -44,7 +44,7 @@ def format_error_response(
     Returns:
         Tuple of (status_code, headers, body)
     """
-    error_body: Dict[str, Any] = {"detail": detail}
+    error_body: dict[str, Any] = {"detail": detail}
 
     if extra is not None:
         error_body["extra"] = extra
@@ -58,7 +58,9 @@ def format_error_response(
     return status_code, response_headers, body_bytes
 
 
-def http_exception_handler(exc: HTTPException) -> Tuple[int, List[Tuple[str, str]], bytes]:
+def http_exception_handler(
+    exc: HTTPException,
+) -> tuple[int, list[tuple[str, str]], bytes]:
     """Handle HTTPException and convert to error response.
 
     Args:
@@ -75,7 +77,9 @@ def http_exception_handler(exc: HTTPException) -> Tuple[int, List[Tuple[str, str
     )
 
 
-def msgspec_validation_error_to_dict(error: msgspec.ValidationError) -> List[Dict[str, Any]]:
+def msgspec_validation_error_to_dict(
+    error: msgspec.ValidationError,
+) -> list[dict[str, Any]]:
     """Convert msgspec ValidationError to structured error list.
 
     Args:
@@ -96,43 +100,53 @@ def msgspec_validation_error_to_dict(error: msgspec.ValidationError) -> List[Dic
 
     # Check if error message contains field location
     if " - at `" in error_msg:
-        msg_part, loc_part = error_msg.split(" - at `", 1)
+        _msg_part, loc_part = error_msg.split(" - at `", 1)
         loc_path = loc_part.rstrip("`")
         # Parse location like $[0].age into ["body", 0, "age"]
         loc_parts = ["body"]
         # Simple parsing - can be improved
-        loc_parts.append(loc_path.replace("$", "").replace("[", ".").replace("]", "").strip("."))
+        loc_parts.append(
+            loc_path.replace("$", "").replace("[", ".").replace("]", "").strip(".")
+        )
     elif "missing required field" in error_msg.lower():
         # Extract field name from message
         match = re.search(r"`(\w+)`", error_msg)
         field = match.group(1) if match else "unknown"
-        errors.append({
-            "loc": ["body", field],
-            "msg": error_msg,
-            "type": "missing_field",
-        })
+        errors.append(
+            {
+                "loc": ["body", field],
+                "msg": error_msg,
+                "type": "missing_field",
+            }
+        )
         return errors
     else:
         # Generic error without location
-        errors.append({
-            "loc": ["body"],
-            "msg": error_msg,
-            "type": "validation_error",
-        })
+        errors.append(
+            {
+                "loc": ["body"],
+                "msg": error_msg,
+                "type": "validation_error",
+            }
+        )
         return errors
 
-    errors.append({
-        "loc": loc_parts if isinstance(loc_parts, list) else ["body"],
-        "msg": error_msg.split(" - at `")[0] if " - at `" in error_msg else error_msg,
-        "type": "validation_error",
-    })
+    errors.append(
+        {
+            "loc": loc_parts if isinstance(loc_parts, list) else ["body"],
+            "msg": error_msg.split(" - at `")[0]
+            if " - at `" in error_msg
+            else error_msg,
+            "type": "validation_error",
+        }
+    )
 
     return errors
 
 
 def request_validation_error_handler(
     exc: RequestValidationError,
-) -> Tuple[int, List[Tuple[str, str]], bytes]:
+) -> tuple[int, list[tuple[str, str]], bytes]:
     """Handle RequestValidationError and convert to 422 response.
 
     Args:
@@ -152,11 +166,13 @@ def request_validation_error_handler(
             formatted_errors.extend(msgspec_validation_error_to_dict(error))
         else:
             # Generic error
-            formatted_errors.append({
-                "loc": ["body"],
-                "msg": str(error),
-                "type": "validation_error",
-            })
+            formatted_errors.append(
+                {
+                    "loc": ["body"],
+                    "msg": str(error),
+                    "type": "validation_error",
+                }
+            )
 
     return format_error_response(
         status_code=422,
@@ -166,7 +182,7 @@ def request_validation_error_handler(
 
 def response_validation_error_handler(
     exc: ResponseValidationError,
-) -> Tuple[int, List[Tuple[str, str]], bytes]:
+) -> tuple[int, list[tuple[str, str]], bytes]:
     """Handle ResponseValidationError and convert to 500 response.
 
     Args:
@@ -185,11 +201,13 @@ def response_validation_error_handler(
         elif isinstance(error, msgspec.ValidationError):
             formatted_errors.extend(msgspec_validation_error_to_dict(error))
         else:
-            formatted_errors.append({
-                "loc": ["response"],
-                "msg": str(error),
-                "type": "validation_error",
-            })
+            formatted_errors.append(
+                {
+                    "loc": ["response"],
+                    "msg": str(error),
+                    "type": "validation_error",
+                }
+            )
 
     return format_error_response(
         status_code=500,
@@ -201,8 +219,8 @@ def response_validation_error_handler(
 def generic_exception_handler(
     exc: Exception,
     debug: bool = False,
-    request: Optional[Any] = None,  # noqa: ARG001 - kept for API compatibility
-) -> Tuple[int, List[Tuple[str, str]], bytes]:
+    request: Any | None = None,  # noqa: ARG001 - kept for API compatibility
+) -> tuple[int, list[tuple[str, str]], bytes]:
     """Handle generic exceptions and convert to 500 response.
 
     Args:
@@ -228,7 +246,7 @@ def generic_exception_handler(
                 return (
                     500,
                     [("content-type", "text/html; charset=utf-8")],
-                    html_content.encode("utf-8")
+                    html_content.encode("utf-8"),
                 )
         except Exception:
             # Fallback to standard traceback formatting in JSON
@@ -237,13 +255,15 @@ def generic_exception_handler(
         # Fallback to JSON with traceback
         tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
         # Split into individual lines for better JSON display, stripping trailing newlines
-        tb_formatted = [line.rstrip('\n') for line in ''.join(tb_lines).split('\n') if line.strip()]
+        tb_formatted = [
+            line.rstrip("\n") for line in "".join(tb_lines).split("\n") if line.strip()
+        ]
         extra = {
             "exception": str(exc),
             "exception_type": type(exc).__name__,
             "traceback": tb_formatted,
         }
-        detail = f"{type(exc).__name__}: {str(exc)}"
+        detail = f"{type(exc).__name__}: {exc!s}"
 
     return format_error_response(
         status_code=500,
@@ -254,9 +274,9 @@ def generic_exception_handler(
 
 def handle_exception(
     exc: Exception,
-    debug: Optional[bool] = None,
-    request: Optional[Any] = None,
-) -> Tuple[int, List[Tuple[str, str]], bytes]:
+    debug: bool | None = None,
+    request: Any | None = None,
+) -> tuple[int, list[tuple[str, str]], bytes]:
     """Main exception handler that routes to specific handlers.
 
     Args:
@@ -286,9 +306,7 @@ def handle_exception(
         return response_validation_error_handler(exc)
     elif isinstance(exc, ValidationException):
         # Generic validation exception
-        return request_validation_error_handler(
-            RequestValidationError(exc.errors())
-        )
+        return request_validation_error_handler(RequestValidationError(exc.errors()))
     elif isinstance(exc, msgspec.ValidationError):
         # Direct msgspec validation error
         errors = msgspec_validation_error_to_dict(exc)

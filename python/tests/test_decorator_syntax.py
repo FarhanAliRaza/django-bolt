@@ -3,13 +3,14 @@ Tests for decorator syntax (@api.view and @api.viewset).
 
 This test suite verifies that the decorator pattern works correctly.
 """
-import pytest
 import msgspec
-from django_bolt import BoltAPI, ViewSet, action
-from django_bolt.views import APIView
-from django_bolt.testing import TestClient
-from .test_models import Article
+import pytest
 
+from django_bolt import BoltAPI, ViewSet, action
+from django_bolt.testing import TestClient
+from django_bolt.views import APIView
+
+from .test_models import Article
 
 # --- Fixtures ---
 

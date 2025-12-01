@@ -13,29 +13,28 @@ import pytest
 
 from django_bolt.api import BoltAPI
 from django_bolt.serializers import (
-    Serializer,
-    Email,
     URL,
+    Email,
     HttpsURL,
-    Phone,
-    Slug,
-    Username,
     NonEmptyStr,
-    PositiveInt,
     NonNegativeInt,
     Percentage,
+    Phone,
+    PositiveInt,
+    Serializer,
+    Slug,
+    Username,
     computed_field,
 )
 from django_bolt.serializers.types import (
+    UUID,
+    HexColor,
+    IPv4,
     Latitude,
     Longitude,
     Port,
-    HexColor,
-    UUID,
-    IPv4,
 )
 from django_bolt.testing import TestClient
-
 
 # =============================================================================
 # SERIALIZERS - Using validated types

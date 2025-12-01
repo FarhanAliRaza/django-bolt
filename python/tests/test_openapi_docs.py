@@ -4,8 +4,9 @@ Tests for OpenAPI documentation generation and rendering.
 These tests verify that the OpenAPI/Swagger documentation endpoints
 are working correctly and not throwing internal errors.
 """
+
 import msgspec
-from typing import Optional
+
 from django_bolt import BoltAPI
 from django_bolt.openapi import OpenAPIConfig, SwaggerRenderPlugin
 from django_bolt.testing import TestClient
@@ -16,7 +17,7 @@ class Item(msgspec.Struct):
     id: int
     name: str
     price: float
-    is_active: Optional[bool] = None
+    is_active: bool | None = None
 
 
 def test_openapi_json_endpoint():
@@ -32,7 +33,7 @@ def test_openapi_json_endpoint():
 
     # Add some test routes with various parameter types
     @api.get("/items/{item_id}")
-    async def get_item(item_id: int, q: Optional[str] = None):
+    async def get_item(item_id: int, q: str | None = None):
         """Get an item by ID."""
         return {"item_id": item_id, "q": q}
 

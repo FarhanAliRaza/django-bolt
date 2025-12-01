@@ -4,22 +4,22 @@ Real ORM-based tests for pagination functionality.
 Tests pagination with actual Django models, database queries, and HTTP requests.
 No mocking - tests the full integration stack.
 """
-import pytest
+
 import msgspec
-from typing import List
+import pytest
 
 from django_bolt import (
     BoltAPI,
-    ViewSet,
+    CursorPagination,
+    LimitOffsetPagination,
     ModelViewSet,
     PageNumberPagination,
-    LimitOffsetPagination,
-    CursorPagination,
+    ViewSet,
     paginate,
 )
 from django_bolt.testing import TestClient
-from .test_models import Article
 
+from .test_models import Article
 
 # ============================================================================
 # Schemas
@@ -204,7 +204,7 @@ def test_page_number_pagination_with_filtering(sample_articles):
 
     @api.get("/articles")
     @paginate(SmallPagePagination)
-    async def list_articles(request, is_published: bool = None):
+    async def list_articles(request, is_published: bool | None = None):
         qs = Article.objects.all()
         if is_published is not None:
             qs = qs.filter(is_published=is_published)
@@ -364,7 +364,7 @@ def test_limit_offset_pagination_with_filtering(sample_articles):
 
     @api.get("/articles")
     @paginate(LimitOffsetPagination)
-    async def list_articles(request, author: str = None):
+    async def list_articles(request, author: str | None = None):
         qs = Article.objects.all()
         if author:
             qs = qs.filter(author=author)
@@ -585,7 +585,7 @@ def test_cursor_pagination_with_filtering(sample_articles):
 
     @api.get("/articles")
     @paginate(SmallCursorPagination)
-    async def list_articles(request, is_published: bool = None):
+    async def list_articles(request, is_published: bool | None = None):
         qs = Article.objects.all()
         if is_published is not None:
             qs = qs.filter(is_published=is_published)

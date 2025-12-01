@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Annotated
 
-import pytest
-
 from django_bolt.serializers import Nested, Serializer
 
 

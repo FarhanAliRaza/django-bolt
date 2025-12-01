@@ -7,9 +7,9 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
-use crate::middleware::compression::CompressionMiddleware;
 use crate::handler::handle_request;
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
+use crate::middleware::compression::CompressionMiddleware;
 use crate::router::Router;
 use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, ROUTE_METADATA_TEMP, TASK_LOCALS};
 

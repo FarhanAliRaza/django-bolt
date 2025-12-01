@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Type, TypeVar
+from typing import Any, TypeVar
 
 from django.db import models
 
@@ -13,14 +13,14 @@ T = TypeVar("T", bound=Serializer)
 
 
 def create_serializer(
-    model: Type[models.Model],
+    model: type[models.Model],
     *,
     fields: list[str] | None = None,
     exclude: list[str] | None = None,
     write_only: set[str] | None = None,
     read_only: set[str] | None = None,
     serializer_name: str | None = None,
-) -> Type[Serializer]:
+) -> type[Serializer]:
     """
     Dynamically create a Serializer class from a Django model.
 
@@ -52,17 +52,13 @@ def create_serializer(
     model_fields = {f.name: f for f in model._meta.get_fields()}
 
     # Determine which fields to include
-    if fields is not None:
-        fields_to_include = set(fields)
-    else:
-        fields_to_include = set(model_fields.keys())
+    fields_to_include = set(fields) if fields is not None else set(model_fields.keys())
 
     if exclude:
         fields_to_include -= set(exclude)
 
     # Build field annotations
     annotations: dict[str, Any] = {}
-    namespace: dict[str, Any] = {}
 
     for field_name in fields_to_include:
         if field_name not in model_fields:
@@ -103,14 +99,14 @@ def create_serializer(
 
 
 def create_serializer_set(
-    model: Type[models.Model],
+    model: type[models.Model],
     *,
     create_fields: list[str] | None = None,
     update_fields: list[str] | None = None,
     public_fields: list[str] | None = None,
     write_only: set[str] | None = None,
     read_only: set[str] | None = None,
-) -> tuple[Type[Serializer], Type[Serializer], Type[Serializer]]:
+) -> tuple[type[Serializer], type[Serializer], type[Serializer]]:
     """
     Create a standard set of three Serializer classes for CRUD operations.
 

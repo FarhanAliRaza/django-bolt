@@ -3,10 +3,10 @@
 Provides request/response logging with support for Django's logging configuration.
 """
 
-import time
-import random
 import logging
-from typing import Dict, Any, Optional, Callable, Awaitable
+import random
+from typing import Any
+
 from .config import LoggingConfig
 
 
@@ -16,7 +16,7 @@ class LoggingMiddleware:
     Integrates with Django's logging system and provides structured logging.
     """
 
-    def __init__(self, config: Optional[LoggingConfig] = None):
+    def __init__(self, config: LoggingConfig | None = None):
         """Initialize logging middleware.
 
         Args:
@@ -24,12 +24,13 @@ class LoggingMiddleware:
         """
         if config is None:
             from .config import get_default_logging_config
+
             config = get_default_logging_config()
 
         self.config = config
         self.logger = config.get_logger()
 
-    def obfuscate_headers(self, headers: Dict[str, str]) -> Dict[str, str]:
+    def obfuscate_headers(self, headers: dict[str, str]) -> dict[str, str]:
         """Obfuscate sensitive headers.
 
         Args:
@@ -46,7 +47,7 @@ class LoggingMiddleware:
                 obfuscated[key] = value
         return obfuscated
 
-    def obfuscate_cookies(self, cookies: Dict[str, str]) -> Dict[str, str]:
+    def obfuscate_cookies(self, cookies: dict[str, str]) -> dict[str, str]:
         """Obfuscate sensitive cookies.
 
         Args:
@@ -63,7 +64,7 @@ class LoggingMiddleware:
                 obfuscated[key] = value
         return obfuscated
 
-    def extract_request_data(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def extract_request_data(self, request: dict[str, Any]) -> dict[str, Any]:
         """Extract request data for logging.
 
         Args:
@@ -117,7 +118,7 @@ class LoggingMiddleware:
 
         return data
 
-    def log_request(self, request: Dict[str, Any]) -> None:
+    def log_request(self, request: dict[str, Any]) -> None:
         """Log an HTTP request.
 
         Args:
@@ -147,10 +148,10 @@ class LoggingMiddleware:
 
     def log_response(
         self,
-        request: Dict[str, Any],
+        request: dict[str, Any],
         status_code: int,
         duration: float,
-        response_size: Optional[int] = None,
+        response_size: int | None = None,
     ) -> None:
         """Log an HTTP response.
 
@@ -185,7 +186,7 @@ class LoggingMiddleware:
                     pass
             # Slow-only gate
             if self.config.min_duration_ms is not None:
-                duration_ms_check = (duration * 1000.0)
+                duration_ms_check = duration * 1000.0
                 if duration_ms_check < float(self.config.min_duration_ms):
                     return
 
@@ -218,13 +219,15 @@ class LoggingMiddleware:
             data["response_size"] = response_size
 
         # Build log message from configured fields only
-        message = " ".join(message_parts) if message_parts else f"Response: {status_code}"
+        message = (
+            " ".join(message_parts) if message_parts else f"Response: {status_code}"
+        )
 
         self.logger.log(log_level, message, extra=data)
 
     def log_exception(
         self,
-        request: Dict[str, Any],
+        request: dict[str, Any],
         exc: Exception,
         exc_info: bool = True,
     ) -> None:
@@ -244,16 +247,16 @@ class LoggingMiddleware:
             "exception": str(exc),
         }
 
-        message = f"Exception in {data['method']} {path}: {type(exc).__name__}: {str(exc)}"
+        message = f"Exception in {data['method']} {path}: {type(exc).__name__}: {exc!s}"
 
         # Use custom exception handler if provided
         if self.config.exception_logging_handler:
-            self.config.exception_logging_handler(
-                self.logger, request, exc, exc_info
-            )
+            self.config.exception_logging_handler(self.logger, request, exc, exc_info)
         else:
             # Default exception logging
-            log_level = getattr(logging, self.config.error_log_level.upper(), logging.ERROR)
+            log_level = getattr(
+                logging, self.config.error_log_level.upper(), logging.ERROR
+            )
             self.logger.log(
                 log_level,
                 message,
@@ -264,9 +267,7 @@ class LoggingMiddleware:
 
 # Convenience function to create logging middleware
 def create_logging_middleware(
-    logger_name: Optional[str] = None,
-    log_level: Optional[str] = None,
-    **kwargs
+    logger_name: str | None = None, log_level: str | None = None, **kwargs
 ) -> LoggingMiddleware:
     """Create a logging middleware with custom configuration.
 

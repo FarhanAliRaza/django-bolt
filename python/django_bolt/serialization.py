@@ -1,16 +1,27 @@
 """Response serialization utilities."""
+
 from __future__ import annotations
+
 import mimetypes
-import msgspec
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
-from .responses import Response as ResponseClass, JSON, PlainText, HTML, Redirect, File, FileResponse, StreamingResponse
-from .binding import coerce_to_response_type_async, coerce_to_response_type
+from typing import TYPE_CHECKING, Any
+
 from . import _json
+from .binding import coerce_to_response_type, coerce_to_response_type_async
+from .responses import (
+    HTML,
+    JSON,
+    File,
+    FileResponse,
+    PlainText,
+    Redirect,
+    Response as ResponseClass,
+    StreamingResponse,
+)
 
 if TYPE_CHECKING:
     from .typing import HandlerMetadata
 
-ResponseTuple = Tuple[int, List[Tuple[str, str]], bytes]
+ResponseTuple = tuple[int, list[tuple[str, str]], bytes]
 
 
 def _convert_serializers(result: Any) -> Any:
@@ -29,13 +40,17 @@ def _convert_serializers(result: Any) -> Any:
     """
     # Check for Serializer instance using unique marker (not duck typing)
     # __is_bolt_serializer__ is defined on the Serializer base class
-    if getattr(result.__class__, "__is_bolt_serializer__", False) and hasattr(result, "dump"):
+    if getattr(result.__class__, "__is_bolt_serializer__", False) and hasattr(
+        result, "dump"
+    ):
         return result.dump()
 
     # Handle list of Serializers
     if isinstance(result, list) and len(result) > 0:
         first = result[0]
-        if getattr(first.__class__, "__is_bolt_serializer__", False) and hasattr(first, "dump"):
+        if getattr(first.__class__, "__is_bolt_serializer__", False) and hasattr(
+            first, "dump"
+        ):
             return [item.dump() for item in result]
 
     return result
@@ -53,7 +68,11 @@ async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTupl
     if isinstance(result, tuple) and len(result) == 3:
         status, headers, body = result
         # Validate it looks like a response tuple
-        if isinstance(status, int) and isinstance(headers, list) and isinstance(body, (bytes, bytearray)):
+        if (
+            isinstance(status, int)
+            and isinstance(headers, list)
+            and isinstance(body, (bytes, bytearray))
+        ):
             return status, headers, bytes(body)
 
     # Handle different response types (ordered by frequency for performance)
@@ -100,7 +119,11 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
     # Check if result is already a raw response tuple (status, headers, body)
     if isinstance(result, tuple) and len(result) == 3:
         status, headers, body = result
-        if isinstance(status, int) and isinstance(headers, list) and isinstance(body, (bytes, bytearray)):
+        if (
+            isinstance(status, int)
+            and isinstance(headers, list)
+            and isinstance(body, (bytes, bytearray))
+        ):
             return status, headers, bytes(body)
 
     # Handle different response types (ordered by frequency for performance)
@@ -110,7 +133,9 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
     # Common: JSON wrapper
     elif isinstance(result, JSON):
         # Sync version of serialize_json_response
-        has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+        has_custom_content_type = result.headers and any(
+            k.lower() == "content-type" for k in result.headers
+        )
         if has_custom_content_type:
             headers = [(k.lower(), v) for k, v in result.headers.items()]
         else:
@@ -124,7 +149,11 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
                 data_bytes = _json.encode(validated)
             except Exception as e:
                 err = f"Response validation error: {e}"
-                return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+                return (
+                    500,
+                    [("content-type", "text/plain; charset=utf-8")],
+                    err.encode(),
+                )
         else:
             data_bytes = result.to_bytes()
         return int(result.status_code), headers, data_bytes
@@ -147,7 +176,9 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
         return serialize_file_streaming_response(result)
     elif isinstance(result, ResponseClass):
         # Sync version of serialize_generic_response
-        has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+        has_custom_content_type = result.headers and any(
+            k.lower() == "content-type" for k in result.headers
+        )
         if has_custom_content_type:
             headers = [(k.lower(), v) for k, v in result.headers.items()]
         else:
@@ -157,11 +188,21 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
 
         if response_tp is not None:
             try:
-                validated = coerce_to_response_type(result.content, response_tp, meta=meta)
-                data_bytes = _json.encode(validated) if result.media_type == "application/json" else result.to_bytes()
+                validated = coerce_to_response_type(
+                    result.content, response_tp, meta=meta
+                )
+                data_bytes = (
+                    _json.encode(validated)
+                    if result.media_type == "application/json"
+                    else result.to_bytes()
+                )
             except Exception as e:
                 err = f"Response validation error: {e}"
-                return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+                return (
+                    500,
+                    [("content-type", "text/plain; charset=utf-8")],
+                    err.encode(),
+                )
         else:
             data_bytes = result.to_bytes()
         return int(result.status_code), headers, data_bytes
@@ -170,10 +211,14 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
         return serialize_json_data_sync(result, response_tp, meta)
 
 
-async def serialize_generic_response(result: ResponseClass, response_tp: Optional[Any], meta: "Optional[HandlerMetadata]" = None) -> ResponseTuple:
+async def serialize_generic_response(
+    result: ResponseClass, response_tp: Any | None, meta: HandlerMetadata | None = None
+) -> ResponseTuple:
     """Serialize generic Response object with custom headers."""
     # Check if content-type is already provided in custom headers
-    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+    has_custom_content_type = result.headers and any(
+        k.lower() == "content-type" for k in result.headers
+    )
 
     if has_custom_content_type:
         # Use only custom headers (including custom content-type)
@@ -186,8 +231,14 @@ async def serialize_generic_response(result: ResponseClass, response_tp: Optiona
 
     if response_tp is not None:
         try:
-            validated = await coerce_to_response_type_async(result.content, response_tp, meta=meta)
-            data_bytes = _json.encode(validated) if result.media_type == "application/json" else result.to_bytes()
+            validated = await coerce_to_response_type_async(
+                result.content, response_tp, meta=meta
+            )
+            data_bytes = (
+                _json.encode(validated)
+                if result.media_type == "application/json"
+                else result.to_bytes()
+            )
         except Exception as e:
             err = f"Response validation error: {e}"
             return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
@@ -197,10 +248,14 @@ async def serialize_generic_response(result: ResponseClass, response_tp: Optiona
     return int(result.status_code), headers, data_bytes
 
 
-async def serialize_json_response(result: JSON, response_tp: Optional[Any], meta: "Optional[HandlerMetadata]" = None) -> ResponseTuple:
+async def serialize_json_response(
+    result: JSON, response_tp: Any | None, meta: HandlerMetadata | None = None
+) -> ResponseTuple:
     """Serialize JSON response object."""
     # Check if content-type is already provided in custom headers
-    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+    has_custom_content_type = result.headers and any(
+        k.lower() == "content-type" for k in result.headers
+    )
 
     if has_custom_content_type:
         # Use only custom headers (including custom content-type)
@@ -213,7 +268,9 @@ async def serialize_json_response(result: JSON, response_tp: Optional[Any], meta
 
     if response_tp is not None:
         try:
-            validated = await coerce_to_response_type_async(result.data, response_tp, meta=meta)
+            validated = await coerce_to_response_type_async(
+                result.data, response_tp, meta=meta
+            )
             data_bytes = _json.encode(validated)
         except Exception as e:
             err = f"Response validation error: {e}"
@@ -227,7 +284,9 @@ async def serialize_json_response(result: JSON, response_tp: Optional[Any], meta
 def serialize_plaintext_response(result: PlainText) -> ResponseTuple:
     """Serialize plain text response."""
     # Check if content-type is already provided in custom headers
-    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+    has_custom_content_type = result.headers and any(
+        k.lower() == "content-type" for k in result.headers
+    )
 
     if has_custom_content_type:
         # Use only custom headers (including custom content-type)
@@ -244,7 +303,9 @@ def serialize_plaintext_response(result: PlainText) -> ResponseTuple:
 def serialize_html_response(result: HTML) -> ResponseTuple:
     """Serialize HTML response."""
     # Check if content-type is already provided in custom headers
-    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+    has_custom_content_type = result.headers and any(
+        k.lower() == "content-type" for k in result.headers
+    )
 
     if has_custom_content_type:
         # Use only custom headers (including custom content-type)
@@ -269,11 +330,17 @@ def serialize_redirect_response(result: Redirect) -> ResponseTuple:
 def serialize_file_response(result: File) -> ResponseTuple:
     """Serialize file response."""
     data = result.read_bytes()
-    ctype = result.media_type or mimetypes.guess_type(result.path)[0] or "application/octet-stream"
+    ctype = (
+        result.media_type
+        or mimetypes.guess_type(result.path)[0]
+        or "application/octet-stream"
+    )
     headers = [("content-type", ctype)]
 
     if result.filename:
-        headers.append(("content-disposition", f"attachment; filename=\"{result.filename}\""))
+        headers.append(
+            ("content-disposition", f'attachment; filename="{result.filename}"')
+        )
     if result.headers:
         headers.extend([(k.lower(), v) for k, v in result.headers.items()])
 
@@ -282,22 +349,32 @@ def serialize_file_response(result: File) -> ResponseTuple:
 
 def serialize_file_streaming_response(result: FileResponse) -> ResponseTuple:
     """Serialize file streaming response."""
-    ctype = result.media_type or mimetypes.guess_type(result.path)[0] or "application/octet-stream"
+    ctype = (
+        result.media_type
+        or mimetypes.guess_type(result.path)[0]
+        or "application/octet-stream"
+    )
     headers = [("x-bolt-file-path", result.path), ("content-type", ctype)]
 
     if result.filename:
-        headers.append(("content-disposition", f"attachment; filename=\"{result.filename}\""))
+        headers.append(
+            ("content-disposition", f'attachment; filename="{result.filename}"')
+        )
     if result.headers:
         headers.extend([(k.lower(), v) for k, v in result.headers.items()])
 
     return int(result.status_code), headers, b""
 
 
-async def serialize_json_data(result: Any, response_tp: Optional[Any], meta: "HandlerMetadata") -> ResponseTuple:
+async def serialize_json_data(
+    result: Any, response_tp: Any | None, meta: HandlerMetadata
+) -> ResponseTuple:
     """Serialize dict/list/other data as JSON."""
     if response_tp is not None:
         try:
-            validated = await coerce_to_response_type_async(result, response_tp, meta=meta)
+            validated = await coerce_to_response_type_async(
+                result, response_tp, meta=meta
+            )
             data = _json.encode(validated)
         except Exception as e:
             err = f"Response validation error: {e}"
@@ -309,7 +386,9 @@ async def serialize_json_data(result: Any, response_tp: Optional[Any], meta: "Ha
     return status, [("content-type", "application/json")], data
 
 
-def serialize_json_data_sync(result: Any, response_tp: Optional[Any], meta: "HandlerMetadata") -> ResponseTuple:
+def serialize_json_data_sync(
+    result: Any, response_tp: Any | None, meta: HandlerMetadata
+) -> ResponseTuple:
     """Serialize dict/list/other data as JSON (sync version for sync handlers)."""
     if response_tp is not None:
         try:

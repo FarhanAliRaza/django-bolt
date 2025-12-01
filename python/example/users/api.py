@@ -1,17 +1,19 @@
-from django_bolt import BoltAPI, JSON, action
-from django_bolt.views import APIView, ViewSet, ModelViewSet
-from django_bolt.exceptions import HTTPException, NotFound
+from typing import Annotated
+
+import msgspec
+from msgspec import Meta
+
+from django_bolt import BoltAPI
 from django_bolt.pagination import (
-    PageNumberPagination,
-    LimitOffsetPagination,
     CursorPagination,
+    LimitOffsetPagination,
+    PageNumberPagination,
     paginate,
 )
-from asgiref.sync import sync_to_async
-import msgspec
+from django_bolt.views import APIView, ModelViewSet, ViewSet
+
 from .models import User
-from typing import List, Annotated
-from msgspec import Meta
+
 api = BoltAPI(prefix="/users")
 
 
@@ -57,19 +59,19 @@ async def users_root():
 
 
 @api.get("/full10")
-async def list_full_10() -> List[UserFull]:
+async def list_full_10() -> list[UserFull]:
     # Optimized: only fetch needed fields instead of all()
     return User.objects.only("id", "username", "email", "first_name", "last_name", "is_active")[:10]
 
 
 @api.get("/sync-full10")
-def list_full_10_sync() -> List[UserFull]:
+def list_full_10_sync() -> list[UserFull]:
     # Optimized: only fetch needed fields instead of all()
     return User.objects.only("id", "username", "email", "first_name", "last_name", "is_active")[:10]
 
 
 @api.get("/sync-mini10")
-def list_mini_10_sync() -> List[UserMini]:
+def list_mini_10_sync() -> list[UserMini]:
     # Already optimized: only() fetches just id and username
     users = User.objects.only("id", "username")[:10]
     # evaludate query inside of sync context
@@ -79,7 +81,7 @@ def list_mini_10_sync() -> List[UserMini]:
 
 
 @api.get("/mini10")
-async def list_mini_10() -> List[UserMini]:
+async def list_mini_10() -> list[UserMini]:
     # Already optimized: only() fetches just id and username
     return User.objects.only("id", "username")[:10]
 
@@ -172,7 +174,7 @@ class UserFull10ViewSet(APIView):
 # 1. Functional View with PageNumberPagination
 @api.get("/paginated")
 @paginate(PageNumberPagination)
-async def list_users_paginated() -> List[UserMini]:
+async def list_users_paginated() -> list[UserMini]:
     """
     List users with page number pagination.
 
@@ -188,7 +190,7 @@ async def list_users_paginated() -> List[UserMini]:
 # 2. Functional View with LimitOffsetPagination
 @api.get("/paginated-offset")
 @paginate(LimitOffsetPagination)
-async def list_users_offset(request) -> List[UserMini]:
+async def list_users_offset(request) -> list[UserMini]:
     """
     List users with limit-offset pagination.
 
@@ -204,7 +206,7 @@ async def list_users_offset(request) -> List[UserMini]:
 # 3. Functional View with CursorPagination
 @api.get("/paginated-cursor")
 @paginate(CursorPagination)
-async def list_users_cursor(request) -> List[UserMini]:
+async def list_users_cursor(request) -> list[UserMini]:
     """
     List users with cursor-based pagination.
 
@@ -226,7 +228,7 @@ class SmallPagePagination(PageNumberPagination):
 
 @api.get("/paginated-small")
 @paginate(SmallPagePagination)
-async def list_users_small_pages(request) -> List[UserMini]:
+async def list_users_small_pages(request) -> list[UserMini]:
     """
     List users with custom small page size.
 
@@ -253,7 +255,7 @@ class UserPaginatedViewSet(ViewSet):
     queryset = User.objects.only("id", "username", "email")
     pagination_class = PageNumberPagination
 
-    async def list(self, request) -> List[UserMini]:
+    async def list(self, request) -> list[UserMini]:
         """List all users with pagination."""
         qs = await self.get_queryset()
 

@@ -1,13 +1,14 @@
 """
 Test type definitions and protocols.
 """
-import pytest
-import jwt
 import time
-from django_bolt import BoltAPI, Request
-from django_bolt.testing import TestClient
-from django_bolt.auth import JWTAuthentication, IsAuthenticated
+
+import jwt
 import msgspec
+
+from django_bolt import BoltAPI, Request
+from django_bolt.auth import IsAuthenticated, JWTAuthentication
+from django_bolt.testing import TestClient
 
 
 class UserCreate(msgspec.Struct):

@@ -3,15 +3,15 @@
 Provides standard health check endpoints for monitoring and load balancers.
 """
 
-from typing import Dict, Any, Callable, List, Optional
-import asyncio
+from collections.abc import Callable
+from typing import Any
 
 
 class HealthCheck:
     """Health check configuration and helpers."""
 
     def __init__(self):
-        self._checks: List[Callable] = []
+        self._checks: list[Callable] = []
 
     def add_check(self, check_func: Callable) -> None:
         """Add a custom health check.
@@ -21,7 +21,7 @@ class HealthCheck:
         """
         self._checks.append(check_func)
 
-    async def run_checks(self) -> Dict[str, Any]:
+    async def run_checks(self) -> dict[str, Any]:
         """Run all configured health checks.
 
         Returns:
@@ -42,7 +42,7 @@ class HealthCheck:
             except Exception as e:
                 results[check.__name__] = {
                     "healthy": False,
-                    "message": f"Check failed: {str(e)}",
+                    "message": f"Check failed: {e!s}",
                 }
                 all_healthy = False
 
@@ -63,20 +63,21 @@ async def check_database() -> tuple[bool, str]:
         Tuple of (is_healthy, message)
     """
     try:
-        from django.db import connection
         from asgiref.sync import sync_to_async
+        from django.db import connection
 
         # Try a simple query
         await sync_to_async(connection.ensure_connection)()
 
         return True, "Database connection OK"
     except Exception as e:
-        return False, f"Database error: {str(e)}"
+        return False, f"Database error: {e!s}"
 
 
 # Health endpoint handlers
 
-async def health_handler() -> Dict[str, str]:
+
+async def health_handler() -> dict[str, str]:
     """Simple liveness check.
 
     Returns:
@@ -85,7 +86,7 @@ async def health_handler() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-async def ready_handler() -> Dict[str, Any]:
+async def ready_handler() -> dict[str, Any]:
     """Readiness check with dependency checks.
 
     Returns:

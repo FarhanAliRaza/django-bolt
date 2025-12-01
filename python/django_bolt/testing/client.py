@@ -5,9 +5,13 @@ This version uses the test_state.rs infrastructure which provides:
 - Per-instance event loops (proper async handling)
 - Streaming response support via stream=True parameter
 """
+
 from __future__ import annotations
 
-from typing import Any, Iterator
+import builtins
+import contextlib
+from collections.abc import Iterator
+from typing import Any
 
 import httpx
 from httpx import Response
@@ -26,7 +30,12 @@ class BoltTestTransport(httpx.BaseTransport):
                         use fast direct dispatch for unit tests.
     """
 
-    def __init__(self, app_id: int, raise_server_exceptions: bool = True, use_http_layer: bool = False):
+    def __init__(
+        self,
+        app_id: int,
+        raise_server_exceptions: bool = True,
+        use_http_layer: bool = False,
+    ):
         self.app_id = app_id
         self.raise_server_exceptions = raise_server_exceptions
         self.use_http_layer = use_http_layer
@@ -38,10 +47,12 @@ class BoltTestTransport(httpx.BaseTransport):
         # Parse URL
         url = request.url
         path = url.path
-        query_string = url.query.decode('utf-8') if url.query else None
+        query_string = url.query.decode("utf-8") if url.query else None
 
         # Extract headers
-        headers = [(k.decode('utf-8'), v.decode('utf-8')) for k, v in request.headers.raw]
+        headers = [
+            (k.decode("utf-8"), v.decode("utf-8")) for k, v in request.headers.raw
+        ]
 
         # Get body
         # Check if content has been read already
@@ -51,14 +62,14 @@ class BoltTestTransport(httpx.BaseTransport):
             # For streaming/multipart requests, need to read the content first
             try:
                 # Try to read the request stream
-                if hasattr(request.stream, 'read'):
+                if hasattr(request.stream, "read"):
                     body_bytes = request.stream.read()
                 else:
                     # Fall back to iterating the stream
-                    body_bytes = b''.join(request.stream)
+                    body_bytes = b"".join(request.stream)
             except Exception:
                 # Last resort: try to get content directly
-                body_bytes = request.content if hasattr(request, "_content") else b''
+                body_bytes = request.content if hasattr(request, "_content") else b""
 
         # Get method
         method = request.method
@@ -100,8 +111,8 @@ class BoltTestTransport(httpx.BaseTransport):
             # Return 500 error
             return Response(
                 status_code=500,
-                headers=[('content-type', 'text/plain')],
-                content=f"Test client error: {e}".encode('utf-8'),
+                headers=[("content-type", "text/plain")],
+                content=f"Test client error: {e}".encode(),
                 request=request,
             )
 
@@ -142,8 +153,11 @@ class TestClient(httpx.Client):
             from django.conf import settings
 
             # Check if any CORS setting is defined
-            has_origins = hasattr(settings, 'CORS_ALLOWED_ORIGINS')
-            has_all_origins = hasattr(settings, 'CORS_ALLOW_ALL_ORIGINS') and settings.CORS_ALLOW_ALL_ORIGINS
+            has_origins = hasattr(settings, "CORS_ALLOWED_ORIGINS")
+            has_all_origins = (
+                hasattr(settings, "CORS_ALLOW_ALL_ORIGINS")
+                and settings.CORS_ALLOW_ALL_ORIGINS
+            )
 
             if not has_origins and not has_all_origins:
                 return None
@@ -153,40 +167,42 @@ class TestClient(httpx.Client):
 
             # Origins
             if has_all_origins:
-                cors_config['origins'] = ["*"]
+                cors_config["origins"] = ["*"]
             elif has_origins:
                 origins = settings.CORS_ALLOWED_ORIGINS
                 if isinstance(origins, (list, tuple)):
-                    cors_config['origins'] = list(origins)
+                    cors_config["origins"] = list(origins)
                 else:
-                    cors_config['origins'] = []
+                    cors_config["origins"] = []
             else:
-                cors_config['origins'] = []
+                cors_config["origins"] = []
 
             # Credentials
-            cors_config['credentials'] = getattr(settings, 'CORS_ALLOW_CREDENTIALS', False)
+            cors_config["credentials"] = getattr(
+                settings, "CORS_ALLOW_CREDENTIALS", False
+            )
 
             # Methods
-            if hasattr(settings, 'CORS_ALLOW_METHODS'):
+            if hasattr(settings, "CORS_ALLOW_METHODS"):
                 methods = settings.CORS_ALLOW_METHODS
                 if isinstance(methods, (list, tuple)):
-                    cors_config['methods'] = list(methods)
+                    cors_config["methods"] = list(methods)
 
             # Headers
-            if hasattr(settings, 'CORS_ALLOW_HEADERS'):
+            if hasattr(settings, "CORS_ALLOW_HEADERS"):
                 headers = settings.CORS_ALLOW_HEADERS
                 if isinstance(headers, (list, tuple)):
-                    cors_config['headers'] = list(headers)
+                    cors_config["headers"] = list(headers)
 
             # Expose headers
-            if hasattr(settings, 'CORS_EXPOSE_HEADERS'):
+            if hasattr(settings, "CORS_EXPOSE_HEADERS"):
                 expose = settings.CORS_EXPOSE_HEADERS
                 if isinstance(expose, (list, tuple)):
-                    cors_config['expose_headers'] = list(expose)
+                    cors_config["expose_headers"] = list(expose)
 
             # Max age
-            if hasattr(settings, 'CORS_PREFLIGHT_MAX_AGE'):
-                cors_config['max_age'] = settings.CORS_PREFLIGHT_MAX_AGE
+            if hasattr(settings, "CORS_PREFLIGHT_MAX_AGE"):
+                cors_config["max_age"] = settings.CORS_PREFLIGHT_MAX_AGE
 
             return cors_config
         except (ImportError, AttributeError):
@@ -224,7 +240,7 @@ class TestClient(httpx.Client):
 
         if cors_allowed_origins is not None:
             # Explicit origins provided - create minimal config
-            cors_config = {'origins': cors_allowed_origins}
+            cors_config = {"origins": cors_allowed_origins}
         elif read_django_settings:
             # Read full CORS config from Django settings (same as production server)
             cors_config = self._read_cors_settings_from_django()
@@ -255,7 +271,9 @@ class TestClient(httpx.Client):
 
         super().__init__(
             base_url=base_url,
-            transport=BoltTestTransport(self.app_id, raise_server_exceptions, use_http_layer),
+            transport=BoltTestTransport(
+                self.app_id, raise_server_exceptions, use_http_layer
+            ),
             follow_redirects=True,
             **kwargs,
         )
@@ -269,70 +287,84 @@ class TestClient(httpx.Client):
         """Exit context manager and cleanup test app."""
         from django_bolt import _core
 
-        try:
+        with contextlib.suppress(builtins.BaseException):
             _core.destroy_test_app(self.app_id)
-        except:
-            pass
         return super().__exit__(*args)
 
     # Override HTTP methods to support stream=True
     def _add_streaming_methods(self, response: Response) -> Response:
         """Add iter_content() and iter_lines() methods to response."""
-        response._iter_content = lambda chunk_size=1024, decode_unicode=False: self._iter_response_content(
-            response.content, chunk_size, decode_unicode
+        response._iter_content = (
+            lambda chunk_size=1024, decode_unicode=False: self._iter_response_content(
+                response.content, chunk_size, decode_unicode
+            )
         )
-        response.iter_content = response._iter_content  # type: ignore
+        response.iter_content = response._iter_content  # type: ignore[attr-defined]
 
         response._iter_lines = lambda decode_unicode=True: self._iter_response_lines(
             response.content, decode_unicode
         )
-        response.iter_lines = response._iter_lines  # type: ignore
+        response.iter_lines = response._iter_lines  # type: ignore[attr-defined]
 
         return response
 
-    def get(self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any) -> Response:
+    def get(
+        self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any
+    ) -> Response:
         """GET request with optional streaming support."""
         response = super().get(url, **kwargs)
         if stream:
             response = self._add_streaming_methods(response)
         return response
 
-    def post(self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any) -> Response:
+    def post(
+        self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any
+    ) -> Response:
         """POST request with optional streaming support."""
         response = super().post(url, **kwargs)
         if stream:
             response = self._add_streaming_methods(response)
         return response
 
-    def put(self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any) -> Response:
+    def put(
+        self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any
+    ) -> Response:
         """PUT request with optional streaming support."""
         response = super().put(url, **kwargs)
         if stream:
             response = self._add_streaming_methods(response)
         return response
 
-    def patch(self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any) -> Response:
+    def patch(
+        self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any
+    ) -> Response:
         """PATCH request with optional streaming support."""
         response = super().patch(url, **kwargs)
         if stream:
             response = self._add_streaming_methods(response)
         return response
 
-    def delete(self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any) -> Response:
+    def delete(
+        self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any
+    ) -> Response:
         """DELETE request with optional streaming support."""
         response = super().delete(url, **kwargs)
         if stream:
             response = self._add_streaming_methods(response)
         return response
 
-    def head(self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any) -> Response:
+    def head(
+        self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any
+    ) -> Response:
         """HEAD request with optional streaming support."""
         response = super().head(url, **kwargs)
         if stream:
             response = self._add_streaming_methods(response)
         return response
 
-    def options(self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any) -> Response:
+    def options(
+        self, url: str | httpx.URL, *, stream: bool = False, **kwargs: Any
+    ) -> Response:
         """OPTIONS request with optional streaming support."""
         response = super().options(url, **kwargs)
         if stream:
@@ -364,7 +396,9 @@ class TestClient(httpx.Client):
                 yield chunk
 
     @staticmethod
-    def _iter_response_lines(content: bytes, decode_unicode: bool = True) -> Iterator[str]:
+    def _iter_response_lines(
+        content: bytes, decode_unicode: bool = True
+    ) -> Iterator[str]:
         """Iterate over response content line by line.
 
         Args:
@@ -376,7 +410,9 @@ class TestClient(httpx.Client):
         """
         buffer = b"" if not decode_unicode else ""
 
-        for chunk in TestClient._iter_response_content(content, chunk_size=8192, decode_unicode=decode_unicode):
+        for chunk in TestClient._iter_response_content(
+            content, chunk_size=8192, decode_unicode=decode_unicode
+        ):
             if chunk:
                 buffer += chunk
 

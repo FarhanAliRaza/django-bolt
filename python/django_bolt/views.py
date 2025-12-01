@@ -14,8 +14,10 @@ Example:
         async def get(self, request, current_user=Depends(get_current_user)) -> dict:
             return {"user": current_user.id}
 """
+
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Set, Type
+from collections.abc import Callable
+from typing import Any, ClassVar
 
 import msgspec
 
@@ -33,12 +35,20 @@ class APIView:
         status_code: Default status code for responses (can be overridden per-method)
     """
 
-    http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
+    http_method_names: ClassVar[list[str]] = [
+        "get",
+        "post",
+        "put",
+        "patch",
+        "delete",
+        "head",
+        "options",
+    ]
 
     # Class-level defaults (can be overridden by subclasses)
-    guards: Optional[List[Any]] = None
-    auth: Optional[List[Any]] = None
-    status_code: Optional[int] = None
+    guards: list[Any] | None = None
+    auth: list[Any] | None = None
+    status_code: int | None = None
 
     def __init__(self, **kwargs):
         """
@@ -51,7 +61,7 @@ class APIView:
             setattr(self, key, value)
 
     @classmethod
-    def as_view(cls, method: str, action: Optional[str] = None) -> Callable:
+    def as_view(cls, method: str, action: str | None = None) -> Callable:
         """
         Create a handler callable for a specific HTTP method.
 
@@ -118,7 +128,7 @@ class APIView:
         view_instance = cls()
 
         # Set action name once at registration time
-        if hasattr(view_instance, 'action'):
+        if hasattr(view_instance, "action"):
             view_instance.action = action_name
 
         # Bind the method once to eliminate lookup overhead
@@ -133,10 +143,10 @@ class APIView:
                 """Auto-generated async view handler that calls bound method directly."""
                 # Inject request object into view instance for pagination/filtering
                 # Request is typically the first positional arg or named 'request'
-                if args and isinstance(args[0], dict) and 'method' in args[0]:
+                if args and isinstance(args[0], dict) and "method" in args[0]:
                     view_instance.request = args[0]
-                elif 'request' in kwargs:
-                    view_instance.request = kwargs['request']
+                elif "request" in kwargs:
+                    view_instance.request = kwargs["request"]
 
                 return await bound_method(*args, **kwargs)
         else:
@@ -145,10 +155,10 @@ class APIView:
                 """Auto-generated sync view handler that calls bound method directly."""
                 # Inject request object into view instance for pagination/filtering
                 # Request is typically the first positional arg or named 'request'
-                if args and isinstance(args[0], dict) and 'method' in args[0]:
+                if args and isinstance(args[0], dict) and "method" in args[0]:
                     view_instance.request = args[0]
-                elif 'request' in kwargs:
-                    view_instance.request = kwargs['request']
+                elif "request" in kwargs:
+                    view_instance.request = kwargs["request"]
 
                 return bound_method(*args, **kwargs)
 
@@ -174,7 +184,7 @@ class APIView:
 
         return view_handler
 
-    def initialize(self, request: Dict[str, Any]) -> None:
+    def initialize(self, request: dict[str, Any]) -> None:
         """
         Hook called before the method handler is invoked.
 
@@ -183,10 +193,9 @@ class APIView:
         Args:
             request: The request dictionary
         """
-        pass
 
     @classmethod
-    def get_allowed_methods(cls) -> Set[str]:
+    def get_allowed_methods(cls) -> set[str]:
         """
         Get the set of HTTP methods that this view implements.
 
@@ -225,17 +234,20 @@ class ViewSet(APIView):
     """
 
     # ViewSet configuration
-    queryset: Optional[Any] = None
-    serializer_class: Optional[Type] = None
-    list_serializer_class: Optional[Type] = None  # Optional: override serializer for list operations
-    lookup_field: str = 'pk'  # Field to use for object lookup (default: 'pk')
-    pagination_class: Optional[Any] = None  # Optional: pagination class to use
+    # Note: queryset is defined as a property below, but subclasses can set it as a class attribute
+    # The __init_subclass__ hook converts class-level queryset to _base_queryset
+    serializer_class: type | None = None
+    list_serializer_class: type | None = (
+        None  # Optional: override serializer for list operations
+    )
+    lookup_field: str = "pk"  # Field to use for object lookup (default: 'pk')
+    pagination_class: Any | None = None  # Optional: pagination class to use
 
     # Action name for current request (set automatically)
-    action: Optional[str] = None
+    action: str | None = None
 
     # Request object (set automatically during dispatch)
-    request: Optional[Dict[str, Any]] = None
+    request: dict[str, Any] | None = None
 
     def __init_subclass__(cls, **kwargs):
         """
@@ -247,11 +259,11 @@ class ViewSet(APIView):
         super().__init_subclass__(**kwargs)
 
         # If subclass defines queryset as class attribute, store it separately
-        if 'queryset' in cls.__dict__ and cls.__dict__['queryset'] is not None:
+        if "queryset" in cls.__dict__ and cls.__dict__["queryset"] is not None:
             # Store the base queryset for cloning
-            cls._base_queryset = cls.__dict__['queryset']
+            cls._base_queryset = cls.__dict__["queryset"]
             # Remove the class attribute so property works
-            delattr(cls, 'queryset')
+            delattr(cls, "queryset")
 
     def _get_base_queryset(self):
         """
@@ -260,15 +272,15 @@ class ViewSet(APIView):
         Returns None if no queryset is defined.
         """
         # Check instance attribute first (for dynamic assignment)
-        if hasattr(self, '_instance_queryset'):
+        if hasattr(self, "_instance_queryset"):
             return self._instance_queryset
 
         # Check class attribute (set via __init_subclass__)
-        if hasattr(self.__class__, '_base_queryset'):
+        if hasattr(self.__class__, "_base_queryset"):
             return self.__class__._base_queryset
 
         # Check if there's a class attribute 'queryset' (shouldn't happen after __init_subclass__)
-        return getattr(self.__class__, 'queryset', None)
+        return getattr(self.__class__, "queryset", None)
 
     def _clone_queryset(self, queryset):
         """
@@ -285,10 +297,10 @@ class ViewSet(APIView):
 
         # Always return a fresh clone to prevent state leakage
         # Django QuerySets are lazy, so .all() creates a new QuerySet instance
-        if hasattr(queryset, '_clone'):
+        if hasattr(queryset, "_clone"):
             # Use Django's internal _clone() for true deep copy
             return queryset._clone()
-        elif hasattr(queryset, 'all'):
+        elif hasattr(queryset, "all"):
             # Fallback to .all() which also creates a new QuerySet
             return queryset.all()
 
@@ -446,11 +458,11 @@ class ViewSet(APIView):
             # Use aget for async retrieval
             obj = await queryset.aget(**lookup_kwargs)
             return obj
-        except Exception as e:
+        except Exception:
             # Django raises DoesNotExist, but we convert to HTTPException
             raise HTTPException(status_code=404, detail="Not found")
 
-    def get_serializer_class(self, action: Optional[str] = None):
+    def get_serializer_class(self, action: str | None = None):
         """
         Get the serializer class for this viewset.
 
@@ -502,7 +514,10 @@ class ViewSet(APIView):
                         # Manual mapping
                         fields = getattr(serializer_class, "__annotations__", {})
                         return [
-                            msgspec.convert({name: getattr(obj, name, None) for name in fields.keys()}, serializer_class)
+                            msgspec.convert(
+                                {name: getattr(obj, name, None) for name in fields},
+                                serializer_class,
+                            )
                             for obj in instance
                         ]
                 else:
@@ -511,7 +526,9 @@ class ViewSet(APIView):
                         return serializer_class.from_model(instance)
                     else:
                         fields = getattr(serializer_class, "__annotations__", {})
-                        mapped = {name: getattr(instance, name, None) for name in fields.keys()}
+                        mapped = {
+                            name: getattr(instance, name, None) for name in fields
+                        }
                         return msgspec.convert(mapped, serializer_class)
             elif data is not None:
                 # Data is already validated by msgspec at parameter binding
@@ -521,6 +538,7 @@ class ViewSet(APIView):
 
 
 # Mixins for common CRUD operations
+
 
 class ListMixin:
     """
@@ -544,7 +562,7 @@ class ListMixin:
         queryset = await self.get_queryset()
 
         # Optional: Apply filtering if filter_queryset is available
-        if hasattr(self, 'filter_queryset'):
+        if hasattr(self, "filter_queryset"):
             queryset = await self.filter_queryset(queryset)
 
         # Convert queryset to list (evaluates database query here)
@@ -563,7 +581,7 @@ class ListMixin:
                 else:
                     # Assume it's a msgspec.Struct, use convert
                     fields = getattr(serializer_class, "__annotations__", {})
-                    mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+                    mapped = {name: getattr(obj, name, None) for name in fields}
                     results.append(msgspec.convert(mapped, serializer_class))
             else:
                 results.append(obj)
@@ -601,7 +619,7 @@ class RetrieveMixin:
             else:
                 # Assume it's a msgspec.Struct, use convert
                 fields = getattr(serializer_class, "__annotations__", {})
-                mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+                mapped = {name: getattr(obj, name, None) for name in fields}
                 return msgspec.convert(mapped, serializer_class)
 
         return obj
@@ -654,7 +672,7 @@ class CreateMixin:
                 return serializer_class.from_model(obj)
             else:
                 fields = getattr(serializer_class, "__annotations__", {})
-                mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+                mapped = {name: getattr(obj, name, None) for name in fields}
                 return msgspec.convert(mapped, serializer_class)
 
         return obj
@@ -705,7 +723,7 @@ class UpdateMixin:
                 return serializer_class.from_model(obj)
             else:
                 fields = getattr(serializer_class, "__annotations__", {})
-                mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+                mapped = {name: getattr(obj, name, None) for name in fields}
                 return msgspec.convert(mapped, serializer_class)
 
         return obj
@@ -757,7 +775,7 @@ class PartialUpdateMixin:
                 return serializer_class.from_model(obj)
             else:
                 fields = getattr(serializer_class, "__annotations__", {})
-                mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+                mapped = {name: getattr(obj, name, None) for name in fields}
                 return msgspec.convert(mapped, serializer_class)
 
         return obj
@@ -787,6 +805,7 @@ class DestroyMixin:
 
 
 # Convenience ViewSet classes (like Django REST Framework)
+
 
 class ReadOnlyModelViewSet(ViewSet):
     """
@@ -818,7 +837,6 @@ class ReadOnlyModelViewSet(ViewSet):
                 article = await self.get_object(pk)
                 return ArticleSchema.from_model(article)
     """
-    pass
 
 
 class ModelViewSet(ViewSet):
@@ -905,8 +923,8 @@ class ModelViewSet(ViewSet):
     """
 
     # Optional: separate serializer for create/update operations
-    create_serializer_class: Optional[Type] = None
-    update_serializer_class: Optional[Type] = None
+    create_serializer_class: type | None = None
+    update_serializer_class: type | None = None
 
     async def list(self, request):
         """
@@ -917,17 +935,17 @@ class ModelViewSet(ViewSet):
         """
         qs = await self.get_queryset()
         qs = await self.filter_queryset(qs)  # Apply filtering (still lazy)
-        serializer_class = self.get_serializer_class(action='list')
+        serializer_class = self.get_serializer_class(action="list")
 
         # Queryset is evaluated here during iteration
         results = []
         async for obj in qs:
-            if hasattr(serializer_class, 'from_model'):
+            if hasattr(serializer_class, "from_model"):
                 results.append(serializer_class.from_model(obj))
             else:
                 # Fallback: manual conversion
-                fields = getattr(serializer_class, '__annotations__', {})
-                mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+                fields = getattr(serializer_class, "__annotations__", {})
+                mapped = {name: getattr(obj, name, None) for name in fields}
                 results.append(msgspec.convert(mapped, serializer_class))
 
         return results
@@ -941,16 +959,18 @@ class ModelViewSet(ViewSet):
         # Extract lookup value from kwargs
         lookup_value = kwargs.get(self.lookup_field)
         if lookup_value is None:
-            raise HTTPException(status_code=400, detail=f"Missing lookup field: {self.lookup_field}")
+            raise HTTPException(
+                status_code=400, detail=f"Missing lookup field: {self.lookup_field}"
+            )
 
         obj = await self.get_object(**{self.lookup_field: lookup_value})
-        serializer_class = self.get_serializer_class(action='retrieve')
+        serializer_class = self.get_serializer_class(action="retrieve")
 
-        if hasattr(serializer_class, 'from_model'):
+        if hasattr(serializer_class, "from_model"):
             return serializer_class.from_model(obj)
         else:
-            fields = getattr(serializer_class, '__annotations__', {})
-            mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+            fields = getattr(serializer_class, "__annotations__", {})
+            mapped = {name: getattr(obj, name, None) for name in fields}
             return msgspec.convert(mapped, serializer_class)
 
     async def create(self, request, data):
@@ -969,7 +989,7 @@ class ModelViewSet(ViewSet):
         model = base_qs.model
 
         # Extract data from msgspec.Struct
-        if hasattr(data, '__struct_fields__'):
+        if hasattr(data, "__struct_fields__"):
             fields = data.__struct_fields__
             data_dict = {field: getattr(data, field) for field in fields}
         elif isinstance(data, dict):
@@ -981,12 +1001,12 @@ class ModelViewSet(ViewSet):
         obj = await model.objects.acreate(**data_dict)
 
         # Serialize response
-        serializer_class = self.get_serializer_class(action='create')
-        if hasattr(serializer_class, 'from_model'):
+        serializer_class = self.get_serializer_class(action="create")
+        if hasattr(serializer_class, "from_model"):
             return serializer_class.from_model(obj)
         else:
-            fields = getattr(serializer_class, '__annotations__', {})
-            mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+            fields = getattr(serializer_class, "__annotations__", {})
+            mapped = {name: getattr(obj, name, None) for name in fields}
             return msgspec.convert(mapped, serializer_class)
 
     async def update(self, request, data, **kwargs):
@@ -998,12 +1018,14 @@ class ModelViewSet(ViewSet):
         """
         lookup_value = kwargs.get(self.lookup_field)
         if lookup_value is None:
-            raise HTTPException(status_code=400, detail=f"Missing lookup field: {self.lookup_field}")
+            raise HTTPException(
+                status_code=400, detail=f"Missing lookup field: {self.lookup_field}"
+            )
 
         obj = await self.get_object(**{self.lookup_field: lookup_value})
 
         # Extract data
-        if hasattr(data, '__struct_fields__'):
+        if hasattr(data, "__struct_fields__"):
             fields = data.__struct_fields__
             data_dict = {field: getattr(data, field) for field in fields}
         elif isinstance(data, dict):
@@ -1018,13 +1040,12 @@ class ModelViewSet(ViewSet):
         await obj.asave()
 
         # Serialize response
-        serializer_class = self.get_serializer_class(action='update')
-        if hasattr(serializer_class, 'from_model'):
+        serializer_class = self.get_serializer_class(action="update")
+        if hasattr(serializer_class, "from_model"):
             return serializer_class.from_model(obj)
         else:
-            import msgspec
-            fields = getattr(serializer_class, '__annotations__', {})
-            mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+            fields = getattr(serializer_class, "__annotations__", {})
+            mapped = {name: getattr(obj, name, None) for name in fields}
             return msgspec.convert(mapped, serializer_class)
 
     async def partial_update(self, request, data, **kwargs):
@@ -1035,12 +1056,14 @@ class ModelViewSet(ViewSet):
         """
         lookup_value = kwargs.get(self.lookup_field)
         if lookup_value is None:
-            raise HTTPException(status_code=400, detail=f"Missing lookup field: {self.lookup_field}")
+            raise HTTPException(
+                status_code=400, detail=f"Missing lookup field: {self.lookup_field}"
+            )
 
         obj = await self.get_object(**{self.lookup_field: lookup_value})
 
         # Extract data
-        if hasattr(data, '__struct_fields__'):
+        if hasattr(data, "__struct_fields__"):
             fields = data.__struct_fields__
             data_dict = {field: getattr(data, field) for field in fields}
         elif isinstance(data, dict):
@@ -1056,13 +1079,12 @@ class ModelViewSet(ViewSet):
         await obj.asave()
 
         # Serialize response
-        serializer_class = self.get_serializer_class(action='partial_update')
-        if hasattr(serializer_class, 'from_model'):
+        serializer_class = self.get_serializer_class(action="partial_update")
+        if hasattr(serializer_class, "from_model"):
             return serializer_class.from_model(obj)
         else:
-            import msgspec
-            fields = getattr(serializer_class, '__annotations__', {})
-            mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+            fields = getattr(serializer_class, "__annotations__", {})
+            mapped = {name: getattr(obj, name, None) for name in fields}
             return msgspec.convert(mapped, serializer_class)
 
     async def destroy(self, request, **kwargs):
@@ -1071,14 +1093,16 @@ class ModelViewSet(ViewSet):
         """
         lookup_value = kwargs.get(self.lookup_field)
         if lookup_value is None:
-            raise HTTPException(status_code=400, detail=f"Missing lookup field: {self.lookup_field}")
+            raise HTTPException(
+                status_code=400, detail=f"Missing lookup field: {self.lookup_field}"
+            )
 
         obj = await self.get_object(**{self.lookup_field: lookup_value})
         await obj.adelete()
 
         return {"deleted": True}
 
-    def get_serializer_class(self, action: Optional[str] = None):
+    def get_serializer_class(self, action: str | None = None):
         """
         Get the serializer class for this viewset.
 
@@ -1098,11 +1122,11 @@ class ModelViewSet(ViewSet):
             action = self.action
 
         # Action-specific serializer classes
-        if action == 'list' and self.list_serializer_class is not None:
+        if action == "list" and self.list_serializer_class is not None:
             return self.list_serializer_class
-        elif action == 'create' and self.create_serializer_class is not None:
+        elif action == "create" and self.create_serializer_class is not None:
             return self.create_serializer_class
-        elif action in ('update', 'partial_update'):
+        elif action in ("update", "partial_update"):
             if self.update_serializer_class is not None:
                 return self.update_serializer_class
             elif self.create_serializer_class is not None:
@@ -1114,4 +1138,3 @@ class ModelViewSet(ViewSet):
                 f"or override the `get_serializer_class()` method."
             )
         return self.serializer_class
-

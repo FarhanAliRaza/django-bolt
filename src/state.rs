@@ -3,8 +3,8 @@ use once_cell::sync::OnceCell;
 use pyo3::prelude::*;
 use pyo3_async_runtimes::TaskLocals;
 use regex::Regex;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
 use crate::router::Router;
@@ -13,8 +13,8 @@ pub struct AppState {
     pub dispatch: Py<PyAny>,
     pub debug: bool,
     pub max_header_size: usize,
-    pub global_cors_config: Option<CorsConfig>,           // Global CORS configuration from Django settings
-    pub cors_origin_regexes: Vec<Regex>,                  // Compiled regex patterns for origin matching
+    pub global_cors_config: Option<CorsConfig>, // Global CORS configuration from Django settings
+    pub cors_origin_regexes: Vec<Regex>,        // Compiled regex patterns for origin matching
     pub global_compression_config: Option<CompressionConfig>, // Global compression configuration used by middleware
 }
 
@@ -59,5 +59,5 @@ pub fn get_max_sync_streaming_threads() -> u64 {
         None
     });
 
-    limit.unwrap_or(1000)  // Default to 1000
+    limit.unwrap_or(1000) // Default to 1000
 }

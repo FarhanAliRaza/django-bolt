@@ -3,8 +3,10 @@ Tests for QuerySet serialization optimization.
 
 These tests verify that field names are pre-computed at route registration time.
 """
-import msgspec
 from typing import get_origin
+
+import msgspec
+
 from django_bolt import BoltAPI
 from django_bolt.testing import TestClient
 

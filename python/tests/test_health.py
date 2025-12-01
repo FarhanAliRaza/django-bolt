@@ -1,13 +1,15 @@
 """Tests for Django-Bolt health check system."""
 
-import pytest
 import asyncio
+
+import pytest
+
 from django_bolt.health import (
     HealthCheck,
+    add_health_check,
     check_database,
     health_handler,
     ready_handler,
-    add_health_check,
     register_health_checks,
 )
 

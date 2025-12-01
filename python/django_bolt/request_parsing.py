@@ -1,9 +1,11 @@
 """Request parsing utilities for form and multipart data."""
+
 import logging
 import traceback
-from typing import Any, Dict, Tuple
 from io import BytesIO
+from typing import Any
 from urllib.parse import parse_qs
+
 import multipart
 
 # Django import - may fail if Django not configured
@@ -21,22 +23,30 @@ def get_max_upload_size() -> int:
     global _MAX_UPLOAD_SIZE
     if _MAX_UPLOAD_SIZE is None:
         try:
-            _MAX_UPLOAD_SIZE = getattr(django_settings, 'BOLT_MAX_UPLOAD_SIZE', 10 * 1024 * 1024) if django_settings else 10 * 1024 * 1024  # 10MB default
+            _MAX_UPLOAD_SIZE = (
+                getattr(django_settings, "BOLT_MAX_UPLOAD_SIZE", 10 * 1024 * 1024)
+                if django_settings
+                else 10 * 1024 * 1024
+            )  # 10MB default
         except (ImportError, AttributeError):
             _MAX_UPLOAD_SIZE = 10 * 1024 * 1024
     return _MAX_UPLOAD_SIZE
 
 
-def parse_form_data(request: Dict[str, Any], headers_map: Dict[str, str]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def parse_form_data(
+    request: dict[str, Any], headers_map: dict[str, str]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Parse form and multipart data from request using python "multipart" library."""
     content_type = headers_map.get("content-type", "")
 
     # Early return if not form data (optimization for JSON/empty requests)
-    if not content_type.startswith(("application/x-www-form-urlencoded", "multipart/form-data")):
+    if not content_type.startswith(
+        ("application/x-www-form-urlencoded", "multipart/form-data")
+    ):
         return {}, {}
 
-    form_map: Dict[str, Any] = {}
-    files_map: Dict[str, Any] = {}
+    form_map: dict[str, Any] = {}
+    files_map: dict[str, Any] = {}
 
     if content_type.startswith("application/x-www-form-urlencoded"):
         body_bytes: bytes = request["body"]
@@ -49,7 +59,9 @@ def parse_form_data(request: Dict[str, Any], headers_map: Dict[str, str]) -> Tup
     return form_map, files_map
 
 
-def parse_multipart_data(request: Dict[str, Any], content_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def parse_multipart_data(
+    request: dict[str, Any], content_type: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """
     Parse multipart form data using python "multipart" library.
 
@@ -57,16 +69,18 @@ def parse_multipart_data(request: Dict[str, Any], content_type: str) -> Tuple[Di
     size limits, and header parsing.
     """
 
-    form_map: Dict[str, Any] = {}
-    files_map: Dict[str, Any] = {}
+    form_map: dict[str, Any] = {}
+    files_map: dict[str, Any] = {}
 
     # Parse content-type header to get boundary
-    content_type_parsed, content_type_options = multipart.parse_options_header(content_type)
+    content_type_parsed, content_type_options = multipart.parse_options_header(
+        content_type
+    )
 
-    if content_type_parsed != 'multipart/form-data':
+    if content_type_parsed != "multipart/form-data":
         return form_map, files_map
 
-    boundary = content_type_options.get('boundary')
+    boundary = content_type_options.get("boundary")
     if not boundary:
         return form_map, files_map
 
@@ -81,7 +95,9 @@ def parse_multipart_data(request: Dict[str, Any], content_type: str) -> Tuple[Di
 
     # SECURITY: Check body size before parsing
     if len(body_bytes) > max_size:
-        raise ValueError(f"Upload size {len(body_bytes)} exceeds maximum {max_size} bytes")
+        raise ValueError(
+            f"Upload size {len(body_bytes)} exceeds maximum {max_size} bytes"
+        )
 
     # Create a file-like object from bytes
     body_file = BytesIO(body_bytes)
@@ -94,7 +110,7 @@ def parse_multipart_data(request: Dict[str, Any], content_type: str) -> Tuple[Di
             content_length=len(body_bytes),
             memory_limit=max_size,
             disk_limit=0,  # Don't allow disk spooling for security
-            part_limit=100  # Limit number of parts
+            part_limit=100,  # Limit number of parts
         )
 
         # Iterate through parts
@@ -111,7 +127,7 @@ def parse_multipart_data(request: Dict[str, Any], content_type: str) -> Tuple[Di
                     "filename": part.filename,
                     "content": content,
                     "content_type": part.content_type,
-                    "size": len(content)
+                    "size": len(content),
                 }
 
                 if name in files_map:

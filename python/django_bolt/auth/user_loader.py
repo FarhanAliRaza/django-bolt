@@ -5,10 +5,10 @@ Supports both eager and lazy loading strategies.
 Eager loading (default): Loads user immediately at dispatch time (43% faster)
 Lazy loading (optional): Wraps loading in LazyUser for first-access evaluation
 """
+
 from __future__ import annotations
 
-from typing import Optional, Any, Callable, TYPE_CHECKING
-
+from typing import Any
 
 # Global registry of auth backend instances for user resolution
 _auth_backend_registry: dict[str, Any] = {}
@@ -27,14 +27,14 @@ def register_auth_backend(backend_name: str, backend_instance: Any) -> None:
     _auth_backend_registry[backend_name] = backend_instance
 
 
-def get_registered_backend(backend_name: str) -> Optional[Any]:
+def get_registered_backend(backend_name: str) -> Any | None:
     """Get a registered auth backend by name."""
     return _auth_backend_registry.get(backend_name)
 
 
 async def load_user(
-    user_id: Optional[str], backend_name: Optional[str], auth_context: Optional[dict] = None
-) -> Optional[Any]:
+    user_id: str | None, backend_name: str | None, auth_context: dict | None = None
+) -> Any | None:
     """
     Eagerly load user from auth context.
 
@@ -59,7 +59,6 @@ async def load_user(
     if backend and hasattr(backend, "get_user"):
         try:
             return await backend.get_user(user_id, auth_context or {})
-        except Exception as e:
+        except Exception:
             # User not found or backend error
-            raise 
-
+            raise

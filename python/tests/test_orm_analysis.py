@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import warnings
 
-import pytest
-
 from django_bolt.analysis import (
     HandlerAnalysis,
     analyze_handler,

@@ -1,10 +1,11 @@
 """
 Test parameter validation and inference system.
 """
-import pytest
 import msgspec
+import pytest
+
 from django_bolt import BoltAPI
-from django_bolt.params import Query, Body
+from django_bolt.params import Body, Query
 
 
 class UserCreate(msgspec.Struct):
@@ -31,7 +32,6 @@ def test_head_with_body_param_raises_error():
     """Test that HEAD endpoints cannot have body parameters."""
     # Note: BoltAPI doesn't have @api.head() decorator yet, but we test the principle
     # This would be the expected behavior if we add HEAD support
-    pass
 
 
 def test_delete_with_body_param_raises_error():

@@ -9,25 +9,25 @@ Tests cover:
 - Mixins (ListMixin, RetrieveMixin, CreateMixin, etc.)
 - ViewSet
 """
-import pytest
+from typing import Any
+
 import msgspec
-from typing import Dict, Any, List
+import pytest
+
 from django_bolt import BoltAPI
+from django_bolt.auth.backends import JWTAuthentication
+from django_bolt.auth.guards import IsAuthenticated
+from django_bolt.exceptions import HTTPException
+from django_bolt.params import Depends
 from django_bolt.views import (
     APIView,
-    ViewSet,
+    CreateMixin,
+    DestroyMixin,
     ListMixin,
     RetrieveMixin,
-    CreateMixin,
     UpdateMixin,
-    PartialUpdateMixin,
-    DestroyMixin,
+    ViewSet,
 )
-from django_bolt.params import Depends
-from django_bolt.exceptions import HTTPException
-from django_bolt.auth.guards import IsAuthenticated
-from django_bolt.auth.backends import JWTAuthentication
-
 
 # --- Test Fixtures ---
 
@@ -38,12 +38,12 @@ def api():
 
 
 def create_request(
-    path_params: Dict[str, Any] = None,
-    query_params: Dict[str, Any] = None,
-    headers: Dict[str, str] = None,
+    path_params: dict[str, Any] | None = None,
+    query_params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
     body: bytes = b"{}",
-    auth: Dict[str, Any] = None,
-) -> Dict[str, Any]:
+    auth: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Helper to create mock request dictionary."""
     return {
         "params": path_params or {},

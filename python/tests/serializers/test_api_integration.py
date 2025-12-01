@@ -15,7 +15,6 @@ async and sync endpoints work seamlessly with sync tests through TestClient.
 
 from __future__ import annotations
 
-import json
 from typing import Annotated
 
 import pytest
@@ -26,7 +25,6 @@ from django_bolt.api import BoltAPI
 from django_bolt.serializers import Nested, Serializer, field_validator
 from django_bolt.testing import TestClient
 from tests.test_models import Author, BlogPost, Comment, Tag
-
 
 # ============================================================================
 # SERIALIZERS - Define all serializers for nested relationships
@@ -772,15 +770,15 @@ class TestAPI4MixedValidation:
 
 
 # ============================================================================
-# API 5: User Authentication & Profile Management - Full Cycle Tests  
+# API 5: User Authentication & Profile Management - Full Cycle Tests
 # ============================================================================
 
 # Import additional dependencies
-from django_bolt.auth import JWTAuthentication, IsAuthenticated, create_jwt_for_user
-from django_bolt.exceptions import HTTPException, NotFound, BadRequest
-from django_bolt.serializers import model_validator
-from tests.test_models import User, UserProfile
 import hashlib
+
+from django_bolt.exceptions import BadRequest
+from django_bolt.serializers import model_validator
+from tests.test_models import User
 
 
 # User Authentication Serializers
@@ -850,10 +848,10 @@ async def signup(data: UserSignupSerializer):
     """User registration endpoint."""
     if await User.objects.filter(username=data.username).aexists():
         raise BadRequest(detail="Username already exists")
-    
+
     if await User.objects.filter(email=data.email).aexists():
         raise BadRequest(detail="Email already exists")
-    
+
     user = await User.objects.acreate(
         username=data.username,
         email=data.email,
@@ -1041,7 +1039,8 @@ class TestAPI5UserRegistration:
 # ============================================================================
 
 from datetime import datetime
-from django_bolt.serializers import computed_field, Email, NonEmptyStr
+
+from django_bolt.serializers import Email, NonEmptyStr, computed_field
 
 
 class AdvancedAuthorSerializer(Serializer):

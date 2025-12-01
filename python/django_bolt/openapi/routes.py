@@ -4,11 +4,12 @@ OpenAPI route registration for BoltAPI.
 This module handles the registration of OpenAPI documentation routes
 (JSON, YAML, and UI plugins) separately from the main BoltAPI class.
 """
-from typing import Dict, Any, TYPE_CHECKING
+
+from typing import TYPE_CHECKING, Any
 
 from django_bolt.openapi.plugins import JsonRenderPlugin, YamlRenderPlugin
 from django_bolt.openapi.schema_generator import SchemaGenerator
-from django_bolt.responses import HTML, Redirect, JSON, PlainText
+from django_bolt.responses import HTML, JSON, PlainText, Redirect
 
 if TYPE_CHECKING:
     from django_bolt.api import BoltAPI
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
 class OpenAPIRouteRegistrar:
     """Handles registration of OpenAPI documentation routes."""
 
-    def __init__(self, api: 'BoltAPI'):
+    def __init__(self, api: "BoltAPI"):
         """Initialize the registrar with a BoltAPI instance.
 
         Args:
@@ -51,11 +52,13 @@ class OpenAPIRouteRegistrar:
                 return JSON(
                     rendered,
                     status_code=200,
-                    headers={"content-type": json_plugin.media_type}
+                    headers={"content-type": json_plugin.media_type},
                 )
             except Exception as e:
                 # Re-raise with more context for debugging
-                raise Exception(f"Failed to generate OpenAPI JSON schema: {type(e).__name__}: {str(e)}") from e
+                raise Exception(
+                    f"Failed to generate OpenAPI JSON schema: {type(e).__name__}: {e!s}"
+                ) from e
 
         # Always register YAML endpoints
         yaml_plugin = YamlRenderPlugin()
@@ -69,7 +72,7 @@ class OpenAPIRouteRegistrar:
             return PlainText(
                 rendered,
                 status_code=200,
-                headers={"content-type": yaml_plugin.media_type}
+                headers={"content-type": yaml_plugin.media_type},
             )
 
         @self.api.get(f"{self.api.openapi_config.path}/openapi.yml")
@@ -81,7 +84,7 @@ class OpenAPIRouteRegistrar:
             return PlainText(
                 rendered,
                 status_code=200,
-                headers={"content-type": yaml_plugin.media_type}
+                headers={"content-type": yaml_plugin.media_type},
             )
 
         # Register UI plugin routes
@@ -92,7 +95,7 @@ class OpenAPIRouteRegistrar:
 
         self.api._openapi_routes_registered = True
 
-    def _get_schema(self) -> Dict[str, Any]:
+    def _get_schema(self) -> dict[str, Any]:
         """Get or generate OpenAPI schema.
 
         Returns:
@@ -124,14 +127,15 @@ class OpenAPIRouteRegistrar:
                             return HTML(
                                 rendered,
                                 status_code=200,
-                                headers={"content-type": p.media_type}
+                                headers={"content-type": p.media_type},
                             )
                         except Exception as e:
                             # Re-raise with more context for debugging
                             raise Exception(
                                 f"Failed to render OpenAPI UI plugin {p.__class__.__name__}: "
-                                f"{type(e).__name__}: {str(e)}"
+                                f"{type(e).__name__}: {e!s}"
                             ) from e
+
                     return ui_handler
 
                 self.api.get(full_path)(make_handler(plugin))

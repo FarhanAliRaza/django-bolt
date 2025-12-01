@@ -4,10 +4,11 @@ Tests for compression middleware in Django-Bolt.
 Tests both global compression configuration and per-route skip functionality.
 """
 import pytest
+
 from django_bolt import BoltAPI
-from django_bolt.middleware import skip_middleware, no_compress, CompressionConfig
+from django_bolt.middleware import CompressionConfig, no_compress, skip_middleware
+from django_bolt.responses import HTML, PlainText, StreamingResponse
 from django_bolt.testing import TestClient
-from django_bolt.responses import PlainText, HTML, StreamingResponse
 
 
 def test_compression_enabled_by_default():

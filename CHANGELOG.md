@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.10]
+
+### Changed
+
+- **Lazy user loading by default** - User loading now uses Django's `SimpleLazyObject` to defer database queries until `request.user` is first accessed. This avoids unnecessary DB calls when user data isn't needed.
+
+## [0.3.9]
+
+### Changed
+
+- **Precompile optimizations** - Handler metadata (parameter extraction, validation, injectors) is now precompiled at route registration time instead of per-request. This eliminates repeated introspection overhead during request handling.
+
+### Added
+
+- **Static analysis for sync handlers** - New `analysis.py` module performs AST-based analysis of handler source code to detect Django ORM usage and blocking I/O patterns. Sync handlers without blocking calls can skip thread pool dispatch for better performance.
+
+## [0.3.8]
+
+### Fixed
+
+- **Static file serving** - Fixed static route handler missing `is_async` and `injector` metadata, which caused static file routes to fail.
+
+### Added
+
+- **CLI `version` command** - Added `django-bolt version` command to display the installed version.
+- **`llm.txt`** - Added LLM-friendly project summary file.
+
 ## [0.3.7]
 
 ### Fixed

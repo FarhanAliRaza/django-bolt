@@ -3,40 +3,281 @@ Middleware system for Django-Bolt.
 
 Provides both decorator-based and class-based middleware approaches.
 Middleware can be applied globally to all routes or selectively to specific routes.
-"""
 
+Performance is the utmost priority - the middleware system is designed for zero overhead:
+- Hot-path operations (CORS, rate limiting, JWT validation) run in Rust
+- Python middleware only runs when explicitly configured
+- Lazy evaluation and minimal allocations
+- Pattern matching compiled once at startup
+"""
+from __future__ import annotations
+
+import re
 import inspect
+import logging
+import time
+import uuid
 import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set, Union
+from enum import Enum
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Pattern,
+    Protocol,
+    Set,
+    Type,
+    Union,
+    runtime_checkable,
+    TYPE_CHECKING,
+)
+
+if TYPE_CHECKING:
+    from ..request import Request
+    from ..responses import Response
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Middleware Scope
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class MiddlewareScope(str, Enum):
+    """
+    Middleware scope determines where middleware applies.
+
+    GLOBAL: Applies to all routes in the application
+    SCOPED: Applies to routes in current router and child routers
+    LOCAL:  Applies only to the specific route it's attached to
+    """
+    GLOBAL = "global"
+    SCOPED = "scoped"
+    LOCAL = "local"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Type Aliases
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# Type alias for call_next function
+CallNext = Callable[["Request"], Awaitable["Response"]]
+
+# Type alias for middleware (class, function, or wrapped Django middleware)
+MiddlewareType = Union[
+    "MiddlewareProtocol",
+    Callable[["Request", CallNext], Awaitable["Response"]],
+    "DjangoMiddlewareAdapter",
+]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Middleware Protocol
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@runtime_checkable
+class MiddlewareProtocol(Protocol):
+    """
+    Protocol for Django-Bolt middleware.
+
+    Middleware can be:
+    1. A class implementing this protocol
+    2. A callable (function or lambda)
+    3. A Django middleware wrapped with DjangoMiddleware()
+
+    The middleware receives the request and a `call_next` function to continue
+    the chain. It can:
+    - Modify the request before passing it on
+    - Short-circuit by returning a response directly
+    - Modify the response after the handler executes
+    - Add data to request.state for downstream handlers
+
+    Example:
+        class TimingMiddleware:
+            async def __call__(
+                self,
+                request: Request,
+                call_next: CallNext
+            ) -> Response:
+                start = time.time()
+                request.state["start_time"] = start
+
+                response = await call_next(request)
+
+                elapsed = time.time() - start
+                response.headers["X-Response-Time"] = f"{elapsed:.3f}s"
+                return response
+    """
+
+    async def __call__(
+        self,
+        request: "Request",
+        call_next: CallNext
+    ) -> "Response":
+        ...
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Base Middleware Class
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class BaseMiddleware(ABC):
+    """
+    Base class for Django-Bolt middleware with common functionality.
+
+    Provides:
+    - Path exclusion patterns (glob-style wildcards)
+    - Method filtering
+    - Scope control (global, scoped, local)
+
+    Example:
+        class AuthMiddleware(BaseMiddleware):
+            exclude_paths = ["/health", "/metrics", "/docs/*"]
+            exclude_methods = ["OPTIONS"]
+
+            async def handle(self, request: Request, call_next: CallNext) -> Response:
+                if not request.headers.get("authorization"):
+                    raise HTTPException(401, "Unauthorized")
+                return await call_next(request)
+
+    Performance:
+        - Pattern matching is compiled once at instantiation
+        - Exclusion checks are O(1) for methods, O(n) regex match for paths
+        - No allocations in hot path
+    """
+
+    # Paths to exclude from this middleware (supports wildcards)
+    exclude_paths: Optional[List[str]] = None
+
+    # HTTP methods to exclude
+    exclude_methods: Optional[List[str]] = None
+
+    # Middleware scope
+    scope: MiddlewareScope = MiddlewareScope.LOCAL
+
+    # Compiled exclusion pattern (set during __init__)
+    _exclude_pattern: Optional[Pattern] = None
+    _exclude_methods_set: Optional[Set[str]] = None
+
+    def __init__(self) -> None:
+        """Initialize middleware with compiled exclusion patterns."""
+        # Compile path exclusion patterns once
+        if self.exclude_paths:
+            patterns = []
+            for path in self.exclude_paths:
+                # Convert glob patterns to regex
+                pattern = re.escape(path).replace(r"\*\*", ".*").replace(r"\*", "[^/]*")
+                patterns.append(f"^{pattern}$")
+            self._exclude_pattern = re.compile("|".join(patterns))
+
+        # Convert method list to set for O(1) lookup
+        if self.exclude_methods:
+            self._exclude_methods_set = set(m.upper() for m in self.exclude_methods)
+
+    async def __call__(
+        self,
+        request: "Request",
+        call_next: CallNext
+    ) -> "Response":
+        """Process request, checking exclusions first."""
+        # Check exclusions (fast path)
+        if self._should_skip(request):
+            return await call_next(request)
+
+        return await self.handle(request, call_next)
+
+    def _should_skip(self, request: "Request") -> bool:
+        """
+        Check if this request should skip the middleware.
+
+        Performance: O(1) for method check, O(n) regex for path check.
+        """
+        # Check method exclusion (O(1) set lookup)
+        if self._exclude_methods_set and request.method in self._exclude_methods_set:
+            return True
+
+        # Check path exclusion (regex match)
+        if self._exclude_pattern and self._exclude_pattern.match(request.path):
+            return True
+
+        return False
+
+    @abstractmethod
+    async def handle(
+        self,
+        request: "Request",
+        call_next: CallNext
+    ) -> "Response":
+        """
+        Handle the request. Override this in subclasses.
+
+        Args:
+            request: The incoming request
+            call_next: Function to call the next middleware/handler
+
+        Returns:
+            Response object
+        """
+        ...
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Legacy Middleware Class (backwards compatibility)
+# ═══════════════════════════════════════════════════════════════════════════
 
 
 class Middleware(ABC):
-    """Base class for middleware implementations."""
-    
+    """
+    Legacy base class for middleware implementations.
+
+    Deprecated: Use BaseMiddleware with __call__ pattern instead.
+    This is kept for backwards compatibility.
+    """
+
     @abstractmethod
     async def process_request(self, request: Any, call_next: Callable) -> Any:
         """
         Process the request and optionally call the next middleware/handler.
-        
+
         Args:
             request: The incoming request object
             call_next: Callable to invoke the next middleware or handler
-            
+
         Returns:
             Response object or result from call_next
         """
         pass
 
+    async def __call__(
+        self,
+        request: "Request",
+        call_next: CallNext
+    ) -> "Response":
+        """Adapter to make legacy middleware compatible with new protocol."""
+        return await self.process_request(request, call_next)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Middleware Configuration
+# ═══════════════════════════════════════════════════════════════════════════
+
 
 class MiddlewareGroup:
     """Groups multiple middleware for reuse across routes."""
-    
-    def __init__(self, *middleware: Union[Middleware, 'MiddlewareConfig']):
+
+    __slots__ = ("middleware",)
+
+    def __init__(self, *middleware: Union[MiddlewareProtocol, "MiddlewareConfig"]):
         self.middleware = list(middleware)
-    
-    def __add__(self, other: 'MiddlewareGroup') -> 'MiddlewareGroup':
+
+    def __add__(self, other: "MiddlewareGroup") -> "MiddlewareGroup":
         """Combine middleware groups."""
         return MiddlewareGroup(*(self.middleware + other.middleware))
 
@@ -44,12 +285,12 @@ class MiddlewareGroup:
 @dataclass
 class MiddlewareConfig:
     """Configuration for a middleware instance with metadata."""
-    
-    middleware: Union[type, Middleware]
+
+    middleware: Union[Type, MiddlewareProtocol]
     config: Dict[str, Any] = field(default_factory=dict)
     skip_routes: Set[str] = field(default_factory=set)
     only_routes: Optional[Set[str]] = None
-    
+
     def applies_to_route(self, route_key: str) -> bool:
         """Check if middleware should apply to a specific route."""
         if route_key in self.skip_routes:
@@ -59,44 +300,70 @@ class MiddlewareConfig:
         return True
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Middleware Decorators
+# ═══════════════════════════════════════════════════════════════════════════
+
+
 def middleware(*args, **kwargs):
     """
     Decorator to attach middleware to a route handler.
-    
+
     Can be used as:
     - @middleware(RateLimitMiddleware(rps=100))
     - @middleware(cors={"origins": ["*"]})
     - @middleware(skip=["auth"])
+
+    Example:
+        @api.post("/upload")
+        @middleware(
+            ValidateContentTypeMiddleware(allowed=["multipart/form-data"]),
+            FileSizeLimitMiddleware(max_size=10 * 1024 * 1024),
+        )
+        async def upload_file(request: Request) -> dict:
+            return {"uploaded": True}
     """
     def decorator(func):
         if not hasattr(func, '__bolt_middleware__'):
             func.__bolt_middleware__ = []
-        
+
         for arg in args:
-            if isinstance(arg, (Middleware, MiddlewareConfig, type)):
+            if isinstance(arg, (BaseMiddleware, Middleware, MiddlewareConfig, type)):
                 func.__bolt_middleware__.append(arg)
             elif isinstance(arg, MiddlewareGroup):
                 func.__bolt_middleware__.extend(arg.middleware)
-        
+            elif callable(arg):
+                # Support raw callables as middleware
+                func.__bolt_middleware__.append(arg)
+
         if kwargs:
             func.__bolt_middleware__.append(kwargs)
-        
+
         return func
-    
+
     # Support both @middleware and @middleware()
-    if len(args) == 1 and callable(args[0]) and not isinstance(args[0], (Middleware, type)):
+    if len(args) == 1 and callable(args[0]) and not isinstance(args[0], (BaseMiddleware, Middleware, type)):
         return decorator(args[0])
     return decorator
 
 
 def rate_limit(rps: int = 100, burst: int = None, key: str = "ip"):
     """
-    Rate limiting decorator.
-    
+    Rate limiting decorator (Rust-accelerated).
+
+    This middleware is handled in Rust for maximum performance.
+    No Python overhead in the hot path.
+
     Args:
         rps: Requests per second limit
         burst: Burst capacity (defaults to 2x rps)
         key: Rate limit key strategy ("ip", "user", "api_key", or header name)
+
+    Example:
+        @api.get("/api/data")
+        @rate_limit(rps=1000, burst=2000, key="ip")
+        async def get_data(request: Request) -> dict:
+            return {"data": [...]}
     """
     def decorator(func):
         if not hasattr(func, '__bolt_middleware__'):
@@ -119,7 +386,10 @@ def cors(
     max_age: int = 3600
 ):
     """
-    CORS configuration decorator for route-level CORS configuration.
+    CORS configuration decorator (Rust-accelerated).
+
+    This middleware is handled in Rust for maximum performance.
+    CORS preflight requests are handled without Python overhead.
 
     Args:
         origins: Allowed origins (REQUIRED). Use ["*"] for all origins, or specific origins
@@ -138,11 +408,6 @@ def cors(
 
         @cors(origins=["https://app.example.com"], credentials=True)
         async def with_cookies(): ...
-
-    Note:
-        If you want to use global CORS settings from Django (CORS_ALLOWED_ORIGINS),
-        do NOT use the @cors decorator - the global config will apply automatically.
-        The @cors decorator is for route-specific CORS overrides only.
 
     Raises:
         ValueError: If origins is not specified (empty @cors() is not allowed)
@@ -186,14 +451,12 @@ def cors(
     return decorator
 
 
-
-
 def skip_middleware(*middleware_names: str):
     """
-    Skip specific global middleware for this route.
+    Skip specific middleware for this route.
 
     Args:
-        middleware_names: Names of middleware to skip (e.g., "cors", "rate_limit", "compression")
+        middleware_names: Names of middleware to skip. Use "*" to skip all.
 
     Examples:
         @api.get("/no-compression")
@@ -201,8 +464,13 @@ def skip_middleware(*middleware_names: str):
         async def no_compress():
             return {"data": "large response without compression"}
 
+        @api.get("/raw")
+        @skip_middleware("*")
+        async def raw_endpoint():
+            return {"raw": True}
+
         @api.get("/minimal")
-        @skip_middleware("cors", "compression")
+        @skip_middleware("cors", "compression", "TimingMiddleware")
         async def minimal():
             return {"fast": True}
     """
@@ -210,6 +478,34 @@ def skip_middleware(*middleware_names: str):
         if not hasattr(func, '__bolt_skip_middleware__'):
             func.__bolt_skip_middleware__ = set()
         func.__bolt_skip_middleware__.update(middleware_names)
+        return func
+    return decorator
+
+
+def override_middleware(
+    middleware_class: Type[BaseMiddleware],
+    replacement: BaseMiddleware
+):
+    """
+    Override a parent middleware with different configuration for this route.
+
+    Args:
+        middleware_class: The middleware class to override
+        replacement: The replacement middleware instance
+
+    Example:
+        @api.get("/high-traffic")
+        @override_middleware(
+            RateLimitMiddleware,
+            RateLimitMiddleware(rps=10000, burst=20000)
+        )
+        async def high_traffic(request: Request) -> dict:
+            return {"data": [...]}
+    """
+    def decorator(func):
+        if not hasattr(func, '__bolt_override_middleware__'):
+            func.__bolt_override_middleware__ = {}
+        func.__bolt_override_middleware__[middleware_class.__name__] = replacement
         return func
     return decorator
 
@@ -230,9 +526,19 @@ def no_compress(func):
     return skip_middleware("compression")(func)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Built-in Rust-Accelerated Middleware Classes
+# ═══════════════════════════════════════════════════════════════════════════
+
+
 class CORSMiddleware(Middleware):
-    """Built-in CORS middleware implementation."""
-    
+    """
+    Built-in CORS middleware implementation.
+
+    Note: This is a Python fallback. The actual CORS handling is done in Rust
+    for maximum performance. Use the @cors decorator or BoltAPI cors= parameter.
+    """
+
     def __init__(
         self,
         origins: List[str] = None,
@@ -246,7 +552,7 @@ class CORSMiddleware(Middleware):
         self.headers = headers or ["Content-Type", "Authorization"]
         self.credentials = credentials
         self.max_age = max_age
-    
+
     async def process_request(self, request: Any, call_next: Callable) -> Any:
         # This will be handled in Rust for performance
         # Python implementation is for compatibility
@@ -255,13 +561,18 @@ class CORSMiddleware(Middleware):
 
 
 class RateLimitMiddleware(Middleware):
-    """Built-in rate limiting middleware implementation."""
-    
+    """
+    Built-in rate limiting middleware implementation.
+
+    Note: This is a Python fallback. The actual rate limiting is done in Rust
+    using the governor crate for maximum performance. Use the @rate_limit decorator.
+    """
+
     def __init__(self, rps: int = 100, burst: int = None, key: str = "ip"):
         self.rps = rps
         self.burst = burst or rps * 2
         self.key = key
-    
+
     async def process_request(self, request: Any, call_next: Callable) -> Any:
         # This will be handled in Rust for performance
         # Python implementation is for compatibility/fallback
@@ -269,3 +580,186 @@ class RateLimitMiddleware(Middleware):
         return response
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Built-in Python Middleware
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TimingMiddleware(BaseMiddleware):
+    """
+    Adds request timing information.
+
+    Adds to request.state:
+        - request_id: Unique request identifier
+        - start_time: Request start timestamp
+
+    Adds response headers:
+        - X-Request-ID: Request identifier
+        - X-Response-Time: Time taken in seconds
+
+    Example:
+        api = BoltAPI(middleware=[TimingMiddleware()])
+
+        @api.get("/")
+        async def index(request: Request) -> dict:
+            request_id = request.state.get("request_id")
+            return {"request_id": request_id}
+    """
+
+    async def handle(
+        self,
+        request: "Request",
+        call_next: CallNext
+    ) -> "Response":
+        request_id = str(uuid.uuid4())
+        start_time = time.perf_counter()
+
+        request.state["request_id"] = request_id
+        request.state["start_time"] = start_time
+
+        response = await call_next(request)
+
+        elapsed = time.perf_counter() - start_time
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Response-Time"] = f"{elapsed:.4f}s"
+
+        return response
+
+
+class LoggingMiddleware(BaseMiddleware):
+    """
+    Logs request and response information.
+
+    Configurable log levels and formats.
+    Excludes health/metrics endpoints by default.
+
+    Example:
+        api = BoltAPI(middleware=[
+            LoggingMiddleware(log_body=False, log_headers=True)
+        ])
+    """
+
+    exclude_paths = ["/health", "/metrics", "/docs", "/openapi.json"]
+
+    def __init__(
+        self,
+        logger: Optional[logging.Logger] = None,
+        log_body: bool = False,
+        log_headers: bool = False,
+        log_level: int = logging.INFO
+    ):
+        super().__init__()
+        self.logger = logger or logging.getLogger("django_bolt.requests")
+        self.log_body = log_body
+        self.log_headers = log_headers
+        self.log_level = log_level
+
+    async def handle(
+        self,
+        request: "Request",
+        call_next: CallNext
+    ) -> "Response":
+        # Log request
+        log_data = {
+            "method": request.method,
+            "path": request.path,
+        }
+        if request.query:
+            log_data["query"] = dict(request.query)
+        if self.log_headers:
+            log_data["headers"] = dict(request.headers)
+        if self.log_body and request.body:
+            log_data["body_size"] = len(request.body)
+
+        self.logger.log(self.log_level, f"Request: {log_data}")
+
+        # Process request
+        start_time = time.perf_counter()
+        response = await call_next(request)
+        elapsed = time.perf_counter() - start_time
+
+        # Log response
+        self.logger.log(
+            self.log_level,
+            f"Response: {response.status_code} for {request.method} {request.path} ({elapsed:.4f}s)"
+        )
+
+        return response
+
+
+class ErrorHandlerMiddleware(BaseMiddleware):
+    """
+    Global error handler middleware.
+
+    Catches exceptions and converts them to appropriate HTTP responses.
+    Should be one of the first middleware in the chain.
+
+    Example:
+        api = BoltAPI(middleware=[
+            ErrorHandlerMiddleware(debug=True),  # First in chain
+            TimingMiddleware(),
+            LoggingMiddleware(),
+        ])
+    """
+
+    scope = MiddlewareScope.GLOBAL
+
+    def __init__(self, debug: bool = False):
+        super().__init__()
+        self.debug = debug
+        self.logger = logging.getLogger("django_bolt.errors")
+
+    async def handle(
+        self,
+        request: "Request",
+        call_next: CallNext
+    ) -> "Response":
+        from ..exceptions import HTTPException
+        from ..responses import Response
+
+        try:
+            return await call_next(request)
+        except HTTPException:
+            raise  # Let HTTP exceptions pass through
+        except Exception as e:
+            self.logger.exception(f"Unhandled exception: {e}")
+
+            if self.debug:
+                import traceback
+                detail = traceback.format_exc()
+            else:
+                detail = "Internal Server Error"
+
+            raise HTTPException(500, detail)
+
+
+# Placeholder for DjangoMiddleware - imported from django_adapter module
+DjangoMiddlewareAdapter = None  # Will be set by django_adapter module
+
+
+__all__ = [
+    # Protocols and base classes
+    "MiddlewareProtocol",
+    "BaseMiddleware",
+    "Middleware",
+    "MiddlewareScope",
+    "CallNext",
+    "MiddlewareType",
+    # Configuration
+    "MiddlewareGroup",
+    "MiddlewareConfig",
+    # Decorators
+    "middleware",
+    "rate_limit",
+    "cors",
+    "skip_middleware",
+    "override_middleware",
+    "no_compress",
+    # Built-in middleware (Rust-accelerated)
+    "CORSMiddleware",
+    "RateLimitMiddleware",
+    # Built-in middleware (Python)
+    "TimingMiddleware",
+    "LoggingMiddleware",
+    "ErrorHandlerMiddleware",
+]

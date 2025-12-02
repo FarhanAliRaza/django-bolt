@@ -3,6 +3,11 @@ Type definitions for Django-Bolt.
 
 This module provides type hints and protocols for Django-Bolt objects,
 enabling full IDE autocomplete and static type checking.
+
+Includes:
+- Request/AuthContext/UserType protocols (for Rust-backed objects)
+- Type aliases for common authentication patterns (JWTClaims, APIKeyAuth, etc.)
+- Request type aliases (AuthenticatedRequest, PublicRequest, etc.)
 """
 from __future__ import annotations
 
@@ -10,10 +15,20 @@ from typing import (
     Protocol,
     Any,
     Dict,
+    List,
     Optional,
     overload,
     runtime_checkable,
+    TYPE_CHECKING,
 )
+
+try:
+    from typing import TypedDict, NotRequired
+except ImportError:
+    from typing_extensions import TypedDict, NotRequired
+
+if TYPE_CHECKING:
+    from .request import Request as TypedRequest
 
 
 
@@ -430,4 +445,149 @@ class Request(Protocol):
         ...
 
 
-__all__ = ["Request", "UserType", "AuthContext", "DjangoModel"]
+# ═══════════════════════════════════════════════════════════════════════════
+# Authentication Type Aliases
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class JWTClaims(TypedDict, total=False):
+    """
+    Standard JWT claims structure.
+
+    See RFC 7519 for standard claim definitions.
+    Use this as the AuthT type parameter for JWT-authenticated requests.
+
+    Example:
+        @api.get("/profile")
+        async def profile(request: Request[User, JWTClaims, dict]) -> dict:
+            user_id = request.auth["sub"]  # IDE knows this is str
+            exp = request.auth["exp"]       # IDE knows this is int
+            return {"user_id": user_id}
+    """
+    # Registered claims (RFC 7519)
+    sub: str                    # Subject (typically user ID)
+    exp: int                    # Expiration time (Unix timestamp)
+    iat: int                    # Issued at (Unix timestamp)
+    nbf: int                    # Not before (Unix timestamp)
+    iss: str                    # Issuer
+    aud: str                    # Audience
+    jti: str                    # JWT ID (unique identifier)
+
+    # Common custom claims
+    user_id: int
+    username: str
+    email: str
+    is_staff: bool
+    is_superuser: bool
+    permissions: List[str]
+    groups: List[str]
+
+
+class APIKeyAuth(TypedDict, total=False):
+    """
+    API key authentication context.
+
+    Use this as the AuthT type parameter for API key-authenticated requests.
+
+    Example:
+        @api.get("/data", auth=[APIKeyAuthentication()])
+        async def get_data(request: Request[None, APIKeyAuth, dict]) -> dict:
+            key_id = request.auth["key_id"]
+            permissions = request.auth.get("permissions", [])
+            return {"key": key_id}
+    """
+    key_id: str
+    key_name: str
+    permissions: List[str]
+    rate_limit: NotRequired[int]
+    metadata: NotRequired[Dict[str, Any]]
+
+
+class SessionAuth(TypedDict, total=False):
+    """
+    Session-based authentication context.
+
+    Use this as the AuthT type parameter for session-authenticated requests.
+
+    Example:
+        @api.get("/dashboard")
+        async def dashboard(request: Request[User, SessionAuth, dict]) -> dict:
+            session_key = request.auth["session_key"]
+            return {"session": session_key}
+    """
+    session_key: str
+    user_id: int
+    created_at: str
+    last_activity: str
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Custom State Type Examples
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TimingState(TypedDict, total=False):
+    """
+    State for timing middleware.
+
+    Example:
+        @api.get("/timed")
+        async def timed(request: Request[User, Auth, TimingState]) -> dict:
+            request_id = request.state.request_id  # IDE autocomplete
+            start = request.state.start_time
+            return {"request_id": request_id}
+    """
+    start_time: float
+    request_id: str
+
+
+class TracingState(TypedDict, total=False):
+    """
+    State for distributed tracing.
+
+    Example:
+        @api.get("/traced")
+        async def traced(request: Request[User, Auth, TracingState]) -> dict:
+            trace_id = request.state.trace_id
+            return {"trace_id": trace_id}
+    """
+    trace_id: str
+    span_id: str
+    parent_span_id: NotRequired[str]
+    baggage: NotRequired[Dict[str, str]]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Middleware Response Types
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class MiddlewareResponse(TypedDict, total=False):
+    """
+    Type for middleware response objects.
+
+    Used internally by middleware to return responses.
+    """
+    body: bytes
+    status_code: int
+    headers: Dict[str, str]
+
+
+__all__ = [
+    # Protocols
+    "Request",
+    "UserType",
+    "AuthContext",
+    "DjangoModel",
+    # JWT Types
+    "JWTClaims",
+    # API Key Types
+    "APIKeyAuth",
+    # Session Types
+    "SessionAuth",
+    # State Types
+    "TimingState",
+    "TracingState",
+    # Response Types
+    "MiddlewareResponse",
+]

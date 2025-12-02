@@ -179,7 +179,6 @@ async def get_me_dependency(user=Depends(get_current_user)):
     guards=[IsAuthenticated()],
     tags=["auth"],
     summary="Get authentication context",
-    preload_user=False
 )
 async def get_auth_context(request: Request):
     """
@@ -200,6 +199,36 @@ async def get_auth_context(request: Request):
         "auth_backend": context.get("auth_backend"),
         "permissions": context.get("permissions", []),
         "auth_claims": context.get("auth_claims", {}),
+    }
+
+
+@api.get(
+    "/auth/no-user-access",
+    auth=[JWTAuthentication()],
+    guards=[IsAuthenticated()],
+    tags=["auth"],
+    summary="Authenticated endpoint that does NOT access request.user (lazy loading benchmark)",
+)
+async def get_no_user_access(request: Request):
+    """
+    Authenticated endpoint that does NOT access request.user.
+
+    This demonstrates lazy loading - the user is never loaded from the database
+    because request.user is never accessed. Compare performance with /auth/me
+    which does access request.user and triggers a database query.
+
+    Use this endpoint to benchmark the overhead of authentication WITHOUT
+    user loading, vs /auth/me which includes user loading.
+
+    Requires a valid JWT token in the Authorization header:
+    Authorization: Bearer <jwt_token>
+    """
+    # Only access auth context - never touch request.user
+    context = request.context
+    return {
+        "authenticated": True,
+        "user_id": context.get("user_id"),
+        "message": "User was NOT loaded from database (lazy loading)",
     }
 
 

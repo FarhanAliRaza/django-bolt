@@ -112,8 +112,12 @@ PYTHON_TOKEN_SCRIPT
 
 # Only run auth tests if we have a valid token
 if [ -n "$TOKEN" ] && [ ${#TOKEN} -gt 50 ]; then
-    printf "### Get Authenticated User (/auth/me)\n"
     AUTH_HEADER="Authorization: Bearer $TOKEN"
+
+    printf "### Auth NO User Access (/auth/no-user-access) - lazy loading, no DB query\n"
+    ab -k -c $C -n $N -H "$AUTH_HEADER" http://$HOST:$PORT/auth/no-user-access 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
+    printf "### Get Authenticated User (/auth/me) - accesses request.user, triggers DB query\n"
     ab -k -c $C -n $N -H "$AUTH_HEADER" http://$HOST:$PORT/auth/me 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
     printf "### Get User via Dependency (/auth/me-dependency)\n"

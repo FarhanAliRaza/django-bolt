@@ -128,10 +128,6 @@ class HandlerMetadata(TypedDict, total=False):
     injector_is_async: bool
     """Whether the injector function is async (True only if handler uses Depends)"""
 
-    # User loading optimization
-    preload_user: bool
-    """Whether to eagerly load user at dispatch time (default: True if auth configured)"""
-
     # Static analysis flags (skip unused parsing)
     # These are computed at route registration time by analyzing handler parameters
     needs_body: bool

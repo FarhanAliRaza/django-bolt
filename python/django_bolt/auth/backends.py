@@ -13,14 +13,17 @@ The authentication flow:
 
 Performance: ~60k+ RPS with JWT validation happening entirely in Rust.
 """
+from __future__ import annotations
+
 import sys
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Set
 from dataclasses import dataclass
-from django.contrib.auth import get_user_model
-from asgiref.sync import sync_to_async
+from typing import Any, Dict, List, Optional, Set
+
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
+
 from .revocation import create_revocation_handler
 
 @dataclass
@@ -100,6 +103,16 @@ class JWTAuthentication(BaseAuthentication):
         issuer: Optional JWT issuer claim to validate
     """
 
+    # Class-level cached User model - resolved once on first use
+    _user_model: Optional[type] = None
+
+    @classmethod
+    def _get_user_model(cls) -> type:
+        """Get User model, caching at class level after first call."""
+        if cls._user_model is None:
+            cls._user_model = get_user_model()
+        return cls._user_model
+
     def __init__(
         self,
         secret: Optional[str] = None,
@@ -178,23 +191,37 @@ class JWTAuthentication(BaseAuthentication):
         Load user from database using the user_id from JWT token.
 
         The user_id should be the primary key of the user in the database.
-        Uses sync_to_async for proper thread-safety with Django ORM.
         """
         if not user_id:
             return None
 
-
-        User = get_user_model()
+        User = self._get_user_model()
 
         try:
-            # Use sync_to_async wrapper for proper thread-safety and database context
-            # Ensures Django's connection pooling is used correctly
-            return await sync_to_async(User.objects.get, thread_sensitive=False)(pk=user_id)
+            return await User.objects.aget(pk=user_id)
         except User.DoesNotExist:
-            # User not found - this is expected in some cases
             return None
         except Exception as e:
-            # Unexpected error - log it for debugging
+            print(f"Error loading user {user_id} in JWTAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
+            return None
+
+    def get_user_sync(self, user_id: Optional[str]) -> Optional[Any]:
+        """
+        Synchronously load user from database using the user_id from JWT token.
+
+        This method does the actual DB query. Thread pool wrapping is handled
+        by user_loader.load_user_sync() based on the handler's async context.
+        """
+        if not user_id:
+            return None
+
+        User = self._get_user_model()
+
+        try:
+            return User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return None
+        except Exception as e:
             print(f"Error loading user {user_id} in JWTAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
             return None
 
@@ -248,6 +275,16 @@ class SessionAuthentication(BaseAuthentication):
     Python execution for every request.
     """
 
+    # Class-level cached User model - resolved once on first use
+    _user_model: Optional[type] = None
+
+    @classmethod
+    def _get_user_model(cls) -> type:
+        """Get User model, caching at class level after first call."""
+        if cls._user_model is None:
+            cls._user_model = get_user_model()
+        return cls._user_model
+
     def __init__(self):
         pass
 
@@ -265,21 +302,35 @@ class SessionAuthentication(BaseAuthentication):
         Load user from database using the user_id from session.
 
         The user_id should be the primary key of the user in the database.
-        Uses sync_to_async for proper thread-safety with Django ORM.
         """
         if not user_id:
             return None
-        User = get_user_model()
+        User = self._get_user_model()
 
         try:
-            # Use sync_to_async wrapper for proper thread-safety and database context
-            # Ensures Django's connection pooling is used correctly
-            return await sync_to_async(User.objects.get, thread_sensitive=False)(pk=user_id)
+            return await User.objects.aget(pk=user_id)
         except User.DoesNotExist:
-            # User not found - this is expected in some cases
             return None
         except Exception as e:
-            # Unexpected error - log it for debugging
+            print(f"Error loading user {user_id} in SessionAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
+            return None
+
+    def get_user_sync(self, user_id: Optional[str]) -> Optional[Any]:
+        """
+        Synchronously load user from database using the user_id from session.
+
+        This method does the actual DB query. Thread pool wrapping is handled
+        by user_loader.load_user_sync() based on the handler's async context.
+        """
+        if not user_id:
+            return None
+        User = self._get_user_model()
+
+        try:
+            return User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return None
+        except Exception as e:
             print(f"Error loading user {user_id} in SessionAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
             return None
 

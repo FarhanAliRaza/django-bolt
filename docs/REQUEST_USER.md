@@ -1,6 +1,6 @@
-# request.user - Eager-Loaded User Objects
+# request.user - Lazy-Loaded User Objects
 
-Django-Bolt provides eager-loaded user objects accessible via `request.user`. By default, users are loaded from the database during request dispatch (before the handler runs) for authenticated endpoints, avoiding the need for manual user lookups.
+Django-Bolt provides lazy-loaded user objects accessible via `request.user`. Users are loaded from the database only when `request.user` is first accessed, using Django's `SimpleLazyObject` pattern for optimal performance.
 
 ## Overview
 
@@ -16,13 +16,13 @@ async def get_user(request):
     return {"username": user.username}
 ```
 
-You can now use `request.user` for cleaner code - **automatically loaded before handler execution**:
+You can now use `request.user` for cleaner code - **automatically loaded on first access**:
 
 ```python
-# New way - user pre-loaded by Django-Bolt
+# New way - user lazy-loaded by Django-Bolt
 @api.get("/me", auth=[JWTAuthentication()], guards=[IsAuthenticated()])
 async def get_me(request):
-    user = request.user  # Already loaded, no await needed
+    user = request.user  # Loaded on first access
     if user:  # Safe to access directly
         return {"username": user.username}
     return {"error": "User not found"}
@@ -33,21 +33,19 @@ This also works seamlessly in **sync handlers**:
 ```python
 @api.get("/profile", auth=[JWTAuthentication()], guards=[IsAuthenticated()])
 def get_profile(request):
-    # Works in sync handlers - user already loaded
+    # Works in sync handlers - user loaded on access
     user = request.user
     if user:
         return {"username": user.username}
     return {"error": "User not found"}
 ```
 
-**Smart loading**: You control user loading via the `preload_user` parameter:
-- **`preload_user=True`** (default when auth configured): User is eagerly loaded at dispatch time
-- **`preload_user=False`**: User loading is skipped (zero overhead for JWT-only verification endpoints)
+**Lazy loading**: User is only loaded from the database when `request.user` is first accessed. If your handler never accesses `request.user`, no database query is made.
 
 ## Features
 
-- **Eager-Loaded**: User is loaded from database during request dispatch (before handler runs)
-- **Controlled Loading**: Use `preload_user=True/False` to control when users are loaded
+- **Lazy-Loaded**: User is loaded from database only when `request.user` is first accessed
+- **Zero Overhead**: Endpoints that don't access `request.user` incur no DB query
 - **No Await Required**: Works in both sync and async handlers with the same syntax
 - **Custom User Models**: Uses Django's `get_user_model()` for custom user support
 - **Extensible**: Override `get_user()` in auth backends for custom user resolution
@@ -65,7 +63,7 @@ api = BoltAPI()
 
 @api.get("/profile", auth=[JWTAuthentication()], guards=[IsAuthenticated()])
 async def get_profile(request):
-    user = request.user  # Already loaded by Django-Bolt
+    user = request.user  # Loaded on first access
     if not user:
         return {"error": "User not found"}
     return {
@@ -83,7 +81,7 @@ from django_bolt.auth import SessionAuthentication
 
 @api.get("/dashboard", auth=[SessionAuthentication()], guards=[IsAuthenticated()])
 async def dashboard(request):
-    user = request.user  # Already loaded by Django-Bolt
+    user = request.user  # Loaded on first access
     if user:
         return {"welcome": f"Welcome back, {user.first_name}!"}
     return {"error": "Not authenticated"}
@@ -96,22 +94,21 @@ For public endpoints without authentication, `request.user` is `None` (no user l
 ```python
 @api.get("/public")
 async def public_endpoint(request):
-    user = request.user  # None - no auth configured, no user loading
+    user = request.user  # None - no auth configured
     if user:
         return {"authenticated": True, "user_id": user.id}
     return {"authenticated": False}
 ```
 
-### Skipping User Loading
+### JWT-Only Verification (No User Access)
 
-Use `preload_user=False` to skip user loading for JWT-only verification endpoints:
+For endpoints that only need to verify the JWT is valid but don't need the user object:
 
 ```python
-@api.get("/verify-token", auth=[JWTAuthentication()], preload_user=False)
+@api.get("/verify-token", auth=[JWTAuthentication()])
 async def verify_token(request):
-    # Token validated in Rust, but user not loaded from database
-    # request.user is None
-    context = request.context
+    # Token validated in Rust, user NOT loaded (we never access request.user)
+    context = request.get("auth", {})
     return {
         "is_valid": True,
         "user_id": context.get("user_id"),
@@ -121,16 +118,16 @@ async def verify_token(request):
 
 ## User Loading Behavior
 
-`request.user` is loaded once at dispatch time (when `preload_user=True`). The loaded user is then available for the entire request lifecycle:
+`request.user` uses Django's `SimpleLazyObject` - the user is loaded once on first access and cached for the entire request lifecycle:
 
 ```python
 @api.get("/user-stats", auth=[JWTAuthentication()], guards=[IsAuthenticated()])
 async def get_user_stats(request):
-    # User already loaded at dispatch time (before handler runs)
+    # User loaded on first access
     user = request.user
     user_count = await User.objects.filter(is_staff=user.is_staff).acount()
 
-    # Multiple accesses return the same cached instance
+    # Multiple accesses return the same cached instance (no additional queries)
     user_profile = request.user
 
     assert user is user_profile  # Same instance
@@ -139,24 +136,21 @@ async def get_user_stats(request):
 
 ## Performance Considerations
 
-User loading timing depends on the `preload_user` parameter:
+User loading is lazy - the database query only happens when `request.user` is accessed:
 
 ```python
-# Route 1: Skip user loading - JWT-only verification
-@api.get("/verify-token", auth=[JWTAuthentication()], preload_user=False)
+# Route 1: JWT-only verification - no user access
+@api.get("/verify-token", auth=[JWTAuthentication()])
 async def verify_token(request):
-    # JWT validated in Rust, user NOT loaded from database
-    # request.user is None
+    # JWT validated in Rust, user NOT loaded (never accessed)
     return {"verified": True}  # ~100k RPS (no DB query)
 
-# Route 2: Eager load user (default) - Full user access
+# Route 2: User access required
 @api.get("/profile", auth=[JWTAuthentication()], guards=[IsAuthenticated()])
 async def get_profile(request):
-    user = request.user  # User already loaded at dispatch time
-    return {"username": user.username}  # ~15k RPS (includes DB query in dispatch)
+    user = request.user  # User loaded here (first access)
+    return {"username": user.username}  # ~15k RPS (includes DB query)
 ```
-
-The timing difference is negligible because `preload_user=True` loads the user during request dispatch (as part of middleware processing) rather than in the handler.
 
 ## Extensibility: Custom User Resolution
 
@@ -321,12 +315,10 @@ async def get_user_info(request):
 
 ## Performance Implications
 
-- **`preload_user=False`**: Zero database queries (only JWT auth in Rust) → ~100k RPS
-- **`preload_user=True`** (default): One database query at dispatch time → ~15k RPS
-- **Multiple Accesses**: No additional queries (user cached in request) → Same as first access
-- **Custom Backends**: Query cost depends on your `get_user()` implementation
-
-**Default behavior**: When auth is configured, `preload_user` defaults to `True`, loading the user eagerly at dispatch time. This is optimal for endpoints that will use the user (avoid checking `if not user` later). For JWT-only verification endpoints, explicitly set `preload_user=False`.
+- **No user access**: Zero database queries (only JWT auth in Rust) - ~100k RPS
+- **User access**: One database query on first `request.user` access - ~15k RPS
+- **Multiple accesses**: No additional queries (user cached via SimpleLazyObject) - Same as first access
+- **Custom backends**: Query cost depends on your `get_user()` implementation
 
 ## Example: Complete User Service
 

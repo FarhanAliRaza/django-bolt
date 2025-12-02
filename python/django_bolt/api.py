@@ -51,8 +51,10 @@ from .admin.routes import AdminRouteRegistrar
 from .admin.static_routes import StaticRouteRegistrar
 from .admin.admin_detection import detect_admin_url_prefix
 from .auth import get_default_authentication_classes, register_auth_backend
-from .auth.user_loader import load_user
+from .auth.user_loader import load_user, load_user_sync
 from .analysis import analyze_handler, warn_blocking_handler
+
+from django.utils.functional import SimpleLazyObject
 
 from . import _json
 
@@ -322,9 +324,8 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        preload_user: Optional[bool] = None,
     ):
-        return self._route_decorator("GET", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, preload_user=preload_user)
+        return self._route_decorator("GET", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
     def post(
         self,
@@ -337,9 +338,8 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        preload_user: Optional[bool] = None,
     ):
-        return self._route_decorator("POST", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, preload_user=preload_user)
+        return self._route_decorator("POST", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
     def put(
         self,
@@ -352,9 +352,8 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        preload_user: Optional[bool] = None,
     ):
-        return self._route_decorator("PUT", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, preload_user=preload_user)
+        return self._route_decorator("PUT", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
     def patch(
         self,
@@ -367,9 +366,8 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        preload_user: Optional[bool] = None,
     ):
-        return self._route_decorator("PATCH", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, preload_user=preload_user)
+        return self._route_decorator("PATCH", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
     def delete(
         self,
@@ -382,9 +380,8 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        preload_user: Optional[bool] = None,
     ):
-        return self._route_decorator("DELETE", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, preload_user=preload_user)
+        return self._route_decorator("DELETE", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
     def head(
         self,
@@ -397,9 +394,8 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        preload_user: Optional[bool] = None,
     ):
-        return self._route_decorator("HEAD", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, preload_user=preload_user)
+        return self._route_decorator("HEAD", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
     def options(
         self,
@@ -412,9 +408,8 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        preload_user: Optional[bool] = None,
     ):
-        return self._route_decorator("OPTIONS", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description, preload_user=preload_user)
+        return self._route_decorator("OPTIONS", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
     def view(
         self,
@@ -749,7 +744,6 @@ class BoltAPI:
         tags: Optional[List[str]] = None,
         summary: Optional[str] = None,
         description: Optional[str] = None,
-        preload_user: Optional[bool] = None,
     ):
         def decorator(fn: Callable):
             # Detect if handler is async or sync
@@ -807,16 +801,6 @@ class BoltAPI:
                 meta["openapi_summary"] = summary
             if description is not None:
                 meta["openapi_description"] = description
-
-            # Store preload_user flag with smart defaults:
-            # True if auth is configured and not explicitly set to False
-            # False/None if no auth configured
-            if preload_user is None:
-                # Default: eager load user if auth is configured
-                meta["preload_user"] = bool(auth is not None)
-            else:
-                # Explicit override
-                meta["preload_user"] = preload_user
 
             # Compile optimized argument injector (once at registration time)
             # This pre-compiles all parameter extraction logic for maximum performance
@@ -1426,40 +1410,6 @@ class BoltAPI:
         # Use the error handler which respects Django DEBUG setting
         return handle_exception(e, debug=None, request=request)  # debug will be checked dynamically
 
-    async def _load_user(self, request: Dict[str, Any], meta: HandlerMetadata, handler_id: Optional[int] = None) -> None:  # noqa: ARG002
-        """
-        Load user from auth context (eager or skip based on preload_user flag).
-
-        Performance-optimized user loading:
-        - preload_user=True: Eagerly loads user at dispatch time (43% faster)
-        - preload_user=False: Skips user loading (zero overhead for public endpoints)
-
-        This approach eliminates LazyUser proxy overhead and loads users directly.
-
-        Args:
-            request: Request dictionary
-            meta: Handler metadata containing preload_user flag
-            handler_id: Handler ID for merged APIs
-        """
-        auth_context = request.get("auth")
-
-        # Check if we should preload the user
-        preload_user = meta.get("preload_user", True)
-
-        if not preload_user or not auth_context or not auth_context.get("user_id"):
-            # Skip user loading (no auth or preload_user=False)
-            request["user"] = None
-            return
-
-        # Extract user_id and backend name from auth context
-        user_id = auth_context.get("user_id")
-        backend_name = auth_context.get("auth_backend")
-
-        # Eagerly load user now (no lazy evaluation, no proxy overhead)
-        user = await load_user(user_id, backend_name, auth_context)
-        request["user"] = user
-
-
     async def _dispatch(self, handler: Callable, request: Dict[str, Any], handler_id: int = None) -> Response:
         """
         Optimized async dispatch that calls the handler and returns response tuple.
@@ -1507,18 +1457,18 @@ class BoltAPI:
             # 1. Direct metadata access (guaranteed to exist - fastest path)
             meta = self._handler_meta[handler]
 
-            # 2. Inline user loading (eliminates _load_user() call overhead)
-            if meta.get("preload_user", True):
-                auth_context = request.get("auth")
-                if auth_context:
-                    user_id = auth_context.get("user_id")
-                    backend_name = auth_context.get("auth_backend")
-                    if user_id:
-                        request["user"] = await load_user(user_id, backend_name, auth_context)
-                    else:
-                        request["user"] = None
-                else:
-                    request["user"] = None
+            # 2. Lazy user loading using SimpleLazyObject (Django pattern)
+            # User is only loaded from DB when request.user is actually accessed
+            auth_context = request.get("auth")
+            if auth_context and auth_context.get("user_id"):
+                user_id = auth_context.get("user_id")
+                backend_name = auth_context.get("auth_backend")
+                # Use pre-computed is_async from handler metadata (avoids runtime loop check)
+                is_async = meta["is_async"]
+                # Use lambda with default args to capture values (avoid late binding)
+                request["user"] = SimpleLazyObject(
+                    lambda u=user_id, b=backend_name, a=auth_context, async_ctx=is_async: load_user_sync(u, b, a, async_ctx)
+                )
             else:
                 request["user"] = None
 

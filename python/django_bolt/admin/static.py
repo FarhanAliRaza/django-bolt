@@ -8,7 +8,7 @@ import mimetypes
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any, Union
 
 from django.conf import settings
 try:
@@ -20,7 +20,7 @@ from ..exceptions import HTTPException
 from ..responses import FileResponse
 
 
-def find_static_file(path: str) -> Optional[str]:
+def find_static_file(path: Union[str, Path]) -> Optional[str]:
     """
     Find a static file using Django's static file finders.
 
@@ -33,6 +33,7 @@ def find_static_file(path: str) -> Optional[str]:
     try:
         # First try STATIC_ROOT (collected static files in production)
         if hasattr(settings, 'STATIC_ROOT') and settings.STATIC_ROOT:
+            path = str(path)  # Normalize for Django finders
             static_root = Path(settings.STATIC_ROOT)
             file_path = static_root / path
             if file_path.exists() and file_path.is_file():

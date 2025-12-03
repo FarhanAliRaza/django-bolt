@@ -7,7 +7,7 @@ to work with Django-Bolt's async middleware chain.
 Performance considerations:
 - Conversion between Bolt Request and Django HttpRequest is lazy where possible
 - Django request attributes are synced back only when needed
-- Async Django middleware is supported without blocking
+- Uses sync_to_async for Django operations that may touch the database
 """
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from typing import Any, Callable, Optional, Type, Union, TYPE_CHECKING
 try:
     from django.http import HttpRequest, HttpResponse, QueryDict
     from django.utils.module_loading import import_string
+    from asgiref.sync import sync_to_async
     DJANGO_AVAILABLE = True
 except ImportError:
     DJANGO_AVAILABLE = False
@@ -26,6 +27,7 @@ except ImportError:
     HttpResponse = None
     QueryDict = None
     import_string = None
+    sync_to_async = None
 
 if TYPE_CHECKING:
     from ..request import Request
@@ -67,7 +69,7 @@ class DjangoMiddleware:
     Performance:
         - Request conversion is done once per middleware chain
         - Django request is cached and reused
-        - Attribute sync is minimal (only when needed)
+        - Uses sync_to_async for database operations
     """
 
     __slots__ = (
@@ -112,86 +114,172 @@ class DjangoMiddleware:
         # Convert Bolt request to Django HttpRequest
         django_request = self._to_django_request(request)
 
-        # Create or get middleware instance
-        middleware = self._get_middleware_instance(call_next, request)
+        # Run the Django middleware in a sync context using sync_to_async
+        # This handles database operations properly
+        bolt_response = await self._run_django_middleware(
+            django_request, request, call_next
+        )
 
-        # Check for old-style process_request
-        if hasattr(middleware, 'process_request'):
-            result = await self._maybe_await(
-                middleware.process_request(django_request)
+        return bolt_response
+
+    async def _run_django_middleware(
+        self,
+        django_request: HttpRequest,
+        bolt_request: "Request",
+        call_next: "CallNext"
+    ) -> "Response":
+        """Run Django middleware with proper sync/async handling."""
+        from ..responses import Response
+
+        # Create the middleware instance with a get_response that bridges
+        # back to our async chain
+        bolt_response_holder = {"response": None, "error": None}
+
+        def get_response(django_req: HttpRequest) -> HttpResponse:
+            """
+            Synchronous get_response for Django middleware.
+            This is called by new-style Django middleware.
+            """
+            # We need to call the async call_next from sync context
+            # This will be handled by running the async chain in a new event loop
+            try:
+                # Get the bolt response by running async code
+                bolt_resp = asyncio.get_event_loop().run_until_complete(
+                    call_next(bolt_request)
+                )
+                bolt_response_holder["response"] = bolt_resp
+                return self._to_django_response(bolt_resp)
+            except RuntimeError:
+                # No running event loop, create one
+                bolt_resp = asyncio.run(call_next(bolt_request))
+                bolt_response_holder["response"] = bolt_resp
+                return self._to_django_response(bolt_resp)
+
+        # Create middleware instance
+        middleware = self.middleware_class(get_response, **self.init_kwargs)
+
+        # Determine if this is old-style or new-style middleware
+        # Old-style middleware has process_request, process_response, process_view, or process_exception
+        has_process_request = hasattr(middleware, 'process_request')
+        has_process_response = hasattr(middleware, 'process_response')
+        has_process_view = hasattr(middleware, 'process_view')
+        has_process_exception = hasattr(middleware, 'process_exception')
+
+        if has_process_request or has_process_response or has_process_view or has_process_exception:
+            # Old-style middleware with process_* methods
+            return await self._handle_old_style_middleware(
+                middleware, django_request, bolt_request, call_next
             )
+        else:
+            # New-style callable middleware
+            return await self._handle_new_style_middleware(
+                middleware, django_request, bolt_request, call_next
+            )
+
+    async def _handle_old_style_middleware(
+        self,
+        middleware: Any,
+        django_request: HttpRequest,
+        bolt_request: "Request",
+        call_next: "CallNext"
+    ) -> "Response":
+        """Handle old-style Django middleware with process_request/process_response."""
+        from ..responses import Response
+
+        # Run process_request in thread pool
+        if hasattr(middleware, 'process_request'):
+            result = await sync_to_async(
+                middleware.process_request, thread_sensitive=True
+            )(django_request)
             if result is not None:
                 # Middleware returned a response, short-circuit
                 return self._to_bolt_response(result)
 
-        # Check for process_view (called right before view)
+        # Run process_view if present
         if hasattr(middleware, 'process_view'):
-            result = await self._maybe_await(
-                middleware.process_view(django_request, None, (), {})
-            )
+            result = await sync_to_async(
+                middleware.process_view, thread_sensitive=True
+            )(django_request, None, (), {})
             if result is not None:
                 return self._to_bolt_response(result)
 
+        # Sync attributes BEFORE calling handler so handler can access them
+        self._sync_request_attributes(django_request, bolt_request)
+
         # Call the next middleware/handler
         try:
-            response = await call_next(request)
+            response = await call_next(bolt_request)
         except Exception as exc:
-            # Check for process_exception
+            # Run process_exception if present
             if hasattr(middleware, 'process_exception'):
-                result = await self._maybe_await(
-                    middleware.process_exception(django_request, exc)
-                )
+                result = await sync_to_async(
+                    middleware.process_exception, thread_sensitive=True
+                )(django_request, exc)
                 if result is not None:
                     return self._to_bolt_response(result)
             raise
 
-        # Sync any attributes Django middleware added to request
-        self._sync_request_attributes(django_request, request)
-
-        # Convert response to Django HttpResponse for process_response
+        # Convert response for process_response
         django_response = self._to_django_response(response)
 
-        # Check for process_response
+        # Run process_response
         if hasattr(middleware, 'process_response'):
-            django_response = await self._maybe_await(
-                middleware.process_response(django_request, django_response)
-            )
+            django_response = await sync_to_async(
+                middleware.process_response, thread_sensitive=True
+            )(django_request, django_response)
 
         # Convert back to Bolt response
         return self._to_bolt_response(django_response)
 
-    def _get_middleware_instance(
+    async def _handle_new_style_middleware(
         self,
-        call_next: "CallNext",
-        request: "Request"
-    ) -> Any:
-        """Get or create middleware instance with get_response callable."""
+        middleware: Any,
+        django_request: HttpRequest,
+        bolt_request: "Request",
+        call_next: "CallNext"
+    ) -> "Response":
+        """Handle new-style callable Django middleware."""
+        # For new-style middleware, we need to call it in a sync context
+        # but capture the response properly
 
-        # Create a synchronous get_response for Django middleware
-        def get_response(django_request: HttpRequest) -> HttpResponse:
-            # This is called by new-style middleware
-            # We need to run the async chain synchronously
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
+        response_holder = {"bolt_response": None}
 
-            if loop is not None and loop.is_running():
-                # Create a future and run in executor
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(
-                        asyncio.run,
-                        call_next(request)
-                    )
-                    bolt_response = future.result()
-            else:
-                bolt_response = asyncio.run(call_next(request))
+        # Run the entire middleware chain synchronously
+        async def run_middleware():
+            # Wrap the async call in a sync function for Django
+            def get_response_sync(django_req: HttpRequest) -> HttpResponse:
+                # Run the async chain
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # We're in an async context, use run_in_executor
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                            future = pool.submit(asyncio.run, call_next(bolt_request))
+                            bolt_resp = future.result()
+                    else:
+                        bolt_resp = loop.run_until_complete(call_next(bolt_request))
+                except RuntimeError:
+                    bolt_resp = asyncio.run(call_next(bolt_request))
 
-            return self._to_django_response(bolt_response)
+                response_holder["bolt_response"] = bolt_resp
+                # Sync attributes after call_next
+                self._sync_request_attributes(django_req, bolt_request)
+                return self._to_django_response(bolt_resp)
 
-        # Create middleware instance
-        return self.middleware_class(get_response, **self.init_kwargs)
+            # Create new middleware instance with proper get_response
+            mw = self.middleware_class(get_response_sync, **self.init_kwargs)
+
+            # Wrap the middleware __call__ in a function for sync_to_async
+            def call_middleware(request):
+                return mw(request)
+
+            # Run the middleware synchronously using sync_to_async
+            django_response = await sync_to_async(call_middleware, thread_sensitive=True)(django_request)
+
+            return self._to_bolt_response(django_response)
+
+        return await run_middleware()
 
     def _to_django_request(self, request: "Request") -> HttpRequest:
         """Convert Bolt Request to Django HttpRequest."""
@@ -205,21 +293,21 @@ class DjangoMiddleware:
         # Build META dict from headers
         django_request.META = self._build_meta(request)
 
-        # Copy cookies
+        # Copy cookies directly
         django_request.COOKIES = dict(request.cookies) if request.cookies else {}
 
-        # Create mutable QueryDicts
+        # Create mutable QueryDicts and populate
         django_request.GET = QueryDict(mutable=True)
-        django_request.POST = QueryDict(mutable=True)
-
-        # Populate GET params
         if request.query:
             for key, value in request.query.items():
                 django_request.GET[key] = value
 
+        django_request.POST = QueryDict(mutable=True)
+
         # Store body for lazy parsing
-        django_request._body = request.body
-        django_request._stream = io.BytesIO(request.body)
+        body = request.body if request.body else b""
+        django_request._body = body
+        django_request._stream = io.BytesIO(body)
 
         # Store reference to Bolt request for attribute sync
         django_request._bolt_request = request
@@ -237,7 +325,7 @@ class DjangoMiddleware:
             "PATH_INFO": request.path,
             "QUERY_STRING": query_string,
             "CONTENT_TYPE": request.headers.get("content-type", ""),
-            "CONTENT_LENGTH": request.headers.get("content-length", ""),
+            "CONTENT_LENGTH": str(len(request.body)) if request.body else "",
             "SERVER_NAME": "localhost",
             "SERVER_PORT": "8000",
         }
@@ -267,7 +355,7 @@ class DjangoMiddleware:
         """
         # Sync user
         if hasattr(django_request, 'user'):
-            bolt_request.user = django_request.user
+            bolt_request._user = django_request.user
 
         # Sync session
         if hasattr(django_request, 'session'):
@@ -283,6 +371,7 @@ class DjangoMiddleware:
             'COOKIES', 'FILES', 'resolver_match', '_body', '_stream',
             '_bolt_request', 'content_type', 'content_params',
             'encoding', 'upload_handlers', '_read_started', '_post_parse_error',
+            'session', 'user',  # Already handled above
         }
 
         for attr in dir(django_request):
@@ -316,11 +405,11 @@ class DjangoMiddleware:
         django_response = HttpResponse(
             content=content,
             status=status_code,
-            content_type=headers.get("content-type", "application/json"),
+            content_type=headers.get("content-type", headers.get("Content-Type", "application/json")),
         )
 
         for key, value in headers.items():
-            if key.lower() != "content-type":
+            if key.lower() not in ("content-type",):
                 django_response[key] = value
 
         return django_response
@@ -336,12 +425,6 @@ class DjangoMiddleware:
             status_code=django_response.status_code,
             headers=headers,
         )
-
-    async def _maybe_await(self, result: Any) -> Any:
-        """Await result if it's a coroutine."""
-        if inspect.iscoroutine(result):
-            return await result
-        return result
 
     def __repr__(self) -> str:
         return f"DjangoMiddleware({self.middleware_class.__name__})"

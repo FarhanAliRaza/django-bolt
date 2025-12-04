@@ -11,7 +11,8 @@ use crate::middleware::compression::CompressionMiddleware;
 use crate::handler::handle_request;
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
 use crate::router::Router;
-use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, ROUTE_METADATA_TEMP, TASK_LOCALS};
+use crate::state::{AppState, GLOBAL_ROUTER, GLOBAL_WEBSOCKET_ROUTER, ROUTE_METADATA, ROUTE_METADATA_TEMP, TASK_LOCALS};
+use crate::websocket::WebSocketRouter;
 
 #[pyfunction]
 pub fn register_routes(
@@ -25,6 +26,21 @@ pub fn register_routes(
     GLOBAL_ROUTER
         .set(Arc::new(router))
         .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Router already initialized"))?;
+    Ok(())
+}
+
+#[pyfunction]
+pub fn register_websocket_routes(
+    _py: Python<'_>,
+    routes: Vec<(String, usize, Py<PyAny>)>,
+) -> PyResult<()> {
+    let mut router = WebSocketRouter::new();
+    for (path, handler_id, handler) in routes {
+        router.register(&path, handler_id, handler.into())?;
+    }
+    GLOBAL_WEBSOCKET_ROUTER
+        .set(Arc::new(router))
+        .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("WebSocket router already initialized"))?;
     Ok(())
 }
 

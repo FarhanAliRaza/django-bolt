@@ -244,6 +244,7 @@ class BoltAPI:
         openapi_config: Optional[Any] = None,
     ) -> None:
         self._routes: List[Tuple[str, str, int, Callable]] = []
+        self._websocket_routes: List[Tuple[str, int, Callable]] = []  # (path, handler_id, handler)
         self._handlers: Dict[int, Callable] = {}
         self._handler_meta: Dict[Callable, HandlerMetadata] = {}
         self._handler_middleware: Dict[int, Dict[str, Any]] = {}  # Middleware metadata per handler
@@ -410,6 +411,98 @@ class BoltAPI:
         description: Optional[str] = None,
     ):
         return self._route_decorator("OPTIONS", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
+
+    def websocket(
+        self,
+        path: str,
+        *,
+        guards: Optional[List[Any]] = None,
+        auth: Optional[List[Any]] = None,
+    ):
+        """
+        Register a WebSocket endpoint with FastAPI-like syntax.
+
+        Usage:
+            from django_bolt.websocket import WebSocket
+
+            @api.websocket("/ws")
+            async def websocket_endpoint(websocket: WebSocket):
+                await websocket.accept()
+                while True:
+                    data = await websocket.receive_text()
+                    await websocket.send_text(f"Echo: {data}")
+
+            @api.websocket("/ws/{room_id}")
+            async def room_websocket(websocket: WebSocket, room_id: str):
+                await websocket.accept()
+                await websocket.send_json({"room": room_id})
+                async for message in websocket.iter_json():
+                    await websocket.send_json({"echo": message})
+        """
+        return self._websocket_decorator(path, guards=guards, auth=auth)
+
+    def _websocket_decorator(
+        self,
+        path: str,
+        *,
+        guards: Optional[List[Any]] = None,
+        auth: Optional[List[Any]] = None,
+    ):
+        """Internal decorator for WebSocket routes."""
+        from .websocket import mark_websocket_handler
+
+        def decorator(fn: Callable) -> Callable:
+            # Ensure handler is async
+            if not inspect.iscoroutinefunction(fn):
+                raise TypeError(
+                    f"WebSocket handler '{fn.__name__}' must be an async function"
+                )
+
+            # Mark as WebSocket handler
+            fn = mark_websocket_handler(fn)
+
+            # Assign handler ID
+            handler_id = self._next_handler_id
+            self._next_handler_id += 1
+
+            # Build full path with prefix
+            full_path = f"{self.prefix}{path}" if self.prefix else path
+
+            # Store the route
+            self._websocket_routes.append((full_path, handler_id, fn))
+            self._handlers[handler_id] = fn
+
+            # Store minimal metadata for WebSocket handler
+            meta: Dict[str, Any] = {
+                "is_async": True,
+                "is_websocket": True,
+                "path_params": _extract_path_params(full_path),
+            }
+            self._handler_meta[fn] = meta
+
+            # Compile middleware metadata for WebSocket handler
+            # Always call compile_middleware_meta to pick up:
+            # 1. Handler-level decorators (@rate_limit, @cors, etc.)
+            # 2. Global middleware from self.middleware
+            # 3. Guards and auth backends
+            middleware_meta = compile_middleware_meta(
+                handler=fn,
+                method="WEBSOCKET",
+                path=full_path,
+                global_middleware=self.middleware,
+                global_middleware_config=self.middleware_config or {},
+                guards=guards,
+                auth=auth,
+            )
+            if middleware_meta:
+                self._handler_middleware[handler_id] = middleware_meta
+                # Store auth backend instances for user resolution
+                if auth is not None:
+                    middleware_meta['_auth_backend_instances'] = auth
+
+            return fn
+
+        return decorator
 
     def view(
         self,

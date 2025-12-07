@@ -9,7 +9,7 @@ from msgspec import Meta, ValidationError
 
 from django.contrib.auth import aauthenticate, get_user_model
 
-from django_bolt import BoltAPI, CompressionConfig, JSON, OpenAPIConfig, RedocRenderPlugin, SwaggerRenderPlugin, action
+from django_bolt import BoltAPI, CompressionConfig, JSON, OpenAPIConfig, RedocRenderPlugin, SwaggerRenderPlugin, WebSocket
 from django_bolt.auth import JWTAuthentication, IsAuthenticated, create_jwt_for_user, get_current_user
 from django_bolt.exceptions import (
     BadRequest,
@@ -990,6 +990,50 @@ class SSEViewSet(ViewSet):
             for i in range(3):
                 yield f"data: {i}\n\n"
         return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ============================================================================
+# WebSocket Endpoints
+# ============================================================================
+
+@api.websocket("/ws")
+async def websocket_load_test(websocket: WebSocket):
+    """
+    WebSocket endpoint for load testing.
+
+    Echoes back any message received. Designed for ws_load.py script.
+
+    Test with:
+        python scripts/ws_load.py ws://localhost:8000/ws -c 50 -d 10
+    """
+    await websocket.accept()
+    try:
+        async for message in websocket.iter_text():
+            await websocket.send_text(message)
+    except Exception:
+        pass  # Client disconnected
+
+
+@api.websocket("/ws/echo")
+async def websocket_echo(websocket: WebSocket):
+    """
+    WebSocket echo endpoint.
+
+    Echoes back any text message received from the client with "Echo: " prefix.
+
+    Test with:
+        websocat ws://localhost:8000/ws/echo
+        > hello
+        < Echo: hello
+    """
+    await websocket.accept()
+    try:
+        async for message in websocket.iter_json():
+            await websocket.send_text(f"Echo: {message}")
+    except Exception as e:
+        print(f"Error in websocket_echo: {e}")
+        await websocket.close(code=1011, reason="Json decode error")
+      
 
 
 @api.view("/cbv-chat-completions")

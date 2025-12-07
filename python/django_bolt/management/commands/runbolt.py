@@ -240,6 +240,20 @@ class Command(BaseCommand):
 
         _core.register_routes(rust_routes)
 
+        # Register WebSocket routes with Rust
+        ws_routes = []
+        for path, handler_id, handler in merged_api._websocket_routes:
+            convert = getattr(merged_api, "_convert_path", None)
+            norm_path = convert(path) if callable(convert) else path
+            ws_routes.append((norm_path, handler_id, handler))
+
+        if ws_routes:
+            _core.register_websocket_routes(ws_routes)
+            if process_id is not None:
+                self.stdout.write(f"[django-bolt] Process {process_id}: Registered {len(ws_routes)} WebSocket routes")
+            else:
+                self.stdout.write(f"[django-bolt] Registered {len(ws_routes)} WebSocket routes")
+
         # Register middleware metadata if present
         if merged_api._handler_middleware:
             middleware_data = [
@@ -450,6 +464,35 @@ class Command(BaseCommand):
                 # Merge middleware metadata (use NEW handler_id)
                 if old_handler_id in api._handler_middleware:
                     merged._handler_middleware[new_handler_id] = api._handler_middleware[old_handler_id]
+
+            # Merge WebSocket routes from this API
+            for path, old_ws_handler_id, ws_handler in api._websocket_routes:
+                ws_route_key = f"WS {path}"
+
+                if ws_route_key in route_map:
+                    raise CommandError(
+                        f"WebSocket route conflict: {ws_route_key} defined in both "
+                        f"{route_map[ws_route_key]} and {api_path}"
+                    )
+
+                # Assign new unique handler_id for WebSocket route
+                new_ws_handler_id = next_handler_id
+                next_handler_id += 1
+
+                route_map[ws_route_key] = api_path
+                merged._websocket_routes.append((path, new_ws_handler_id, ws_handler))
+                merged._handlers[new_ws_handler_id] = ws_handler
+
+                # Store reference to original API
+                merged._handler_api_map[new_ws_handler_id] = api
+
+                # Merge handler metadata for WebSocket
+                if ws_handler in api._handler_meta:
+                    merged._handler_meta[ws_handler] = api._handler_meta[ws_handler]
+
+                # Merge middleware metadata for WebSocket
+                if old_ws_handler_id in api._handler_middleware:
+                    merged._handler_middleware[new_ws_handler_id] = api._handler_middleware[old_ws_handler_id]
 
         # Update next handler ID
         merged._next_handler_id = next_handler_id

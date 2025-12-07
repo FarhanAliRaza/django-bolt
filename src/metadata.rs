@@ -207,7 +207,9 @@ pub struct RouteMetadata {
     pub needs_query: bool,
     pub needs_headers: bool,
     pub needs_cookies: bool,
+    #[allow(dead_code)] // Reserved for future optimization
     pub needs_path_params: bool,
+    #[allow(dead_code)] // Reserved for future optimization
     pub is_static_route: bool,
 }
 

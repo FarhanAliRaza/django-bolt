@@ -1,5 +1,5 @@
 use actix_http::KeepAlive;
-use actix_web::{self as aw, web, App, HttpServer};
+use actix_web::{self as aw, web, App, HttpRequest, HttpResponse, HttpServer};
 use ahash::AHashMap;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -11,7 +11,8 @@ use crate::middleware::compression::CompressionMiddleware;
 use crate::handler::handle_request;
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
 use crate::router::Router;
-use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, ROUTE_METADATA_TEMP, TASK_LOCALS};
+use crate::state::{AppState, GLOBAL_ROUTER, GLOBAL_WEBSOCKET_ROUTER, ROUTE_METADATA, ROUTE_METADATA_TEMP, TASK_LOCALS};
+use crate::websocket::{WebSocketRouter, handle_websocket_upgrade_with_handler, is_websocket_upgrade};
 
 #[pyfunction]
 pub fn register_routes(
@@ -29,6 +30,21 @@ pub fn register_routes(
 }
 
 #[pyfunction]
+pub fn register_websocket_routes(
+    _py: Python<'_>,
+    routes: Vec<(String, usize, Py<PyAny>)>,
+) -> PyResult<()> {
+    let mut router = WebSocketRouter::new();
+    for (path, handler_id, handler) in routes {
+        router.register(&path, handler_id, handler.into())?;
+    }
+    GLOBAL_WEBSOCKET_ROUTER
+        .set(Arc::new(router))
+        .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("WebSocket router already initialized"))?;
+    Ok(())
+}
+
+#[pyfunction]
 pub fn register_middleware_metadata(
     py: Python<'_>,
     metadata: Vec<(usize, Py<PyAny>)>,
@@ -37,7 +53,7 @@ pub fn register_middleware_metadata(
 
     for (handler_id, meta) in metadata {
         // Parse Python metadata into typed Rust metadata
-        if let Ok(py_dict) = meta.bind(py).downcast::<PyDict>() {
+        if let Ok(py_dict) = meta.bind(py).cast::<PyDict>() {
             match RouteMetadata::from_python(py_dict, py) {
                 Ok(parsed) => {
                     parsed_metadata_map.insert(handler_id, parsed);
@@ -325,10 +341,19 @@ pub fn start_server_async(
                     }
 
                     let server = HttpServer::new(move || {
-                        App::new()
+                        let mut app = App::new()
                             .app_data(web::Data::new(app_state.clone()))
-                            .wrap(CompressionMiddleware::new()) // Respects Content-Encoding: identity from skip_compression
-                            .default_service(web::route().to(handle_request))
+                            .wrap(CompressionMiddleware::new()); // Respects Content-Encoding: identity from skip_compression
+
+                        // Register WebSocket routes BEFORE the catch-all handler
+                        // We iterate through all registered WebSocket paths and add explicit routes
+                        if let Some(ws_router) = GLOBAL_WEBSOCKET_ROUTER.get() {
+                            for path in ws_router.get_all_paths() {
+                                app = app.route(&path, web::get().to(websocket_upgrade_handler));
+                            }
+                        }
+
+                        app.default_service(web::route().to(handle_request))
                     })
                     .keep_alive(keep_alive)
                     .client_request_timeout(std::time::Duration::from_secs(0))
@@ -387,4 +412,37 @@ pub fn start_server_async(
     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Server error: {}", e)))?;
 
     Ok(())
+}
+
+/// Handler for WebSocket upgrade requests
+/// This is registered as a service and checks against the WebSocket router
+pub async fn websocket_upgrade_handler(
+    req: HttpRequest,
+    stream: web::Payload,
+    state: web::Data<Arc<AppState>>,
+) -> actix_web::Result<HttpResponse> {
+    // Check if this is a WebSocket upgrade request
+    if !is_websocket_upgrade(&req) {
+        return Ok(HttpResponse::BadRequest().body("Not a WebSocket upgrade request"));
+    }
+
+    let path = req.path();
+
+    // Look up in global WebSocket router
+    if let Some(ws_router) = GLOBAL_WEBSOCKET_ROUTER.get() {
+        if let Some((route, path_params)) = ws_router.find(path) {
+            let handler = Python::attach(|py| route.handler.clone_ref(py));
+            // Pass AppState to WebSocket handler for CORS validation and connection tracking
+            return handle_websocket_upgrade_with_handler(
+                req,
+                stream,
+                handler,
+                route.handler_id,
+                path_params,
+                state.get_ref().clone(),
+            ).await;
+        }
+    }
+
+    Ok(HttpResponse::NotFound().body("WebSocket endpoint not found"))
 }

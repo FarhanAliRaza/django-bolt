@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicU64;
 
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
 use crate::router::Router;
+use crate::websocket::WebSocketRouter;
 
 pub struct AppState {
     pub dispatch: Py<PyAny>,
@@ -19,6 +20,7 @@ pub struct AppState {
 }
 
 pub static GLOBAL_ROUTER: OnceCell<Arc<Router>> = OnceCell::new();
+pub static GLOBAL_WEBSOCKET_ROUTER: OnceCell<Arc<WebSocketRouter>> = OnceCell::new();
 pub static TASK_LOCALS: OnceCell<TaskLocals> = OnceCell::new(); // reuse global python event loop
 pub static ROUTE_METADATA: OnceCell<Arc<AHashMap<usize, RouteMetadata>>> = OnceCell::new();
 pub static ROUTE_METADATA_TEMP: OnceCell<AHashMap<usize, RouteMetadata>> = OnceCell::new(); // Temporary storage before CORS injection

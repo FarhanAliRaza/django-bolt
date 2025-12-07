@@ -44,11 +44,11 @@ async def chat_handler(websocket: WebSocket, room_id: str):
 
 ### Parameters
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `path` | `str` | URL path with optional path parameters |
-| `auth` | `list` | Authentication backends (same as HTTP) |
-| `guards` | `list` | Permission guards (same as HTTP) |
+| Parameter | Type   | Description                            |
+| --------- | ------ | -------------------------------------- |
+| `path`    | `str`  | URL path with optional path parameters |
+| `auth`    | `list` | Authentication backends (same as HTTP) |
+| `guards`  | `list` | Permission guards (same as HTTP)       |
 
 ## WebSocket Class
 
@@ -527,38 +527,45 @@ For now, you'll need to implement connection tracking and broadcasting manually 
 
 ### WebSocket Class
 
-| Method/Property | Description |
-|----------------|-------------|
-| `await accept(subprotocol=None)` | Accept the WebSocket connection |
-| `await receive_text()` | Receive a text message |
-| `await receive_bytes()` | Receive a binary message |
-| `await receive_json()` | Receive and parse a JSON message |
-| `async for msg in iter_text()` | Iterate over text messages |
-| `async for msg in iter_bytes()` | Iterate over binary messages |
-| `async for msg in iter_json()` | Iterate over JSON messages |
-| `await send_text(data)` | Send a text message |
-| `await send_bytes(data)` | Send a binary message |
-| `await send_json(data)` | Send a JSON message |
-| `await close(code, reason)` | Close the connection |
-| `.path` | Request path |
-| `.query_params` | Query parameters dict |
-| `.headers` | Request headers |
-| `.cookies` | Request cookies |
-| `.path_params` | Extracted path parameters |
-| `.client` | Client address as `(host, port)` tuple or `None` |
+| Method/Property                  | Description                                      |
+| -------------------------------- | ------------------------------------------------ |
+| `await accept(subprotocol=None)` | Accept the WebSocket connection                  |
+| `await receive_text()`           | Receive a text message                           |
+| `await receive_bytes()`          | Receive a binary message                         |
+| `await receive_json()`           | Receive and parse a JSON message                 |
+| `async for msg in iter_text()`   | Iterate over text messages                       |
+| `async for msg in iter_bytes()`  | Iterate over binary messages                     |
+| `async for msg in iter_json()`   | Iterate over JSON messages                       |
+| `await send_text(data)`          | Send a text message                              |
+| `await send_bytes(data)`         | Send a binary message                            |
+| `await send_json(data)`          | Send a JSON message                              |
+| `await close(code, reason)`      | Close the connection                             |
+| `.path`                          | Request path                                     |
+| `.query_params`                  | Query parameters dict                            |
+| `.headers`                       | Request headers                                  |
+| `.cookies`                       | Request cookies                                  |
+| `.path_params`                   | Extracted path parameters                        |
+| `.client`                        | Client address as `(host, port)` tuple or `None` |
 
 ### WebSocketTestClient
 
-| Method/Property | Description |
-|----------------|-------------|
-| `async with client:` | Context manager for connection |
-| `await send_text(data)` | Send a text message |
-| `await send_bytes(data)` | Send a binary message |
-| `await send_json(data)` | Send a JSON message |
-| `await receive_text(timeout)` | Receive text with optional timeout |
+| Method/Property                | Description                         |
+| ------------------------------ | ----------------------------------- |
+| `async with client:`           | Context manager for connection      |
+| `await send_text(data)`        | Send a text message                 |
+| `await send_bytes(data)`       | Send a binary message               |
+| `await send_json(data)`        | Send a JSON message                 |
+| `await receive_text(timeout)`  | Receive text with optional timeout  |
 | `await receive_bytes(timeout)` | Receive bytes with optional timeout |
-| `await receive_json(timeout)` | Receive JSON with optional timeout |
-| `await close(code)` | Close the connection |
-| `.accepted` | Whether connection was accepted |
-| `.closed` | Whether connection is closed |
-| `.close_code` | Close code if closed |
+| `await receive_json(timeout)`  | Receive JSON with optional timeout  |
+| `await close(code)`            | Close the connection                |
+| `.accepted`                    | Whether connection was accepted     |
+| `.closed`                      | Whether connection is closed        |
+| `.close_code`                  | Close code if closed                |
+
+## 💡 Suggestions for Future Enhancements
+
+    Connection Manager: Built-in support for tracking active connections by room/channel
+    Broadcasting: Helper for sending messages to multiple clients
+    Pub/Sub Integration: Redis or in-memory pub/sub for multi-process WebSocket coordination
+    Compression: Per-message deflate extension support

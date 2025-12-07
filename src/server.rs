@@ -12,7 +12,7 @@ use crate::handler::handle_request;
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
 use crate::router::Router;
 use crate::state::{AppState, GLOBAL_ROUTER, GLOBAL_WEBSOCKET_ROUTER, ROUTE_METADATA, ROUTE_METADATA_TEMP, TASK_LOCALS};
-use crate::websocket::{WebSocketRouter, handle_websocket_upgrade, is_websocket_upgrade};
+use crate::websocket::{WebSocketRouter, handle_websocket_upgrade_with_handler, is_websocket_upgrade};
 
 #[pyfunction]
 pub fn register_routes(
@@ -431,7 +431,7 @@ pub async fn websocket_upgrade_handler(
     if let Some(ws_router) = GLOBAL_WEBSOCKET_ROUTER.get() {
         if let Some((route, path_params)) = ws_router.find(path) {
             let handler = Python::attach(|py| route.handler.clone_ref(py));
-            return handle_websocket_upgrade(req, stream, handler, route.handler_id, path_params).await;
+            return handle_websocket_upgrade_with_handler(req, stream, handler, route.handler_id, path_params).await;
         }
     }
 

@@ -1,9 +1,10 @@
 //! WebSocket upgrade handler with full Python integration
 
-use actix::{Addr};
+use actix::Addr;
 use actix_web::{web, HttpRequest, HttpResponse};
 use actix_web_actors::ws;
 use ahash::AHashMap;
+use futures_util::FutureExt;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 use std::sync::atomic::Ordering;
@@ -475,51 +476,69 @@ pub async fn handle_websocket_upgrade_with_handler(
     });
 
     // Spawn task to run Python handler using proper async integration
+    // We use catch_unwind to ensure cleanup happens even on panic
     let ws_state_clone = ws_state.clone();
     actix_web::rt::spawn(async move {
-        // Create WebSocket instance and get the coroutine
-        let future_result = Python::attach(|py| -> PyResult<_> {
-            // Import the WebSocket class
-            let ws_module = py.import("django_bolt.websocket")?;
-            let ws_class = ws_module.getattr("WebSocket")?;
+        // Wrap the entire handler execution in catch_unwind to handle panics
+        let result = std::panic::AssertUnwindSafe(async {
+            // Create WebSocket instance and get the coroutine
+            let future_result = Python::attach(|py| -> PyResult<_> {
+                // Import the WebSocket class
+                let ws_module = py.import("django_bolt.websocket")?;
+                let ws_class = ws_module.getattr("WebSocket")?;
 
-            // Create receive and send functions
-            let receive_fn = create_receive_fn(py, ws_state_clone.clone())?;
-            let send_fn = create_send_fn(py, ws_state_clone.clone())?;
+                // Create receive and send functions
+                let receive_fn = create_receive_fn(py, ws_state_clone.clone())?;
+                let send_fn = create_send_fn(py, ws_state_clone.clone())?;
 
-            // Create WebSocket instance
-            let websocket = ws_class.call1((scope, receive_fn, send_fn))?;
+                // Create WebSocket instance
+                let websocket = ws_class.call1((scope, receive_fn, send_fn))?;
 
-            // Call the handler with the WebSocket instance
-            let coro = handler.call1(py, (websocket,))?;
+                // Call the handler with the WebSocket instance
+                let coro = handler.call1(py, (websocket,))?;
 
-            // Reuse the global event loop locals initialized at server startup (same as HTTP handlers)
-            let locals = TASK_LOCALS.get().ok_or_else(|| {
-                pyo3::exceptions::PyRuntimeError::new_err("Asyncio loop not initialized")
-            })?;
+                // Reuse the global event loop locals initialized at server startup (same as HTTP handlers)
+                let locals = TASK_LOCALS.get().ok_or_else(|| {
+                    pyo3::exceptions::PyRuntimeError::new_err("Asyncio loop not initialized")
+                })?;
 
-            // Convert Python coroutine to Rust future using the shared event loop
-            pyo3_async_runtimes::into_future_with_locals(locals, coro.bind(py).clone())
-        });
+                // Convert Python coroutine to Rust future using the shared event loop
+                pyo3_async_runtimes::into_future_with_locals(locals, coro.bind(py).clone())
+            });
 
-        match future_result {
-            Ok(future) => {
-                if let Err(e) = future.await {
-                    eprintln!("[django-bolt] WebSocket handler error: {}", e);
-                    // Close the connection on error
+            match future_result {
+                Ok(future) => {
+                    if let Err(e) = future.await {
+                        eprintln!("[django-bolt] WebSocket handler error: {}", e);
+                        // Close the connection on error - this triggers actor stopped() which decrements counter
+                        let _ = addr.send(SendToClient(WsMessage::Close {
+                            code: 1011,
+                            reason: "Internal error".to_string(),
+                        })).await;
+                    }
+                    // Normal completion - actor will be stopped when handler returns and Python closes
+                }
+                Err(e) => {
+                    eprintln!("[django-bolt] WebSocket handler setup error: {}", e);
+                    // Close the connection on setup error - this triggers actor stopped() which decrements counter
                     let _ = addr.send(SendToClient(WsMessage::Close {
                         code: 1011,
-                        reason: "Internal error".to_string(),
+                        reason: "Handler setup failed".to_string(),
                     })).await;
                 }
             }
-            Err(e) => {
-                eprintln!("[django-bolt] WebSocket handler setup error: {}", e);
-                let _ = addr.send(SendToClient(WsMessage::Close {
-                    code: 1011,
-                    reason: "Handler setup failed".to_string(),
-                })).await;
-            }
+        })
+        .catch_unwind()
+        .await;
+
+        // If the task panicked, ensure we close the actor to trigger cleanup
+        if result.is_err() {
+            eprintln!("[django-bolt] WebSocket handler task panicked - closing connection");
+            // Send close message to trigger actor stopped() which decrements counter
+            let _ = addr.send(SendToClient(WsMessage::Close {
+                code: 1011,
+                reason: "Internal server error".to_string(),
+            })).await;
         }
     });
 

@@ -231,6 +231,33 @@ See the **[Security Guide](SECURITY.md)** for file serving security features.
 
 ---
 
+## WebSocket
+
+Django-Bolt provides full WebSocket support with a FastAPI-like interface:
+
+```python
+from django_bolt import BoltAPI, WebSocket
+
+api = BoltAPI()
+
+@api.websocket("/ws/chat/{room_id}")
+async def chat(websocket: WebSocket, room_id: str):
+    await websocket.accept()
+    async for message in websocket.iter_text():
+        await websocket.send_text(f"[{room_id}] {message}")
+```
+
+- **[WebSocket Guide](WEBSOCKET.md)** - Complete WebSocket documentation
+  - WebSocket decorator and handler patterns
+  - Sending/receiving text, binary, and JSON messages
+  - Path parameters with type coercion
+  - Authentication and guards
+  - Origin validation and rate limiting
+  - Testing with `WebSocketTestClient`
+  - Close codes and exception handling
+
+---
+
 ## ⚡ Middleware
 
 - **[Middleware Guide](MIDDLEWARE.md)** - Complete middleware documentation
@@ -332,6 +359,7 @@ See the **[Security Guide](SECURITY.md)** for file serving security features.
 | **[Logging](LOGGING.md)**                                 | Request/response logging and metrics              |
 | **[Exception Handling](EXCEPTIONS.md)**                   | Error handling patterns                           |
 | **[Testing Utilities](TESTING_UTILITIES.md)**             | Testing tools and patterns                        |
+| **[WebSocket](WEBSOCKET.md)**                             | WebSocket support and testing                     |
 | **[Async Django](ASYNC_DJANGO.md)**                       | Using Django ORM with async                       |
 | **[Django Admin](DJANGO_ADMIN.md)**                       | Django Admin integration                          |
 | **[GIL Optimization](GIL_OPTIMIZATION.md)**               | Performance architecture and optimization         |

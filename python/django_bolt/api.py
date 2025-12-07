@@ -484,11 +484,12 @@ class BoltAPI:
             if guards or auth:
                 middleware_meta = compile_middleware_meta(
                     handler=fn,
+                    method="WEBSOCKET",
+                    path=full_path,
+                    global_middleware=[],
+                    global_middleware_config=self.middleware_config or {},
                     guards=guards,
                     auth=auth,
-                    cors=None,
-                    rate_limit=None,
-                    global_middleware_config=self.middleware_config,
                 )
                 if middleware_meta:
                     self._handler_middleware[handler_id] = middleware_meta

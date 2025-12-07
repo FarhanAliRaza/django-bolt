@@ -1,5 +1,5 @@
 use actix_http::KeepAlive;
-use actix_web::{self as aw, web, App, HttpServer};
+use actix_web::{self as aw, web, App, HttpRequest, HttpResponse, HttpServer};
 use ahash::AHashMap;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -12,7 +12,7 @@ use crate::handler::handle_request;
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
 use crate::router::Router;
 use crate::state::{AppState, GLOBAL_ROUTER, GLOBAL_WEBSOCKET_ROUTER, ROUTE_METADATA, ROUTE_METADATA_TEMP, TASK_LOCALS};
-use crate::websocket::WebSocketRouter;
+use crate::websocket::{WebSocketRouter, handle_websocket_upgrade, is_websocket_upgrade};
 
 #[pyfunction]
 pub fn register_routes(
@@ -341,10 +341,19 @@ pub fn start_server_async(
                     }
 
                     let server = HttpServer::new(move || {
-                        App::new()
+                        let mut app = App::new()
                             .app_data(web::Data::new(app_state.clone()))
-                            .wrap(CompressionMiddleware::new()) // Respects Content-Encoding: identity from skip_compression
-                            .default_service(web::route().to(handle_request))
+                            .wrap(CompressionMiddleware::new()); // Respects Content-Encoding: identity from skip_compression
+
+                        // Register WebSocket routes BEFORE the catch-all handler
+                        // We iterate through all registered WebSocket paths and add explicit routes
+                        if let Some(ws_router) = GLOBAL_WEBSOCKET_ROUTER.get() {
+                            for path in ws_router.get_all_paths() {
+                                app = app.route(&path, web::get().to(websocket_upgrade_handler));
+                            }
+                        }
+
+                        app.default_service(web::route().to(handle_request))
                     })
                     .keep_alive(keep_alive)
                     .client_request_timeout(std::time::Duration::from_secs(0))
@@ -403,4 +412,28 @@ pub fn start_server_async(
     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Server error: {}", e)))?;
 
     Ok(())
+}
+
+/// Handler for WebSocket upgrade requests
+/// This is registered as a service and checks against the WebSocket router
+pub async fn websocket_upgrade_handler(
+    req: HttpRequest,
+    stream: web::Payload,
+) -> actix_web::Result<HttpResponse> {
+    // Check if this is a WebSocket upgrade request
+    if !is_websocket_upgrade(&req) {
+        return Ok(HttpResponse::BadRequest().body("Not a WebSocket upgrade request"));
+    }
+
+    let path = req.path();
+
+    // Look up in global WebSocket router
+    if let Some(ws_router) = GLOBAL_WEBSOCKET_ROUTER.get() {
+        if let Some((route, path_params)) = ws_router.find(path) {
+            let handler = Python::attach(|py| route.handler.clone_ref(py));
+            return handle_websocket_upgrade(req, stream, handler, route.handler_id, path_params).await;
+        }
+    }
+
+    Ok(HttpResponse::NotFound().body("WebSocket endpoint not found"))
 }

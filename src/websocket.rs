@@ -109,6 +109,8 @@ pub struct WebSocketRouter {
     dynamic_router: matchit::Router<WebSocketRoute>,
     /// Track if we have any dynamic routes
     has_dynamic_routes: bool,
+    /// Store dynamic route paths for Actix registration
+    dynamic_paths: Vec<String>,
 }
 
 impl WebSocketRouter {
@@ -117,6 +119,7 @@ impl WebSocketRouter {
             static_routes: AHashMap::new(),
             dynamic_router: matchit::Router::new(),
             has_dynamic_routes: false,
+            dynamic_paths: Vec::new(),
         }
     }
 
@@ -143,6 +146,8 @@ impl WebSocketRouter {
                 ))
             })?;
             self.has_dynamic_routes = true;
+            // Store original path for Actix registration (convert {param} to Actix format)
+            self.dynamic_paths.push(path.to_string());
         }
 
         Ok(())
@@ -171,6 +176,14 @@ impl WebSocketRouter {
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.static_routes.is_empty() && !self.has_dynamic_routes
+    }
+
+    /// Get all registered WebSocket paths for Actix route registration
+    pub fn get_all_paths(&self) -> Vec<String> {
+        let mut paths: Vec<String> = self.static_routes.keys().cloned().collect();
+        // Add dynamic paths - they use {param} syntax which Actix also supports
+        paths.extend(self.dynamic_paths.iter().cloned());
+        paths
     }
 }
 

@@ -1,18 +1,13 @@
-//! WebSocket support for Django-Bolt
-//!
-//! This module provides WebSocket support with proper Python handler integration.
-//! Uses tokio channels to bridge Actix's actor-based WebSocket with Python's
-//! ASGI-style async interface.
+//! WebSocket upgrade handler with full Python integration
 
-use actix::{Actor, ActorContext, Addr, AsyncContext, Handler, Message, StreamHandler};
+use actix::{Addr};
 use actix_web::{web, HttpRequest, HttpResponse};
 use actix_web_actors::ws;
 use ahash::AHashMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use crate::metadata::CorsConfig;
@@ -20,410 +15,10 @@ use crate::middleware::rate_limit::check_rate_limit;
 use crate::state::{AppState, ROUTE_METADATA, TASK_LOCALS};
 use crate::validation::{validate_auth_and_guards, AuthGuardResult};
 
-/// Global counter for active WebSocket connections
-pub static ACTIVE_WS_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
-
-/// Get maximum allowed WebSocket connections from settings
-fn get_max_connections() -> usize {
-    // 1. Check environment variable
-    if let Ok(val) = std::env::var("DJANGO_BOLT_WS_MAX_CONNECTIONS") {
-        if let Ok(max) = val.parse::<usize>() {
-            return max;
-        }
-    }
-
-    // 2. Check Django settings
-    Python::attach(|py| {
-        if let Ok(django_conf) = py.import("django.conf") {
-            if let Ok(settings) = django_conf.getattr("settings") {
-                if let Ok(max) = settings.getattr("BOLT_WS_MAX_CONNECTIONS") {
-                    if let Ok(val) = max.extract::<usize>() {
-                        return val;
-                    }
-                }
-            }
-        }
-        10000 // Default: 10k connections
-    })
-}
-
-/// Get WebSocket channel buffer size from settings
-fn get_channel_buffer_size() -> usize {
-    // 1. Check environment variable
-    if let Ok(val) = std::env::var("DJANGO_BOLT_WS_CHANNEL_SIZE") {
-        if let Ok(size) = val.parse::<usize>() {
-            return size;
-        }
-    }
-
-    // 2. Check Django settings
-    Python::attach(|py| {
-        if let Ok(django_conf) = py.import("django.conf") {
-            if let Ok(settings) = django_conf.getattr("settings") {
-                if let Ok(size) = settings.getattr("BOLT_WS_CHANNEL_SIZE") {
-                    if let Ok(val) = size.extract::<usize>() {
-                        return val;
-                    }
-                }
-            }
-        }
-        100 // Default
-    })
-}
-
-/// Get WebSocket heartbeat interval from settings
-fn get_heartbeat_interval() -> Duration {
-    // 1. Check environment variable
-    if let Ok(val) = std::env::var("DJANGO_BOLT_WS_HEARTBEAT_INTERVAL") {
-        if let Ok(secs) = val.parse::<u64>() {
-            return Duration::from_secs(secs);
-        }
-    }
-
-    // 2. Check Django settings
-    Python::attach(|py| {
-        if let Ok(django_conf) = py.import("django.conf") {
-            if let Ok(settings) = django_conf.getattr("settings") {
-                if let Ok(interval) = settings.getattr("BOLT_WS_HEARTBEAT_INTERVAL") {
-                    if let Ok(secs) = interval.extract::<u64>() {
-                        return Duration::from_secs(secs);
-                    }
-                }
-            }
-        }
-        Duration::from_secs(5) // Default
-    })
-}
-
-/// Get WebSocket client timeout from settings
-fn get_client_timeout() -> Duration {
-    // 1. Check environment variable
-    if let Ok(val) = std::env::var("DJANGO_BOLT_WS_CLIENT_TIMEOUT") {
-        if let Ok(secs) = val.parse::<u64>() {
-            return Duration::from_secs(secs);
-        }
-    }
-
-    // 2. Check Django settings
-    Python::attach(|py| {
-        if let Ok(django_conf) = py.import("django.conf") {
-            if let Ok(settings) = django_conf.getattr("settings") {
-                if let Ok(timeout) = settings.getattr("BOLT_WS_CLIENT_TIMEOUT") {
-                    if let Ok(secs) = timeout.extract::<u64>() {
-                        return Duration::from_secs(secs);
-                    }
-                }
-            }
-        }
-        Duration::from_secs(10) // Default
-    })
-}
-
-
-/// Maximum WebSocket message size (1MB default)
-const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
-
-/// Message types for communication between Actix actor and Python handler
-#[derive(Debug)]
-pub enum WsMessage {
-    /// Text message from client
-    Text(String),
-    /// Binary message from client
-    Binary(Vec<u8>),
-    /// Client disconnected
-    Disconnect { code: u16 },
-    /// Connection accepted by Python handler
-    Accept { subprotocol: Option<String> },
-    /// Send text to client (from Python)
-    SendText(String),
-    /// Send binary to client (from Python)
-    SendBinary(Vec<u8>),
-    /// Close connection (from Python)
-    Close { code: u16, reason: String },
-}
-
-/// Actix message for sending data to client
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct SendToClient(pub WsMessage);
-
-/// WebSocket actor that bridges Actix and Python
-pub struct WebSocketActor {
-    /// Client heartbeat tracking
-    hb: Instant,
-    /// Channel to send received messages to Python handler
-    to_python_tx: mpsc::Sender<WsMessage>,
-    /// Whether connection has been accepted
-    accepted: bool,
-    /// Close code if connection was closed
-    close_code: Option<u16>,
-    /// Heartbeat interval (configurable)
-    heartbeat_interval: Duration,
-    /// Client timeout (configurable)
-    client_timeout: Duration,
-}
-
-impl WebSocketActor {
-    pub fn new(to_python_tx: mpsc::Sender<WsMessage>) -> Self {
-        WebSocketActor {
-            hb: Instant::now(),
-            to_python_tx,
-            accepted: false,
-            close_code: None,
-            heartbeat_interval: get_heartbeat_interval(),
-            client_timeout: get_client_timeout(),
-        }
-    }
-
-    /// Start heartbeat process
-    fn start_heartbeat(&self, ctx: &mut ws::WebsocketContext<Self>) {
-        let timeout = self.client_timeout;
-        ctx.run_interval(self.heartbeat_interval, move |act, ctx| {
-            if Instant::now().duration_since(act.hb) > timeout {
-                // Send disconnect to Python
-                let _ = act.to_python_tx.try_send(WsMessage::Disconnect { code: 1001 });
-                ctx.stop();
-                return;
-            }
-            ctx.ping(b"");
-        });
-    }
-}
-
-impl Actor for WebSocketActor {
-    type Context = ws::WebsocketContext<Self>;
-
-    fn started(&mut self, ctx: &mut Self::Context) {
-        self.start_heartbeat(ctx);
-    }
-
-    fn stopped(&mut self, _ctx: &mut Self::Context) {
-        // Notify Python handler that connection is closed
-        let code = self.close_code.unwrap_or(1000);
-        let _ = self.to_python_tx.try_send(WsMessage::Disconnect { code });
-
-        // Decrement active connection counter
-        ACTIVE_WS_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-
-/// Handle messages from Python to send to client
-impl Handler<SendToClient> for WebSocketActor {
-    type Result = ();
-
-    fn handle(&mut self, msg: SendToClient, ctx: &mut Self::Context) {
-        match msg.0 {
-            WsMessage::Accept { subprotocol: _ } => {
-                self.accepted = true;
-                // Accept is implicit in Actix - connection is already open
-            }
-            WsMessage::SendText(text) => {
-                if self.accepted {
-                    ctx.text(text);
-                }
-            }
-            WsMessage::SendBinary(data) => {
-                if self.accepted {
-                    ctx.binary(data);
-                }
-            }
-            WsMessage::Close { code, reason } => {
-                self.close_code = Some(code);
-                ctx.close(Some(ws::CloseReason {
-                    code: ws::CloseCode::Other(code),
-                    description: if reason.is_empty() {
-                        None
-                    } else {
-                        Some(reason)
-                    },
-                }));
-                ctx.stop();
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Handle incoming WebSocket messages from client
-impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WebSocketActor {
-    fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
-        match msg {
-            Ok(ws::Message::Ping(msg)) => {
-                self.hb = Instant::now();
-                ctx.pong(&msg);
-            }
-            Ok(ws::Message::Pong(_)) => {
-                self.hb = Instant::now();
-            }
-            Ok(ws::Message::Text(text)) => {
-                self.hb = Instant::now();
-                // Validate message size
-                if text.len() > MAX_MESSAGE_SIZE {
-                    eprintln!(
-                        "[django-bolt] WebSocket message too large: {} bytes (max {})",
-                        text.len(),
-                        MAX_MESSAGE_SIZE
-                    );
-                    self.close_code = Some(1009); // Message too big
-                    ctx.close(Some(ws::CloseReason {
-                        code: ws::CloseCode::Size,
-                        description: Some("Message too large".to_string()),
-                    }));
-                    ctx.stop();
-                    return;
-                }
-                // Forward to Python handler
-                if let Err(e) = self.to_python_tx.try_send(WsMessage::Text(text.to_string())) {
-                    eprintln!("[django-bolt] Failed to forward message to Python: {}", e);
-                }
-            }
-            Ok(ws::Message::Binary(bin)) => {
-                self.hb = Instant::now();
-                // Validate message size
-                if bin.len() > MAX_MESSAGE_SIZE {
-                    eprintln!(
-                        "[django-bolt] WebSocket binary message too large: {} bytes (max {})",
-                        bin.len(),
-                        MAX_MESSAGE_SIZE
-                    );
-                    self.close_code = Some(1009);
-                    ctx.close(Some(ws::CloseReason {
-                        code: ws::CloseCode::Size,
-                        description: Some("Message too large".to_string()),
-                    }));
-                    ctx.stop();
-                    return;
-                }
-                if let Err(e) = self.to_python_tx.try_send(WsMessage::Binary(bin.to_vec())) {
-                    eprintln!("[django-bolt] Failed to forward binary to Python: {}", e);
-                }
-            }
-            Ok(ws::Message::Close(reason)) => {
-                let code = reason
-                    .as_ref()
-                    .map(|r| match r.code {
-                        ws::CloseCode::Normal => 1000,
-                        ws::CloseCode::Away => 1001,
-                        ws::CloseCode::Protocol => 1002,
-                        ws::CloseCode::Unsupported => 1003,
-                        ws::CloseCode::Abnormal => 1006,
-                        ws::CloseCode::Invalid => 1007,
-                        ws::CloseCode::Policy => 1008,
-                        ws::CloseCode::Size => 1009,
-                        ws::CloseCode::Extension => 1010,
-                        ws::CloseCode::Error => 1011,
-                        ws::CloseCode::Restart => 1012,
-                        ws::CloseCode::Again => 1013,
-                        ws::CloseCode::Other(c) => c,
-                        _ => 1000, // Unknown close codes default to normal
-                    })
-                    .unwrap_or(1000);
-                self.close_code = Some(code);
-                let _ = self.to_python_tx.try_send(WsMessage::Disconnect { code });
-                ctx.close(reason);
-                ctx.stop();
-            }
-            Err(e) => {
-                eprintln!("[django-bolt] WebSocket protocol error: {}", e);
-                self.close_code = Some(1002); // Protocol error
-                let _ = self.to_python_tx.try_send(WsMessage::Disconnect { code: 1002 });
-                ctx.stop();
-            }
-            _ => {}
-        }
-    }
-}
-
-/// WebSocket route definition
-pub struct WebSocketRoute {
-    pub path: String,
-    pub handler_id: usize,
-    pub handler: Py<PyAny>,
-}
-
-/// WebSocket router for matching paths to handlers
-pub struct WebSocketRouter {
-    /// Static routes (no path params) - O(1) lookup
-    static_routes: AHashMap<String, WebSocketRoute>,
-    /// Dynamic routes (with path params) - radix tree
-    dynamic_router: matchit::Router<WebSocketRoute>,
-    /// Track if we have any dynamic routes
-    has_dynamic_routes: bool,
-    /// Store dynamic route paths for Actix registration
-    dynamic_paths: Vec<String>,
-}
-
-impl WebSocketRouter {
-    pub fn new() -> Self {
-        WebSocketRouter {
-            static_routes: AHashMap::new(),
-            dynamic_router: matchit::Router::new(),
-            has_dynamic_routes: false,
-            dynamic_paths: Vec::new(),
-        }
-    }
-
-    pub fn register(
-        &mut self,
-        path: &str,
-        handler_id: usize,
-        handler: Py<PyAny>,
-    ) -> PyResult<()> {
-        let route = WebSocketRoute {
-            path: path.to_string(),
-            handler_id,
-            handler,
-        };
-
-        if !path.contains('{') {
-            self.static_routes.insert(path.to_string(), route);
-        } else {
-            let converted = crate::router::convert_path(path);
-            self.dynamic_router.insert(&converted, route).map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!(
-                    "Failed to register WebSocket route: {}",
-                    e
-                ))
-            })?;
-            self.has_dynamic_routes = true;
-            self.dynamic_paths.push(path.to_string());
-        }
-
-        Ok(())
-    }
-
-    pub fn find(&self, path: &str) -> Option<(&WebSocketRoute, AHashMap<String, String>)> {
-        // O(1) static route lookup first
-        if let Some(route) = self.static_routes.get(path) {
-            return Some((route, AHashMap::new()));
-        }
-
-        // Radix tree lookup only if we have dynamic routes
-        if self.has_dynamic_routes {
-            if let Ok(matched) = self.dynamic_router.at(path) {
-                let mut params = AHashMap::new();
-                for (key, value) in matched.params.iter() {
-                    params.insert(key.to_string(), value.to_string());
-                }
-                return Some((matched.value, params));
-            }
-        }
-
-        None
-    }
-
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.static_routes.is_empty() && !self.has_dynamic_routes
-    }
-
-    /// Get all registered WebSocket paths for Actix route registration
-    pub fn get_all_paths(&self) -> Vec<String> {
-        let mut paths: Vec<String> = self.static_routes.keys().cloned().collect();
-        paths.extend(self.dynamic_paths.iter().cloned());
-        paths
-    }
-}
+use super::actor::WebSocketActor;
+use super::config::WS_CONFIG;
+use super::messages::{SendToClient, WsMessage};
+use super::ACTIVE_WS_CONNECTIONS;
 
 /// Check if a request is a WebSocket upgrade request
 #[inline]
@@ -508,7 +103,6 @@ struct WsConnectionState {
 
 /// Create Python receive function that reads from channel
 fn create_receive_fn(py: Python<'_>, state: Arc<WsConnectionState>) -> PyResult<Py<PyAny>> {
-    // Wrap in a Python callable
     #[pyclass]
     struct ReceiveFn {
         state: Arc<WsConnectionState>,
@@ -750,6 +344,13 @@ fn is_origin_allowed(origin: &str, cors_config: &CorsConfig, global_regexes: &[r
 }
 
 /// HTTP handler for WebSocket upgrade with full Python integration
+///
+/// Handles:
+/// - Connection limit checking
+/// - Rate limiting (reuses HTTP rate limit infrastructure)
+/// - Origin validation (CORS-like protection)
+/// - Authentication and guards
+/// - WebSocket upgrade and actor setup
 pub async fn handle_websocket_upgrade_with_handler(
     req: HttpRequest,
     stream: web::Payload,
@@ -758,18 +359,20 @@ pub async fn handle_websocket_upgrade_with_handler(
     path_params: AHashMap<String, String>,
     state: Arc<AppState>,
 ) -> actix_web::Result<HttpResponse> {
+    // Use cached config - no Python/GIL access
+    let config = &*WS_CONFIG;
+
     // Validate request is actually a WebSocket upgrade
     if !is_websocket_upgrade(&req) {
         return Ok(HttpResponse::BadRequest().body("Expected WebSocket upgrade request"));
     }
 
     // Check connection limit FIRST (before any processing)
-    let max_connections = get_max_connections();
     let current_connections = ACTIVE_WS_CONNECTIONS.load(Ordering::Relaxed);
-    if current_connections >= max_connections {
+    if current_connections >= config.max_connections {
         eprintln!(
             "[django-bolt] WebSocket: Connection limit reached ({}/{})",
-            current_connections, max_connections
+            current_connections, config.max_connections
         );
         return Ok(HttpResponse::ServiceUnavailable()
             .content_type("application/json")
@@ -832,34 +435,47 @@ pub async fn handle_websocket_upgrade_with_handler(
         }
     }
 
-    // Increment connection counter (will be decremented when actor stops)
+    // Increment connection counter BEFORE any fallible operations
+    // This ensures we always decrement if we fail after this point
     ACTIVE_WS_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
 
     // Create channels for bidirectional communication (configurable size)
-    let channel_size = get_channel_buffer_size();
-    let (to_python_tx, to_python_rx) = mpsc::channel::<WsMessage>(channel_size);
+    let (to_python_tx, to_python_rx) = mpsc::channel::<WsMessage>(config.channel_buffer_size);
 
-    // Build scope for Python
-    let scope = Python::attach(|py| build_scope(py, &req, &path_params))
-        .map_err(|e| actix_web::error::ErrorBadRequest(format!("Invalid request: {}", e)))?;
+    // Build scope for Python - if this fails, decrement counter
+    let scope = match Python::attach(|py| build_scope(py, &req, &path_params)) {
+        Ok(s) => s,
+        Err(e) => {
+            // CRITICAL: Decrement counter on error to prevent resource leak
+            ACTIVE_WS_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+            return Err(actix_web::error::ErrorBadRequest(format!("Invalid request: {}", e)));
+        }
+    };
 
     // Start the WebSocket actor
     let actor = WebSocketActor::new(to_python_tx);
 
-    // Use WsResponseBuilder to start actor and get address
-    let (addr, resp) = ws::WsResponseBuilder::new(actor, &req, stream)
-        .frame_size(MAX_MESSAGE_SIZE)
+    // Use WsResponseBuilder to start actor and get address - if this fails, decrement counter
+    let (addr, resp) = match ws::WsResponseBuilder::new(actor, &req, stream)
+        .frame_size(config.max_message_size)
         .start_with_addr()
-        .map_err(|e| actix_web::error::ErrorInternalServerError(format!("WebSocket error: {}", e)))?;
+    {
+        Ok(result) => result,
+        Err(e) => {
+            // CRITICAL: Decrement counter on error to prevent resource leak
+            ACTIVE_WS_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+            return Err(actix_web::error::ErrorInternalServerError(format!("WebSocket error: {}", e)));
+        }
+    };
 
     // Create shared state for Python functions
-    let state = Arc::new(WsConnectionState {
+    let ws_state = Arc::new(WsConnectionState {
         from_actor_rx: tokio::sync::Mutex::new(to_python_rx),
         actor_addr: addr.clone(),
     });
 
     // Spawn task to run Python handler using proper async integration
-    let state_clone = state.clone();
+    let ws_state_clone = ws_state.clone();
     actix_web::rt::spawn(async move {
         // Create WebSocket instance and get the coroutine
         let future_result = Python::attach(|py| -> PyResult<_> {
@@ -868,8 +484,8 @@ pub async fn handle_websocket_upgrade_with_handler(
             let ws_class = ws_module.getattr("WebSocket")?;
 
             // Create receive and send functions
-            let receive_fn = create_receive_fn(py, state_clone.clone())?;
-            let send_fn = create_send_fn(py, state_clone.clone())?;
+            let receive_fn = create_receive_fn(py, ws_state_clone.clone())?;
+            let send_fn = create_send_fn(py, ws_state_clone.clone())?;
 
             // Create WebSocket instance
             let websocket = ws_class.call1((scope, receive_fn, send_fn))?;

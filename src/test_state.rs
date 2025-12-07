@@ -221,6 +221,7 @@ pub fn register_test_websocket_routes(
 }
 
 /// Find a WebSocket route for the given path in a test app
+#[allow(dead_code)] // Reserved for future WebSocket testing utilities
 pub fn find_test_websocket_route(
     app_id: u64,
 ) -> Option<Arc<RwLock<TestApp>>> {
@@ -428,7 +429,7 @@ pub fn register_test_middleware_metadata(
         app.middleware_metadata
             .insert(handler_id, meta.clone_ref(py));
 
-        if let Ok(py_dict) = meta.bind(py).downcast::<PyDict>() {
+        if let Ok(py_dict) = meta.bind(py).cast::<PyDict>() {
             match RouteMetadata::from_python(py_dict, py) {
                 Ok(parsed) => {
                     app.route_metadata.insert(handler_id, parsed);
@@ -750,7 +751,7 @@ pub fn handle_test_request_for(
                 .map(|s| s.to_string())
                 .unwrap_or_else(|_| "unknown".to_string());
             test_debug!("[test_state] got headers object, type: {}", header_type);
-            if let Ok(hdict) = hobj.downcast::<PyDict>() {
+            if let Ok(hdict) = hobj.cast::<PyDict>() {
                 test_debug!("[test_state] headers is a dict");
                 for (k, v) in hdict {
                     if let (Ok(ks), Ok(vs)) = (k.extract::<String>(), v.extract::<String>()) {

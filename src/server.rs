@@ -53,7 +53,7 @@ pub fn register_middleware_metadata(
 
     for (handler_id, meta) in metadata {
         // Parse Python metadata into typed Rust metadata
-        if let Ok(py_dict) = meta.bind(py).downcast::<PyDict>() {
+        if let Ok(py_dict) = meta.bind(py).cast::<PyDict>() {
             match RouteMetadata::from_python(py_dict, py) {
                 Ok(parsed) => {
                     parsed_metadata_map.insert(handler_id, parsed);

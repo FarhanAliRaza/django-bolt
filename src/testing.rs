@@ -245,7 +245,7 @@ pub fn handle_test_request(
 
             let mut resp_headers: Vec<(String, String)> = Vec::new();
             if let Ok(hobj) = obj.getattr("headers") {
-                if let Ok(hdict) = hobj.downcast::<PyDict>() {
+                if let Ok(hdict) = hobj.cast::<PyDict>() {
                     for (k, v) in hdict {
                         if let (Ok(ks), Ok(vs)) = (k.extract::<String>(), v.extract::<String>()) {
                             resp_headers.push((ks, vs));

@@ -27,6 +27,7 @@ from typing import Any, AsyncIterator, Callable
 from django_bolt import BoltAPI
 from django_bolt.websocket import WebSocket, CloseCode
 from django_bolt.websocket.handlers import get_websocket_param_name
+from django_bolt.websocket.handlers import build_websocket_request
 
 
 def _read_cors_settings_from_django() -> dict | None:
@@ -175,11 +176,13 @@ class WebSocketTestClient:
         # This ensures WebSocket origin validation uses same config as HTTP
         self._app_id = _core.create_test_app(self.api._dispatch, False, self._cors_config)
 
-        # Register WebSocket routes
-        ws_routes = [
-            (path, handler_id, handler)
-            for path, handler_id, handler in self.api._websocket_routes
-        ]
+        # Register WebSocket routes with pre-compiled injectors (same as production)
+        ws_routes = []
+        for path, handler_id, handler in self.api._websocket_routes:
+            # Get pre-compiled injector from handler metadata (same as runbolt.py)
+            meta = self.api._handler_meta.get(handler, {})
+            injector = meta.get("injector")
+            ws_routes.append((path, handler_id, handler, injector))
         if ws_routes:
             _core.register_test_websocket_routes(self._app_id, ws_routes)
 
@@ -272,6 +275,7 @@ class WebSocketTestClient:
         """Enter async context - start the WebSocket handler.
 
         Routes through Rust for path matching, authentication, and guard evaluation.
+        Uses the same production code path as Rust for parameter injection.
         """
         # Use Rust for path matching, auth, and guard evaluation
         _found, handler_id, handler, path_params, scope = self._find_handler_via_rust()
@@ -279,102 +283,35 @@ class WebSocketTestClient:
         # Create WebSocket instance
         ws = WebSocket(scope, self._receive, self._send)
 
-        # Get the parameter name for the WebSocket argument
-        ws_param_name = get_websocket_param_name(handler)
+        # Use production code path for parameter injection
+        # This ensures tests actually verify the injector implementation
 
-        # Build kwargs for the handler
-        kwargs = {ws_param_name: ws}
+        # Get the pre-compiled injector from handler metadata (same as Rust does)
+        meta = self.api._handler_meta.get(handler)
 
-        # Add path params as kwargs with type coercion
-        import inspect
-        import typing
-        import re
-        sig = inspect.signature(handler)
+        if meta and "injector" in meta:
+            # Build request dict from scope (same as Rust's build_websocket_request call)
+            request = build_websocket_request(scope)
 
-        # Get resolved type hints (handles PEP 563 stringified annotations)
-        try:
-            type_hints = typing.get_type_hints(handler, include_extras=True)
-        except Exception:
-            type_hints = {}
+            # Call the pre-compiled injector to get (args, kwargs)
+            injector = meta["injector"]
+            if meta.get("injector_is_async", False):
+                args, kwargs = await injector(request)
+            else:
+                args, kwargs = injector(request)
 
-        def parse_string_annotation(ann_str: str) -> Any:
-            """Try to parse a string annotation to extract the base type.
-
-            Handles patterns like:
-            - "int" -> int
-            - "Annotated[int, 'metadata']" -> int
-            """
-            ann_str = ann_str.strip()
-
-            # Check for Annotated pattern
-            annotated_match = re.match(r"Annotated\[([^,\]]+)", ann_str)
-            if annotated_match:
-                inner_type = annotated_match.group(1).strip()
-                return inner_type
-
-            return ann_str
-
-        def get_base_type(annotation: Any) -> Any:
-            """Extract base type from Annotated or return as-is."""
-            # Handle string annotations (PEP 563)
-            if isinstance(annotation, str):
-                return parse_string_annotation(annotation)
-
-            # Handle typing.Annotated[T, ...] -> T
-            origin = typing.get_origin(annotation)
-
-            # Check for Annotated (handle both typing and typing_extensions)
-            try:
-                from typing import Annotated as TypingAnnotated
-            except ImportError:
-                TypingAnnotated = None  # type: ignore
-
-            try:
-                from typing_extensions import Annotated as ExtAnnotated
-            except ImportError:
-                ExtAnnotated = None  # type: ignore
-
-            is_annotated = (
-                origin is not None and (
-                    (TypingAnnotated is not None and origin is TypingAnnotated)
-                    or (ExtAnnotated is not None and origin is ExtAnnotated)
-                    or getattr(origin, "__name__", "") == "Annotated"
-                )
-            )
-
-            if is_annotated:
-                args = typing.get_args(annotation)
-                if args:
-                    return args[0]  # First arg is the actual type
-            return annotation
-
-        for name, value in path_params.items():
-            if name in sig.parameters and name != ws_param_name:
-                # Get annotation from resolved hints or fallback to signature
-                annotation = type_hints.get(name) or sig.parameters[name].annotation
-
-                # Type coerce if needed
-                if annotation != inspect.Parameter.empty:
-                    # Unwrap Annotated types
-                    base_type = get_base_type(annotation)
-
-                    try:
-                        # Handle both actual types and string annotations
-                        ann_name = getattr(base_type, "__name__", str(base_type))
-                        if base_type is int or ann_name == "int":
-                            value = int(value)
-                        elif base_type is float or ann_name == "float":
-                            value = float(value)
-                        elif base_type is bool or ann_name == "bool":
-                            value = value.lower() in ("true", "1", "yes")
-                    except (ValueError, TypeError):
-                        pass  # Keep as string if conversion fails
-                kwargs[name] = value
+            # Prepend websocket to args (same as Rust does)
+            args = [ws] + list(args)
+        else:
+            # Fallback for handlers without injector (simple websocket-only handlers)
+            ws_param_name = get_websocket_param_name(handler)
+            args = [ws] if ws_param_name else []
+            kwargs = {}
 
         # Start handler in background task
         async def run_handler():
             try:
-                await handler(**kwargs)
+                await handler(*args, **kwargs)
             except Exception as e:
                 self._handler_exception = e
                 # Send disconnect on error

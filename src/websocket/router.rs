@@ -9,6 +9,8 @@ pub struct WebSocketRoute {
     pub path: String,
     pub handler_id: usize,
     pub handler: Py<PyAny>,
+    /// Pre-compiled parameter injector (passed from Python at registration time)
+    pub injector: Option<Py<PyAny>>,
 }
 
 /// WebSocket router for matching paths to handlers
@@ -38,11 +40,13 @@ impl WebSocketRouter {
         path: &str,
         handler_id: usize,
         handler: Py<PyAny>,
+        injector: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         let route = WebSocketRoute {
             path: path.to_string(),
             handler_id,
             handler,
+            injector,
         };
 
         if !path.contains('{') {

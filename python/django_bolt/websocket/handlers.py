@@ -3,10 +3,55 @@
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Tuple
 
 if TYPE_CHECKING:
     from .types import WebSocket
+
+
+def build_websocket_request(scope: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build a request-like dict from WebSocket scope for parameter injection.
+
+    This function converts the WebSocket scope (similar to ASGI scope) into
+    a request dict format that the HTTP parameter injector expects.
+
+    The scope contains:
+    - type: "websocket"
+    - path: URL path
+    - query_string: raw query string as bytes
+    - headers: dict of header name -> value
+    - path_params: dict of path parameter name -> value
+    - cookies: dict of cookie name -> value
+    - client: tuple of (host, port)
+
+    Returns a dict compatible with the HTTP injector:
+    - params: path parameters
+    - query: parsed query string parameters
+    - headers: request headers (lowercased keys)
+    - cookies: request cookies
+    - body: empty bytes (WebSocket has no request body at connect time)
+    """
+    from urllib.parse import parse_qs
+
+    # Parse query string into dict
+    query_string = scope.get("query_string", b"")
+    if isinstance(query_string, bytes):
+        query_string = query_string.decode("utf-8", errors="replace")
+
+    parsed_qs = parse_qs(query_string, keep_blank_values=True)
+    # Convert lists to single values for simple access
+    query_map = {k: v[0] if len(v) == 1 else v for k, v in parsed_qs.items()}
+
+    return {
+        "params": scope.get("path_params", {}),
+        "query": query_map,
+        "headers": scope.get("headers", {}),
+        "cookies": scope.get("cookies", {}),
+        "body": b"",  # WebSocket has no body at connect time
+        "path": scope.get("path", "/"),
+        "method": "WEBSOCKET",
+    }
 
 
 def is_websocket_handler(func: Callable[..., Any]) -> bool:

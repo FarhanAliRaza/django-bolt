@@ -240,12 +240,15 @@ class Command(BaseCommand):
 
         _core.register_routes(rust_routes)
 
-        # Register WebSocket routes with Rust
+        # Register WebSocket routes with Rust (including pre-compiled injectors)
         ws_routes = []
         for path, handler_id, handler in merged_api._websocket_routes:
             convert = getattr(merged_api, "_convert_path", None)
             norm_path = convert(path) if callable(convert) else path
-            ws_routes.append((norm_path, handler_id, handler))
+            # Get pre-compiled injector from handler metadata
+            meta = merged_api._handler_meta.get(handler, {})
+            injector = meta.get("injector")
+            ws_routes.append((norm_path, handler_id, handler, injector))
 
         if ws_routes:
             _core.register_websocket_routes(ws_routes)

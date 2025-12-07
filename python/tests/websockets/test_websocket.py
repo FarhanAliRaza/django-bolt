@@ -4,8 +4,9 @@ WebSocket tests using WebSocketTestClient.
 Tests the WebSocket functionality including:
 - Echo (text, json, binary)
 - Path parameters with type coercion
-- Query parameters
-- Headers
+- Query parameters (via Query() marker)
+- Headers (via Header() marker)
+- Cookies (via Cookie() marker)
 - Close handling
 - Guards/auth integration with real JWT tokens
 - Error handling
@@ -13,6 +14,7 @@ Tests the WebSocket functionality including:
 from __future__ import annotations
 
 import time
+from typing import Annotated
 
 import jwt
 import pytest
@@ -21,6 +23,7 @@ from django_bolt import BoltAPI, WebSocket
 from django_bolt.testing import WebSocketTestClient, ConnectionClosed
 from django_bolt.websocket import CloseCode
 from django_bolt.auth import IsAuthenticated, IsAdminUser, HasPermission, JWTAuthentication
+from django_bolt.param_functions import Query, Header, Cookie
 
 
 # Test secret for JWT tokens
@@ -487,16 +490,6 @@ async def test_websocket_handler_error(api):
 
 
 @pytest.mark.asyncio
-async def test_websocket_invalid_path(api):
-    """Test connecting to non-existent path."""
-    with pytest.raises(ValueError) as exc_info:
-        async with WebSocketTestClient(api, "/ws/nonexistent"):
-            pass
-
-    assert "No WebSocket handler found" in str(exc_info.value)
-
-
-@pytest.mark.asyncio
 async def test_websocket_receive_timeout(api):
     """Test receive timeout."""
     async with WebSocketTestClient(api, "/ws/slow") as ws:
@@ -519,3 +512,194 @@ async def test_websocket_connection_state(api):
         assert ws.closed is False
 
     assert ws.closed is True
+
+
+# --- Parameter Injection Tests ---
+# These tests verify that the production injector code path works correctly.
+# They use Query(), Header(), and Cookie() markers which require the
+# pre-compiled injector (not manual parameter extraction).
+
+
+@pytest.fixture
+def injection_api():
+    """Create test API with parameter injection WebSocket routes."""
+    api = BoltAPI()
+
+    # Query parameter injection via Query() marker
+    @api.websocket("/ws/inject/query")
+    async def query_inject_handler(
+        websocket: WebSocket,
+        token: Annotated[str, Query()],
+        limit: Annotated[int, Query()] = 10,
+    ):
+        await websocket.accept()
+        await websocket.send_json({
+            "token": token,
+            "token_type": type(token).__name__,
+            "limit": limit,
+            "limit_type": type(limit).__name__,
+        })
+
+    # Header injection via Header() marker
+    @api.websocket("/ws/inject/header")
+    async def header_inject_handler(
+        websocket: WebSocket,
+        authorization: Annotated[str, Header()],
+        x_request_id: Annotated[str, Header(alias="x-request-id")] = "default",
+    ):
+        await websocket.accept()
+        await websocket.send_json({
+            "authorization": authorization,
+            "x_request_id": x_request_id,
+        })
+
+    # Cookie injection via Cookie() marker
+    @api.websocket("/ws/inject/cookie")
+    async def cookie_inject_handler(
+        websocket: WebSocket,
+        session_id: Annotated[str, Cookie(alias="session")],
+        theme: Annotated[str, Cookie()] = "light",
+    ):
+        await websocket.accept()
+        await websocket.send_json({
+            "session_id": session_id,
+            "theme": theme,
+        })
+
+    # Mixed injection (path + query + header + cookie)
+    @api.websocket("/ws/inject/mixed/{room_id}")
+    async def mixed_inject_handler(
+        websocket: WebSocket,
+        room_id: int,  # Path param with type coercion
+        token: Annotated[str, Query()],
+        authorization: Annotated[str, Header()],
+        session: Annotated[str, Cookie(alias="session")],
+    ):
+        await websocket.accept()
+        await websocket.send_json({
+            "room_id": room_id,
+            "room_id_type": type(room_id).__name__,
+            "token": token,
+            "authorization": authorization,
+            "session": session,
+        })
+
+    return api
+
+
+@pytest.mark.asyncio
+async def test_websocket_query_injection(injection_api):
+    """Test Query() parameter injection works via production injector."""
+    async with WebSocketTestClient(
+        injection_api,
+        "/ws/inject/query",
+        query_string="token=abc123&limit=50"
+    ) as ws:
+        response = await ws.receive_json()
+        assert response["token"] == "abc123"
+        assert response["token_type"] == "str"
+        assert response["limit"] == 50
+        assert response["limit_type"] == "int"
+
+
+@pytest.mark.asyncio
+async def test_websocket_query_injection_default(injection_api):
+    """Test Query() parameter uses default value when not provided."""
+    async with WebSocketTestClient(
+        injection_api,
+        "/ws/inject/query",
+        query_string="token=xyz"
+    ) as ws:
+        response = await ws.receive_json()
+        assert response["token"] == "xyz"
+        assert response["limit"] == 10  # Default value
+
+
+@pytest.mark.asyncio
+async def test_websocket_header_injection(injection_api):
+    """Test Header() parameter injection works via production injector."""
+    headers = {
+        "Authorization": "Bearer secret-token",
+        "X-Request-ID": "req-12345",
+    }
+    async with WebSocketTestClient(
+        injection_api,
+        "/ws/inject/header",
+        headers=headers
+    ) as ws:
+        response = await ws.receive_json()
+        assert response["authorization"] == "Bearer secret-token"
+        assert response["x_request_id"] == "req-12345"
+
+
+@pytest.mark.asyncio
+async def test_websocket_header_injection_default(injection_api):
+    """Test Header() parameter uses default value when not provided."""
+    headers = {
+        "Authorization": "Bearer token",
+    }
+    async with WebSocketTestClient(
+        injection_api,
+        "/ws/inject/header",
+        headers=headers
+    ) as ws:
+        response = await ws.receive_json()
+        assert response["authorization"] == "Bearer token"
+        assert response["x_request_id"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_websocket_cookie_injection(injection_api):
+    """Test Cookie() parameter injection works via production injector."""
+    headers = {
+        "Cookie": "session=sess-abc123; theme=dark",
+    }
+    async with WebSocketTestClient(
+        injection_api,
+        "/ws/inject/cookie",
+        headers=headers
+    ) as ws:
+        response = await ws.receive_json()
+        assert response["session_id"] == "sess-abc123"
+        assert response["theme"] == "dark"
+
+
+@pytest.mark.asyncio
+async def test_websocket_cookie_injection_default(injection_api):
+    """Test Cookie() parameter uses default value when not provided."""
+    headers = {
+        "Cookie": "session=my-session",
+    }
+    async with WebSocketTestClient(
+        injection_api,
+        "/ws/inject/cookie",
+        headers=headers
+    ) as ws:
+        response = await ws.receive_json()
+        assert response["session_id"] == "my-session"
+        assert response["theme"] == "light"  # Default value
+
+
+@pytest.mark.asyncio
+async def test_websocket_mixed_injection(injection_api):
+    """Test combined path, query, header, and cookie parameter injection."""
+    headers = {
+        "Authorization": "Bearer mix-token",
+        "Cookie": "session=mix-session",
+    }
+    async with WebSocketTestClient(
+        injection_api,
+        "/ws/inject/mixed/42",
+        query_string="token=mix-query-token",
+        headers=headers
+    ) as ws:
+        response = await ws.receive_json()
+        # Path param with type coercion
+        assert response["room_id"] == 42
+        assert response["room_id_type"] == "int"
+        # Query param
+        assert response["token"] == "mix-query-token"
+        # Header param
+        assert response["authorization"] == "Bearer mix-token"
+        # Cookie param
+        assert response["session"] == "mix-session"

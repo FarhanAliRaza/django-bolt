@@ -53,6 +53,7 @@ from .admin.admin_detection import detect_admin_url_prefix
 from .auth import get_default_authentication_classes, register_auth_backend
 from .auth.user_loader import load_user, load_user_sync
 from .analysis import analyze_handler, warn_blocking_handler
+from .websocket import mark_websocket_handler, WebSocket as WebSocketType
 
 from django.utils.functional import SimpleLazyObject
 
@@ -449,7 +450,6 @@ class BoltAPI:
         auth: Optional[List[Any]] = None,
     ):
         """Internal decorator for WebSocket routes."""
-        from .websocket import mark_websocket_handler
 
         def decorator(fn: Callable) -> Callable:
             # Ensure handler is async
@@ -472,12 +472,17 @@ class BoltAPI:
             self._websocket_routes.append((full_path, handler_id, fn))
             self._handlers[handler_id] = fn
 
-            # Store minimal metadata for WebSocket handler
-            meta: Dict[str, Any] = {
-                "is_async": True,
-                "is_websocket": True,
-                "path_params": _extract_path_params(full_path),
-            }
+            # Compile parameter binder for WebSocket (reuses HTTP binding logic)
+            # This enables injection of path params, query params, headers, cookies
+            meta = self._compile_websocket_binder(fn, full_path, WebSocketType)
+            meta["is_async"] = True
+            meta["is_websocket"] = True
+
+            # Compile optimized argument injector (same as HTTP handlers)
+            injector = self._compile_argument_injector(meta)
+            meta["injector"] = injector
+            meta["injector_is_async"] = inspect.iscoroutinefunction(injector)
+
             self._handler_meta[fn] = meta
 
             # Compile middleware metadata for WebSocket handler
@@ -1150,6 +1155,135 @@ class BoltAPI:
         # Classify handler pattern for specialized injector selection
         meta["handler_pattern"] = self._classify_handler_pattern(
             field_definitions, meta, needs_form_parsing
+        )
+
+        return meta
+
+    def _compile_websocket_binder(self, fn: Callable, path: str, websocket_type: type) -> HandlerMetadata:
+        """
+        Compile parameter binding metadata for a WebSocket handler.
+
+        Similar to _compile_binder but:
+        1. Skips the first parameter if it's a WebSocket type (it's injected separately)
+        2. No body/form/file parameters (WebSocket doesn't have request body at connect time)
+        3. Supports path, query, header, cookie injection
+
+        Args:
+            fn: WebSocket handler function
+            path: Route path pattern
+            websocket_type: The WebSocket class type to detect
+
+        Returns:
+            Metadata dictionary for parameter binding
+        """
+        sig = inspect.signature(fn)
+        globalns = sys.modules.get(fn.__module__, {}).__dict__ if fn.__module__ else {}
+        type_hints = get_type_hints(fn, globalns=globalns, include_extras=True)
+
+        # Extract path parameters from route pattern
+        path_params = _extract_path_params(path)
+
+        meta: HandlerMetadata = {
+            "sig": sig,
+            "fields": [],
+            "path_params": path_params,
+            "http_method": "WEBSOCKET",
+        }
+
+        params = list(sig.parameters.values())
+
+        # If no params or just websocket param, return empty fields
+        if not params:
+            meta["mode"] = "websocket_only"
+            meta["needs_body"] = False
+            meta["needs_query"] = False
+            meta["needs_headers"] = False
+            meta["needs_cookies"] = False
+            meta["needs_path_params"] = False
+            meta["needs_form_parsing"] = False
+            meta["handler_pattern"] = HandlerPattern.NO_PARAMS
+            return meta
+
+        # Parse each parameter into FieldDefinition, skipping WebSocket param
+        field_definitions: List[FieldDefinition] = []
+
+        for param in params:
+            name = param.name
+            annotation = type_hints.get(name, param.annotation)
+
+            # Unwrap Annotated to get the base type
+            base_annotation = annotation
+            origin = get_origin(annotation)
+            if origin is Annotated:
+                args = get_args(annotation)
+                base_annotation = args[0] if args else annotation
+
+            # Skip WebSocket parameter - it's injected by Rust
+            if base_annotation is websocket_type or (
+                isinstance(base_annotation, type) and issubclass(base_annotation, websocket_type)
+            ):
+                continue
+
+            # Also skip if param name is 'websocket' or 'ws' with no annotation
+            if name in ("websocket", "ws") and annotation is inspect.Parameter.empty:
+                continue
+
+            # Extract explicit markers from Annotated or default
+            explicit_marker = None
+
+            if origin is Annotated:
+                args = get_args(annotation)
+                annotation = args[0] if args else annotation
+                for meta_val in args[1:]:
+                    if isinstance(meta_val, (Param, DependsMarker)):
+                        explicit_marker = meta_val
+                        break
+
+            if explicit_marker is None and isinstance(param.default, (Param, DependsMarker)):
+                explicit_marker = param.default
+
+            # Create FieldDefinition with inference
+            # WebSocket doesn't have body, so primitives should default to query
+            field = FieldDefinition.from_parameter(
+                parameter=param,
+                annotation=annotation,
+                path_params=path_params,
+                http_method="GET",  # Use GET-like inference (no body)
+                explicit_marker=explicit_marker,
+            )
+
+            # Attach pre-compiled extractor to field
+            extractor = create_extractor_for_field(field)
+            if extractor is not None:
+                object.__setattr__(field, "extractor", extractor)
+
+            field_definitions.append(field)
+
+        meta["fields"] = field_definitions
+
+        if not field_definitions:
+            meta["mode"] = "websocket_only"
+            meta["needs_body"] = False
+            meta["needs_query"] = False
+            meta["needs_headers"] = False
+            meta["needs_cookies"] = False
+            meta["needs_path_params"] = False
+            meta["needs_form_parsing"] = False
+            meta["handler_pattern"] = HandlerPattern.NO_PARAMS
+            return meta
+
+        meta["mode"] = "mixed"
+        meta["needs_form_parsing"] = False  # WebSocket doesn't have form data
+        meta["needs_body"] = False  # WebSocket doesn't have body at connect
+        meta["needs_query"] = any(f.source == "query" for f in field_definitions)
+        meta["needs_headers"] = any(f.source == "header" for f in field_definitions)
+        meta["needs_cookies"] = any(f.source == "cookie" for f in field_definitions)
+        meta["needs_path_params"] = any(f.source == "path" for f in field_definitions)
+        meta["is_static_route"] = len(path_params) == 0
+
+        # Classify pattern for injector optimization
+        meta["handler_pattern"] = self._classify_handler_pattern(
+            field_definitions, meta, False
         )
 
         return meta

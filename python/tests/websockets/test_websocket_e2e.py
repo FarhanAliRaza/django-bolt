@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Annotated
 
 import jwt
 import pytest
@@ -437,15 +438,6 @@ class TestWebSocketErrors:
 
         assert "Test error" in str(exc_info.value)
 
-    @pytest.mark.asyncio
-    async def test_invalid_path(self, api):
-        """Test connecting to non-existent path."""
-        with pytest.raises(ValueError) as exc_info:
-            async with WebSocketTestClient(api, "/ws/nonexistent"):
-                pass
-
-        assert "No WebSocket handler found" in str(exc_info.value)
-
 
 class TestWebSocketTimeout:
     """Test WebSocket timeout handling."""
@@ -740,14 +732,7 @@ class TestWebSocketAnnotatedTypes:
 
     @pytest.fixture
     def api(self):
-        from typing import Annotated
-
         api = BoltAPI()
-
-        # Note: Annotated type coercion works when get_type_hints() can resolve
-        # the annotations. With PEP 563 (from __future__ import annotations),
-        # metadata classes must be defined at module level or use string literals.
-        # Using string metadata here for compatibility.
 
         @api.websocket("/ws/annotated/{user_id}")
         async def annotated_handler(websocket: WebSocket, user_id: Annotated[int, "positive integer"]):

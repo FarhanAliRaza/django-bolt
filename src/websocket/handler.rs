@@ -5,6 +5,7 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use actix_web_actors::ws;
 use ahash::AHashMap;
 use futures_util::FutureExt;
+use once_cell::sync::OnceCell;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 use std::sync::atomic::Ordering;
@@ -20,6 +21,28 @@ use super::actor::WebSocketActor;
 use super::config::WS_CONFIG;
 use super::messages::{SendToClient, WsMessage};
 use super::ACTIVE_WS_CONNECTIONS;
+
+/// Cached Python imports - loaded once at first WebSocket connection
+static WS_CLASS: OnceCell<Py<PyAny>> = OnceCell::new();
+static BUILD_REQUEST_FN: OnceCell<Py<PyAny>> = OnceCell::new();
+
+/// Get cached WebSocket class (imports once, reuses)
+fn get_ws_class(py: Python<'_>) -> PyResult<&Py<PyAny>> {
+    WS_CLASS.get_or_try_init(|| {
+        let ws_module = py.import("django_bolt.websocket")?;
+        let ws_class = ws_module.getattr("WebSocket")?;
+        Ok(ws_class.unbind())
+    })
+}
+
+/// Get cached build_websocket_request function (imports once, reuses)
+fn get_build_request_fn(py: Python<'_>) -> PyResult<&Py<PyAny>> {
+    BUILD_REQUEST_FN.get_or_try_init(|| {
+        let handlers_module = py.import("django_bolt.websocket.handlers")?;
+        let build_request = handlers_module.getattr("build_websocket_request")?;
+        Ok(build_request.unbind())
+    })
+}
 
 /// Check if a request is a WebSocket upgrade request
 #[inline]
@@ -359,6 +382,7 @@ pub async fn handle_websocket_upgrade_with_handler(
     handler_id: usize,
     path_params: AHashMap<String, String>,
     state: Arc<AppState>,
+    injector: Option<Py<PyAny>>,
 ) -> actix_web::Result<HttpResponse> {
     // Use cached config - no Python/GIL access
     let config = &*WS_CONFIG;
@@ -483,19 +507,45 @@ pub async fn handle_websocket_upgrade_with_handler(
         let result = std::panic::AssertUnwindSafe(async {
             // Create WebSocket instance and get the coroutine
             let future_result = Python::attach(|py| -> PyResult<_> {
-                // Import the WebSocket class
-                let ws_module = py.import("django_bolt.websocket")?;
-                let ws_class = ws_module.getattr("WebSocket")?;
+                // Use cached WebSocket class (imports once, reuses)
+                let ws_class = get_ws_class(py)?;
 
                 // Create receive and send functions
                 let receive_fn = create_receive_fn(py, ws_state_clone.clone())?;
                 let send_fn = create_send_fn(py, ws_state_clone.clone())?;
 
                 // Create WebSocket instance
-                let websocket = ws_class.call1((scope, receive_fn, send_fn))?;
+                let websocket = ws_class.call1(py, (scope.clone_ref(py), receive_fn, send_fn))?;
 
-                // Call the handler with the WebSocket instance
-                let coro = handler.call1(py, (websocket,))?;
+                // Use cached build_websocket_request function (imports once, reuses)
+                let build_request = get_build_request_fn(py)?;
+                let request = build_request.call1(py, (scope,))?;
+
+                // Call handler with proper parameter injection
+                // Injector is pre-compiled at route registration and passed from router
+                let coro = if let Some(ref inj) = injector {
+                    // Use pre-compiled injector to extract parameters
+                    // Sync injector - call directly
+                    // Note: WebSocket handlers don't support async injectors (dependencies)
+                    // since the injector is called synchronously during connection setup
+                    let result = inj.call1(py, (request,))?;
+                    let (args, kwargs): (Py<PyAny>, Py<PyAny>) = result.extract(py)?;
+
+                    // Prepend websocket to args
+                    let args_list = args.bind(py).cast::<pyo3::types::PyList>()?;
+                    let new_args = pyo3::types::PyList::new(py, std::iter::once(&websocket))?;
+                    for item in args_list.iter() {
+                        new_args.append(item)?;
+                    }
+                    let args_tuple = PyTuple::new(py, new_args.iter())?;
+
+                    // Call handler with websocket + extracted args
+                    let kwargs_dict = kwargs.bind(py).cast::<PyDict>()?;
+                    handler.call(py, args_tuple, Some(&kwargs_dict))?
+                } else {
+                    // No injector (simple handler) - just pass websocket
+                    handler.call1(py, (&websocket,))?
+                };
 
                 // Reuse the global event loop locals initialized at server startup (same as HTTP handlers)
                 let locals = TASK_LOCALS.get().ok_or_else(|| {

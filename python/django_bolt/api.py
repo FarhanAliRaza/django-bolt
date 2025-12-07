@@ -480,19 +480,25 @@ class BoltAPI:
             }
             self._handler_meta[fn] = meta
 
-            # Compile middleware metadata if guards/auth provided
-            if guards or auth:
-                middleware_meta = compile_middleware_meta(
-                    handler=fn,
-                    method="WEBSOCKET",
-                    path=full_path,
-                    global_middleware=[],
-                    global_middleware_config=self.middleware_config or {},
-                    guards=guards,
-                    auth=auth,
-                )
-                if middleware_meta:
-                    self._handler_middleware[handler_id] = middleware_meta
+            # Compile middleware metadata for WebSocket handler
+            # Always call compile_middleware_meta to pick up:
+            # 1. Handler-level decorators (@rate_limit, @cors, etc.)
+            # 2. Global middleware from self.middleware
+            # 3. Guards and auth backends
+            middleware_meta = compile_middleware_meta(
+                handler=fn,
+                method="WEBSOCKET",
+                path=full_path,
+                global_middleware=self.middleware,
+                global_middleware_config=self.middleware_config or {},
+                guards=guards,
+                auth=auth,
+            )
+            if middleware_meta:
+                self._handler_middleware[handler_id] = middleware_meta
+                # Store auth backend instances for user resolution
+                if auth is not None:
+                    middleware_meta['_auth_backend_instances'] = auth
 
             return fn
 

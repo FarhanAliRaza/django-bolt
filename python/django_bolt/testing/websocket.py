@@ -1,7 +1,8 @@
 """WebSocket testing utilities for django-bolt.
 
 Provides test client for WebSocket endpoints without subprocess/network overhead.
-Uses mock ASGI interface to call handlers directly.
+Routes through Rust for path matching, authentication, and guard evaluation,
+then uses mock ASGI interface for bidirectional message handling.
 
 Usage:
     api = BoltAPI()
@@ -21,20 +22,82 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, AsyncIterator, Callable, Optional
-from collections import deque
+from typing import Any, AsyncIterator, Callable
 
 from django_bolt import BoltAPI
-from django_bolt.websocket import WebSocket, WebSocketState, CloseCode
+from django_bolt.websocket import WebSocket, CloseCode
 from django_bolt.websocket.handlers import get_websocket_param_name
+
+
+def _read_cors_settings_from_django() -> dict | None:
+    """Read all CORS settings from Django settings (same as production server).
+
+    Returns:
+        Dict with CORS config from Django settings, or None if not configured.
+        Keys: origins, credentials, methods, headers, expose_headers, max_age
+    """
+    try:
+        from django.conf import settings
+
+        # Check if any CORS setting is defined
+        has_origins = hasattr(settings, 'CORS_ALLOWED_ORIGINS')
+        has_all_origins = hasattr(settings, 'CORS_ALLOW_ALL_ORIGINS') and settings.CORS_ALLOW_ALL_ORIGINS
+
+        if not has_origins and not has_all_origins:
+            return None
+
+        # Build CORS config dict matching production server format
+        cors_config = {}
+
+        # Origins
+        if has_all_origins:
+            cors_config['origins'] = ["*"]
+        elif has_origins:
+            origins = settings.CORS_ALLOWED_ORIGINS
+            if isinstance(origins, (list, tuple)):
+                cors_config['origins'] = list(origins)
+            else:
+                cors_config['origins'] = []
+        else:
+            cors_config['origins'] = []
+
+        # Credentials
+        cors_config['credentials'] = getattr(settings, 'CORS_ALLOW_CREDENTIALS', False)
+
+        # Methods
+        if hasattr(settings, 'CORS_ALLOW_METHODS'):
+            methods = settings.CORS_ALLOW_METHODS
+            if isinstance(methods, (list, tuple)):
+                cors_config['methods'] = list(methods)
+
+        # Headers
+        if hasattr(settings, 'CORS_ALLOW_HEADERS'):
+            headers = settings.CORS_ALLOW_HEADERS
+            if isinstance(headers, (list, tuple)):
+                cors_config['headers'] = list(headers)
+
+        # Expose headers
+        if hasattr(settings, 'CORS_EXPOSE_HEADERS'):
+            expose = settings.CORS_EXPOSE_HEADERS
+            if isinstance(expose, (list, tuple)):
+                cors_config['expose_headers'] = list(expose)
+
+        # Max age
+        if hasattr(settings, 'CORS_PREFLIGHT_MAX_AGE'):
+            cors_config['max_age'] = settings.CORS_PREFLIGHT_MAX_AGE
+
+        return cors_config
+    except (ImportError, AttributeError):
+        # Django not configured or settings not available
+        return None
 
 
 class WebSocketTestClient:
     """Async WebSocket test client for django-bolt.
 
-    This client simulates a WebSocket connection by calling the handler
-    directly with mock receive/send functions. No actual network connection
-    is made.
+    This client routes through Rust for path matching, authentication, and
+    guard evaluation (same as production), then uses mock ASGI receive/send
+    for bidirectional message handling.
 
     Usage:
         async with WebSocketTestClient(api, "/ws/echo") as ws:
@@ -52,6 +115,8 @@ class WebSocketTestClient:
         query_string: str = "",
         subprotocols: list[str] | None = None,
         auth_context: Any = None,
+        cors_allowed_origins: list[str] | None = None,
+        read_django_settings: bool = True,
     ):
         """Initialize WebSocket test client.
 
@@ -63,6 +128,10 @@ class WebSocketTestClient:
             subprotocols: Optional list of subprotocols to request
             auth_context: Optional authentication context for guard evaluation.
                          Should have user_id, is_superuser, is_staff, permissions attributes.
+            cors_allowed_origins: Global CORS allowed origins for testing.
+                                  If None and read_django_settings=True, reads from Django settings.
+            read_django_settings: If True, read CORS settings from Django settings
+                                 when cors_allowed_origins is None. Default True.
         """
         self.api = api
         self.path = path
@@ -70,6 +139,15 @@ class WebSocketTestClient:
         self.query_string = query_string
         self.subprotocols = subprotocols or []
         self.auth_context = auth_context
+
+        # Build CORS config dict for Rust (same as HTTP TestClient)
+        self._cors_config: dict | None = None
+        if cors_allowed_origins is not None:
+            # Explicit origins provided - create minimal config
+            self._cors_config = {'origins': cors_allowed_origins}
+        elif read_django_settings:
+            # Read full CORS config from Django settings (same as production server)
+            self._cors_config = _read_cors_settings_from_django()
 
         # Message queues for bidirectional communication
         self._client_to_server: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -83,77 +161,93 @@ class WebSocketTestClient:
         self._handler_task: asyncio.Task | None = None
         self._handler_exception: Exception | None = None
 
-    def _find_handler(self) -> tuple[Callable, int, dict[str, str]] | None:
-        """Find the WebSocket handler for the path.
+        # Test app ID (set when used with TestClient context)
+        self._app_id: int | None = None
+
+    def _get_or_create_app_id(self) -> int:
+        """Get or create a test app ID for Rust routing."""
+        if self._app_id is not None:
+            return self._app_id
+
+        from django_bolt import _core
+
+        # Create a test app instance for this WebSocket test with CORS config
+        # This ensures WebSocket origin validation uses same config as HTTP
+        self._app_id = _core.create_test_app(self.api._dispatch, False, self._cors_config)
+
+        # Register WebSocket routes
+        ws_routes = [
+            (path, handler_id, handler)
+            for path, handler_id, handler in self.api._websocket_routes
+        ]
+        if ws_routes:
+            _core.register_test_websocket_routes(self._app_id, ws_routes)
+
+        # Register middleware metadata for guards/auth
+        if self.api._handler_middleware:
+            middleware_data = [
+                (handler_id, meta)
+                for handler_id, meta in self.api._handler_middleware.items()
+            ]
+            _core.register_test_middleware_metadata(self._app_id, middleware_data)
+
+        return self._app_id
+
+    def _cleanup_app(self) -> None:
+        """Cleanup test app instance."""
+        if self._app_id is not None:
+            from django_bolt import _core
+            try:
+                _core.destroy_test_app(self._app_id)
+            except Exception:
+                pass
+            self._app_id = None
+
+    def _find_handler_via_rust(self) -> tuple[bool, int, Callable, dict[str, Any], dict[str, Any]]:
+        """Find WebSocket handler and build scope via Rust.
+
+        Routes through Rust for path matching, auth, and guard evaluation.
 
         Returns:
-            Tuple of (handler, handler_id, path_params) if found, None otherwise
+            Tuple of (found, handler_id, handler, path_params, scope)
+
+        Raises:
+            ValueError: If no handler found for path
+            PermissionError: If guards fail
         """
-        for route_path, handler_id, handler in self.api._websocket_routes:
-            # Simple path matching (exact or with path params)
-            path_params = self._match_path(route_path, self.path)
-            if path_params is not None:
-                return handler, handler_id, path_params
-        return None
+        from django_bolt import _core
 
-    def _match_path(self, pattern: str, path: str) -> dict[str, str] | None:
-        """Match a path pattern against an actual path.
+        app_id = self._get_or_create_app_id()
 
-        Args:
-            pattern: Route pattern like "/ws/chat/{room_id}"
-            path: Actual path like "/ws/chat/general"
+        # Build headers list for Rust
+        headers_list = list(self.headers.items())
 
-        Returns:
-            Dict of path params if matched, None otherwise
-        """
-        pattern_parts = pattern.strip("/").split("/")
-        path_parts = path.strip("/").split("/")
+        try:
+            found, handler_id, handler, path_params, scope = _core.handle_test_websocket(
+                app_id,
+                self.path,
+                headers_list,
+                self.query_string if self.query_string else None,
+            )
+        except PermissionError as e:
+            # Re-raise permission errors from Rust
+            raise PermissionError(f"WebSocket connection denied: {e}") from e
 
-        if len(pattern_parts) != len(path_parts):
-            return None
+        if not found:
+            raise ValueError(f"No WebSocket handler found for path: {self.path}")
 
-        params = {}
-        for pattern_part, path_part in zip(pattern_parts, path_parts):
-            if pattern_part.startswith("{") and pattern_part.endswith("}"):
-                param_name = pattern_part[1:-1]
-                params[param_name] = path_part
-            elif pattern_part != path_part:
-                return None
+        # Convert path_params from Rust dict to Python dict
+        path_params_dict = dict(path_params) if path_params else {}
 
-        return params
+        # Convert scope from Rust dict to Python dict and add extras
+        scope_dict = dict(scope) if scope else {}
+        scope_dict["subprotocols"] = self.subprotocols
 
-    def _build_scope(self, path_params: dict[str, str]) -> dict[str, Any]:
-        """Build ASGI-style scope for WebSocket."""
-        # Convert headers to ASGI format
-        headers_dict = {k.lower(): v for k, v in self.headers.items()}
-
-        scope = {
-            "type": "websocket",
-            "path": self.path,
-            "query_string": self.query_string.encode("utf-8"),
-            "headers": headers_dict,
-            "path_params": path_params,
-            "cookies": self._parse_cookies(headers_dict.get("cookie", "")),
-            "client": ("127.0.0.1", 12345),  # Mock client address
-            "subprotocols": self.subprotocols,
-        }
-
-        # Add auth context if provided (for guard evaluation)
+        # Add auth context if provided (for Python-side guard evaluation fallback)
         if self.auth_context is not None:
-            scope["auth_context"] = self.auth_context
+            scope_dict["auth_context"] = self.auth_context
 
-        return scope
-
-    def _parse_cookies(self, cookie_header: str) -> dict[str, str]:
-        """Parse cookie header into dict."""
-        cookies = {}
-        if cookie_header:
-            for pair in cookie_header.split(";"):
-                pair = pair.strip()
-                if "=" in pair:
-                    key, value = pair.split("=", 1)
-                    cookies[key.strip()] = value.strip()
-        return cookies
+        return found, handler_id, handler, path_params_dict, scope_dict
 
     async def _receive(self) -> dict[str, Any]:
         """ASGI receive callable - gets messages from client queue."""
@@ -174,99 +268,13 @@ class WebSocketTestClient:
         # Put all messages in queue for client to receive
         await self._server_to_client.put(message)
 
-    def _evaluate_guards(self, handler_id: int, scope: dict[str, Any]) -> tuple[bool, int, str]:
-        """Evaluate guards for WebSocket connection.
-
-        Args:
-            handler_id: Handler ID to look up guards
-            scope: WebSocket scope with auth context
-
-        Returns:
-            Tuple of (allowed, status_code, message)
-            - allowed: True if guards pass
-            - status_code: HTTP status code if denied (401 or 403)
-            - message: Error message if denied
-        """
-        # Get guards from handler middleware metadata
-        middleware_meta = self.api._handler_middleware.get(handler_id)
-        if not middleware_meta:
-            return (True, 200, "")
-
-        guards = middleware_meta.get("guards", [])
-        if not guards:
-            return (True, 200, "")
-
-        # Build mock auth context from scope
-        # In real usage, auth would be evaluated from headers/cookies
-        auth_context = scope.get("auth_context")
-
-        # Evaluate each guard
-        for guard_meta in guards:
-            guard_type = guard_meta.get("type", "")
-
-            if guard_type == "allow_any":
-                return (True, 200, "")
-
-            if guard_type == "is_authenticated":
-                if auth_context is None:
-                    return (False, 401, "Authentication required")
-                if not hasattr(auth_context, "user_id") or auth_context.user_id is None:
-                    return (False, 401, "Authentication required")
-
-            elif guard_type == "is_superuser":
-                if auth_context is None:
-                    return (False, 401, "Authentication required")
-                if not getattr(auth_context, "is_superuser", False):
-                    return (False, 403, "Superuser access required")
-
-            elif guard_type == "is_staff":
-                if auth_context is None:
-                    return (False, 401, "Authentication required")
-                if not getattr(auth_context, "is_staff", False):
-                    return (False, 403, "Staff access required")
-
-            elif guard_type == "has_permission":
-                perm = guard_meta.get("permission", "")
-                if auth_context is None:
-                    return (False, 401, "Authentication required")
-                permissions = getattr(auth_context, "permissions", set())
-                if perm not in permissions:
-                    return (False, 403, f"Permission '{perm}' required")
-
-            elif guard_type == "has_any_permission":
-                perms = guard_meta.get("permissions", [])
-                if auth_context is None:
-                    return (False, 401, "Authentication required")
-                permissions = getattr(auth_context, "permissions", set())
-                if not any(p in permissions for p in perms):
-                    return (False, 403, "Required permission not found")
-
-            elif guard_type == "has_all_permissions":
-                perms = guard_meta.get("permissions", [])
-                if auth_context is None:
-                    return (False, 401, "Authentication required")
-                permissions = getattr(auth_context, "permissions", set())
-                if not all(p in permissions for p in perms):
-                    return (False, 403, "Missing required permissions")
-
-        return (True, 200, "")
-
     async def __aenter__(self) -> "WebSocketTestClient":
-        """Enter async context - start the WebSocket handler."""
-        result = self._find_handler()
-        if result is None:
-            raise ValueError(f"No WebSocket handler found for path: {self.path}")
+        """Enter async context - start the WebSocket handler.
 
-        handler, handler_id, path_params = result
-        scope = self._build_scope(path_params)
-
-        # Evaluate guards before starting connection
-        allowed, status_code, message = self._evaluate_guards(handler_id, scope)
-        if not allowed:
-            if status_code == 401:
-                raise PermissionError(f"WebSocket connection denied: {message}")
-            else:
-                raise PermissionError(f"WebSocket connection forbidden: {message}")
+        Routes through Rust for path matching, authentication, and guard evaluation.
+        """
+        # Use Rust for path matching, auth, and guard evaluation
+        _found, handler_id, handler, path_params, scope = self._find_handler_via_rust()
 
         # Create WebSocket instance
         ws = WebSocket(scope, self._receive, self._send)
@@ -402,6 +410,9 @@ class WebSocketTestClient:
                 await self._handler_task
             except asyncio.CancelledError:
                 pass
+
+        # Cleanup test app instance
+        self._cleanup_app()
 
         # Re-raise handler exception if any
         if self._handler_exception and exc_type is None:

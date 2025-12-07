@@ -5,7 +5,9 @@ Tests the full WebSocket lifecycle with actual handlers.
 from __future__ import annotations
 
 import asyncio
-import json
+import time
+
+import jwt
 import pytest
 import django
 from django.conf import settings
@@ -34,6 +36,29 @@ if not settings.configured:
 from django_bolt import BoltAPI, WebSocket
 from django_bolt.testing import WebSocketTestClient, ConnectionClosed
 from django_bolt.websocket import CloseCode
+
+
+# Test secret for JWT tokens
+E2E_JWT_SECRET = "test-secret-key-for-websocket-e2e-jwt"
+
+
+def create_e2e_jwt(
+    user_id: int = 123,
+    is_staff: bool = False,
+    is_superuser: bool = False,
+    permissions: list[str] | None = None,
+) -> str:
+    """Create a JWT token for e2e testing."""
+    payload = {
+        "sub": str(user_id),
+        "user_id": str(user_id),
+        "is_staff": is_staff,
+        "is_superuser": is_superuser,
+        "permissions": permissions or [],
+        "exp": int(time.time()) + 3600,  # 1 hour from now
+        "iat": int(time.time()),
+    }
+    return jwt.encode(payload, E2E_JWT_SECRET, algorithm="HS256")
 
 
 class TestWebSocketEcho:
@@ -522,11 +547,11 @@ class TestWebSocketState:
 
 
 class TestWebSocketGuards:
-    """Test WebSocket guard/auth integration."""
+    """Test WebSocket guard/auth integration with real JWT authentication."""
 
     @pytest.fixture
     def api(self):
-        from django_bolt.auth import IsAuthenticated, IsAdminUser, HasPermission
+        from django_bolt.auth import IsAuthenticated, IsAdminUser, HasPermission, JWTAuthentication
 
         api = BoltAPI()
 
@@ -535,17 +560,29 @@ class TestWebSocketGuards:
             await websocket.accept()
             await websocket.send_text("public")
 
-        @api.websocket("/ws/protected", guards=[IsAuthenticated()])
+        @api.websocket(
+            "/ws/protected",
+            auth=[JWTAuthentication(secret=E2E_JWT_SECRET)],
+            guards=[IsAuthenticated()],
+        )
         async def protected_ws(websocket: WebSocket):
             await websocket.accept()
             await websocket.send_text("protected")
 
-        @api.websocket("/ws/admin", guards=[IsAdminUser()])
+        @api.websocket(
+            "/ws/admin",
+            auth=[JWTAuthentication(secret=E2E_JWT_SECRET)],
+            guards=[IsAdminUser()],
+        )
         async def admin_ws(websocket: WebSocket):
             await websocket.accept()
             await websocket.send_text("admin")
 
-        @api.websocket("/ws/permission", guards=[HasPermission("api.view_data")])
+        @api.websocket(
+            "/ws/permission",
+            auth=[JWTAuthentication(secret=E2E_JWT_SECRET)],
+            guards=[HasPermission("api.view_data")],
+        )
         async def permission_ws(websocket: WebSocket):
             await websocket.accept()
             await websocket.send_text("has permission")
@@ -561,7 +598,7 @@ class TestWebSocketGuards:
 
     @pytest.mark.asyncio
     async def test_protected_route_without_auth(self, api):
-        """Test protected route fails without auth context."""
+        """Test protected route fails without JWT token."""
         with pytest.raises(PermissionError) as exc_info:
             async with WebSocketTestClient(api, "/ws/protected") as ws:
                 pass
@@ -570,71 +607,55 @@ class TestWebSocketGuards:
 
     @pytest.mark.asyncio
     async def test_protected_route_with_auth(self, api):
-        """Test protected route works with valid auth context."""
-        # Create a mock auth context
-        class MockAuthContext:
-            user_id = 123
-            is_superuser = False
-            is_staff = False
-            permissions = set()
+        """Test protected route works with valid JWT token."""
+        token = create_e2e_jwt(user_id=123)
+        headers = {"Authorization": f"Bearer {token}"}
 
-        async with WebSocketTestClient(api, "/ws/protected", auth_context=MockAuthContext()) as ws:
+        async with WebSocketTestClient(api, "/ws/protected", headers=headers) as ws:
             msg = await ws.receive_text()
             assert msg == "protected"
 
     @pytest.mark.asyncio
     async def test_admin_route_without_superuser(self, api):
         """Test admin route fails for non-superuser."""
-        class MockAuthContext:
-            user_id = 123
-            is_superuser = False
-            is_staff = False
-            permissions = set()
+        token = create_e2e_jwt(user_id=123, is_superuser=False)
+        headers = {"Authorization": f"Bearer {token}"}
 
         with pytest.raises(PermissionError) as exc_info:
-            async with WebSocketTestClient(api, "/ws/admin", auth_context=MockAuthContext()) as ws:
+            async with WebSocketTestClient(api, "/ws/admin", headers=headers) as ws:
                 pass
 
-        assert "Superuser access required" in str(exc_info.value)
+        assert "Permission denied" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_admin_route_with_superuser(self, api):
         """Test admin route works for superuser."""
-        class MockAuthContext:
-            user_id = 123
-            is_superuser = True
-            is_staff = True
-            permissions = set()
+        token = create_e2e_jwt(user_id=123, is_superuser=True, is_staff=True)
+        headers = {"Authorization": f"Bearer {token}"}
 
-        async with WebSocketTestClient(api, "/ws/admin", auth_context=MockAuthContext()) as ws:
+        async with WebSocketTestClient(api, "/ws/admin", headers=headers) as ws:
             msg = await ws.receive_text()
             assert msg == "admin"
 
     @pytest.mark.asyncio
     async def test_permission_route_without_permission(self, api):
         """Test permission-guarded route fails without required permission."""
-        class MockAuthContext:
-            user_id = 123
-            is_superuser = False
-            is_staff = False
-            permissions = set()
+        token = create_e2e_jwt(user_id=123, permissions=[])
+        headers = {"Authorization": f"Bearer {token}"}
 
         with pytest.raises(PermissionError) as exc_info:
-            async with WebSocketTestClient(api, "/ws/permission", auth_context=MockAuthContext()) as ws:
+            async with WebSocketTestClient(api, "/ws/permission", headers=headers) as ws:
                 pass
 
-        assert "Permission 'api.view_data' required" in str(exc_info.value)
+        assert "Permission denied" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_permission_route_with_permission(self, api):
         """Test permission-guarded route works with required permission."""
-        class MockAuthContext:
-            user_id = 123
-            is_superuser = False
-            is_staff = False
-            permissions = {"api.view_data", "api.edit_data"}
+        token = create_e2e_jwt(user_id=123, permissions=["api.view_data", "api.edit_data"])
+        headers = {"Authorization": f"Bearer {token}"}
 
-        async with WebSocketTestClient(api, "/ws/permission", auth_context=MockAuthContext()) as ws:
+        async with WebSocketTestClient(api, "/ws/permission", headers=headers) as ws:
             msg = await ws.receive_text()
             assert msg == "has permission"
 

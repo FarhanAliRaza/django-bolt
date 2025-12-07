@@ -996,12 +996,30 @@ class SSEViewSet(ViewSet):
 # WebSocket Endpoints
 # ============================================================================
 
+@api.websocket("/ws")
+async def websocket_load_test(websocket: WebSocket):
+    """
+    WebSocket endpoint for load testing.
+
+    Echoes back any message received. Designed for ws_load.py script.
+
+    Test with:
+        python scripts/ws_load.py ws://localhost:8000/ws -c 50 -d 10
+    """
+    await websocket.accept()
+    try:
+        async for message in websocket.iter_text():
+            await websocket.send_text(message)
+    except Exception:
+        pass  # Client disconnected
+
+
 @api.websocket("/ws/echo")
 async def websocket_echo(websocket: WebSocket):
     """
     WebSocket echo endpoint.
 
-    Echoes back any text message received from the client.
+    Echoes back any text message received from the client with "Echo: " prefix.
 
     Test with:
         websocat ws://localhost:8000/ws/echo
@@ -1010,10 +1028,12 @@ async def websocket_echo(websocket: WebSocket):
     """
     await websocket.accept()
     try:
-        async for message in websocket.iter_text():
+        async for message in websocket.iter_json():
             await websocket.send_text(f"Echo: {message}")
-    except Exception:
-        pass  # Client disconnected
+    except Exception as e:
+        print(f"Error in websocket_echo: {e}")
+        await websocket.close(code=1011, reason="Json decode error")
+      
 
 
 @api.view("/cbv-chat-completions")

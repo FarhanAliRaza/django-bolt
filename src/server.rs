@@ -419,6 +419,7 @@ pub fn start_server_async(
 pub async fn websocket_upgrade_handler(
     req: HttpRequest,
     stream: web::Payload,
+    state: web::Data<Arc<AppState>>,
 ) -> actix_web::Result<HttpResponse> {
     // Check if this is a WebSocket upgrade request
     if !is_websocket_upgrade(&req) {
@@ -431,7 +432,15 @@ pub async fn websocket_upgrade_handler(
     if let Some(ws_router) = GLOBAL_WEBSOCKET_ROUTER.get() {
         if let Some((route, path_params)) = ws_router.find(path) {
             let handler = Python::attach(|py| route.handler.clone_ref(py));
-            return handle_websocket_upgrade_with_handler(req, stream, handler, route.handler_id, path_params).await;
+            // Pass AppState to WebSocket handler for CORS validation and connection tracking
+            return handle_websocket_upgrade_with_handler(
+                req,
+                stream,
+                handler,
+                route.handler_id,
+                path_params,
+                state.get_ref().clone(),
+            ).await;
         }
     }
 

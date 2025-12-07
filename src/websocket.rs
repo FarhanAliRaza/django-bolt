@@ -10,12 +10,42 @@ use actix_web_actors::ws;
 use ahash::AHashMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-use crate::state::{ROUTE_METADATA, TASK_LOCALS};
+use crate::metadata::CorsConfig;
+use crate::middleware::rate_limit::check_rate_limit;
+use crate::state::{AppState, ROUTE_METADATA, TASK_LOCALS};
 use crate::validation::{validate_auth_and_guards, AuthGuardResult};
+
+/// Global counter for active WebSocket connections
+pub static ACTIVE_WS_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
+
+/// Get maximum allowed WebSocket connections from settings
+fn get_max_connections() -> usize {
+    // 1. Check environment variable
+    if let Ok(val) = std::env::var("DJANGO_BOLT_WS_MAX_CONNECTIONS") {
+        if let Ok(max) = val.parse::<usize>() {
+            return max;
+        }
+    }
+
+    // 2. Check Django settings
+    Python::attach(|py| {
+        if let Ok(django_conf) = py.import("django.conf") {
+            if let Ok(settings) = django_conf.getattr("settings") {
+                if let Ok(max) = settings.getattr("BOLT_WS_MAX_CONNECTIONS") {
+                    if let Ok(val) = max.extract::<usize>() {
+                        return val;
+                    }
+                }
+            }
+        }
+        10000 // Default: 10k connections
+    })
+}
 
 /// Get WebSocket channel buffer size from settings
 fn get_channel_buffer_size() -> usize {
@@ -89,40 +119,6 @@ fn get_client_timeout() -> Duration {
     })
 }
 
-/// Get allowed WebSocket origins from settings (for CORS-like protection)
-fn get_allowed_origins() -> Option<Vec<String>> {
-    // 1. Check environment variable (comma-separated)
-    if let Ok(val) = std::env::var("DJANGO_BOLT_WS_ALLOWED_ORIGINS") {
-        if val == "*" {
-            return None; // Allow all
-        }
-        return Some(val.split(',').map(|s| s.trim().to_string()).collect());
-    }
-
-    // 2. Check Django settings
-    Python::attach(|py| {
-        if let Ok(django_conf) = py.import("django.conf") {
-            if let Ok(settings) = django_conf.getattr("settings") {
-                // Check BOLT_WS_ALLOWED_ORIGINS first
-                if let Ok(origins) = settings.getattr("BOLT_WS_ALLOWED_ORIGINS") {
-                    if let Ok(list) = origins.extract::<Vec<String>>() {
-                        if list.iter().any(|o| o == "*") {
-                            return None;
-                        }
-                        return Some(list);
-                    }
-                }
-                // Fall back to CORS_ALLOWED_ORIGINS if available
-                if let Ok(origins) = settings.getattr("CORS_ALLOWED_ORIGINS") {
-                    if let Ok(list) = origins.extract::<Vec<String>>() {
-                        return Some(list);
-                    }
-                }
-            }
-        }
-        None // Default: allow all (for backward compatibility)
-    })
-}
 
 /// Maximum WebSocket message size (1MB default)
 const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
@@ -205,6 +201,9 @@ impl Actor for WebSocketActor {
         // Notify Python handler that connection is closed
         let code = self.close_code.unwrap_or(1000);
         let _ = self.to_python_tx.try_send(WsMessage::Disconnect { code });
+
+        // Decrement active connection counter
+        ACTIVE_WS_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -680,37 +679,74 @@ fn create_send_fn(py: Python<'_>, state: Arc<WsConnectionState>) -> PyResult<Py<
     Ok(Py::new(py, send_fn)?.into_any().into())
 }
 
-/// Validate WebSocket origin header against allowed origins
-fn validate_origin(req: &HttpRequest) -> bool {
-    let allowed_origins = get_allowed_origins();
-
-    // If no allowed origins configured, allow all (backward compatibility)
-    let allowed = match allowed_origins {
-        None => return true,
-        Some(origins) => origins,
-    };
-
+/// Validate WebSocket origin header against CORS allowed origins
+/// Uses the same CORS configuration as HTTP requests (like FastAPI)
+///
+/// Security behavior:
+/// - If CORS is configured with allow_all_origins=true: allow all origins
+/// - If CORS is configured with specific origins: only allow those origins
+/// - If NO CORS is configured: DENY all cross-origin requests (fail-secure)
+/// - Same-origin requests (no Origin header) are always allowed
+fn validate_origin(req: &HttpRequest, state: &AppState) -> bool {
     // Get origin header from request
     let origin = match req.headers().get("origin") {
         Some(v) => match v.to_str() {
             Ok(s) => s,
-            Err(_) => return false,
+            Err(_) => {
+                eprintln!("[django-bolt] WebSocket: Invalid Origin header encoding");
+                return false;
+            }
         },
         None => {
             // No origin header - allow for same-origin requests
-            // (browsers don't send Origin for same-origin WebSocket)
+            // (browsers don't send Origin for same-origin WebSocket connections)
             return true;
         }
     };
 
-    // Check if origin is in allowed list
-    allowed.iter().any(|allowed_origin| {
-        if allowed_origin == "*" {
-            true
-        } else {
-            origin == allowed_origin || origin.starts_with(&format!("{}:", allowed_origin))
-        }
-    })
+    // Check global CORS config (same as HTTP)
+    if let Some(ref cors_config) = state.global_cors_config {
+        return is_origin_allowed(origin, cors_config, &state.cors_origin_regexes);
+    }
+
+    // SECURITY: No CORS configured = deny all cross-origin requests
+    // This is a fail-secure default (unlike the old allow-all default)
+    eprintln!(
+        "[django-bolt] WebSocket: Rejecting cross-origin request from '{}' - no CORS configured. \
+        Set CORS_ALLOWED_ORIGINS in Django settings to allow WebSocket connections.",
+        origin
+    );
+    false
+}
+
+/// Check if an origin is allowed by the CORS configuration
+/// Reuses the same logic as HTTP CORS validation
+fn is_origin_allowed(origin: &str, cors_config: &CorsConfig, global_regexes: &[regex::Regex]) -> bool {
+    // Allow all origins if configured
+    if cors_config.allow_all_origins {
+        return true;
+    }
+
+    // O(1) exact match using HashSet
+    if cors_config.origin_set.contains(origin) {
+        return true;
+    }
+
+    // Check route-level regex patterns
+    if cors_config
+        .compiled_origin_regexes
+        .iter()
+        .any(|re| re.is_match(origin))
+    {
+        return true;
+    }
+
+    // Check global regex patterns
+    if global_regexes.iter().any(|re| re.is_match(origin)) {
+        return true;
+    }
+
+    false
 }
 
 /// HTTP handler for WebSocket upgrade with full Python integration
@@ -720,25 +756,59 @@ pub async fn handle_websocket_upgrade_with_handler(
     handler: Py<PyAny>,
     handler_id: usize,
     path_params: AHashMap<String, String>,
+    state: Arc<AppState>,
 ) -> actix_web::Result<HttpResponse> {
     // Validate request is actually a WebSocket upgrade
     if !is_websocket_upgrade(&req) {
         return Ok(HttpResponse::BadRequest().body("Expected WebSocket upgrade request"));
     }
 
-    // Validate origin header (CORS-like protection for WebSocket)
-    if !validate_origin(&req) {
-        return Ok(HttpResponse::Forbidden()
+    // Check connection limit FIRST (before any processing)
+    let max_connections = get_max_connections();
+    let current_connections = ACTIVE_WS_CONNECTIONS.load(Ordering::Relaxed);
+    if current_connections >= max_connections {
+        eprintln!(
+            "[django-bolt] WebSocket: Connection limit reached ({}/{})",
+            current_connections, max_connections
+        );
+        return Ok(HttpResponse::ServiceUnavailable()
             .content_type("application/json")
-            .body(r#"{"detail":"Origin not allowed"}"#));
+            .body(r#"{"detail":"Too many WebSocket connections"}"#));
     }
 
-    // Extract headers for auth/guard evaluation
+    // Extract headers for rate limiting and auth
     let mut headers: AHashMap<String, String> = AHashMap::new();
     for (key, value) in req.headers().iter() {
         if let Ok(v) = value.to_str() {
             headers.insert(key.as_str().to_lowercase(), v.to_string());
         }
+    }
+
+    // Get peer address for rate limiting
+    let peer_addr = req.peer_addr().map(|addr| addr.ip().to_string());
+
+    // Check rate limiting BEFORE origin validation (reuse HTTP rate limit)
+    if let Some(route_metadata) = ROUTE_METADATA.get() {
+        if let Some(route_meta) = route_metadata.get(&handler_id) {
+            if let Some(ref rate_config) = route_meta.rate_limit_config {
+                if let Some(response) = check_rate_limit(
+                    handler_id,
+                    &headers,
+                    peer_addr.as_deref(),
+                    rate_config,
+                ) {
+                    return Ok(response);
+                }
+            }
+        }
+    }
+
+    // Validate origin header (CORS-like protection for WebSocket)
+    // Uses same CORS config as HTTP requests
+    if !validate_origin(&req, &state) {
+        return Ok(HttpResponse::Forbidden()
+            .content_type("application/json")
+            .body(r#"{"detail":"Origin not allowed"}"#));
     }
 
     // Evaluate authentication and guards before upgrading
@@ -761,6 +831,9 @@ pub async fn handle_websocket_upgrade_with_handler(
             }
         }
     }
+
+    // Increment connection counter (will be decremented when actor stops)
+    ACTIVE_WS_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
 
     // Create channels for bidirectional communication (configurable size)
     let channel_size = get_channel_buffer_size();

@@ -7,17 +7,43 @@ Tests the WebSocket functionality including:
 - Query parameters
 - Headers
 - Close handling
-- Guards/auth integration
+- Guards/auth integration with real JWT tokens
 - Error handling
 """
 from __future__ import annotations
 
+import time
+
+import jwt
 import pytest
 
 from django_bolt import BoltAPI, WebSocket
 from django_bolt.testing import WebSocketTestClient, ConnectionClosed
 from django_bolt.websocket import CloseCode
-from django_bolt.auth import IsAuthenticated, IsAdminUser, HasPermission
+from django_bolt.auth import IsAuthenticated, IsAdminUser, HasPermission, JWTAuthentication
+
+
+# Test secret for JWT tokens
+TEST_JWT_SECRET = "test-secret-key-for-websocket-tests"
+
+
+def create_test_jwt(
+    user_id: int = 123,
+    is_staff: bool = False,
+    is_superuser: bool = False,
+    permissions: list[str] | None = None,
+) -> str:
+    """Create a JWT token for testing."""
+    payload = {
+        "sub": str(user_id),
+        "user_id": str(user_id),
+        "is_staff": is_staff,
+        "is_superuser": is_superuser,
+        "permissions": permissions or [],
+        "exp": int(time.time()) + 3600,  # 1 hour from now
+        "iat": int(time.time()),
+    }
+    return jwt.encode(payload, TEST_JWT_SECRET, algorithm="HS256")
 
 
 @pytest.fixture
@@ -136,23 +162,35 @@ def api():
             "type": type(active).__name__,
         })
 
-    # Guard-protected handlers
+    # Guard-protected handlers with real JWT authentication
     @api.websocket("/ws/public")
     async def public_ws(websocket: WebSocket):
         await websocket.accept()
         await websocket.send_text("public")
 
-    @api.websocket("/ws/protected", guards=[IsAuthenticated()])
+    @api.websocket(
+        "/ws/protected",
+        auth=[JWTAuthentication(secret=TEST_JWT_SECRET)],
+        guards=[IsAuthenticated()],
+    )
     async def protected_ws(websocket: WebSocket):
         await websocket.accept()
         await websocket.send_text("protected")
 
-    @api.websocket("/ws/admin", guards=[IsAdminUser()])
+    @api.websocket(
+        "/ws/admin",
+        auth=[JWTAuthentication(secret=TEST_JWT_SECRET)],
+        guards=[IsAdminUser()],
+    )
     async def admin_ws(websocket: WebSocket):
         await websocket.accept()
         await websocket.send_text("admin")
 
-    @api.websocket("/ws/permission", guards=[HasPermission("api.view_data")])
+    @api.websocket(
+        "/ws/permission",
+        auth=[JWTAuthentication(secret=TEST_JWT_SECRET)],
+        guards=[HasPermission("api.view_data")],
+    )
     async def permission_ws(websocket: WebSocket):
         await websocket.accept()
         await websocket.send_text("has permission")
@@ -380,14 +418,12 @@ async def test_websocket_protected_without_auth(api):
 
 @pytest.mark.asyncio
 async def test_websocket_protected_with_auth(api):
-    """Test protected route works with valid auth context."""
-    class MockAuthContext:
-        user_id = 123
-        is_superuser = False
-        is_staff = False
-        permissions = set()
+    """Test protected route works with valid JWT token."""
+    # Create a valid JWT token
+    token = create_test_jwt(user_id=123)
+    headers = {"Authorization": f"Bearer {token}"}
 
-    async with WebSocketTestClient(api, "/ws/protected", auth_context=MockAuthContext()) as ws:
+    async with WebSocketTestClient(api, "/ws/protected", headers=headers) as ws:
         msg = await ws.receive_text()
         assert msg == "protected"
 
@@ -395,26 +431,22 @@ async def test_websocket_protected_with_auth(api):
 @pytest.mark.asyncio
 async def test_websocket_admin_route(api):
     """Test admin route requires superuser."""
-    class RegularUser:
-        user_id = 123
-        is_superuser = False
-        is_staff = False
-        permissions = set()
-
-    class AdminUser:
-        user_id = 123
-        is_superuser = True
-        is_staff = True
-        permissions = set()
+    # Regular user token (not superuser)
+    regular_token = create_test_jwt(user_id=123, is_superuser=False)
+    regular_headers = {"Authorization": f"Bearer {regular_token}"}
 
     # Regular user should fail
     with pytest.raises(PermissionError) as exc_info:
-        async with WebSocketTestClient(api, "/ws/admin", auth_context=RegularUser()):
+        async with WebSocketTestClient(api, "/ws/admin", headers=regular_headers):
             pass
-    assert "Superuser access required" in str(exc_info.value)
+    assert "Permission denied" in str(exc_info.value)
+
+    # Admin token (superuser)
+    admin_token = create_test_jwt(user_id=123, is_superuser=True, is_staff=True)
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
 
     # Admin should succeed
-    async with WebSocketTestClient(api, "/ws/admin", auth_context=AdminUser()) as ws:
+    async with WebSocketTestClient(api, "/ws/admin", headers=admin_headers) as ws:
         msg = await ws.receive_text()
         assert msg == "admin"
 
@@ -422,26 +454,22 @@ async def test_websocket_admin_route(api):
 @pytest.mark.asyncio
 async def test_websocket_permission_route(api):
     """Test permission-guarded route."""
-    class UserWithoutPermission:
-        user_id = 123
-        is_superuser = False
-        is_staff = False
-        permissions = set()
-
-    class UserWithPermission:
-        user_id = 123
-        is_superuser = False
-        is_staff = False
-        permissions = {"api.view_data"}
+    # User without permission
+    no_perm_token = create_test_jwt(user_id=123, permissions=[])
+    no_perm_headers = {"Authorization": f"Bearer {no_perm_token}"}
 
     # Without permission should fail
     with pytest.raises(PermissionError) as exc_info:
-        async with WebSocketTestClient(api, "/ws/permission", auth_context=UserWithoutPermission()):
+        async with WebSocketTestClient(api, "/ws/permission", headers=no_perm_headers):
             pass
-    assert "Permission 'api.view_data' required" in str(exc_info.value)
+    assert "Permission denied" in str(exc_info.value)
+
+    # User with permission
+    with_perm_token = create_test_jwt(user_id=123, permissions=["api.view_data"])
+    with_perm_headers = {"Authorization": f"Bearer {with_perm_token}"}
 
     # With permission should succeed
-    async with WebSocketTestClient(api, "/ws/permission", auth_context=UserWithPermission()) as ws:
+    async with WebSocketTestClient(api, "/ws/permission", headers=with_perm_headers) as ws:
         msg = await ws.receive_text()
         assert msg == "has permission"
 

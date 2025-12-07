@@ -25,8 +25,8 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     use crate::server::{register_middleware_metadata, register_routes, register_websocket_routes, start_server_async};
     use crate::test_state::{
         create_test_app, destroy_test_app, ensure_test_runtime, handle_actix_http_request,
-        handle_test_request_for, register_test_middleware_metadata, register_test_routes,
-        set_test_task_locals,
+        handle_test_request_for, handle_test_websocket, register_test_middleware_metadata,
+        register_test_routes, register_test_websocket_routes, set_test_task_locals,
     };
     use crate::testing::handle_test_request;
     m.add_function(wrap_pyfunction!(register_routes, m)?)?;
@@ -43,5 +43,8 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ensure_test_runtime, m)?)?;
     m.add_function(wrap_pyfunction!(handle_test_request_for, m)?)?;
     m.add_function(wrap_pyfunction!(handle_actix_http_request, m)?)?;
+    // WebSocket test functions
+    m.add_function(wrap_pyfunction!(register_test_websocket_routes, m)?)?;
+    m.add_function(wrap_pyfunction!(handle_test_websocket, m)?)?;
     Ok(())
 }

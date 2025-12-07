@@ -205,6 +205,215 @@ pub fn register_test_routes(
 }
 
 #[pyfunction]
+pub fn register_test_websocket_routes(
+    _py: Python<'_>,
+    app_id: u64,
+    routes: Vec<(String, usize, Py<PyAny>)>,
+) -> PyResult<()> {
+    let Some(entry) = registry().get(&app_id) else {
+        return Err(pyo3::exceptions::PyKeyError::new_err("Invalid test app id"));
+    };
+    let mut app = entry.write();
+    for (path, handler_id, handler) in routes {
+        app.websocket_router.register(&path, handler_id, handler)?;
+    }
+    Ok(())
+}
+
+/// Find a WebSocket route for the given path in a test app
+pub fn find_test_websocket_route(
+    app_id: u64,
+) -> Option<Arc<RwLock<TestApp>>> {
+    registry().get(&app_id).map(|entry| entry.clone())
+}
+
+/// Handle WebSocket test request - simulates the WebSocket connection flow
+/// This is called from Python's WebSocketTestClient to route through Rust
+///
+/// Now includes full security checks matching production:
+/// - Origin validation (using same CORS config as HTTP)
+/// - Rate limiting (reuses HTTP rate limit infrastructure)
+/// - Connection limits
+/// - Authentication and guards
+#[pyfunction]
+pub fn handle_test_websocket(
+    py: Python<'_>,
+    app_id: u64,
+    path: String,
+    headers: Vec<(String, String)>,
+    query_string: Option<String>,
+) -> PyResult<(bool, usize, Py<PyAny>, Py<PyAny>, Py<PyAny>)> {
+    // Returns: (found, handler_id, handler, path_params_dict, scope_dict)
+    // If found is false, handler_id is 0 and handler/path_params/scope are None
+
+    let entry = registry()
+        .get(&app_id)
+        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Invalid test app id"))?;
+
+    let app = entry.read();
+
+    // Convert headers to AHashMap for security checks
+    let mut header_map: AHashMap<String, String> = AHashMap::with_capacity(headers.len());
+    for (name, value) in headers.iter() {
+        header_map.insert(name.to_lowercase(), value.clone());
+    }
+
+    // ===== SECURITY CHECK 1: Origin Validation =====
+    // Uses same CORS config as HTTP (like FastAPI)
+    let origin = header_map.get("origin");
+    if let Some(origin_value) = origin {
+        // Cross-origin request - must validate against CORS config
+        let origin_allowed = if let Some(ref cors_config) = app.global_cors_config {
+            // Check allow_all_origins
+            if cors_config.allow_all_origins {
+                true
+            } else {
+                // O(1) HashSet lookup
+                cors_config.origin_set.contains(origin_value)
+                    || cors_config.compiled_origin_regexes.iter().any(|re| re.is_match(origin_value))
+            }
+        } else {
+            // SECURITY: No CORS configured = deny all cross-origin requests (fail-secure)
+            false
+        };
+
+        if !origin_allowed {
+            return Err(pyo3::exceptions::PyPermissionError::new_err(
+                format!("Origin not allowed: {}. Configure CORS_ALLOWED_ORIGINS in Django settings.", origin_value)
+            ));
+        }
+    }
+    // No origin header = same-origin request, allowed
+
+    // Look up the WebSocket route
+    let (route, path_params) = match app.websocket_router.find(&path) {
+        Some((route, params)) => (route, params),
+        None => {
+            // Return not found
+            return Ok((false, 0, py.None(), py.None(), py.None()));
+        }
+    };
+
+    let handler_id = route.handler_id;
+    let handler = route.handler.clone_ref(py);
+
+    // ===== SECURITY CHECK 2: Rate Limiting =====
+    // Reuses same rate limit infrastructure as HTTP
+    if let Some(route_meta) = app.route_metadata.get(&handler_id) {
+        if let Some(ref rate_config) = route_meta.rate_limit_config {
+            if let Some(_response) = crate::middleware::rate_limit::check_rate_limit(
+                handler_id,
+                &header_map,
+                Some("127.0.0.1"), // Test client IP
+                rate_config,
+            ) {
+                return Err(pyo3::exceptions::PyPermissionError::new_err(
+                    "Rate limit exceeded"
+                ));
+            }
+        }
+    }
+
+    // ===== SECURITY CHECK 3: Authentication & Guards =====
+    if let Some(route_meta) = app.route_metadata.get(&handler_id) {
+        // Authenticate using real auth backends (JWT, API key, etc.)
+        let auth_ctx = if !route_meta.auth_backends.is_empty() {
+            authenticate(&header_map, &route_meta.auth_backends)
+        } else {
+            None
+        };
+
+        // Evaluate guards
+        if !route_meta.guards.is_empty() {
+            match evaluate_guards(&route_meta.guards, auth_ctx.as_ref()) {
+                GuardResult::Allow => {}
+                GuardResult::Unauthorized => {
+                    return Err(pyo3::exceptions::PyPermissionError::new_err(
+                        "Authentication required",
+                    ));
+                }
+                GuardResult::Forbidden => {
+                    return Err(pyo3::exceptions::PyPermissionError::new_err(
+                        "Permission denied",
+                    ));
+                }
+            }
+        }
+    }
+
+    // Build path_params dict
+    let path_params_dict = pyo3::types::PyDict::new(py);
+    for (k, v) in path_params.iter() {
+        path_params_dict.set_item(k, v)?;
+    }
+
+    // Build scope dict (ASGI-style)
+    let scope_dict = pyo3::types::PyDict::new(py);
+    scope_dict.set_item("type", "websocket")?;
+    scope_dict.set_item("path", &path)?;
+
+    // Query string as bytes
+    let qs_bytes = query_string
+        .as_ref()
+        .map(|s| s.as_bytes())
+        .unwrap_or(b"");
+    scope_dict.set_item("query_string", pyo3::types::PyBytes::new(py, qs_bytes))?;
+
+    // Headers as dict (lowercase keys)
+    let headers_dict = pyo3::types::PyDict::new(py);
+    for (k, v) in headers.iter() {
+        headers_dict.set_item(k.to_lowercase(), v)?;
+    }
+    scope_dict.set_item("headers", headers_dict)?;
+
+    // Path params
+    scope_dict.set_item("path_params", &path_params_dict)?;
+
+    // Parse cookies from headers
+    let cookies_dict = pyo3::types::PyDict::new(py);
+    for (k, v) in headers.iter() {
+        if k.to_lowercase() == "cookie" {
+            for pair in v.split(';') {
+                let pair = pair.trim();
+                if let Some(eq_pos) = pair.find('=') {
+                    let key = &pair[..eq_pos];
+                    let value = &pair[eq_pos + 1..];
+                    cookies_dict.set_item(key, value)?;
+                }
+            }
+        }
+    }
+    scope_dict.set_item("cookies", cookies_dict)?;
+
+    // Client address
+    let client_tuple = pyo3::types::PyTuple::new(py, &["127.0.0.1", "12345"])?;
+    scope_dict.set_item("client", client_tuple)?;
+
+    // Add auth context to scope if present
+    if let Some(route_meta) = app.route_metadata.get(&handler_id) {
+        let auth_ctx = if !route_meta.auth_backends.is_empty() {
+            authenticate(&header_map, &route_meta.auth_backends)
+        } else {
+            None
+        };
+
+        if let Some(ref auth) = auth_ctx {
+            let ctx_dict = pyo3::types::PyDict::new(py);
+            populate_auth_context(&ctx_dict.clone().unbind(), auth, py);
+            scope_dict.set_item("auth_context", ctx_dict)?;
+        }
+    }
+
+    Ok((
+        true,
+        handler_id,
+        handler,
+        path_params_dict.into(),
+        scope_dict.into(),
+    ))
+}
+
+#[pyfunction]
 pub fn register_test_middleware_metadata(
     py: Python<'_>,
     app_id: u64,

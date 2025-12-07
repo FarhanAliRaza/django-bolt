@@ -18,29 +18,29 @@ use crate::state::{get_max_sync_streaming_threads, ACTIVE_SYNC_STREAMING_THREADS
 
 #[inline(always)]
 pub fn convert_python_chunk(value: &Bound<'_, PyAny>) -> Option<Bytes> {
-    if let Ok(py_bytes) = value.downcast::<PyBytes>() {
+    if let Ok(py_bytes) = value.cast::<PyBytes>() {
         return Some(Bytes::copy_from_slice(py_bytes.as_bytes()));
     }
-    if let Ok(py_bytearray) = value.downcast::<PyByteArray>() {
+    if let Ok(py_bytearray) = value.cast::<PyByteArray>() {
         return Some(Bytes::copy_from_slice(unsafe { py_bytearray.as_bytes() }));
     }
-    if let Ok(py_str) = value.downcast::<PyString>() {
+    if let Ok(py_str) = value.cast::<PyString>() {
         if let Ok(s) = py_str.to_str() {
             return Some(Bytes::from(s.to_owned()));
         }
         let s = py_str.to_string_lossy().into_owned();
         return Some(Bytes::from(s.into_bytes()));
     }
-    if let Ok(memory_view) = value.downcast::<PyMemoryView>() {
+    if let Ok(memory_view) = value.cast::<PyMemoryView>() {
         if let Ok(bytes_obj) = memory_view.call_method0("tobytes") {
-            if let Ok(py_bytes) = bytes_obj.downcast::<PyBytes>() {
+            if let Ok(py_bytes) = bytes_obj.cast::<PyBytes>() {
                 return Some(Bytes::copy_from_slice(py_bytes.as_bytes()));
             }
         }
     }
     if value.hasattr("__bytes__").unwrap_or(false) {
         if let Ok(buffer) = value.call_method0("__bytes__") {
-            if let Ok(py_bytes) = buffer.downcast::<PyBytes>() {
+            if let Ok(py_bytes) = buffer.cast::<PyBytes>() {
                 return Some(Bytes::copy_from_slice(py_bytes.as_bytes()));
             }
         }
@@ -215,7 +215,7 @@ fn create_python_stream_with_config(
                             let bytes_opt = Python::attach(|py| {
                                 let v = obj.bind(py);
                                 if is_optimized_batcher {
-                                    if let Ok(py_bytes) = v.downcast::<PyBytes>() {
+                                    if let Ok(py_bytes) = v.cast::<PyBytes>() {
                                         Some(Bytes::copy_from_slice(py_bytes.as_bytes()))
                                     } else {
                                         super::streaming::convert_python_chunk(&v)

@@ -340,7 +340,7 @@ pub async fn handle_request(
             let fast_tuple: Option<(u16, Vec<(String, String)>, Vec<u8>)> =
                 Python::attach(|py| {
                     let obj = result_obj.bind(py);
-                    let tuple = obj.downcast::<PyTuple>().ok()?;
+                    let tuple = obj.cast::<PyTuple>().ok()?;
                     if tuple.len() != 3 {
                         return None;
                     }
@@ -357,7 +357,7 @@ pub async fn handle_request(
 
                     // 2: body (bytes) - copy within GIL, drop Python object before releasing GIL
                     let body_obj = tuple.get_item(2).ok()?;
-                    let pybytes = body_obj.downcast::<PyBytes>().ok()?;
+                    let pybytes = body_obj.cast::<PyBytes>().ok()?;
                     let body_vec = pybytes.as_bytes().to_vec();
                     // Python object drops automatically when this scope ends (still holding GIL)
                     Some((status_code, resp_headers, body_vec))
@@ -647,7 +647,7 @@ pub async fn handle_request(
                         .unwrap_or(200);
                     let mut headers: Vec<(String, String)> = Vec::new();
                     if let Ok(hobj) = obj.getattr("headers") {
-                        if let Ok(hdict) = hobj.downcast::<PyDict>() {
+                        if let Ok(hdict) = hobj.cast::<PyDict>() {
                             for (k, v) in hdict {
                                 if let (Ok(ks), Ok(vs)) =
                                     (k.extract::<String>(), v.extract::<String>())

@@ -239,6 +239,14 @@ class TestClient(httpx.Client):
         ]
         _core.register_test_routes(self.app_id, rust_routes)
 
+        # Register WebSocket routes
+        ws_routes = [
+            (path, handler_id, handler)
+            for path, handler_id, handler in api._websocket_routes
+        ]
+        if ws_routes:
+            _core.register_test_websocket_routes(self.app_id, ws_routes)
+
         # Register middleware metadata if any exists
         if api._handler_middleware:
             middleware_data = [

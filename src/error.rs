@@ -24,7 +24,7 @@ pub fn extract_http_exception(
         .getattr("headers")
         .ok()
         .and_then(|h| {
-            if let Ok(dict) = h.downcast::<PyDict>() {
+            if let Ok(dict) = h.cast::<PyDict>() {
                 let mut result = Vec::new();
                 for (k, v) in dict {
                     if let (Ok(key), Ok(value)) = (k.extract::<String>(), v.extract::<String>()) {

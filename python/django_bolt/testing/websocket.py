@@ -1,0 +1,576 @@
+"""WebSocket testing utilities for django-bolt.
+
+Provides test client for WebSocket endpoints without subprocess/network overhead.
+Routes through Rust for path matching, authentication, and guard evaluation,
+then uses mock ASGI interface for bidirectional message handling.
+
+Usage:
+    api = BoltAPI()
+
+    @api.websocket("/ws/echo")
+    async def echo(websocket: WebSocket):
+        await websocket.accept()
+        async for msg in websocket.iter_text():
+            await websocket.send_text(f"Echo: {msg}")
+
+    async with WebSocketTestClient(api, "/ws/echo") as ws:
+        await ws.send_text("hello")
+        response = await ws.receive_text()
+        assert response == "Echo: hello"
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+from typing import Any, AsyncIterator, Callable
+
+from django_bolt import BoltAPI
+from django_bolt.websocket import WebSocket, CloseCode
+from django_bolt.websocket.handlers import get_websocket_param_name
+
+
+def _read_cors_settings_from_django() -> dict | None:
+    """Read all CORS settings from Django settings (same as production server).
+
+    Returns:
+        Dict with CORS config from Django settings, or None if not configured.
+        Keys: origins, credentials, methods, headers, expose_headers, max_age
+    """
+    try:
+        from django.conf import settings
+
+        # Check if any CORS setting is defined
+        has_origins = hasattr(settings, 'CORS_ALLOWED_ORIGINS')
+        has_all_origins = hasattr(settings, 'CORS_ALLOW_ALL_ORIGINS') and settings.CORS_ALLOW_ALL_ORIGINS
+
+        if not has_origins and not has_all_origins:
+            return None
+
+        # Build CORS config dict matching production server format
+        cors_config = {}
+
+        # Origins
+        if has_all_origins:
+            cors_config['origins'] = ["*"]
+        elif has_origins:
+            origins = settings.CORS_ALLOWED_ORIGINS
+            if isinstance(origins, (list, tuple)):
+                cors_config['origins'] = list(origins)
+            else:
+                cors_config['origins'] = []
+        else:
+            cors_config['origins'] = []
+
+        # Credentials
+        cors_config['credentials'] = getattr(settings, 'CORS_ALLOW_CREDENTIALS', False)
+
+        # Methods
+        if hasattr(settings, 'CORS_ALLOW_METHODS'):
+            methods = settings.CORS_ALLOW_METHODS
+            if isinstance(methods, (list, tuple)):
+                cors_config['methods'] = list(methods)
+
+        # Headers
+        if hasattr(settings, 'CORS_ALLOW_HEADERS'):
+            headers = settings.CORS_ALLOW_HEADERS
+            if isinstance(headers, (list, tuple)):
+                cors_config['headers'] = list(headers)
+
+        # Expose headers
+        if hasattr(settings, 'CORS_EXPOSE_HEADERS'):
+            expose = settings.CORS_EXPOSE_HEADERS
+            if isinstance(expose, (list, tuple)):
+                cors_config['expose_headers'] = list(expose)
+
+        # Max age
+        if hasattr(settings, 'CORS_PREFLIGHT_MAX_AGE'):
+            cors_config['max_age'] = settings.CORS_PREFLIGHT_MAX_AGE
+
+        return cors_config
+    except (ImportError, AttributeError):
+        # Django not configured or settings not available
+        return None
+
+
+class WebSocketTestClient:
+    """Async WebSocket test client for django-bolt.
+
+    This client routes through Rust for path matching, authentication, and
+    guard evaluation (same as production), then uses mock ASGI receive/send
+    for bidirectional message handling.
+
+    Usage:
+        async with WebSocketTestClient(api, "/ws/echo") as ws:
+            await ws.send_text("hello")
+            response = await ws.receive_text()
+    """
+
+    __test__ = False  # Tell pytest this is not a test class
+
+    def __init__(
+        self,
+        api: BoltAPI,
+        path: str,
+        headers: dict[str, str] | None = None,
+        query_string: str = "",
+        subprotocols: list[str] | None = None,
+        auth_context: Any = None,
+        cors_allowed_origins: list[str] | None = None,
+        read_django_settings: bool = True,
+    ):
+        """Initialize WebSocket test client.
+
+        Args:
+            api: BoltAPI instance with WebSocket routes
+            path: WebSocket endpoint path (e.g., "/ws/echo")
+            headers: Optional request headers
+            query_string: Optional query string (without ?)
+            subprotocols: Optional list of subprotocols to request
+            auth_context: Optional authentication context for guard evaluation.
+                         Should have user_id, is_superuser, is_staff, permissions attributes.
+            cors_allowed_origins: Global CORS allowed origins for testing.
+                                  If None and read_django_settings=True, reads from Django settings.
+            read_django_settings: If True, read CORS settings from Django settings
+                                 when cors_allowed_origins is None. Default True.
+        """
+        self.api = api
+        self.path = path
+        self.headers = headers or {}
+        self.query_string = query_string
+        self.subprotocols = subprotocols or []
+        self.auth_context = auth_context
+
+        # Build CORS config dict for Rust (same as HTTP TestClient)
+        self._cors_config: dict | None = None
+        if cors_allowed_origins is not None:
+            # Explicit origins provided - create minimal config
+            self._cors_config = {'origins': cors_allowed_origins}
+        elif read_django_settings:
+            # Read full CORS config from Django settings (same as production server)
+            self._cors_config = _read_cors_settings_from_django()
+
+        # Message queues for bidirectional communication
+        self._client_to_server: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._server_to_client: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        # Connection state
+        self._accepted = False
+        self._closed = False
+        self._close_code: int | None = None
+        self._accepted_subprotocol: str | None = None
+        self._handler_task: asyncio.Task | None = None
+        self._handler_exception: Exception | None = None
+
+        # Test app ID (set when used with TestClient context)
+        self._app_id: int | None = None
+
+    def _get_or_create_app_id(self) -> int:
+        """Get or create a test app ID for Rust routing."""
+        if self._app_id is not None:
+            return self._app_id
+
+        from django_bolt import _core
+
+        # Create a test app instance for this WebSocket test with CORS config
+        # This ensures WebSocket origin validation uses same config as HTTP
+        self._app_id = _core.create_test_app(self.api._dispatch, False, self._cors_config)
+
+        # Register WebSocket routes
+        ws_routes = [
+            (path, handler_id, handler)
+            for path, handler_id, handler in self.api._websocket_routes
+        ]
+        if ws_routes:
+            _core.register_test_websocket_routes(self._app_id, ws_routes)
+
+        # Register middleware metadata for guards/auth
+        if self.api._handler_middleware:
+            middleware_data = [
+                (handler_id, meta)
+                for handler_id, meta in self.api._handler_middleware.items()
+            ]
+            _core.register_test_middleware_metadata(self._app_id, middleware_data)
+
+        return self._app_id
+
+    def _cleanup_app(self) -> None:
+        """Cleanup test app instance."""
+        if self._app_id is not None:
+            from django_bolt import _core
+            try:
+                _core.destroy_test_app(self._app_id)
+            except Exception:
+                pass
+            self._app_id = None
+
+    def _find_handler_via_rust(self) -> tuple[bool, int, Callable, dict[str, Any], dict[str, Any]]:
+        """Find WebSocket handler and build scope via Rust.
+
+        Routes through Rust for path matching, auth, and guard evaluation.
+
+        Returns:
+            Tuple of (found, handler_id, handler, path_params, scope)
+
+        Raises:
+            ValueError: If no handler found for path
+            PermissionError: If guards fail
+        """
+        from django_bolt import _core
+
+        app_id = self._get_or_create_app_id()
+
+        # Build headers list for Rust
+        headers_list = list(self.headers.items())
+
+        try:
+            found, handler_id, handler, path_params, scope = _core.handle_test_websocket(
+                app_id,
+                self.path,
+                headers_list,
+                self.query_string if self.query_string else None,
+            )
+        except PermissionError as e:
+            # Re-raise permission errors from Rust
+            raise PermissionError(f"WebSocket connection denied: {e}") from e
+
+        if not found:
+            raise ValueError(f"No WebSocket handler found for path: {self.path}")
+
+        # Convert path_params from Rust dict to Python dict
+        path_params_dict = dict(path_params) if path_params else {}
+
+        # Convert scope from Rust dict to Python dict and add extras
+        scope_dict = dict(scope) if scope else {}
+        scope_dict["subprotocols"] = self.subprotocols
+
+        # Add auth context if provided (for Python-side guard evaluation fallback)
+        if self.auth_context is not None:
+            scope_dict["auth_context"] = self.auth_context
+
+        return found, handler_id, handler, path_params_dict, scope_dict
+
+    async def _receive(self) -> dict[str, Any]:
+        """ASGI receive callable - gets messages from client queue."""
+        return await self._client_to_server.get()
+
+    async def _send(self, message: dict[str, Any]) -> None:
+        """ASGI send callable - puts messages to server queue."""
+        msg_type = message.get("type", "")
+
+        if msg_type == "websocket.accept":
+            self._accepted = True
+            self._accepted_subprotocol = message.get("subprotocol")
+
+        elif msg_type == "websocket.close":
+            self._closed = True
+            self._close_code = message.get("code", CloseCode.NORMAL)
+
+        # Put all messages in queue for client to receive
+        await self._server_to_client.put(message)
+
+    async def __aenter__(self) -> "WebSocketTestClient":
+        """Enter async context - start the WebSocket handler.
+
+        Routes through Rust for path matching, authentication, and guard evaluation.
+        """
+        # Use Rust for path matching, auth, and guard evaluation
+        _found, handler_id, handler, path_params, scope = self._find_handler_via_rust()
+
+        # Create WebSocket instance
+        ws = WebSocket(scope, self._receive, self._send)
+
+        # Get the parameter name for the WebSocket argument
+        ws_param_name = get_websocket_param_name(handler)
+
+        # Build kwargs for the handler
+        kwargs = {ws_param_name: ws}
+
+        # Add path params as kwargs with type coercion
+        import inspect
+        import typing
+        import re
+        sig = inspect.signature(handler)
+
+        # Get resolved type hints (handles PEP 563 stringified annotations)
+        try:
+            type_hints = typing.get_type_hints(handler, include_extras=True)
+        except Exception:
+            type_hints = {}
+
+        def parse_string_annotation(ann_str: str) -> Any:
+            """Try to parse a string annotation to extract the base type.
+
+            Handles patterns like:
+            - "int" -> int
+            - "Annotated[int, 'metadata']" -> int
+            """
+            ann_str = ann_str.strip()
+
+            # Check for Annotated pattern
+            annotated_match = re.match(r"Annotated\[([^,\]]+)", ann_str)
+            if annotated_match:
+                inner_type = annotated_match.group(1).strip()
+                return inner_type
+
+            return ann_str
+
+        def get_base_type(annotation: Any) -> Any:
+            """Extract base type from Annotated or return as-is."""
+            # Handle string annotations (PEP 563)
+            if isinstance(annotation, str):
+                return parse_string_annotation(annotation)
+
+            # Handle typing.Annotated[T, ...] -> T
+            origin = typing.get_origin(annotation)
+
+            # Check for Annotated (handle both typing and typing_extensions)
+            try:
+                from typing import Annotated as TypingAnnotated
+            except ImportError:
+                TypingAnnotated = None  # type: ignore
+
+            try:
+                from typing_extensions import Annotated as ExtAnnotated
+            except ImportError:
+                ExtAnnotated = None  # type: ignore
+
+            is_annotated = (
+                origin is not None and (
+                    (TypingAnnotated is not None and origin is TypingAnnotated)
+                    or (ExtAnnotated is not None and origin is ExtAnnotated)
+                    or getattr(origin, "__name__", "") == "Annotated"
+                )
+            )
+
+            if is_annotated:
+                args = typing.get_args(annotation)
+                if args:
+                    return args[0]  # First arg is the actual type
+            return annotation
+
+        for name, value in path_params.items():
+            if name in sig.parameters and name != ws_param_name:
+                # Get annotation from resolved hints or fallback to signature
+                annotation = type_hints.get(name) or sig.parameters[name].annotation
+
+                # Type coerce if needed
+                if annotation != inspect.Parameter.empty:
+                    # Unwrap Annotated types
+                    base_type = get_base_type(annotation)
+
+                    try:
+                        # Handle both actual types and string annotations
+                        ann_name = getattr(base_type, "__name__", str(base_type))
+                        if base_type is int or ann_name == "int":
+                            value = int(value)
+                        elif base_type is float or ann_name == "float":
+                            value = float(value)
+                        elif base_type is bool or ann_name == "bool":
+                            value = value.lower() in ("true", "1", "yes")
+                    except (ValueError, TypeError):
+                        pass  # Keep as string if conversion fails
+                kwargs[name] = value
+
+        # Start handler in background task
+        async def run_handler():
+            try:
+                await handler(**kwargs)
+            except Exception as e:
+                self._handler_exception = e
+                # Send disconnect on error
+                if not self._closed:
+                    await self._server_to_client.put({
+                        "type": "websocket.close",
+                        "code": CloseCode.INTERNAL_ERROR,
+                    })
+                    self._closed = True
+                    self._close_code = CloseCode.INTERNAL_ERROR
+
+        self._handler_task = asyncio.create_task(run_handler())
+
+        # Give handler a chance to start
+        await asyncio.sleep(0)
+
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Exit async context - close connection and cleanup."""
+        if not self._closed:
+            # Send disconnect to handler
+            await self._client_to_server.put({
+                "type": "websocket.disconnect",
+                "code": CloseCode.NORMAL,
+            })
+            self._closed = True
+
+        # Cancel handler task if still running
+        if self._handler_task and not self._handler_task.done():
+            self._handler_task.cancel()
+            try:
+                await self._handler_task
+            except asyncio.CancelledError:
+                pass
+
+        # Cleanup test app instance
+        self._cleanup_app()
+
+        # Re-raise handler exception if any
+        if self._handler_exception and exc_type is None:
+            raise self._handler_exception
+
+    @property
+    def accepted(self) -> bool:
+        """Whether the connection has been accepted."""
+        return self._accepted
+
+    @property
+    def closed(self) -> bool:
+        """Whether the connection has been closed."""
+        return self._closed
+
+    @property
+    def close_code(self) -> int | None:
+        """Close code if connection was closed."""
+        return self._close_code
+
+    @property
+    def accepted_subprotocol(self) -> str | None:
+        """Subprotocol accepted by server."""
+        return self._accepted_subprotocol
+
+    async def send_text(self, data: str) -> None:
+        """Send a text message to the server."""
+        if self._closed:
+            raise RuntimeError("WebSocket is closed")
+        await self._client_to_server.put({
+            "type": "websocket.receive",
+            "text": data,
+        })
+        # Give handler time to process
+        await asyncio.sleep(0)
+
+    async def send_bytes(self, data: bytes) -> None:
+        """Send a binary message to the server."""
+        if self._closed:
+            raise RuntimeError("WebSocket is closed")
+        await self._client_to_server.put({
+            "type": "websocket.receive",
+            "bytes": data,
+        })
+        await asyncio.sleep(0)
+
+    async def send_json(self, data: Any, mode: str = "text") -> None:
+        """Send JSON data to the server."""
+        text = json.dumps(data, separators=(",", ":"))
+        if mode == "text":
+            await self.send_text(text)
+        else:
+            await self.send_bytes(text.encode("utf-8"))
+
+    async def receive(self, timeout: float = 5.0) -> dict[str, Any]:
+        """Receive a raw message from the server."""
+        try:
+            return await asyncio.wait_for(
+                self._server_to_client.get(),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"No message received within {timeout}s")
+
+    async def receive_text(self, timeout: float = 5.0) -> str:
+        """Receive a text message from the server."""
+        while True:
+            msg = await self.receive(timeout=timeout)
+            msg_type = msg.get("type", "")
+
+            if msg_type == "websocket.send":
+                if "text" in msg:
+                    return msg["text"]
+                elif "bytes" in msg:
+                    return msg["bytes"].decode("utf-8")
+            elif msg_type == "websocket.close":
+                self._closed = True
+                self._close_code = msg.get("code", CloseCode.NORMAL)
+                raise ConnectionClosed(self._close_code)
+            elif msg_type == "websocket.accept":
+                # Skip accept messages
+                continue
+            else:
+                # Unknown message type, skip
+                continue
+
+    async def receive_bytes(self, timeout: float = 5.0) -> bytes:
+        """Receive a binary message from the server."""
+        while True:
+            msg = await self.receive(timeout=timeout)
+            msg_type = msg.get("type", "")
+
+            if msg_type == "websocket.send":
+                if "bytes" in msg:
+                    return msg["bytes"]
+                elif "text" in msg:
+                    return msg["text"].encode("utf-8")
+            elif msg_type == "websocket.close":
+                self._closed = True
+                self._close_code = msg.get("code", CloseCode.NORMAL)
+                raise ConnectionClosed(self._close_code)
+            elif msg_type == "websocket.accept":
+                continue
+            else:
+                continue
+
+    async def receive_json(self, timeout: float = 5.0, mode: str = "text") -> Any:
+        """Receive and parse JSON from the server."""
+        if mode == "text":
+            data = await self.receive_text(timeout=timeout)
+        else:
+            data = await self.receive_bytes(timeout=timeout)
+            data = data.decode("utf-8")
+        return json.loads(data)
+
+    async def close(self, code: int = CloseCode.NORMAL) -> None:
+        """Close the WebSocket connection."""
+        if not self._closed:
+            await self._client_to_server.put({
+                "type": "websocket.disconnect",
+                "code": code,
+            })
+            self._closed = True
+            self._close_code = code
+
+    async def iter_text(self, timeout: float = 5.0) -> AsyncIterator[str]:
+        """Async iterator for text messages."""
+        while not self._closed:
+            try:
+                yield await self.receive_text(timeout=timeout)
+            except (ConnectionClosed, TimeoutError):
+                break
+
+    async def iter_bytes(self, timeout: float = 5.0) -> AsyncIterator[bytes]:
+        """Async iterator for binary messages."""
+        while not self._closed:
+            try:
+                yield await self.receive_bytes(timeout=timeout)
+            except (ConnectionClosed, TimeoutError):
+                break
+
+    async def iter_json(self, timeout: float = 5.0) -> AsyncIterator[Any]:
+        """Async iterator for JSON messages."""
+        while not self._closed:
+            try:
+                yield await self.receive_json(timeout=timeout)
+            except (ConnectionClosed, TimeoutError):
+                break
+
+
+class ConnectionClosed(Exception):
+    """Raised when WebSocket connection is closed."""
+
+    def __init__(self, code: int = CloseCode.NORMAL, reason: str = ""):
+        self.code = code
+        self.reason = reason
+        super().__init__(f"WebSocket closed with code {code}: {reason}")
+
+
+# For backwards compatibility and convenience
+WebSocketClient = WebSocketTestClient

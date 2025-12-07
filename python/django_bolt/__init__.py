@@ -157,6 +157,16 @@ from .openapi import (
     YamlRenderPlugin,
 )
 
+# WebSocket module
+from .websocket import (
+    WebSocket,
+    WebSocketState,
+    WebSocketDisconnect,
+    WebSocketClose,
+    WebSocketException,
+    CloseCode,
+)
+
 __all__ = [
     # Core
     "BoltAPI",
@@ -253,6 +263,13 @@ __all__ = [
     "StoplightRenderPlugin",
     "JsonRenderPlugin",
     "YamlRenderPlugin",
+    # WebSocket
+    "WebSocket",
+    "WebSocketState",
+    "WebSocketDisconnect",
+    "WebSocketClose",
+    "WebSocketException",
+    "CloseCode",
 ]
 
 default_app_config = 'django_bolt.apps.DjangoBoltConfig'

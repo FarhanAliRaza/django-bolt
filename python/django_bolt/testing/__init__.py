@@ -4,7 +4,7 @@ Provides test clients for in-memory testing without subprocess/network overhead,
 including streaming response support for SSE and similar endpoints.
 
 Usage:
-    # Regular response
+    # Regular HTTP response
     response = client.get("/endpoint")
     assert response.status_code == 200
 
@@ -17,9 +17,18 @@ Usage:
     response = client.get("/sse", stream=True)
     for line in response.iter_lines():
         process(line)
+
+    # WebSocket testing
+    async with WebSocketTestClient(api, "/ws/echo") as ws:
+        await ws.send_text("hello")
+        response = await ws.receive_text()
+        assert response == "Echo: hello"
 """
 from django_bolt.testing.client import TestClient
+from django_bolt.testing.websocket import WebSocketTestClient, ConnectionClosed
 
 __all__ = [
     "TestClient",
+    "WebSocketTestClient",
+    "ConnectionClosed",
 ]

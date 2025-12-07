@@ -13,7 +13,7 @@ import pytest
 from asgiref.sync import async_to_sync
 from django_bolt import BoltAPI, ViewSet, action
 from django_bolt.testing import TestClient
-from .test_models import Article
+from tests.test_models import Article
 
 
 # --- Schemas ---

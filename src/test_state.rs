@@ -14,6 +14,7 @@ use crate::middleware::auth::{authenticate, populate_auth_context};
 use crate::permissions::{evaluate_guards, GuardResult};
 use crate::request::PyRequest;
 use crate::router::{parse_query_string, Router};
+use crate::websocket::WebSocketRouter;
 
 // Actix testing imports
 use actix_web::dev::Service;
@@ -35,6 +36,7 @@ macro_rules! test_debug {
 /// Test-only application state stored per instance (identified by app_id)
 pub struct TestApp {
     pub router: Router,
+    pub websocket_router: WebSocketRouter, // WebSocket routes for testing
     pub middleware_metadata: AHashMap<usize, Py<PyAny>>, // raw Python metadata for compatibility
     pub route_metadata: AHashMap<usize, RouteMetadata>,  // parsed Rust metadata
     pub dispatch: Py<PyAny>,
@@ -66,6 +68,7 @@ pub fn create_test_app(
 
     let app = TestApp {
         router: Router::new(),
+        websocket_router: WebSocketRouter::new(),
         middleware_metadata: AHashMap::new(),
         route_metadata: AHashMap::new(),
         dispatch: dispatch.clone_ref(py),

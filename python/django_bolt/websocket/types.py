@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import msgspec
 from typing import TYPE_CHECKING, Any, Callable, Awaitable
 
 from .state import WebSocketState
@@ -153,7 +153,7 @@ class WebSocket:
         else:
             data = await self.receive_bytes()
             data = data.decode("utf-8")
-        return json.loads(data)
+        return msgspec.json.decode(data)
 
     async def send(self, message: dict[str, Any]) -> None:
         """Send a raw WebSocket message."""
@@ -177,7 +177,7 @@ class WebSocket:
             data: Data to serialize as JSON
             mode: 'text' or 'binary' - how to send the JSON
         """
-        text = json.dumps(data, separators=(",", ":"))
+        text = msgspec.json.encode(data).decode("utf-8")
         if mode == "text":
             await self.send_text(text)
         else:

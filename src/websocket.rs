@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-use crate::state::ROUTE_METADATA;
+use crate::state::{ROUTE_METADATA, TASK_LOCALS};
 use crate::validation::{validate_auth_and_guards, AuthGuardResult};
 
 /// Get WebSocket channel buffer size from settings
@@ -680,30 +680,6 @@ fn create_send_fn(py: Python<'_>, state: Arc<WsConnectionState>) -> PyResult<Py<
     Ok(Py::new(py, send_fn)?.into_any().into())
 }
 
-/// HTTP handler for WebSocket upgrade requests
-pub async fn handle_websocket_upgrade(
-    req: HttpRequest,
-    stream: web::Payload,
-    handler: Py<PyAny>,
-    _handler_id: usize,
-    path_params: AHashMap<String, String>,
-) -> actix_web::Result<HttpResponse> {
-    // Create channel for messages from Actix to Python (client messages)
-    let (to_python_tx, to_python_rx) = mpsc::channel::<WsMessage>(100);
-
-    // Start WebSocket actor and get its address
-    let actor = WebSocketActor::new(to_python_tx);
-
-    // Start the actor with the WebSocket stream
-    let resp = ws::start(actor, &req, stream)?;
-
-    // We need to get the actor address to send messages to it
-    // Unfortunately, ws::start doesn't return the address directly
-    // We need a different approach - use ws::WsResponseBuilder
-
-    Ok(resp)
-}
-
 /// Validate WebSocket origin header against allowed origins
 fn validate_origin(req: &HttpRequest) -> bool {
     let allowed_origins = get_allowed_origins();
@@ -828,8 +804,13 @@ pub async fn handle_websocket_upgrade_with_handler(
             // Call the handler with the WebSocket instance
             let coro = handler.call1(py, (websocket,))?;
 
-            // Convert Python coroutine to Rust future using pyo3_async_runtimes
-            pyo3_async_runtimes::tokio::into_future(coro.bind(py).clone())
+            // Reuse the global event loop locals initialized at server startup (same as HTTP handlers)
+            let locals = TASK_LOCALS.get().ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("Asyncio loop not initialized")
+            })?;
+
+            // Convert Python coroutine to Rust future using the shared event loop
+            pyo3_async_runtimes::into_future_with_locals(locals, coro.bind(py).clone())
         });
 
         match future_result {

@@ -84,7 +84,7 @@ class TestWebSocketEcho:
         """Test echoing unicode characters."""
         async with WebSocketTestClient(api, "/ws/echo") as ws:
             await ws.send_text("Hello 世界 🌍")
-            response = await ws.receive_text()
+            response: str = await ws.receive_text()
             assert response == "Echo: Hello 世界 🌍"
 
 

@@ -519,3 +519,196 @@ class TestWebSocketState:
             assert ws.closed is False
 
         assert ws.closed is True
+
+
+class TestWebSocketGuards:
+    """Test WebSocket guard/auth integration."""
+
+    @pytest.fixture
+    def api(self):
+        from django_bolt.auth import IsAuthenticated, IsAdminUser, HasPermission
+
+        api = BoltAPI()
+
+        @api.websocket("/ws/public")
+        async def public_ws(websocket: WebSocket):
+            await websocket.accept()
+            await websocket.send_text("public")
+
+        @api.websocket("/ws/protected", guards=[IsAuthenticated()])
+        async def protected_ws(websocket: WebSocket):
+            await websocket.accept()
+            await websocket.send_text("protected")
+
+        @api.websocket("/ws/admin", guards=[IsAdminUser()])
+        async def admin_ws(websocket: WebSocket):
+            await websocket.accept()
+            await websocket.send_text("admin")
+
+        @api.websocket("/ws/permission", guards=[HasPermission("api.view_data")])
+        async def permission_ws(websocket: WebSocket):
+            await websocket.accept()
+            await websocket.send_text("has permission")
+
+        return api
+
+    @pytest.mark.asyncio
+    async def test_public_route_no_auth(self, api):
+        """Test public route works without auth."""
+        async with WebSocketTestClient(api, "/ws/public") as ws:
+            msg = await ws.receive_text()
+            assert msg == "public"
+
+    @pytest.mark.asyncio
+    async def test_protected_route_without_auth(self, api):
+        """Test protected route fails without auth context."""
+        with pytest.raises(PermissionError) as exc_info:
+            async with WebSocketTestClient(api, "/ws/protected") as ws:
+                pass
+
+        assert "Authentication required" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_protected_route_with_auth(self, api):
+        """Test protected route works with valid auth context."""
+        # Create a mock auth context
+        class MockAuthContext:
+            user_id = 123
+            is_superuser = False
+            is_staff = False
+            permissions = set()
+
+        async with WebSocketTestClient(api, "/ws/protected", auth_context=MockAuthContext()) as ws:
+            msg = await ws.receive_text()
+            assert msg == "protected"
+
+    @pytest.mark.asyncio
+    async def test_admin_route_without_superuser(self, api):
+        """Test admin route fails for non-superuser."""
+        class MockAuthContext:
+            user_id = 123
+            is_superuser = False
+            is_staff = False
+            permissions = set()
+
+        with pytest.raises(PermissionError) as exc_info:
+            async with WebSocketTestClient(api, "/ws/admin", auth_context=MockAuthContext()) as ws:
+                pass
+
+        assert "Superuser access required" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_admin_route_with_superuser(self, api):
+        """Test admin route works for superuser."""
+        class MockAuthContext:
+            user_id = 123
+            is_superuser = True
+            is_staff = True
+            permissions = set()
+
+        async with WebSocketTestClient(api, "/ws/admin", auth_context=MockAuthContext()) as ws:
+            msg = await ws.receive_text()
+            assert msg == "admin"
+
+    @pytest.mark.asyncio
+    async def test_permission_route_without_permission(self, api):
+        """Test permission-guarded route fails without required permission."""
+        class MockAuthContext:
+            user_id = 123
+            is_superuser = False
+            is_staff = False
+            permissions = set()
+
+        with pytest.raises(PermissionError) as exc_info:
+            async with WebSocketTestClient(api, "/ws/permission", auth_context=MockAuthContext()) as ws:
+                pass
+
+        assert "Permission 'api.view_data' required" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_permission_route_with_permission(self, api):
+        """Test permission-guarded route works with required permission."""
+        class MockAuthContext:
+            user_id = 123
+            is_superuser = False
+            is_staff = False
+            permissions = {"api.view_data", "api.edit_data"}
+
+        async with WebSocketTestClient(api, "/ws/permission", auth_context=MockAuthContext()) as ws:
+            msg = await ws.receive_text()
+            assert msg == "has permission"
+
+
+class TestWebSocketTypeCoercion:
+    """Test WebSocket path parameter type coercion."""
+
+    @pytest.fixture
+    def api(self):
+        api = BoltAPI()
+
+        @api.websocket("/ws/user/{user_id}")
+        async def user_handler(websocket: WebSocket, user_id: int):
+            await websocket.accept()
+            # Verify type coercion worked
+            await websocket.send_json({
+                "user_id": user_id,
+                "type": type(user_id).__name__,
+            })
+
+        @api.websocket("/ws/price/{price}")
+        async def price_handler(websocket: WebSocket, price: float):
+            await websocket.accept()
+            await websocket.send_json({
+                "price": price,
+                "type": type(price).__name__,
+            })
+
+        @api.websocket("/ws/active/{active}")
+        async def active_handler(websocket: WebSocket, active: bool):
+            await websocket.accept()
+            await websocket.send_json({
+                "active": active,
+                "type": type(active).__name__,
+            })
+
+        return api
+
+    @pytest.mark.asyncio
+    async def test_int_coercion(self, api):
+        """Test integer path parameter coercion."""
+        async with WebSocketTestClient(api, "/ws/user/42") as ws:
+            response = await ws.receive_json()
+            assert response["user_id"] == 42
+            assert response["type"] == "int"
+
+    @pytest.mark.asyncio
+    async def test_float_coercion(self, api):
+        """Test float path parameter coercion."""
+        async with WebSocketTestClient(api, "/ws/price/19.99") as ws:
+            response = await ws.receive_json()
+            assert response["price"] == 19.99
+            assert response["type"] == "float"
+
+    @pytest.mark.asyncio
+    async def test_bool_coercion_true(self, api):
+        """Test bool path parameter coercion (true)."""
+        async with WebSocketTestClient(api, "/ws/active/true") as ws:
+            response = await ws.receive_json()
+            assert response["active"] is True
+            assert response["type"] == "bool"
+
+    @pytest.mark.asyncio
+    async def test_bool_coercion_false(self, api):
+        """Test bool path parameter coercion (false)."""
+        async with WebSocketTestClient(api, "/ws/active/false") as ws:
+            response = await ws.receive_json()
+            assert response["active"] is False
+            assert response["type"] == "bool"
+
+    @pytest.mark.asyncio
+    async def test_bool_coercion_one(self, api):
+        """Test bool path parameter coercion (1)."""
+        async with WebSocketTestClient(api, "/ws/active/1") as ws:
+            response = await ws.receive_json()
+            assert response["active"] is True
+            assert response["type"] == "bool"

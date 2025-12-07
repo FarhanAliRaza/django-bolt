@@ -14,6 +14,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
+use crate::state::ROUTE_METADATA;
+use crate::validation::{validate_auth_and_guards, AuthGuardResult};
+
 /// Maximum WebSocket message size (1MB default)
 const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 /// How often heartbeat pings are sent
@@ -596,12 +599,41 @@ pub async fn handle_websocket_upgrade_with_handler(
     req: HttpRequest,
     stream: web::Payload,
     handler: Py<PyAny>,
-    _handler_id: usize,
+    handler_id: usize,
     path_params: AHashMap<String, String>,
 ) -> actix_web::Result<HttpResponse> {
     // Validate request is actually a WebSocket upgrade
     if !is_websocket_upgrade(&req) {
         return Ok(HttpResponse::BadRequest().body("Expected WebSocket upgrade request"));
+    }
+
+    // Extract headers for auth/guard evaluation
+    let mut headers: AHashMap<String, String> = AHashMap::new();
+    for (key, value) in req.headers().iter() {
+        if let Ok(v) = value.to_str() {
+            headers.insert(key.as_str().to_lowercase(), v.to_string());
+        }
+    }
+
+    // Evaluate authentication and guards before upgrading
+    if let Some(route_metadata) = ROUTE_METADATA.get() {
+        if let Some(route_meta) = route_metadata.get(&handler_id) {
+            match validate_auth_and_guards(&headers, &route_meta.auth_backends, &route_meta.guards) {
+                AuthGuardResult::Allow(_ctx) => {
+                    // Guards passed, continue with WebSocket upgrade
+                }
+                AuthGuardResult::Unauthorized => {
+                    return Ok(HttpResponse::Unauthorized()
+                        .content_type("application/json")
+                        .body(r#"{"detail":"Authentication required"}"#));
+                }
+                AuthGuardResult::Forbidden => {
+                    return Ok(HttpResponse::Forbidden()
+                        .content_type("application/json")
+                        .body(r#"{"detail":"Permission denied"}"#));
+                }
+            }
+        }
     }
 
     // Create channels for bidirectional communication

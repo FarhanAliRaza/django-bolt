@@ -51,6 +51,7 @@ class WebSocketTestClient:
         headers: dict[str, str] | None = None,
         query_string: str = "",
         subprotocols: list[str] | None = None,
+        auth_context: Any = None,
     ):
         """Initialize WebSocket test client.
 
@@ -60,12 +61,15 @@ class WebSocketTestClient:
             headers: Optional request headers
             query_string: Optional query string (without ?)
             subprotocols: Optional list of subprotocols to request
+            auth_context: Optional authentication context for guard evaluation.
+                         Should have user_id, is_superuser, is_staff, permissions attributes.
         """
         self.api = api
         self.path = path
         self.headers = headers or {}
         self.query_string = query_string
         self.subprotocols = subprotocols or []
+        self.auth_context = auth_context
 
         # Message queues for bidirectional communication
         self._client_to_server: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -79,13 +83,17 @@ class WebSocketTestClient:
         self._handler_task: asyncio.Task | None = None
         self._handler_exception: Exception | None = None
 
-    def _find_handler(self) -> tuple[Callable, dict[str, str]] | None:
-        """Find the WebSocket handler for the path."""
+    def _find_handler(self) -> tuple[Callable, int, dict[str, str]] | None:
+        """Find the WebSocket handler for the path.
+
+        Returns:
+            Tuple of (handler, handler_id, path_params) if found, None otherwise
+        """
         for route_path, handler_id, handler in self.api._websocket_routes:
             # Simple path matching (exact or with path params)
             path_params = self._match_path(route_path, self.path)
             if path_params is not None:
-                return handler, path_params
+                return handler, handler_id, path_params
         return None
 
     def _match_path(self, pattern: str, path: str) -> dict[str, str] | None:
@@ -119,7 +127,7 @@ class WebSocketTestClient:
         # Convert headers to ASGI format
         headers_dict = {k.lower(): v for k, v in self.headers.items()}
 
-        return {
+        scope = {
             "type": "websocket",
             "path": self.path,
             "query_string": self.query_string.encode("utf-8"),
@@ -129,6 +137,12 @@ class WebSocketTestClient:
             "client": ("127.0.0.1", 12345),  # Mock client address
             "subprotocols": self.subprotocols,
         }
+
+        # Add auth context if provided (for guard evaluation)
+        if self.auth_context is not None:
+            scope["auth_context"] = self.auth_context
+
+        return scope
 
     def _parse_cookies(self, cookie_header: str) -> dict[str, str]:
         """Parse cookie header into dict."""
@@ -160,14 +174,99 @@ class WebSocketTestClient:
         # Put all messages in queue for client to receive
         await self._server_to_client.put(message)
 
+    def _evaluate_guards(self, handler_id: int, scope: dict[str, Any]) -> tuple[bool, int, str]:
+        """Evaluate guards for WebSocket connection.
+
+        Args:
+            handler_id: Handler ID to look up guards
+            scope: WebSocket scope with auth context
+
+        Returns:
+            Tuple of (allowed, status_code, message)
+            - allowed: True if guards pass
+            - status_code: HTTP status code if denied (401 or 403)
+            - message: Error message if denied
+        """
+        # Get guards from handler middleware metadata
+        middleware_meta = self.api._handler_middleware.get(handler_id)
+        if not middleware_meta:
+            return (True, 200, "")
+
+        guards = middleware_meta.get("guards", [])
+        if not guards:
+            return (True, 200, "")
+
+        # Build mock auth context from scope
+        # In real usage, auth would be evaluated from headers/cookies
+        auth_context = scope.get("auth_context")
+
+        # Evaluate each guard
+        for guard_meta in guards:
+            guard_type = guard_meta.get("type", "")
+
+            if guard_type == "allow_any":
+                return (True, 200, "")
+
+            if guard_type == "is_authenticated":
+                if auth_context is None:
+                    return (False, 401, "Authentication required")
+                if not hasattr(auth_context, "user_id") or auth_context.user_id is None:
+                    return (False, 401, "Authentication required")
+
+            elif guard_type == "is_superuser":
+                if auth_context is None:
+                    return (False, 401, "Authentication required")
+                if not getattr(auth_context, "is_superuser", False):
+                    return (False, 403, "Superuser access required")
+
+            elif guard_type == "is_staff":
+                if auth_context is None:
+                    return (False, 401, "Authentication required")
+                if not getattr(auth_context, "is_staff", False):
+                    return (False, 403, "Staff access required")
+
+            elif guard_type == "has_permission":
+                perm = guard_meta.get("permission", "")
+                if auth_context is None:
+                    return (False, 401, "Authentication required")
+                permissions = getattr(auth_context, "permissions", set())
+                if perm not in permissions:
+                    return (False, 403, f"Permission '{perm}' required")
+
+            elif guard_type == "has_any_permission":
+                perms = guard_meta.get("permissions", [])
+                if auth_context is None:
+                    return (False, 401, "Authentication required")
+                permissions = getattr(auth_context, "permissions", set())
+                if not any(p in permissions for p in perms):
+                    return (False, 403, "Required permission not found")
+
+            elif guard_type == "has_all_permissions":
+                perms = guard_meta.get("permissions", [])
+                if auth_context is None:
+                    return (False, 401, "Authentication required")
+                permissions = getattr(auth_context, "permissions", set())
+                if not all(p in permissions for p in perms):
+                    return (False, 403, "Missing required permissions")
+
+        return (True, 200, "")
+
     async def __aenter__(self) -> "WebSocketTestClient":
         """Enter async context - start the WebSocket handler."""
         result = self._find_handler()
         if result is None:
             raise ValueError(f"No WebSocket handler found for path: {self.path}")
 
-        handler, path_params = result
+        handler, handler_id, path_params = result
         scope = self._build_scope(path_params)
+
+        # Evaluate guards before starting connection
+        allowed, status_code, message = self._evaluate_guards(handler_id, scope)
+        if not allowed:
+            if status_code == 401:
+                raise PermissionError(f"WebSocket connection denied: {message}")
+            else:
+                raise PermissionError(f"WebSocket connection forbidden: {message}")
 
         # Create WebSocket instance
         ws = WebSocket(scope, self._receive, self._send)
@@ -178,20 +277,32 @@ class WebSocketTestClient:
         # Build kwargs for the handler
         kwargs = {ws_param_name: ws}
 
-        # Add path params as kwargs
+        # Add path params as kwargs with type coercion
         import inspect
+        import typing
         sig = inspect.signature(handler)
+
+        # Get resolved type hints (handles PEP 563 stringified annotations)
+        try:
+            type_hints = typing.get_type_hints(handler)
+        except Exception:
+            type_hints = {}
+
         for name, value in path_params.items():
             if name in sig.parameters and name != ws_param_name:
+                # Get annotation from resolved hints or fallback to signature
+                annotation = type_hints.get(name) or sig.parameters[name].annotation
+
                 # Type coerce if needed
-                param = sig.parameters[name]
-                if param.annotation != inspect.Parameter.empty:
+                if annotation != inspect.Parameter.empty:
                     try:
-                        if param.annotation == int:
+                        # Handle both actual types and string annotations
+                        ann_name = getattr(annotation, "__name__", str(annotation))
+                        if annotation is int or ann_name == "int":
                             value = int(value)
-                        elif param.annotation == float:
+                        elif annotation is float or ann_name == "float":
                             value = float(value)
-                        elif param.annotation == bool:
+                        elif annotation is bool or ann_name == "bool":
                             value = value.lower() in ("true", "1", "yes")
                     except (ValueError, TypeError):
                         pass  # Keep as string if conversion fails

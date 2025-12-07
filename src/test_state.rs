@@ -208,14 +208,14 @@ pub fn register_test_routes(
 pub fn register_test_websocket_routes(
     _py: Python<'_>,
     app_id: u64,
-    routes: Vec<(String, usize, Py<PyAny>)>,
+    routes: Vec<(String, usize, Py<PyAny>, Option<Py<PyAny>>)>,
 ) -> PyResult<()> {
     let Some(entry) = registry().get(&app_id) else {
         return Err(pyo3::exceptions::PyKeyError::new_err("Invalid test app id"));
     };
     let mut app = entry.write();
-    for (path, handler_id, handler) in routes {
-        app.websocket_router.register(&path, handler_id, handler)?;
+    for (path, handler_id, handler, injector) in routes {
+        app.websocket_router.register(&path, handler_id, handler, injector)?;
     }
     Ok(())
 }
@@ -286,8 +286,16 @@ pub fn handle_test_websocket(
     }
     // No origin header = same-origin request, allowed
 
+    // Normalize trailing slash for consistent matching
+    // WebSocket clients typically don't follow redirects, so we normalize server-side
+    let normalized_path = if path.len() > 1 && path.ends_with('/') {
+        &path[..path.len() - 1]
+    } else {
+        &path
+    };
+
     // Look up the WebSocket route
-    let (route, path_params) = match app.websocket_router.find(&path) {
+    let (route, path_params) = match app.websocket_router.find(normalized_path) {
         Some((route, params)) => (route, params),
         None => {
             // Return not found

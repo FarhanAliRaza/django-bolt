@@ -1,5 +1,5 @@
 use actix_http::KeepAlive;
-use actix_web::{self as aw, web, App, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{self as aw, middleware::NormalizePath, web, App, HttpRequest, HttpResponse, HttpServer};
 use ahash::AHashMap;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -32,11 +32,11 @@ pub fn register_routes(
 #[pyfunction]
 pub fn register_websocket_routes(
     _py: Python<'_>,
-    routes: Vec<(String, usize, Py<PyAny>)>,
+    routes: Vec<(String, usize, Py<PyAny>, Option<Py<PyAny>>)>,
 ) -> PyResult<()> {
     let mut router = WebSocketRouter::new();
-    for (path, handler_id, handler) in routes {
-        router.register(&path, handler_id, handler.into())?;
+    for (path, handler_id, handler, injector) in routes {
+        router.register(&path, handler_id, handler.into(), injector)?;
     }
     GLOBAL_WEBSOCKET_ROUTER
         .set(Arc::new(router))
@@ -343,6 +343,7 @@ pub fn start_server_async(
                     let server = HttpServer::new(move || {
                         let mut app = App::new()
                             .app_data(web::Data::new(app_state.clone()))
+                            .wrap(NormalizePath::trim()) // Strip trailing slashes before routing
                             .wrap(CompressionMiddleware::new()); // Respects Content-Encoding: identity from skip_compression
 
                         // Register WebSocket routes BEFORE the catch-all handler
@@ -353,7 +354,18 @@ pub fn start_server_async(
                             }
                         }
 
-                        app.default_service(web::route().to(handle_request))
+                        // Register catch-all WebSocket 404 handler
+                        // This matches all GET requests with WebSocket upgrade headers that didn't match
+                        // registered WebSocket routes, and properly closes them with code 1000
+                        app = app.route(
+                            "/{path:.*}",
+                            web::get()
+                                .guard(actix_web::guard::fn_guard(is_websocket_upgrade_guard))
+                                .to(websocket_not_found_handler),
+                        );
+
+                        // Default service handles all unmatched HTTP requests
+                        app.default_service(web::to(handle_request))
                     })
                     .keep_alive(keep_alive)
                     .client_request_timeout(std::time::Duration::from_secs(0))
@@ -414,6 +426,30 @@ pub fn start_server_async(
     Ok(())
 }
 
+/// Guard function to detect WebSocket upgrade requests
+/// Used for catch-all WebSocket 404 route
+fn is_websocket_upgrade_guard(ctx: &actix_web::guard::GuardContext) -> bool {
+    let headers = ctx.head().headers();
+
+    // Check for Connection: upgrade header
+    let has_upgrade_connection = headers
+        .get("connection")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_lowercase().contains("upgrade"))
+        .unwrap_or(false);
+
+    if !has_upgrade_connection {
+        return false;
+    }
+
+    // Check for Upgrade: websocket header
+    headers
+        .get("upgrade")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false)
+}
+
 /// Handler for WebSocket upgrade requests
 /// This is registered as a service and checks against the WebSocket router
 pub async fn websocket_upgrade_handler(
@@ -428,10 +464,23 @@ pub async fn websocket_upgrade_handler(
 
     let path = req.path();
 
+    // Normalize trailing slash for consistent matching
+    // WebSocket clients typically don't follow redirects, so we normalize server-side
+    let normalized_path = if path.len() > 1 && path.ends_with('/') {
+        &path[..path.len() - 1]
+    } else {
+        path
+    };
+
     // Look up in global WebSocket router
     if let Some(ws_router) = GLOBAL_WEBSOCKET_ROUTER.get() {
-        if let Some((route, path_params)) = ws_router.find(path) {
-            let handler = Python::attach(|py| route.handler.clone_ref(py));
+        if let Some((route, path_params)) = ws_router.find(normalized_path) {
+            let (handler, injector) = Python::attach(|py| {
+                (
+                    route.handler.clone_ref(py),
+                    route.injector.as_ref().map(|i| i.clone_ref(py)),
+                )
+            });
             // Pass AppState to WebSocket handler for CORS validation and connection tracking
             return handle_websocket_upgrade_with_handler(
                 req,
@@ -440,9 +489,48 @@ pub async fn websocket_upgrade_handler(
                 route.handler_id,
                 path_params,
                 state.get_ref().clone(),
+                injector,
             ).await;
         }
     }
 
     Ok(HttpResponse::NotFound().body("WebSocket endpoint not found"))
+}
+
+/// Minimal WebSocket actor for 404 - accepts then immediately closes
+struct WebSocketNotFoundActor;
+
+impl actix::Actor for WebSocketNotFoundActor {
+    type Context = actix_web_actors::ws::WebsocketContext<Self>;
+
+    fn started(&mut self, ctx: &mut Self::Context) {
+        use actix::ActorContext;
+        // Immediately close with code 1000 (normal closure) - like Starlette
+        ctx.close(Some(actix_web_actors::ws::CloseReason {
+            code: actix_web_actors::ws::CloseCode::Normal,
+            description: Some("Not Found".to_string()),
+        }));
+        ctx.stop();
+    }
+}
+
+impl actix::StreamHandler<Result<actix_web_actors::ws::Message, actix_web_actors::ws::ProtocolError>>
+    for WebSocketNotFoundActor
+{
+    fn handle(
+        &mut self,
+        _msg: Result<actix_web_actors::ws::Message, actix_web_actors::ws::ProtocolError>,
+        _ctx: &mut Self::Context,
+    ) {
+        // Ignore all messages - we're closing immediately
+    }
+}
+
+/// Handler for WebSocket upgrade requests to non-existent paths
+/// Properly upgrades then closes with code 1000, avoiding client hangs
+async fn websocket_not_found_handler(
+    req: HttpRequest,
+    stream: web::Payload,
+) -> actix_web::Result<HttpResponse> {
+    actix_web_actors::ws::start(WebSocketNotFoundActor, &req, stream)
 }

@@ -1018,13 +1018,6 @@ async def websocket_load_test(websocket: WebSocket):
 async def websocket_echo(websocket: WebSocket):
     """
     WebSocket echo endpoint.
-
-    Echoes back any text message received from the client with "Echo: " prefix.
-
-    Test with:
-        websocat ws://localhost:8000/ws/echo
-        > hello
-        < Echo: hello
     """
     await websocket.accept()
     try:
@@ -1032,7 +1025,25 @@ async def websocket_echo(websocket: WebSocket):
             await websocket.send_text(f"Echo: {message}")
     except Exception as e:
         print(f"Error in websocket_echo: {e}")
-        await websocket.close(code=1011, reason="Json decode error")
+        await websocket.close(code=1011, reason="Some Error")
+
+
+@api.websocket("/ws/room/{room_id}")
+async def websocket_room(websocket: WebSocket, room_id: str):
+    """
+    WebSocket echo endpoint with room ID path parameter.
+
+    Echoes back messages with the room ID prefix.
+
+    Test with:
+        websocat ws://localhost:8000/ws/room/lobby
+    """
+    await websocket.accept()
+    try:
+        async for message in websocket.iter_text():
+            await websocket.send_text(f"[{room_id}] {message}")
+    except Exception:
+        pass  # Client disconnected
       
 
 

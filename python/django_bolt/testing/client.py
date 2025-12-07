@@ -239,11 +239,13 @@ class TestClient(httpx.Client):
         ]
         _core.register_test_routes(self.app_id, rust_routes)
 
-        # Register WebSocket routes
-        ws_routes = [
-            (path, handler_id, handler)
-            for path, handler_id, handler in api._websocket_routes
-        ]
+        # Register WebSocket routes with pre-compiled injectors (same as production)
+        ws_routes = []
+        for path, handler_id, handler in api._websocket_routes:
+            # Get pre-compiled injector from handler metadata (same as runbolt.py)
+            meta = api._handler_meta.get(handler, {})
+            injector = meta.get("injector")
+            ws_routes.append((path, handler_id, handler, injector))
         if ws_routes:
             _core.register_test_websocket_routes(self.app_id, ws_routes)
 

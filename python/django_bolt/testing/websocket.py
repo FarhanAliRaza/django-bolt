@@ -280,13 +280,65 @@ class WebSocketTestClient:
         # Add path params as kwargs with type coercion
         import inspect
         import typing
+        import re
         sig = inspect.signature(handler)
 
         # Get resolved type hints (handles PEP 563 stringified annotations)
         try:
-            type_hints = typing.get_type_hints(handler)
+            type_hints = typing.get_type_hints(handler, include_extras=True)
         except Exception:
             type_hints = {}
+
+        def parse_string_annotation(ann_str: str) -> Any:
+            """Try to parse a string annotation to extract the base type.
+
+            Handles patterns like:
+            - "int" -> int
+            - "Annotated[int, 'metadata']" -> int
+            """
+            ann_str = ann_str.strip()
+
+            # Check for Annotated pattern
+            annotated_match = re.match(r"Annotated\[([^,\]]+)", ann_str)
+            if annotated_match:
+                inner_type = annotated_match.group(1).strip()
+                return inner_type
+
+            return ann_str
+
+        def get_base_type(annotation: Any) -> Any:
+            """Extract base type from Annotated or return as-is."""
+            # Handle string annotations (PEP 563)
+            if isinstance(annotation, str):
+                return parse_string_annotation(annotation)
+
+            # Handle typing.Annotated[T, ...] -> T
+            origin = typing.get_origin(annotation)
+
+            # Check for Annotated (handle both typing and typing_extensions)
+            try:
+                from typing import Annotated as TypingAnnotated
+            except ImportError:
+                TypingAnnotated = None  # type: ignore
+
+            try:
+                from typing_extensions import Annotated as ExtAnnotated
+            except ImportError:
+                ExtAnnotated = None  # type: ignore
+
+            is_annotated = (
+                origin is not None and (
+                    (TypingAnnotated is not None and origin is TypingAnnotated)
+                    or (ExtAnnotated is not None and origin is ExtAnnotated)
+                    or getattr(origin, "__name__", "") == "Annotated"
+                )
+            )
+
+            if is_annotated:
+                args = typing.get_args(annotation)
+                if args:
+                    return args[0]  # First arg is the actual type
+            return annotation
 
         for name, value in path_params.items():
             if name in sig.parameters and name != ws_param_name:
@@ -295,14 +347,17 @@ class WebSocketTestClient:
 
                 # Type coerce if needed
                 if annotation != inspect.Parameter.empty:
+                    # Unwrap Annotated types
+                    base_type = get_base_type(annotation)
+
                     try:
                         # Handle both actual types and string annotations
-                        ann_name = getattr(annotation, "__name__", str(annotation))
-                        if annotation is int or ann_name == "int":
+                        ann_name = getattr(base_type, "__name__", str(base_type))
+                        if base_type is int or ann_name == "int":
                             value = int(value)
-                        elif annotation is float or ann_name == "float":
+                        elif base_type is float or ann_name == "float":
                             value = float(value)
-                        elif annotation is bool or ann_name == "bool":
+                        elif base_type is bool or ann_name == "bool":
                             value = value.lower() in ("true", "1", "yes")
                     except (ValueError, TypeError):
                         pass  # Keep as string if conversion fails

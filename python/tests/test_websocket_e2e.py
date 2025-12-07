@@ -712,3 +712,52 @@ class TestWebSocketTypeCoercion:
             response = await ws.receive_json()
             assert response["active"] is True
             assert response["type"] == "bool"
+
+
+class TestWebSocketAnnotatedTypes:
+    """Test WebSocket path parameter type coercion with typing.Annotated."""
+
+    @pytest.fixture
+    def api(self):
+        from typing import Annotated
+
+        api = BoltAPI()
+
+        # Note: Annotated type coercion works when get_type_hints() can resolve
+        # the annotations. With PEP 563 (from __future__ import annotations),
+        # metadata classes must be defined at module level or use string literals.
+        # Using string metadata here for compatibility.
+
+        @api.websocket("/ws/annotated/{user_id}")
+        async def annotated_handler(websocket: WebSocket, user_id: Annotated[int, "positive integer"]):
+            await websocket.accept()
+            await websocket.send_json({
+                "user_id": user_id,
+                "type": type(user_id).__name__,
+            })
+
+        @api.websocket("/ws/annotated_float/{price}")
+        async def annotated_float_handler(websocket: WebSocket, price: Annotated[float, "price in USD"]):
+            await websocket.accept()
+            await websocket.send_json({
+                "price": price,
+                "type": type(price).__name__,
+            })
+
+        return api
+
+    @pytest.mark.asyncio
+    async def test_annotated_int_coercion(self, api):
+        """Test integer coercion with Annotated type."""
+        async with WebSocketTestClient(api, "/ws/annotated/123") as ws:
+            response = await ws.receive_json()
+            assert response["user_id"] == 123
+            assert response["type"] == "int"
+
+    @pytest.mark.asyncio
+    async def test_annotated_float_coercion(self, api):
+        """Test float coercion with Annotated type."""
+        async with WebSocketTestClient(api, "/ws/annotated_float/29.99") as ws:
+            response = await ws.receive_json()
+            assert response["price"] == 29.99
+            assert response["type"] == "float"

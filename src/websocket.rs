@@ -17,12 +17,115 @@ use tokio::sync::mpsc;
 use crate::state::ROUTE_METADATA;
 use crate::validation::{validate_auth_and_guards, AuthGuardResult};
 
+/// Get WebSocket channel buffer size from settings
+fn get_channel_buffer_size() -> usize {
+    // 1. Check environment variable
+    if let Ok(val) = std::env::var("DJANGO_BOLT_WS_CHANNEL_SIZE") {
+        if let Ok(size) = val.parse::<usize>() {
+            return size;
+        }
+    }
+
+    // 2. Check Django settings
+    Python::attach(|py| {
+        if let Ok(django_conf) = py.import("django.conf") {
+            if let Ok(settings) = django_conf.getattr("settings") {
+                if let Ok(size) = settings.getattr("BOLT_WS_CHANNEL_SIZE") {
+                    if let Ok(val) = size.extract::<usize>() {
+                        return val;
+                    }
+                }
+            }
+        }
+        100 // Default
+    })
+}
+
+/// Get WebSocket heartbeat interval from settings
+fn get_heartbeat_interval() -> Duration {
+    // 1. Check environment variable
+    if let Ok(val) = std::env::var("DJANGO_BOLT_WS_HEARTBEAT_INTERVAL") {
+        if let Ok(secs) = val.parse::<u64>() {
+            return Duration::from_secs(secs);
+        }
+    }
+
+    // 2. Check Django settings
+    Python::attach(|py| {
+        if let Ok(django_conf) = py.import("django.conf") {
+            if let Ok(settings) = django_conf.getattr("settings") {
+                if let Ok(interval) = settings.getattr("BOLT_WS_HEARTBEAT_INTERVAL") {
+                    if let Ok(secs) = interval.extract::<u64>() {
+                        return Duration::from_secs(secs);
+                    }
+                }
+            }
+        }
+        Duration::from_secs(5) // Default
+    })
+}
+
+/// Get WebSocket client timeout from settings
+fn get_client_timeout() -> Duration {
+    // 1. Check environment variable
+    if let Ok(val) = std::env::var("DJANGO_BOLT_WS_CLIENT_TIMEOUT") {
+        if let Ok(secs) = val.parse::<u64>() {
+            return Duration::from_secs(secs);
+        }
+    }
+
+    // 2. Check Django settings
+    Python::attach(|py| {
+        if let Ok(django_conf) = py.import("django.conf") {
+            if let Ok(settings) = django_conf.getattr("settings") {
+                if let Ok(timeout) = settings.getattr("BOLT_WS_CLIENT_TIMEOUT") {
+                    if let Ok(secs) = timeout.extract::<u64>() {
+                        return Duration::from_secs(secs);
+                    }
+                }
+            }
+        }
+        Duration::from_secs(10) // Default
+    })
+}
+
+/// Get allowed WebSocket origins from settings (for CORS-like protection)
+fn get_allowed_origins() -> Option<Vec<String>> {
+    // 1. Check environment variable (comma-separated)
+    if let Ok(val) = std::env::var("DJANGO_BOLT_WS_ALLOWED_ORIGINS") {
+        if val == "*" {
+            return None; // Allow all
+        }
+        return Some(val.split(',').map(|s| s.trim().to_string()).collect());
+    }
+
+    // 2. Check Django settings
+    Python::attach(|py| {
+        if let Ok(django_conf) = py.import("django.conf") {
+            if let Ok(settings) = django_conf.getattr("settings") {
+                // Check BOLT_WS_ALLOWED_ORIGINS first
+                if let Ok(origins) = settings.getattr("BOLT_WS_ALLOWED_ORIGINS") {
+                    if let Ok(list) = origins.extract::<Vec<String>>() {
+                        if list.iter().any(|o| o == "*") {
+                            return None;
+                        }
+                        return Some(list);
+                    }
+                }
+                // Fall back to CORS_ALLOWED_ORIGINS if available
+                if let Ok(origins) = settings.getattr("CORS_ALLOWED_ORIGINS") {
+                    if let Ok(list) = origins.extract::<Vec<String>>() {
+                        return Some(list);
+                    }
+                }
+            }
+        }
+        None // Default: allow all (for backward compatibility)
+    })
+}
+
 /// Maximum WebSocket message size (1MB default)
 const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
-/// How often heartbeat pings are sent
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
-/// How long before lack of client response causes a timeout
-const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Message types for communication between Actix actor and Python handler
 #[derive(Debug)]
@@ -58,6 +161,10 @@ pub struct WebSocketActor {
     accepted: bool,
     /// Close code if connection was closed
     close_code: Option<u16>,
+    /// Heartbeat interval (configurable)
+    heartbeat_interval: Duration,
+    /// Client timeout (configurable)
+    client_timeout: Duration,
 }
 
 impl WebSocketActor {
@@ -67,13 +174,16 @@ impl WebSocketActor {
             to_python_tx,
             accepted: false,
             close_code: None,
+            heartbeat_interval: get_heartbeat_interval(),
+            client_timeout: get_client_timeout(),
         }
     }
 
     /// Start heartbeat process
     fn start_heartbeat(&self, ctx: &mut ws::WebsocketContext<Self>) {
-        ctx.run_interval(HEARTBEAT_INTERVAL, |act, ctx| {
-            if Instant::now().duration_since(act.hb) > CLIENT_TIMEOUT {
+        let timeout = self.client_timeout;
+        ctx.run_interval(self.heartbeat_interval, move |act, ctx| {
+            if Instant::now().duration_since(act.hb) > timeout {
                 // Send disconnect to Python
                 let _ = act.to_python_tx.try_send(WsMessage::Disconnect { code: 1001 });
                 ctx.stop();
@@ -594,6 +704,39 @@ pub async fn handle_websocket_upgrade(
     Ok(resp)
 }
 
+/// Validate WebSocket origin header against allowed origins
+fn validate_origin(req: &HttpRequest) -> bool {
+    let allowed_origins = get_allowed_origins();
+
+    // If no allowed origins configured, allow all (backward compatibility)
+    let allowed = match allowed_origins {
+        None => return true,
+        Some(origins) => origins,
+    };
+
+    // Get origin header from request
+    let origin = match req.headers().get("origin") {
+        Some(v) => match v.to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        },
+        None => {
+            // No origin header - allow for same-origin requests
+            // (browsers don't send Origin for same-origin WebSocket)
+            return true;
+        }
+    };
+
+    // Check if origin is in allowed list
+    allowed.iter().any(|allowed_origin| {
+        if allowed_origin == "*" {
+            true
+        } else {
+            origin == allowed_origin || origin.starts_with(&format!("{}:", allowed_origin))
+        }
+    })
+}
+
 /// HTTP handler for WebSocket upgrade with full Python integration
 pub async fn handle_websocket_upgrade_with_handler(
     req: HttpRequest,
@@ -605,6 +748,13 @@ pub async fn handle_websocket_upgrade_with_handler(
     // Validate request is actually a WebSocket upgrade
     if !is_websocket_upgrade(&req) {
         return Ok(HttpResponse::BadRequest().body("Expected WebSocket upgrade request"));
+    }
+
+    // Validate origin header (CORS-like protection for WebSocket)
+    if !validate_origin(&req) {
+        return Ok(HttpResponse::Forbidden()
+            .content_type("application/json")
+            .body(r#"{"detail":"Origin not allowed"}"#));
     }
 
     // Extract headers for auth/guard evaluation
@@ -636,8 +786,9 @@ pub async fn handle_websocket_upgrade_with_handler(
         }
     }
 
-    // Create channels for bidirectional communication
-    let (to_python_tx, to_python_rx) = mpsc::channel::<WsMessage>(100);
+    // Create channels for bidirectional communication (configurable size)
+    let channel_size = get_channel_buffer_size();
+    let (to_python_tx, to_python_rx) = mpsc::channel::<WsMessage>(channel_size);
 
     // Build scope for Python
     let scope = Python::attach(|py| build_scope(py, &req, &path_params))
@@ -655,13 +806,14 @@ pub async fn handle_websocket_upgrade_with_handler(
     // Create shared state for Python functions
     let state = Arc::new(WsConnectionState {
         from_actor_rx: tokio::sync::Mutex::new(to_python_rx),
-        actor_addr: addr,
+        actor_addr: addr.clone(),
     });
 
-    // Spawn task to run Python handler
+    // Spawn task to run Python handler using proper async integration
     let state_clone = state.clone();
     actix_web::rt::spawn(async move {
-        let result = Python::attach(|py| -> PyResult<()> {
+        // Create WebSocket instance and get the coroutine
+        let future_result = Python::attach(|py| -> PyResult<_> {
             // Import the WebSocket class
             let ws_module = py.import("django_bolt.websocket")?;
             let ws_class = ws_module.getattr("WebSocket")?;
@@ -676,24 +828,28 @@ pub async fn handle_websocket_upgrade_with_handler(
             // Call the handler with the WebSocket instance
             let coro = handler.call1(py, (websocket,))?;
 
-            // Run the coroutine using pyo3-async-runtimes
-            let asyncio = py.import("asyncio")?;
-
-            // Get or create event loop
-            let loop_result = asyncio.call_method0("get_event_loop");
-            let event_loop = match loop_result {
-                Ok(l) => l,
-                Err(_) => asyncio.call_method0("new_event_loop")?,
-            };
-
-            // Run until complete
-            let _ = event_loop.call_method1("run_until_complete", (coro,));
-
-            Ok(())
+            // Convert Python coroutine to Rust future using pyo3_async_runtimes
+            pyo3_async_runtimes::tokio::into_future(coro.bind(py).clone())
         });
 
-        if let Err(e) = result {
-            eprintln!("[django-bolt] WebSocket handler error: {}", e);
+        match future_result {
+            Ok(future) => {
+                if let Err(e) = future.await {
+                    eprintln!("[django-bolt] WebSocket handler error: {}", e);
+                    // Close the connection on error
+                    let _ = addr.send(SendToClient(WsMessage::Close {
+                        code: 1011,
+                        reason: "Internal error".to_string(),
+                    })).await;
+                }
+            }
+            Err(e) => {
+                eprintln!("[django-bolt] WebSocket handler setup error: {}", e);
+                let _ = addr.send(SendToClient(WsMessage::Close {
+                    code: 1011,
+                    reason: "Handler setup failed".to_string(),
+                })).await;
+            }
         }
     });
 

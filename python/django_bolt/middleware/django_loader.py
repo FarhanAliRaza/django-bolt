@@ -25,17 +25,9 @@ if TYPE_CHECKING:
     from .middleware import MiddlewareType
 
 
-# Middleware that don't make sense for API endpoints
-DEFAULT_EXCLUDED_MIDDLEWARE = {
-    # CSRF is typically handled differently in APIs (tokens in headers)
-    "django.middleware.csrf.CsrfViewMiddleware",
-    # Clickjacking protection is for HTML pages
-    "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    # Messages are for Django templates
-    "django.contrib.messages.middleware.MessageMiddleware",
-    # Locale/timezone middleware may not be needed for APIs
-    # "django.middleware.locale.LocaleMiddleware",
-}
+# Middleware that may be excluded for API-only endpoints (opt-in exclusion)
+# By default, ALL middleware from settings.MIDDLEWARE are loaded
+DEFAULT_EXCLUDED_MIDDLEWARE: set = set()  # Empty by default - load everything
 
 
 def load_django_middleware(

@@ -496,7 +496,7 @@ RouteMetadata {
 
 ### Django Middleware Integration
 
-Django-Bolt can automatically load middleware from Django's `settings.MIDDLEWARE`, providing seamless integration with existing Django projects.
+Django-Bolt uses Django's middleware pattern for all middleware, providing a unified syntax for both Django and custom middleware.
 
 #### Automatic Loading from settings.MIDDLEWARE
 
@@ -504,7 +504,6 @@ Django-Bolt can automatically load middleware from Django's `settings.MIDDLEWARE
 from django_bolt import BoltAPI
 
 # Use all Django middleware from settings.MIDDLEWARE
-# (excludes CSRF, Clickjacking, Messages by default)
 api = BoltAPI(django_middleware=True)
 ```
 
@@ -534,56 +533,35 @@ from django_bolt import BoltAPI
 from django_bolt.middleware import TimingMiddleware
 
 # Django middleware runs first, then custom middleware
+# Pass middleware classes (not instances) - Django-style
 api = BoltAPI(
     django_middleware=True,
-    middleware=[TimingMiddleware()],
+    middleware=[TimingMiddleware],  # Class, not instance
 )
-```
-
-#### Default Exclusions
-
-By default, these middleware are excluded because they don't make sense for APIs:
-- `django.middleware.csrf.CsrfViewMiddleware` - CSRF protection (APIs use tokens in headers)
-- `django.middleware.clickjacking.XFrameOptionsMiddleware` - Clickjacking protection (for HTML pages)
-- `django.contrib.messages.middleware.MessageMiddleware` - Messages (for Django templates)
-
-To include excluded middleware:
-
-```python
-# Using the loader directly with exclude_defaults=False
-from django_bolt.middleware import load_django_middleware
-
-api = BoltAPI(middleware=load_django_middleware(
-    ['django.middleware.csrf.CsrfViewMiddleware'],
-    exclude_defaults=False
-))
 ```
 
 #### How Django Middleware Works
 
-Django middleware is wrapped in `DjangoMiddleware` adapter that:
-1. Converts Bolt requests to Django `HttpRequest` objects
-2. Runs Django middleware (supports both old-style and new-style)
-3. Syncs Django-added attributes (`request.user`, `request.session`) back to Bolt request
-4. Converts Django responses back to Bolt responses
+All middleware follows Django's pattern:
+- `__init__(get_response)`: Receives the next middleware/handler in chain
+- `__call__(request)`: Processes the request
 
 ```python
-# The adapter handles both middleware styles:
+# Standard Django middleware pattern - works for both Django and Bolt
 
-# Old-style (process_request/process_response)
-class OldStyleMiddleware:
-    def process_request(self, request):
-        request.custom_attr = "value"
-    def process_response(self, request, response):
-        return response
-
-# New-style (callable)
-class NewStyleMiddleware:
+class MyMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
-    def __call__(self, request):
-        request.custom_attr = "value"
-        return self.get_response(request)
+
+    async def __call__(self, request):
+        # Before request processing
+        request.state["custom_value"] = "hello"
+
+        response = await self.get_response(request)
+
+        # After request processing
+        response.headers["X-Custom-Header"] = "yes"
+        return response
 ```
 
 #### Accessing Django Middleware Attributes
@@ -604,18 +582,36 @@ async def get_current_user(request):
 
 ### Custom Middleware (Python)
 
-For custom middleware logic not available in Rust:
+Create custom middleware using Django's pattern:
 
 ```python
-from django_bolt.middleware import Middleware
+class LoggingMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
 
-class LoggingMiddleware(Middleware):
-    async def process_request(self, request, call_next):
-        print(f"Request: {request['method']} {request['path']}")
-        response = await call_next(request)
+    async def __call__(self, request):
+        print(f"Request: {request.method} {request.path}")
+        response = await self.get_response(request)
+        print(f"Response: {response.status_code}")
         return response
 
-api = BoltAPI(middleware=[LoggingMiddleware()])
+# Pass middleware classes to BoltAPI
+api = BoltAPI(middleware=[LoggingMiddleware])
+```
+
+Or use the `BaseMiddleware` helper class for path/method filtering:
+
+```python
+from django_bolt.middleware import BaseMiddleware
+
+class AuthMiddleware(BaseMiddleware):
+    exclude_paths = ["/health", "/metrics", "/docs/*"]
+    exclude_methods = ["OPTIONS"]
+
+    async def process_request(self, request):
+        if not request.headers.get("authorization"):
+            raise HTTPException(401, "Unauthorized")
+        return await self.get_response(request)
 ```
 
 **Note**: Custom Python middleware incurs GIL overhead. Use built-in Rust middleware when possible for best performance.

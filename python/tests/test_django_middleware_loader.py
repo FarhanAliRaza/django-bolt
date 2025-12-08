@@ -22,19 +22,25 @@ from django_bolt.middleware import DjangoMiddleware
 
 
 class TestDefaultExclusions:
-    """Tests for default middleware exclusions."""
+    """Tests for default middleware exclusions (now empty by default)."""
 
-    def test_csrf_excluded_by_default(self):
-        """Test that CSRF middleware is in default exclusions."""
-        assert "django.middleware.csrf.CsrfViewMiddleware" in DEFAULT_EXCLUDED_MIDDLEWARE
+    def test_no_default_exclusions(self):
+        """Test that there are no default exclusions - all middleware loaded."""
+        # We now load ALL middleware from settings.MIDDLEWARE by default
+        # Users can exclude specific middleware if needed via the exclude config
+        assert DEFAULT_EXCLUDED_MIDDLEWARE == set()
 
-    def test_clickjacking_excluded_by_default(self):
-        """Test that clickjacking middleware is in default exclusions."""
-        assert "django.middleware.clickjacking.XFrameOptionsMiddleware" in DEFAULT_EXCLUDED_MIDDLEWARE
+    def test_csrf_not_excluded_by_default(self):
+        """Test that CSRF middleware is NOT excluded by default."""
+        assert "django.middleware.csrf.CsrfViewMiddleware" not in DEFAULT_EXCLUDED_MIDDLEWARE
 
-    def test_messages_excluded_by_default(self):
-        """Test that messages middleware is in default exclusions."""
-        assert "django.contrib.messages.middleware.MessageMiddleware" in DEFAULT_EXCLUDED_MIDDLEWARE
+    def test_clickjacking_not_excluded_by_default(self):
+        """Test that clickjacking middleware is NOT excluded by default."""
+        assert "django.middleware.clickjacking.XFrameOptionsMiddleware" not in DEFAULT_EXCLUDED_MIDDLEWARE
+
+    def test_messages_not_excluded_by_default(self):
+        """Test that messages middleware is NOT excluded by default."""
+        assert "django.contrib.messages.middleware.MessageMiddleware" not in DEFAULT_EXCLUDED_MIDDLEWARE
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -191,15 +197,16 @@ class TestRealDjangoMiddleware:
         from django_bolt import BoltAPI
         from django_bolt.middleware import TimingMiddleware
 
-        timing = TimingMiddleware()
+        # Middleware classes are passed (Django-style)
+        # They get instantiated with get_response when building the chain
         api = BoltAPI(
             django_middleware=['django.contrib.sessions.middleware.SessionMiddleware'],
-            middleware=[timing],
+            middleware=[TimingMiddleware],  # Pass class, not instance
         )
 
         assert len(api.middleware) == 2
         assert isinstance(api.middleware[0], DjangoMiddleware)  # Django first
-        assert api.middleware[1] is timing  # Custom second
+        assert api.middleware[1] is TimingMiddleware  # Custom class stored
 
     def test_handles_invalid_middleware_path(self):
         """Test that invalid middleware paths are skipped gracefully."""

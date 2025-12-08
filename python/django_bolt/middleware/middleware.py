@@ -65,13 +65,16 @@ class MiddlewareScope(str, Enum):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-# Type alias for call_next function
-CallNext = Callable[["Request"], Awaitable["Response"]]
+# Type alias for get_response function (Django-style)
+GetResponse = Callable[["Request"], Awaitable["Response"]]
 
-# Type alias for middleware (class, function, or wrapped Django middleware)
+# Legacy alias for backwards compatibility
+CallNext = GetResponse
+
+# Type alias for middleware class (Django-style: takes get_response in __init__)
 MiddlewareType = Union[
     "MiddlewareProtocol",
-    Callable[["Request", CallNext], Awaitable["Response"]],
+    Type["BaseMiddleware"],
     "DjangoMiddlewareAdapter",
 ]
 
@@ -84,42 +87,40 @@ MiddlewareType = Union[
 @runtime_checkable
 class MiddlewareProtocol(Protocol):
     """
-    Protocol for Django-Bolt middleware.
+    Protocol for Django-Bolt middleware (Django-style pattern).
 
-    Middleware can be:
-    1. A class implementing this protocol
-    2. A callable (function or lambda)
-    3. A Django middleware wrapped with DjangoMiddleware()
+    Uses the same pattern as Django middleware:
+    - __init__(get_response): Receives the next middleware/handler in chain
+    - __call__(request): Processes the request
 
-    The middleware receives the request and a `call_next` function to continue
-    the chain. It can:
-    - Modify the request before passing it on
-    - Short-circuit by returning a response directly
-    - Modify the response after the handler executes
-    - Add data to request.state for downstream handlers
+    This unified pattern works for both Django and Bolt middleware.
 
     Example:
         class TimingMiddleware:
-            async def __call__(
-                self,
-                request: Request,
-                call_next: CallNext
-            ) -> Response:
+            def __init__(self, get_response):
+                self.get_response = get_response
+
+            async def __call__(self, request: Request) -> Response:
                 start = time.time()
                 request.state["start_time"] = start
 
-                response = await call_next(request)
+                response = await self.get_response(request)
 
                 elapsed = time.time() - start
                 response.headers["X-Response-Time"] = f"{elapsed:.3f}s"
                 return response
+
+    The middleware can:
+    - Modify the request before passing it on
+    - Short-circuit by returning a response directly
+    - Modify the response after the handler executes
+    - Add data to request.state for downstream handlers
     """
 
-    async def __call__(
-        self,
-        request: "Request",
-        call_next: CallNext
-    ) -> "Response":
+    def __init__(self, get_response: GetResponse) -> None:
+        ...
+
+    async def __call__(self, request: "Request") -> "Response":
         ...
 
 
@@ -130,7 +131,11 @@ class MiddlewareProtocol(Protocol):
 
 class BaseMiddleware(ABC):
     """
-    Base class for Django-Bolt middleware with common functionality.
+    Base class for Django-Bolt middleware (Django-style pattern).
+
+    Uses the same pattern as Django middleware:
+    - __init__(get_response): Receives the next middleware/handler in chain
+    - __call__(request): Processes the request
 
     Provides:
     - Path exclusion patterns (glob-style wildcards)
@@ -142,10 +147,10 @@ class BaseMiddleware(ABC):
             exclude_paths = ["/health", "/metrics", "/docs/*"]
             exclude_methods = ["OPTIONS"]
 
-            async def handle(self, request: Request, call_next: CallNext) -> Response:
+            async def process_request(self, request: Request) -> Response:
                 if not request.headers.get("authorization"):
                     raise HTTPException(401, "Unauthorized")
-                return await call_next(request)
+                return await self.get_response(request)
 
     Performance:
         - Pattern matching is compiled once at instantiation
@@ -166,8 +171,15 @@ class BaseMiddleware(ABC):
     _exclude_pattern: Optional[Pattern] = None
     _exclude_methods_set: Optional[Set[str]] = None
 
-    def __init__(self) -> None:
-        """Initialize middleware with compiled exclusion patterns."""
+    def __init__(self, get_response: GetResponse) -> None:
+        """
+        Initialize middleware with get_response (Django-style).
+
+        Args:
+            get_response: The next middleware/handler in the chain
+        """
+        self.get_response = get_response
+
         # Compile path exclusion patterns once
         if self.exclude_paths:
             patterns = []
@@ -181,17 +193,13 @@ class BaseMiddleware(ABC):
         if self.exclude_methods:
             self._exclude_methods_set = set(m.upper() for m in self.exclude_methods)
 
-    async def __call__(
-        self,
-        request: "Request",
-        call_next: CallNext
-    ) -> "Response":
+    async def __call__(self, request: "Request") -> "Response":
         """Process request, checking exclusions first."""
         # Check exclusions (fast path)
         if self._should_skip(request):
-            return await call_next(request)
+            return await self.get_response(request)
 
-        return await self.handle(request, call_next)
+        return await self.process_request(request)
 
     def _should_skip(self, request: "Request") -> bool:
         """
@@ -210,17 +218,14 @@ class BaseMiddleware(ABC):
         return False
 
     @abstractmethod
-    async def handle(
-        self,
-        request: "Request",
-        call_next: CallNext
-    ) -> "Response":
+    async def process_request(self, request: "Request") -> "Response":
         """
-        Handle the request. Override this in subclasses.
+        Process the request. Override this in subclasses.
+
+        Call self.get_response(request) to continue the chain.
 
         Args:
             request: The incoming request
-            call_next: Function to call the next middleware/handler
 
         Returns:
             Response object
@@ -229,39 +234,48 @@ class BaseMiddleware(ABC):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Legacy Middleware Class (backwards compatibility)
+# Simple Middleware Class (convenience alias)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class Middleware(ABC):
     """
-    Legacy base class for middleware implementations.
+    Simple middleware base class (Django-style pattern).
 
-    Deprecated: Use BaseMiddleware with __call__ pattern instead.
-    This is kept for backwards compatibility.
+    Alias for BaseMiddleware without exclusion patterns.
+    Use this for simple middleware that doesn't need path/method filtering.
+
+    Example:
+        class MyMiddleware(Middleware):
+            async def process_request(self, request: Request) -> Response:
+                # Do something before
+                response = await self.get_response(request)
+                # Do something after
+                return response
     """
 
+    def __init__(self, get_response: GetResponse) -> None:
+        """Initialize with get_response (next in chain)."""
+        self.get_response = get_response
+
     @abstractmethod
-    async def process_request(self, request: Any, call_next: Callable) -> Any:
+    async def process_request(self, request: "Request") -> "Response":
         """
-        Process the request and optionally call the next middleware/handler.
+        Process the request.
+
+        Call self.get_response(request) to continue the chain.
 
         Args:
             request: The incoming request object
-            call_next: Callable to invoke the next middleware or handler
 
         Returns:
-            Response object or result from call_next
+            Response object
         """
         pass
 
-    async def __call__(
-        self,
-        request: "Request",
-        call_next: CallNext
-    ) -> "Response":
-        """Adapter to make legacy middleware compatible with new protocol."""
-        return await self.process_request(request, call_next)
+    async def __call__(self, request: "Request") -> "Response":
+        """Process request through middleware."""
+        return await self.process_request(request)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -531,9 +545,9 @@ def no_compress(func):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class CORSMiddleware(Middleware):
+class CORSMiddleware:
     """
-    Built-in CORS middleware implementation.
+    Built-in CORS middleware implementation (Django-style).
 
     Note: This is a Python fallback. The actual CORS handling is done in Rust
     for maximum performance. Use the @cors decorator or BoltAPI cors= parameter.
@@ -541,42 +555,51 @@ class CORSMiddleware(Middleware):
 
     def __init__(
         self,
+        get_response: GetResponse,
         origins: List[str] = None,
         methods: List[str] = None,
         headers: List[str] = None,
         credentials: bool = False,
         max_age: int = 3600
     ):
+        self.get_response = get_response
         self.origins = origins or ["*"]
         self.methods = methods or ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
         self.headers = headers or ["Content-Type", "Authorization"]
         self.credentials = credentials
         self.max_age = max_age
 
-    async def process_request(self, request: Any, call_next: Callable) -> Any:
+    async def __call__(self, request: "Request") -> "Response":
         # This will be handled in Rust for performance
         # Python implementation is for compatibility
-        response = await call_next(request)
+        response = await self.get_response(request)
         return response
 
 
-class RateLimitMiddleware(Middleware):
+class RateLimitMiddleware:
     """
-    Built-in rate limiting middleware implementation.
+    Built-in rate limiting middleware implementation (Django-style).
 
     Note: This is a Python fallback. The actual rate limiting is done in Rust
     using the governor crate for maximum performance. Use the @rate_limit decorator.
     """
 
-    def __init__(self, rps: int = 100, burst: int = None, key: str = "ip"):
+    def __init__(
+        self,
+        get_response: GetResponse,
+        rps: int = 100,
+        burst: int = None,
+        key: str = "ip"
+    ):
+        self.get_response = get_response
         self.rps = rps
         self.burst = burst or rps * 2
         self.key = key
 
-    async def process_request(self, request: Any, call_next: Callable) -> Any:
+    async def __call__(self, request: "Request") -> "Response":
         # This will be handled in Rust for performance
         # Python implementation is for compatibility/fallback
-        response = await call_next(request)
+        response = await self.get_response(request)
         return response
 
 
@@ -587,7 +610,7 @@ class RateLimitMiddleware(Middleware):
 
 class TimingMiddleware(BaseMiddleware):
     """
-    Adds request timing information.
+    Adds request timing information (Django-style).
 
     Adds to request.state:
         - request_id: Unique request identifier
@@ -598,7 +621,7 @@ class TimingMiddleware(BaseMiddleware):
         - X-Response-Time: Time taken in seconds
 
     Example:
-        api = BoltAPI(middleware=[TimingMiddleware()])
+        api = BoltAPI(middleware=[TimingMiddleware])
 
         @api.get("/")
         async def index(request: Request) -> dict:
@@ -606,18 +629,14 @@ class TimingMiddleware(BaseMiddleware):
             return {"request_id": request_id}
     """
 
-    async def handle(
-        self,
-        request: "Request",
-        call_next: CallNext
-    ) -> "Response":
+    async def process_request(self, request: "Request") -> "Response":
         request_id = str(uuid.uuid4())
         start_time = time.perf_counter()
 
         request.state["request_id"] = request_id
         request.state["start_time"] = start_time
 
-        response = await call_next(request)
+        response = await self.get_response(request)
 
         elapsed = time.perf_counter() - start_time
         response.headers["X-Request-ID"] = request_id
@@ -628,37 +647,32 @@ class TimingMiddleware(BaseMiddleware):
 
 class LoggingMiddleware(BaseMiddleware):
     """
-    Logs request and response information.
+    Logs request and response information (Django-style).
 
     Configurable log levels and formats.
     Excludes health/metrics endpoints by default.
 
     Example:
-        api = BoltAPI(middleware=[
-            LoggingMiddleware(log_body=False, log_headers=True)
-        ])
+        api = BoltAPI(middleware=[LoggingMiddleware])
     """
 
     exclude_paths = ["/health", "/metrics", "/docs", "/openapi.json"]
 
     def __init__(
         self,
+        get_response: GetResponse,
         logger: Optional[logging.Logger] = None,
         log_body: bool = False,
         log_headers: bool = False,
         log_level: int = logging.INFO
     ):
-        super().__init__()
+        super().__init__(get_response)
         self.logger = logger or logging.getLogger("django_bolt.requests")
         self.log_body = log_body
         self.log_headers = log_headers
         self.log_level = log_level
 
-    async def handle(
-        self,
-        request: "Request",
-        call_next: CallNext
-    ) -> "Response":
+    async def process_request(self, request: "Request") -> "Response":
         # Log request
         log_data = {
             "method": request.method,
@@ -675,7 +689,7 @@ class LoggingMiddleware(BaseMiddleware):
 
         # Process request
         start_time = time.perf_counter()
-        response = await call_next(request)
+        response = await self.get_response(request)
         elapsed = time.perf_counter() - start_time
 
         # Log response
@@ -689,36 +703,28 @@ class LoggingMiddleware(BaseMiddleware):
 
 class ErrorHandlerMiddleware(BaseMiddleware):
     """
-    Global error handler middleware.
+    Global error handler middleware (Django-style).
 
     Catches exceptions and converts them to appropriate HTTP responses.
     Should be one of the first middleware in the chain.
 
     Example:
-        api = BoltAPI(middleware=[
-            ErrorHandlerMiddleware(debug=True),  # First in chain
-            TimingMiddleware(),
-            LoggingMiddleware(),
-        ])
+        api = BoltAPI(middleware=[ErrorHandlerMiddleware])
     """
 
     scope = MiddlewareScope.GLOBAL
 
-    def __init__(self, debug: bool = False):
-        super().__init__()
+    def __init__(self, get_response: GetResponse, debug: bool = False):
+        super().__init__(get_response)
         self.debug = debug
         self.logger = logging.getLogger("django_bolt.errors")
 
-    async def handle(
-        self,
-        request: "Request",
-        call_next: CallNext
-    ) -> "Response":
+    async def process_request(self, request: "Request") -> "Response":
         from ..exceptions import HTTPException
         from ..responses import Response
 
         try:
-            return await call_next(request)
+            return await self.get_response(request)
         except HTTPException:
             raise  # Let HTTP exceptions pass through
         except Exception as e:
@@ -743,7 +749,8 @@ __all__ = [
     "BaseMiddleware",
     "Middleware",
     "MiddlewareScope",
-    "CallNext",
+    "GetResponse",
+    "CallNext",  # Legacy alias
     "MiddlewareType",
     # Configuration
     "MiddlewareGroup",

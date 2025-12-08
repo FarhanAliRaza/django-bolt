@@ -410,19 +410,22 @@ class TestMiddlewareChaining:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TrackingBoltMiddleware(BaseMiddleware):
-    """A Bolt native middleware for testing."""
+class TrackingBoltMiddleware:
+    """A Bolt native middleware for testing (Django-style pattern)."""
 
-    def __init__(self):
-        super().__init__()
-        self.requests_seen = 0
+    # Track requests across all instances for testing
+    requests_seen = 0
 
-    async def handle(self, request: Request, call_next: CallNext) -> Response:
-        self.requests_seen += 1
+    def __init__(self, get_response):
+        self.get_response = get_response
+        TrackingBoltMiddleware.requests_seen = 0  # Reset on instantiation
+
+    async def __call__(self, request: Request) -> Response:
+        TrackingBoltMiddleware.requests_seen += 1
         request.state["bolt_tracked"] = True
-        request.state["request_number"] = self.requests_seen
+        request.state["request_number"] = TrackingBoltMiddleware.requests_seen
 
-        response = await call_next(request)
+        response = await self.get_response(request)
 
         response.headers["X-Bolt-Tracked"] = "yes"
         return response
@@ -434,42 +437,44 @@ class TestMixedMiddleware:
     @pytest.mark.asyncio
     async def test_bolt_then_django_middleware(self):
         """Test Bolt middleware before Django middleware."""
-        bolt_mw = TrackingBoltMiddleware()
-        django_mw = DjangoMiddleware(HeaderMiddleware1)
-
         request = Request(method="GET", path="/test")
 
         async def handler(req: Request) -> Response:
             assert req.state.get("bolt_tracked") is True
             return Response(content={"status": "ok"}, status_code=200)
 
-        # Chain: Bolt -> Django -> handler
-        async def django_chain(req: Request) -> Response:
+        # Build chain: Bolt -> Django -> handler (Django-style)
+        django_mw = DjangoMiddleware(HeaderMiddleware1)
+
+        async def django_wrapped(req: Request) -> Response:
             return await django_mw(req, handler)
 
-        response = await bolt_mw(request, django_chain)
+        bolt_mw = TrackingBoltMiddleware(django_wrapped)
+
+        response = await bolt_mw(request)
 
         assert response.status_code == 200
         assert response.headers.get("X-Bolt-Tracked") == "yes"
         assert response.headers.get("X-Chain-1") == "yes"
-        assert bolt_mw.requests_seen == 1
+        assert TrackingBoltMiddleware.requests_seen == 1
 
     @pytest.mark.asyncio
     async def test_django_then_bolt_middleware(self):
         """Test Django middleware before Bolt middleware."""
-        django_mw = DjangoMiddleware(HeaderMiddleware1)
-        bolt_mw = TrackingBoltMiddleware()
-
         request = Request(method="GET", path="/test")
 
         async def handler(req: Request) -> Response:
             return Response(content={"status": "ok"}, status_code=200)
 
-        # Chain: Django -> Bolt -> handler
-        async def bolt_chain(req: Request) -> Response:
-            return await bolt_mw(req, handler)
+        # Build chain: Django -> Bolt -> handler (Django-style)
+        bolt_mw = TrackingBoltMiddleware(handler)
 
-        response = await django_mw(request, bolt_chain)
+        async def bolt_wrapped(req: Request) -> Response:
+            return await bolt_mw(req)
+
+        django_mw = DjangoMiddleware(HeaderMiddleware1)
+
+        response = await django_mw(request, bolt_wrapped)
 
         assert response.status_code == 200
         assert response.headers.get("X-Bolt-Tracked") == "yes"

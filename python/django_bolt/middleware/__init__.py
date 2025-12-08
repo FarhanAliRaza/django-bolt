@@ -11,14 +11,21 @@ Performance is the utmost priority - the middleware system is designed for zero 
 - Lazy evaluation and minimal allocations
 
 Usage:
-    # App-level middleware
+    # Use Django's settings.MIDDLEWARE automatically
+    api = BoltAPI(django_middleware=True)
+
+    # Or with custom Bolt middleware
     api = BoltAPI(
         middleware=[
             TimingMiddleware(),
             LoggingMiddleware(),
-            DjangoMiddleware(SessionMiddleware),
-            DjangoMiddleware(AuthenticationMiddleware),
         ]
+    )
+
+    # Or combine both
+    api = BoltAPI(
+        django_middleware=True,
+        middleware=[TimingMiddleware()],
     )
 
     # Route-level middleware
@@ -62,6 +69,11 @@ from .middleware import (
 )
 from .compression import CompressionConfig
 from .django_adapter import DjangoMiddleware
+from .django_loader import (
+    load_django_middleware,
+    get_django_middleware_setting,
+    DEFAULT_EXCLUDED_MIDDLEWARE,
+)
 
 __all__ = [
     # Protocols and base classes
@@ -91,4 +103,7 @@ __all__ = [
     "ErrorHandlerMiddleware",
     # Django compatibility
     "DjangoMiddleware",
+    "load_django_middleware",
+    "get_django_middleware_setting",
+    "DEFAULT_EXCLUDED_MIDDLEWARE",
 ]

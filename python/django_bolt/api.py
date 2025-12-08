@@ -7,7 +7,7 @@ import re
 import sys
 import time
 import types
-from typing import Any, Callable, Dict, List, Tuple, Optional, get_origin, get_args, Annotated, get_type_hints, Union
+from typing import Any, Callable, Dict, List, Tuple, Optional, Union, get_origin, get_args, Annotated, get_type_hints
 
 # Django import - may fail if Django not configured
 try:
@@ -238,11 +238,29 @@ class BoltAPI:
         prefix: str = "",
         middleware: Optional[List[Any]] = None,
         middleware_config: Optional[Dict[str, Any]] = None,
+        django_middleware: Optional[Union[bool, List[str], Dict[str, Any]]] = None,
         enable_logging: bool = True,
         logging_config: Optional[Any] = None,
         compression: Optional[Any] = None,
         openapi_config: Optional[Any] = None,
     ) -> None:
+        """
+        Initialize a BoltAPI instance.
+
+        Args:
+            prefix: URL prefix for all routes (e.g., "/api/v1")
+            middleware: List of Bolt middleware instances
+            middleware_config: Dict-based middleware configuration (legacy)
+            django_middleware: Django middleware configuration. Can be:
+                - True: Use all middleware from settings.MIDDLEWARE (excluding CSRF, etc.)
+                - False/None: Don't use Django middleware
+                - List[str]: Use only these specific Django middleware
+                - Dict with "include"/"exclude" keys for fine control
+            enable_logging: Enable request/response logging
+            logging_config: Custom logging configuration
+            compression: Compression configuration (CompressionConfig or False to disable)
+            openapi_config: OpenAPI documentation configuration
+        """
         self._routes: List[Tuple[str, str, int, Callable]] = []
         self._handlers: Dict[int, Callable] = {}
         self._handler_meta: Dict[Callable, HandlerMetadata] = {}
@@ -250,8 +268,18 @@ class BoltAPI:
         self._next_handler_id = 0
         self.prefix = prefix.rstrip("/")  # Remove trailing slash
 
-        # Global middleware configuration
-        self.middleware = middleware or []
+        # Build middleware list: Django middleware first, then custom middleware
+        self.middleware = []
+
+        # Load Django middleware if configured
+        if django_middleware:
+            from .middleware.django_loader import load_django_middleware
+            self.middleware.extend(load_django_middleware(django_middleware))
+
+        # Add custom middleware
+        if middleware:
+            self.middleware.extend(middleware)
+
         self.middleware_config = middleware_config or {}
 
         # Logging configuration (opt-in, setup happens at server startup)

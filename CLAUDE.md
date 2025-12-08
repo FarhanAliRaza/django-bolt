@@ -339,20 +339,24 @@ uv run --with pytest pytest python/tests -s -vv
 ## Project Structure (python/django_bolt)
 
 ### Core API
+
 - `api.py` - Main BoltAPI class and route decorators
 - `router.py` - Route registration and management
 - `binding.py` - Parameter extraction and type coercion from requests
 
 ### HTTP Handling
+
 - `responses.py` - Response types (PlainText, HTML, File, Streaming, etc.)
 - `exceptions.py` - HTTPException and error handling
 - `params.py` - Parameter markers (Header, Cookie, Form, File, Depends)
 
 ### Serialization & Validation
+
 - `serialization.py` - msgspec-based serialization and validation
 - `param_functions.py` - Dynamic parameter handling
 
 ### Authentication & Security
+
 - `auth/backends.py` - JWT and API Key implementations
 - `auth/guards.py` - Permission guards (IsAuthenticated, HasPermission, etc.)
 - `auth/jwt_utils.py` - Token creation helpers
@@ -361,11 +365,13 @@ uv run --with pytest pytest python/tests -s -vv
 - `auth/revocation.py` - Token revocation stores
 
 ### Middleware
+
 - `middleware/middleware.py` - CORS, rate limiting decorators
 - `middleware/compiler.py` - Compiles Python config to Rust metadata
 - `middleware/compression.py` - Response compression utilities
 
 ### Advanced Features
+
 - `health.py` - Health check endpoints
 - `openapi/` - OpenAPI/Swagger schema generation
 - `pagination.py` - Pagination helpers
@@ -375,6 +381,7 @@ uv run --with pytest pytest python/tests -s -vv
 - `dependencies.py` - Dependency injection system
 
 ### Django Integration
+
 - `bootstrap.py` - Django configuration helper
 - `cli.py` - CLI tool (`django-bolt init` command)
 - `management/commands/runbolt.py` - Django management command with autodiscovery
@@ -387,6 +394,7 @@ uv run --with pytest pytest python/tests -s -vv
 **Problem**: `make build` fails with compilation errors
 
 **Solution**:
+
 1. Check Rust syntax: `cargo check`
 2. Review error message for specific file/line
 3. Ensure PyO3 types are correct in Rust code
@@ -398,6 +406,7 @@ uv run --with pytest pytest python/tests -s -vv
 **Problem**: Some tests pass sometimes, fail other times
 
 **Solution**:
+
 1. Always run with `-s -vv` flags for detailed output: `make test-py`
 2. Check for async/await issues - ensure all async code awaits properly
 3. Look for race conditions in concurrent test execution
@@ -409,6 +418,7 @@ uv run --with pytest pytest python/tests -s -vv
 **Problem**: RPS drops significantly after code modifications
 
 **Solution**:
+
 1. Run benchmarks to quantify: `make save-bench` (creates baseline comparison)
 2. Check which component regressed: compare BENCHMARK_BASELINE.md vs BENCHMARK_DEV.md
 3. Profile Rust hot paths: check `src/handler.rs`, `src/routing.rs`, serialization
@@ -421,6 +431,7 @@ uv run --with pytest pytest python/tests -s -vv
 **Problem**: PyO3 bridge errors or segmentation faults
 
 **Solution**:
+
 1. Review PyO3 error messages carefully - they're usually descriptive
 2. Check `src/handler.rs` for correct GIL handling
 3. Ensure Python object references are properly managed (don't hold across GIL releases)
@@ -430,6 +441,7 @@ uv run --with pytest pytest python/tests -s -vv
 ## Important Implementation Notes
 
 ### Core Framework Design
+
 - **Async and sync handler support**: The framework must handle both `async def` and `def` handlers, dispatching them correctly to Actix Web's runtime. Check `src/handler.rs` for implementation.
 - **Python-Rust bridge (PyO3)**: Handler execution crosses the GIL boundary. Minimize Python work in Rust hot paths. See `src/handler.rs` for GIL management patterns.
 - **Middleware compilation**: Python `middleware_config` dicts must be converted to Rust metadata structs at server startup. Implementation in `python/django_bolt/middleware/compiler.py` and `src/metadata.rs`.
@@ -437,6 +449,7 @@ uv run --with pytest pytest python/tests -s -vv
 - **Multi-process isolation**: Each process has independent Python interpreter and Django imports. State sharing must happen via Rust shared state (`src/state.rs`) or external mechanisms.
 
 ### Development Standards
+
 - **Never silently ignore errors**: Always print or raise exceptions - silent failures create obscure bugs that are hard to trace
 - **Tests must be meaningful**: Only add tests that verify actual functionality; tests must fail when functionality changes
 - **Prefer `from __future__ import annotations`**: Use PEP 563 for cleaner type hints across Python files
@@ -446,27 +459,35 @@ uv run --with pytest pytest python/tests -s -vv
 ## When to Edit Which Files
 
 ### Adding Framework Features
+
 - **New parameter types** (Query, Header, Body variants): Edit `python/django_bolt/params.py` and `python/django_bolt/binding.py`, then update `src/handler.rs` for extraction
 - **New response types**: Add to `python/django_bolt/responses.py` and implement serialization in `src/handler.rs`
 - **New authentication backend**: Extend `python/django_bolt/auth/backends.py` with new class, optionally implement validation in `src/middleware/auth.rs` for performance
 - **New guard/permission type**: Add to `python/django_bolt/auth/guards.py` and implement check in `src/permissions.rs`
 - **New middleware system**: Add to `python/django_bolt/middleware/`, implement compiler in `middleware/compiler.py`, and Rust handler in `src/middleware/`
 
-### Fixing Bugs
-- **Routing issues**: `python/django_bolt/router.py` and `src/router.rs`
-- **Parameter extraction problems**: `python/django_bolt/binding.py` and `src/handler.rs`
-- **Serialization issues**: `python/django_bolt/serialization.py`
-- **Authentication failures**: `python/django_bolt/auth/` and `src/middleware/auth.rs`
-- **Middleware not working**: `python/django_bolt/middleware/` and `src/middleware/`
-
 ### Performance Improvements
+
 - **Serialization speed**: `python/django_bolt/serialization.py` and `src/handler.rs`
 - **Routing performance**: `src/router.rs`
 - **GIL contention**: Reduce Python work in hot paths, consider moving logic to Rust in `src/handler.rs`
 - **Compression**: `python/django_bolt/middleware/compression.py` and `src/middleware/compression.rs`
 
 ### Testing
+
 - **Add unit tests**: Create file in `python/tests/test_*.py` following existing patterns
 - **Add integration tests**: Modify `python/tests/syntax_test_server.py` or `python/tests/middleware_test_server.py` for test routes
 - **Test Rust changes**: Add tests in `src/test_state.rs` and `src/testing.rs`
 - Always import on the top of the file
+
+## Testing Principles
+
+### Tests Must Fail Without the Fix
+
+When adding tests for bug fixes, the test MUST fail when the fix is reverted. This ensures:
+
+1. The test actually validates the fix, not some unrelated behavior
+2. The test would have caught the bug if it existed before
+3. We're not testing bogus claims that pass regardless of the fix
+
+**How to verify**: Before finalizing a bug fix test, revert the fix and confirm the test fails. Only then apply the fix and confirm the test passes.

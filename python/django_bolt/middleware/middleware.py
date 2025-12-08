@@ -19,8 +19,6 @@ import time
 import uuid
 import warnings
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from enum import Enum
 from typing import (
     Any,
     Awaitable,
@@ -40,24 +38,6 @@ from typing import (
 if TYPE_CHECKING:
     from ..request import Request
     from ..responses import Response
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Middleware Scope
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class MiddlewareScope(str, Enum):
-    """
-    Middleware scope determines where middleware applies.
-
-    GLOBAL: Applies to all routes in the application
-    SCOPED: Applies to routes in current router and child routers
-    LOCAL:  Applies only to the specific route it's attached to
-    """
-    GLOBAL = "global"
-    SCOPED = "scoped"
-    LOCAL = "local"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -140,7 +120,6 @@ class BaseMiddleware(ABC):
     Provides:
     - Path exclusion patterns (glob-style wildcards)
     - Method filtering
-    - Scope control (global, scoped, local)
 
     Example:
         class AuthMiddleware(BaseMiddleware):
@@ -163,9 +142,6 @@ class BaseMiddleware(ABC):
 
     # HTTP methods to exclude
     exclude_methods: Optional[List[str]] = None
-
-    # Middleware scope
-    scope: MiddlewareScope = MiddlewareScope.LOCAL
 
     # Compiled exclusion pattern (set during __init__)
     _exclude_pattern: Optional[Pattern] = None
@@ -279,42 +255,6 @@ class Middleware(ABC):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Middleware Configuration
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class MiddlewareGroup:
-    """Groups multiple middleware for reuse across routes."""
-
-    __slots__ = ("middleware",)
-
-    def __init__(self, *middleware: Union[MiddlewareProtocol, "MiddlewareConfig"]):
-        self.middleware = list(middleware)
-
-    def __add__(self, other: "MiddlewareGroup") -> "MiddlewareGroup":
-        """Combine middleware groups."""
-        return MiddlewareGroup(*(self.middleware + other.middleware))
-
-
-@dataclass
-class MiddlewareConfig:
-    """Configuration for a middleware instance with metadata."""
-
-    middleware: Union[Type, MiddlewareProtocol]
-    config: Dict[str, Any] = field(default_factory=dict)
-    skip_routes: Set[str] = field(default_factory=set)
-    only_routes: Optional[Set[str]] = None
-
-    def applies_to_route(self, route_key: str) -> bool:
-        """Check if middleware should apply to a specific route."""
-        if route_key in self.skip_routes:
-            return False
-        if self.only_routes is not None and route_key not in self.only_routes:
-            return False
-        return True
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # Middleware Decorators
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -324,15 +264,15 @@ def middleware(*args, **kwargs):
     Decorator to attach middleware to a route handler.
 
     Can be used as:
-    - @middleware(RateLimitMiddleware(rps=100))
+    - @middleware(MyMiddlewareClass)
     - @middleware(cors={"origins": ["*"]})
     - @middleware(skip=["auth"])
 
     Example:
         @api.post("/upload")
         @middleware(
-            ValidateContentTypeMiddleware(allowed=["multipart/form-data"]),
-            FileSizeLimitMiddleware(max_size=10 * 1024 * 1024),
+            ValidateContentTypeMiddleware,
+            FileSizeLimitMiddleware,
         )
         async def upload_file(request: Request) -> dict:
             return {"uploaded": True}
@@ -342,10 +282,8 @@ def middleware(*args, **kwargs):
             func.__bolt_middleware__ = []
 
         for arg in args:
-            if isinstance(arg, (BaseMiddleware, Middleware, MiddlewareConfig, type)):
+            if isinstance(arg, (BaseMiddleware, Middleware, type)):
                 func.__bolt_middleware__.append(arg)
-            elif isinstance(arg, MiddlewareGroup):
-                func.__bolt_middleware__.extend(arg.middleware)
             elif callable(arg):
                 # Support raw callables as middleware
                 func.__bolt_middleware__.append(arg)
@@ -496,34 +434,6 @@ def skip_middleware(*middleware_names: str):
     return decorator
 
 
-def override_middleware(
-    middleware_class: Type[BaseMiddleware],
-    replacement: BaseMiddleware
-):
-    """
-    Override a parent middleware with different configuration for this route.
-
-    Args:
-        middleware_class: The middleware class to override
-        replacement: The replacement middleware instance
-
-    Example:
-        @api.get("/high-traffic")
-        @override_middleware(
-            RateLimitMiddleware,
-            RateLimitMiddleware(rps=10000, burst=20000)
-        )
-        async def high_traffic(request: Request) -> dict:
-            return {"data": [...]}
-    """
-    def decorator(func):
-        if not hasattr(func, '__bolt_override_middleware__'):
-            func.__bolt_override_middleware__ = {}
-        func.__bolt_override_middleware__[middleware_class.__name__] = replacement
-        return func
-    return decorator
-
-
 def no_compress(func):
     """
     Disable compression for this route.
@@ -538,69 +448,6 @@ def no_compress(func):
             return StreamingResponse(...)
     """
     return skip_middleware("compression")(func)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Built-in Rust-Accelerated Middleware Classes
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class CORSMiddleware:
-    """
-    Built-in CORS middleware implementation (Django-style).
-
-    Note: This is a Python fallback. The actual CORS handling is done in Rust
-    for maximum performance. Use the @cors decorator or BoltAPI cors= parameter.
-    """
-
-    def __init__(
-        self,
-        get_response: GetResponse,
-        origins: List[str] = None,
-        methods: List[str] = None,
-        headers: List[str] = None,
-        credentials: bool = False,
-        max_age: int = 3600
-    ):
-        self.get_response = get_response
-        self.origins = origins or ["*"]
-        self.methods = methods or ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-        self.headers = headers or ["Content-Type", "Authorization"]
-        self.credentials = credentials
-        self.max_age = max_age
-
-    async def __call__(self, request: "Request") -> "Response":
-        # This will be handled in Rust for performance
-        # Python implementation is for compatibility
-        response = await self.get_response(request)
-        return response
-
-
-class RateLimitMiddleware:
-    """
-    Built-in rate limiting middleware implementation (Django-style).
-
-    Note: This is a Python fallback. The actual rate limiting is done in Rust
-    using the governor crate for maximum performance. Use the @rate_limit decorator.
-    """
-
-    def __init__(
-        self,
-        get_response: GetResponse,
-        rps: int = 100,
-        burst: int = None,
-        key: str = "ip"
-    ):
-        self.get_response = get_response
-        self.rps = rps
-        self.burst = burst or rps * 2
-        self.key = key
-
-    async def __call__(self, request: "Request") -> "Response":
-        # This will be handled in Rust for performance
-        # Python implementation is for compatibility/fallback
-        response = await self.get_response(request)
-        return response
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -712,8 +559,6 @@ class ErrorHandlerMiddleware(BaseMiddleware):
         api = BoltAPI(middleware=[ErrorHandlerMiddleware])
     """
 
-    scope = MiddlewareScope.GLOBAL
-
     def __init__(self, get_response: GetResponse, debug: bool = False):
         super().__init__(get_response)
         self.debug = debug
@@ -748,23 +593,15 @@ __all__ = [
     "MiddlewareProtocol",
     "BaseMiddleware",
     "Middleware",
-    "MiddlewareScope",
     "GetResponse",
     "CallNext",  # Legacy alias
     "MiddlewareType",
-    # Configuration
-    "MiddlewareGroup",
-    "MiddlewareConfig",
     # Decorators
     "middleware",
     "rate_limit",
     "cors",
     "skip_middleware",
-    "override_middleware",
     "no_compress",
-    # Built-in middleware (Rust-accelerated)
-    "CORSMiddleware",
-    "RateLimitMiddleware",
     # Built-in middleware (Python)
     "TimingMiddleware",
     "LoggingMiddleware",

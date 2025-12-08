@@ -150,13 +150,24 @@ def add_optimization_flags_to_metadata(
 
 
 def middleware_to_dict(mw: Any) -> Optional[Dict[str, Any]]:
-    """Convert middleware specification to dictionary."""
+    """
+    Convert middleware specification to dictionary for Rust metadata.
+
+    Only dict-based middleware configs (from @cors, @rate_limit decorators)
+    need to be converted. Python middleware classes/instances are handled
+    entirely in Python and don't need serialization to Rust.
+
+    Args:
+        mw: Middleware specification (dict from decorators, or Python class/instance)
+
+    Returns:
+        Dict if it's a Rust-handled middleware type (cors, rate_limit), None otherwise
+    """
     if isinstance(mw, dict):
+        # Dict-based config from decorators like @cors() or @rate_limit()
+        # These are the only ones Rust needs to know about
         return mw
-    elif hasattr(mw, '__dict__'):
-        # Convert middleware object to dict
-        return {
-            'type': mw.__class__.__name__.lower().replace('middleware', ''),
-            **mw.__dict__
-        }
+
+    # Python middleware classes/instances are handled in Python
+    # They don't need to be serialized to Rust metadata
     return None

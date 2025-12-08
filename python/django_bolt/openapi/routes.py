@@ -8,7 +8,7 @@ from typing import Dict, Any, TYPE_CHECKING
 
 from django_bolt.openapi.plugins import JsonRenderPlugin, YamlRenderPlugin
 from django_bolt.openapi.schema_generator import SchemaGenerator
-from django_bolt.responses import HTML, Redirect, JSON, PlainText
+from django_bolt.responses import HTML, JSON, PlainText
 
 if TYPE_CHECKING:
     from django_bolt.api import BoltAPI
@@ -137,11 +137,32 @@ class OpenAPIRouteRegistrar:
                 self.api.get(full_path)(make_handler(plugin))
 
     def _register_root_redirect(self) -> None:
-        """Register root redirect to default UI plugin."""
-        if self.api.openapi_config.default_plugin:
-            default_path = self.api.openapi_config.default_plugin.paths[0]
+        """Register root path to serve default UI directly.
 
-            @self.api.get(self.api.openapi_config.path)
-            async def openapi_root_redirect():
-                """Redirect to default OpenAPI UI."""
-                return Redirect(f"{self.api.openapi_config.path}{default_path}")
+        Serves the default UI at the root path instead of redirecting.
+        This avoids redirect loops caused by NormalizePath::trim() middleware
+        which strips trailing slashes (e.g., /docs/ -> /docs).
+        """
+        if self.api.openapi_config.default_plugin:
+            schema_url = f"{self.api.openapi_config.path}/openapi.json"
+            plugin = self.api.openapi_config.default_plugin
+
+            # Capture plugin in closure
+            def make_root_handler(p, url):
+                async def openapi_root_handler():
+                    """Serve default OpenAPI UI at root path."""
+                    try:
+                        schema = self._get_schema()
+                        rendered = p.render(schema, url)
+                        return HTML(
+                            rendered,
+                            status_code=200,
+                            headers={"content-type": p.media_type}
+                        )
+                    except Exception as e:
+                        raise Exception(
+                            f"Failed to render OpenAPI UI: {type(e).__name__}: {str(e)}"
+                        ) from e
+                return openapi_root_handler
+
+            self.api.get(self.api.openapi_config.path)(make_root_handler(plugin, schema_url))

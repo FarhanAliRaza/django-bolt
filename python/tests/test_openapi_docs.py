@@ -100,3 +100,53 @@ def test_swagger_ui_endpoint():
         # Should contain Swagger UI indicators
         html = response.text
         assert "swagger" in html.lower() or "openapi" in html.lower()
+
+
+def test_openapi_root_path_serves_ui_directly():
+    """Test that /docs serves default UI directly without redirect loop.
+
+    This test catches the bug where:
+    - /docs redirected to /docs/
+    - NormalizePath::trim() stripped trailing slash back to /docs
+    - Infinite redirect loop
+
+    The fix serves the default UI directly at /docs instead of redirecting.
+
+    We verify this by checking that response.history is empty (no redirects occurred).
+    """
+    api = BoltAPI(
+        openapi_config=OpenAPIConfig(
+            title="Test API",
+            version="1.0.0",
+            path="/docs",
+            render_plugins=[SwaggerRenderPlugin(path="/")]
+        )
+    )
+
+    @api.get("/test")
+    async def test_endpoint():
+        return {"status": "ok"}
+
+    api._register_openapi_routes()
+
+    with TestClient(api) as client:
+        response = client.get("/docs")
+
+        # CRITICAL: Must NOT redirect - this is what causes the infinite loop
+        # in production with NormalizePath::trim() middleware.
+        # TestClient doesn't have NormalizePath, so redirect would "work" here,
+        # but in production: /docs -> redirect /docs/ -> trim to /docs -> loop
+        assert len(response.history) == 0, \
+            f"/docs should serve UI directly without redirect, but got redirects: {response.history}"
+
+        # Should return 200 with HTML content directly
+        assert response.status_code == 200, \
+            f"Expected 200, got {response.status_code}"
+
+        # Should be HTML content (Swagger UI)
+        content_type = response.headers.get("content-type", "")
+        assert "text/html" in content_type, f"Expected HTML, got {content_type}"
+
+        # Should contain Swagger UI content
+        html = response.text
+        assert "swagger" in html.lower(), "Response should contain Swagger UI"

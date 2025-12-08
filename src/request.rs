@@ -14,6 +14,7 @@ pub struct PyRequest {
     pub context: Option<Py<PyDict>>, // Middleware context data
     // None if no auth context or user not found
     pub user: Option<Py<PyAny>>,
+    pub state: Py<PyDict>, // Arbitrary state for middleware to store data
 }
 
 #[pymethods]
@@ -55,6 +56,58 @@ impl PyRequest {
             Some(user) => user.clone_ref(py),
             None => py.None(),
         }
+    }
+
+    /// Get headers as a dict for middleware access.
+    ///
+    /// Example:
+    ///     auth_header = request.headers.get("authorization")
+    #[getter]
+    fn headers<'py>(&self, py: Python<'py>) -> Py<PyDict> {
+        let d = PyDict::new(py);
+        for (k, v) in &self.headers {
+            let _ = d.set_item(k, v);
+        }
+        d.unbind()
+    }
+
+    /// Get cookies as a dict for middleware access.
+    ///
+    /// Example:
+    ///     session_id = request.cookies.get("session_id")
+    #[getter]
+    fn cookies<'py>(&self, py: Python<'py>) -> Py<PyDict> {
+        let d = PyDict::new(py);
+        for (k, v) in &self.cookies {
+            let _ = d.set_item(k, v);
+        }
+        d.unbind()
+    }
+
+    /// Get query params as a dict for middleware access.
+    ///
+    /// Example:
+    ///     page = request.query.get("page", "1")
+    #[getter]
+    fn query<'py>(&self, py: Python<'py>) -> Py<PyDict> {
+        let d = PyDict::new(py);
+        for (k, v) in &self.query_params {
+            let _ = d.set_item(k, v);
+        }
+        d.unbind()
+    }
+
+    /// Get the state dict for middleware to store arbitrary data.
+    ///
+    /// This follows the Starlette pattern where middleware can store
+    /// request-scoped data that persists through the request lifecycle.
+    ///
+    /// Example:
+    ///     request.state["request_id"] = "abc123"
+    ///     request.state["tenant"] = tenant_obj
+    #[getter]
+    fn state<'py>(&self, py: Python<'py>) -> Py<PyDict> {
+        self.state.clone_ref(py)
     }
 
     #[pyo3(signature = (key, /, default=None))]

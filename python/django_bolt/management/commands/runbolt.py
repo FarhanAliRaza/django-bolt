@@ -457,8 +457,14 @@ class Command(BaseCommand):
                 merged._handlers[new_handler_id] = handler
 
                 # CRITICAL: Store reference to original API for this handler
-                # This preserves logging, auth, middleware, and all per-API config
-                merged._handler_api_map[new_handler_id] = api
+                # For mounted sub-apps, preserve the sub-app reference (has its own middleware)
+                # Otherwise use the API that owns this route
+                if hasattr(api, '_handler_api_map') and old_handler_id in api._handler_api_map:
+                    # This route was mounted from a sub-app - preserve that reference
+                    merged._handler_api_map[new_handler_id] = api._handler_api_map[old_handler_id]
+                else:
+                    # Route belongs directly to this API
+                    merged._handler_api_map[new_handler_id] = api
 
                 # Merge handler metadata
                 if handler in api._handler_meta:
@@ -486,8 +492,11 @@ class Command(BaseCommand):
                 merged._websocket_routes.append((path, new_ws_handler_id, ws_handler))
                 merged._handlers[new_ws_handler_id] = ws_handler
 
-                # Store reference to original API
-                merged._handler_api_map[new_ws_handler_id] = api
+                # Store reference to original API (or sub-app for mounted routes)
+                if hasattr(api, '_handler_api_map') and old_ws_handler_id in api._handler_api_map:
+                    merged._handler_api_map[new_ws_handler_id] = api._handler_api_map[old_ws_handler_id]
+                else:
+                    merged._handler_api_map[new_ws_handler_id] = api
 
                 # Merge handler metadata for WebSocket
                 if ws_handler in api._handler_meta:

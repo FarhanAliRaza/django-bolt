@@ -122,21 +122,13 @@ from .middleware import (
     MiddlewareProtocol,
     BaseMiddleware,
     Middleware,
-    MiddlewareScope,
     CallNext,
-    # Configuration
-    MiddlewareGroup,
-    MiddlewareConfig,
     # Decorators
     middleware,
     rate_limit,
     cors,
     skip_middleware,
-    override_middleware,
     no_compress,
-    # Built-in middleware (Rust-accelerated)
-    CORSMiddleware,
-    RateLimitMiddleware,
     # Built-in middleware (Python)
     TimingMiddleware,
     LoggingMiddleware,
@@ -227,21 +219,13 @@ __all__ = [
     "MiddlewareProtocol",
     "BaseMiddleware",
     "Middleware",
-    "MiddlewareScope",
     "CallNext",
-    # Middleware - Configuration
-    "MiddlewareGroup",
-    "MiddlewareConfig",
     # Middleware - Decorators
     "middleware",
     "rate_limit",
     "cors",
     "skip_middleware",
-    "override_middleware",
     "no_compress",
-    # Middleware - Built-in (Rust-accelerated)
-    "CORSMiddleware",
-    "RateLimitMiddleware",
     # Middleware - Built-in (Python)
     "TimingMiddleware",
     "LoggingMiddleware",

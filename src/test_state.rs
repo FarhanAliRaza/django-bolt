@@ -657,6 +657,7 @@ pub fn handle_test_request_for(
         cookies,
         context,
         user: None,
+        state: PyDict::new(py).unbind(), // Empty state dict for middleware
     };
     let request_obj = Py::new(py, request)?;
 

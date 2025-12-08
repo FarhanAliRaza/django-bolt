@@ -301,6 +301,7 @@ pub async fn handle_request(
             cookies,
             context,
             user: None,
+            state: PyDict::new(py).unbind(), // Empty state dict for middleware
         };
         let request_obj = Py::new(py, request)?;
 

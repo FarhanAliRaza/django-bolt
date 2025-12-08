@@ -23,7 +23,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-8l7jd)6zngu@-^(&lt=q3smdfx4rcuu9tp3&6&y)ovqm%y=20t'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = ["*"]
 
@@ -58,13 +58,20 @@ ROOT_URLCONF = 'testproject.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [
+            
+            BASE_DIR / "templates"
+            
+            
+            ],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'django.template.context_processors.csp',
+            
             ],
         },
     },
@@ -209,3 +216,21 @@ else:
     
     
 BOLT_MAX_SYNC_STREAMING_THREADS = 1000
+
+
+from django.utils.csp import CSP
+
+MIDDLEWARE += [
+    'django.middleware.csp.ContentSecurityPolicyMiddleware',
+]
+
+SECURE_CSP = {
+    "default-src": [CSP.SELF],
+    "script-src": [CSP.SELF, CSP.NONCE],  # Scripts require nonce!
+    "style-src": [CSP.SELF, CSP.UNSAFE_INLINE, "https://fonts.googleapis.com"],
+    "font-src": [CSP.SELF, "https://fonts.gstatic.com"],
+    "img-src": [CSP.SELF, "https:", "data:"],
+}
+
+
+

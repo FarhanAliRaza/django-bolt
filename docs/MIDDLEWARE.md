@@ -494,6 +494,114 @@ RouteMetadata {
 }
 ```
 
+### Django Middleware Integration
+
+Django-Bolt can automatically load middleware from Django's `settings.MIDDLEWARE`, providing seamless integration with existing Django projects.
+
+#### Automatic Loading from settings.MIDDLEWARE
+
+```python
+from django_bolt import BoltAPI
+
+# Use all Django middleware from settings.MIDDLEWARE
+# (excludes CSRF, Clickjacking, Messages by default)
+api = BoltAPI(django_middleware=True)
+```
+
+#### Custom Middleware Selection
+
+```python
+# Only include specific middleware
+api = BoltAPI(django_middleware=[
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+])
+
+# Use dict config for include/exclude
+api = BoltAPI(django_middleware={
+    "include": [
+        'django.contrib.sessions.middleware.SessionMiddleware',
+        'django.middleware.common.CommonMiddleware',
+    ],
+    "exclude": ['django.middleware.common.CommonMiddleware']
+})
+```
+
+#### Combining Django and Custom Middleware
+
+```python
+from django_bolt import BoltAPI
+from django_bolt.middleware import TimingMiddleware
+
+# Django middleware runs first, then custom middleware
+api = BoltAPI(
+    django_middleware=True,
+    middleware=[TimingMiddleware()],
+)
+```
+
+#### Default Exclusions
+
+By default, these middleware are excluded because they don't make sense for APIs:
+- `django.middleware.csrf.CsrfViewMiddleware` - CSRF protection (APIs use tokens in headers)
+- `django.middleware.clickjacking.XFrameOptionsMiddleware` - Clickjacking protection (for HTML pages)
+- `django.contrib.messages.middleware.MessageMiddleware` - Messages (for Django templates)
+
+To include excluded middleware:
+
+```python
+# Using the loader directly with exclude_defaults=False
+from django_bolt.middleware import load_django_middleware
+
+api = BoltAPI(middleware=load_django_middleware(
+    ['django.middleware.csrf.CsrfViewMiddleware'],
+    exclude_defaults=False
+))
+```
+
+#### How Django Middleware Works
+
+Django middleware is wrapped in `DjangoMiddleware` adapter that:
+1. Converts Bolt requests to Django `HttpRequest` objects
+2. Runs Django middleware (supports both old-style and new-style)
+3. Syncs Django-added attributes (`request.user`, `request.session`) back to Bolt request
+4. Converts Django responses back to Bolt responses
+
+```python
+# The adapter handles both middleware styles:
+
+# Old-style (process_request/process_response)
+class OldStyleMiddleware:
+    def process_request(self, request):
+        request.custom_attr = "value"
+    def process_response(self, request, response):
+        return response
+
+# New-style (callable)
+class NewStyleMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+    def __call__(self, request):
+        request.custom_attr = "value"
+        return self.get_response(request)
+```
+
+#### Accessing Django Middleware Attributes
+
+Attributes set by Django middleware are available on the Bolt request:
+
+```python
+@api.get("/me")
+async def get_current_user(request):
+    # User from AuthenticationMiddleware
+    user = request.user
+
+    # Session from SessionMiddleware
+    session = request.state.get("_django_session")
+
+    return {"user_id": user.id if user.is_authenticated else None}
+```
+
 ### Custom Middleware (Python)
 
 For custom middleware logic not available in Rust:

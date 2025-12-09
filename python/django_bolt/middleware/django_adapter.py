@@ -42,7 +42,7 @@ except ImportError:
     markcoroutinefunction = None
 
 # Import MiddlewareResponse at module level (used at runtime in _to_bolt_response)
-from ..api import MiddlewareResponse
+from ..middleware_response import MiddlewareResponse
 
 if TYPE_CHECKING:
     from ..request import Request

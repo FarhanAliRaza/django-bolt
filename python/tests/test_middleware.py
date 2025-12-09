@@ -76,7 +76,7 @@ class TestMiddlewareDecorators:
         assert len(middleware) > 0
         assert middleware[0]['type'] == 'cors'
         assert middleware[0]['origins'] == ["http://localhost:3000"]
-        assert middleware[0]['credentials'] == True
+        assert middleware[0]['credentials']
         assert middleware[0]['max_age'] == 7200
 
     def test_auth_via_guards(self):
@@ -421,7 +421,7 @@ class TestMiddlewareIntegration:
         assert cors_config['origins'] == ["http://localhost:3000", "https://app.example.com"]
         assert cors_config['methods'] == ["GET", "POST", "PUT"]
         assert cors_config['headers'] == ["Content-Type", "Authorization", "X-Custom"]
-        assert cors_config['credentials'] == True
+        assert cors_config['credentials']
         assert cors_config['max_age'] == 7200
 
 

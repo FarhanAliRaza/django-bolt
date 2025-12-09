@@ -131,7 +131,7 @@ def test_viewset_decorator_with_custom_actions(api):
             return articles
 
     # Create test articles
-    article1 = Article.objects.create(
+    Article.objects.create(
         title="Published",
         content="Content",
         author="Author",

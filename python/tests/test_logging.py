@@ -735,7 +735,7 @@ class TestQueueBasedLogging:
         config_module._QUEUE_LISTENER = None
         config_module._QUEUE = None
 
-        handler = _ensure_queue_logging("INFO")
+        _ensure_queue_logging("INFO")
 
         # Should have created listener
         assert config_module._QUEUE_LISTENER is not None, "QueueListener should be created"

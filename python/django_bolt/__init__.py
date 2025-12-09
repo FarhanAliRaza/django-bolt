@@ -122,7 +122,6 @@ from .responses import JSON, Response, StreamingResponse
 from .router import Router
 from .types import (
     APIKeyAuth,
-    AuthContext,
     DjangoModel,
     JWTClaims,
     SessionAuth,

@@ -44,7 +44,7 @@ from .logging.middleware import LoggingMiddleware, create_logging_middleware
 from .middleware import CompressionConfig
 from .middleware.compiler import add_optimization_flags_to_metadata, compile_middleware_meta
 from .middleware.django_loader import load_django_middleware
-from .router import Router
+from .middleware_response import MiddlewareResponse
 from .openapi import (
     OpenAPIConfig,
     RapidocRenderPlugin,
@@ -58,14 +58,13 @@ from .openapi.schema_generator import SchemaGenerator
 from .params import Depends as DependsMarker
 from .params import Param
 from .request_parsing import parse_form_data
+from .router import Router
 from .serialization import serialize_response
 from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
 from .typing import FieldDefinition, HandlerMetadata, HandlerPattern, is_msgspec_struct
 from .views import APIView, ViewSet
 from .websocket import WebSocket as WebSocketType
 from .websocket import mark_websocket_handler
-
-from .middleware_response import MiddlewareResponse
 
 Response = tuple[int, list[tuple[str, str]], bytes]
 
@@ -322,7 +321,7 @@ class BoltAPI:
             try:
                 # Try to get Django project name from settings
                 title = getattr(django_settings, 'PROJECT_NAME', None) or getattr(django_settings, 'SITE_NAME', None) or "API" if django_settings else "API"
-            except:
+            except Exception:
                 title = "API"
 
             self.openapi_config = OpenAPIConfig(
@@ -1994,7 +1993,7 @@ class BoltAPI:
         """
         registered = set()
 
-        for handler_id, metadata in self._handler_middleware.items():
+        for _handler_id, metadata in self._handler_middleware.items():
             # Get stored backend instances (stored during route decoration)
             backend_instances = metadata.get('_auth_backend_instances', [])
             for backend_instance in backend_instances:
@@ -2141,7 +2140,7 @@ class BoltAPI:
         all_routes = router.get_all_routes()
 
         # Get router middleware chain (including parent routers)
-        router_middleware = router.get_middleware_chain()
+        router.get_middleware_chain()
 
         for method, route_path, handler, meta in all_routes:
             # Compute full path with optional prefix
@@ -2151,7 +2150,7 @@ class BoltAPI:
             route_auth = meta.pop('auth', None)
             route_guards = meta.pop('guards', None)
             route_tags = meta.pop('tags', None)
-            route_router_middleware = meta.pop('_router_middleware', [])
+            meta.pop('_router_middleware', [])
 
             # Get the appropriate decorator based on method
             decorator_method = getattr(self, method.lower(), None)

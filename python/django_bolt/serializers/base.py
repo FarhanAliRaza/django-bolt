@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 import logging
-import sys
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar, get_args, get_origin, get_type_hints
 
@@ -283,15 +282,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     frames_to_cleanup.append(frame)
 
             # Resolve type hints with local namespace
-            if sys.version_info >= (3, 11):
-                hints = get_type_hints(cls, globalns=None, localns=localns, include_extras=True)
-            else:
-                # For Python < 3.11, try typing_extensions first
-                try:
-                    from typing_extensions import get_type_hints as get_type_hints_ext
-                    hints = get_type_hints_ext(cls, globalns=None, localns=localns, include_extras=True)
-                except ImportError:
-                    hints = get_type_hints(cls, globalns=None, localns=localns)
+            hints = get_type_hints(cls, globalns=None, localns=localns, include_extras=True)
 
         except Exception:
             # Strategy 2: Fallback without local namespace (module-level classes)

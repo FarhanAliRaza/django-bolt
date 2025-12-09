@@ -1,3 +1,4 @@
+import contextlib
 import importlib
 import os
 import signal
@@ -126,10 +127,8 @@ class Command(BaseCommand):
         def signal_handler(signum, frame):
             self.stdout.write("\n[django-bolt] Shutting down processes...")
             for pid in child_pids:
-                try:
+                with contextlib.suppress(ProcessLookupError):
                     os.kill(pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
             sys.exit(0)
 
         signal.signal(signal.SIGINT, signal_handler)
@@ -193,7 +192,7 @@ class Command(BaseCommand):
         openapi_config = None
 
         # Find first API with OpenAPI config
-        for api_path, api in apis:
+        for _api_path, api in apis:
             if api.openapi_config:
                 openapi_config = api.openapi_config
                 openapi_enabled = True
@@ -300,7 +299,7 @@ class Command(BaseCommand):
                 compression_config = settings.BOLT_COMPRESSION.to_rust_config()
         else:
             # Check if any API has compression configured
-            for api_path, api in apis:
+            for _api_path, api in apis:
                 if hasattr(api, 'compression') and api.compression is not None:
                     compression_config = api.compression.to_rust_config()
                     break

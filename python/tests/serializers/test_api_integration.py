@@ -582,7 +582,7 @@ class TestAPI3DeeplyNested:
         post.tags.add(tag)
 
         # Create comments
-        comment1 = Comment.objects.create(
+        Comment.objects.create(
             post=post, author=commenter, text="Great post!"
         )
 

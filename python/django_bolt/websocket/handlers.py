@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -74,10 +75,8 @@ def get_websocket_param_name(func: Callable[..., Any]) -> str | None:
     sig = inspect.signature(func)
     hints = {}
 
-    try:
+    with contextlib.suppress(Exception):
         hints = func.__annotations__.copy() if hasattr(func, "__annotations__") else {}
-    except Exception:
-        pass
 
     for param_name, param in sig.parameters.items():
         # Check annotation

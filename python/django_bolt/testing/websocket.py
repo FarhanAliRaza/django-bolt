@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -201,10 +202,8 @@ class WebSocketTestClient:
         """Cleanup test app instance."""
         if self._app_id is not None:
             from django_bolt import _core
-            try:
+            with contextlib.suppress(Exception):
                 _core.destroy_test_app(self._app_id)
-            except Exception:
-                pass
             self._app_id = None
 
     def _find_handler_via_rust(self) -> tuple[bool, int, Callable, dict[str, Any], dict[str, Any]]:
@@ -344,10 +343,8 @@ class WebSocketTestClient:
         # Cancel handler task if still running
         if self._handler_task and not self._handler_task.done():
             self._handler_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._handler_task
-            except asyncio.CancelledError:
-                pass
 
         # Cleanup test app instance
         self._cleanup_app()

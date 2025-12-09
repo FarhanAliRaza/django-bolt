@@ -52,7 +52,7 @@ def test_readonly_model_viewset(api):
         content="Content 1",
         author="Author 1",
     )
-    article2 = async_to_sync(Article.objects.acreate)(
+    async_to_sync(Article.objects.acreate)(
         title="Article 2",
         content="Content 2",
         author="Author 2",
@@ -284,7 +284,7 @@ def test_model_viewset_custom_queryset(api):
 def test_model_viewset_lookup_field(api):
     """Test ModelViewSet with custom lookup_field."""
     # Create article
-    article = async_to_sync(Article.objects.acreate)(
+    async_to_sync(Article.objects.acreate)(
         title="Test Article",
         content="Content",
         author="test-author",

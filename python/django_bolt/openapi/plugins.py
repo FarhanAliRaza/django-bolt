@@ -112,10 +112,12 @@ class YamlRenderPlugin(OpenAPIRenderPlugin):
     def __init__(
         self,
         *,
-        path: str | list[str] = ["/openapi.yaml", "/openapi.yml"],
+        path: str | list[str] = None,
         media_type: str = "text/yaml; charset=utf-8",
         **kwargs: Any,
     ) -> None:
+        if path is None:
+            path = ["/openapi.yaml", "/openapi.yml"]
         super().__init__(path=path, media_type=media_type, **kwargs)
 
     def render(self, openapi_schema: dict[str, Any], schema_url: str) -> str:
@@ -260,7 +262,7 @@ class ScalarRenderPlugin(OpenAPIRenderPlugin):
         version: str = "latest",
         js_url: str | None = None,
         css_url: str | None = None,
-        path: str | list[str] = ["/scalar", "/"],
+        path: str | list[str] = None,
         options: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -274,6 +276,8 @@ class ScalarRenderPlugin(OpenAPIRenderPlugin):
             options: Scalar configuration options.
             **kwargs: Additional arguments to pass to base class.
         """
+        if path is None:
+            path = ["/scalar", "/"]
         self.js_url = js_url or f"https://cdn.jsdelivr.net/npm/@scalar/api-reference@{version}"
         self.css_url = css_url or self._default_css_url
         self.options = options

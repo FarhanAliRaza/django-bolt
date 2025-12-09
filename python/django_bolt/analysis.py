@@ -277,10 +277,9 @@ class OrmVisitor(ast.NodeVisitor):
         # This reduces false positives like dict.get(), response.get(), etc.
         is_in_objects_chain = self._check_for_objects_chain(node)
 
-        if is_in_objects_chain:
-            if attr_name in SYNC_ORM_METHODS or attr_name in ASYNC_ORM_METHODS:
-                self.analysis.uses_orm = True
-                self.analysis.orm_operations.add(attr_name)
+        if is_in_objects_chain and (attr_name in SYNC_ORM_METHODS or attr_name in ASYNC_ORM_METHODS):
+            self.analysis.uses_orm = True
+            self.analysis.orm_operations.add(attr_name)
 
         # Check for model instance methods (save, delete, etc.)
         # These are called on model instances, not managers
@@ -317,12 +316,11 @@ class OrmVisitor(ast.NodeVisitor):
         """Detect iteration over QuerySets (blocking)."""
         # Check if iterating over something that looks like a QuerySet
         # e.g., for user in User.objects.all():
-        if isinstance(node.iter, ast.Call):
-            if isinstance(node.iter.func, ast.Attribute):
-                method_name = node.iter.func.attr
-                if method_name in SYNC_ORM_METHODS or method_name in ASYNC_ORM_METHODS:
-                    self.analysis.uses_orm = True
-                    self.analysis.orm_operations.add(f"iterate_{method_name}")
+        if isinstance(node.iter, ast.Call) and isinstance(node.iter.func, ast.Attribute):
+            method_name = node.iter.func.attr
+            if method_name in SYNC_ORM_METHODS or method_name in ASYNC_ORM_METHODS:
+                self.analysis.uses_orm = True
+                self.analysis.orm_operations.add(f"iterate_{method_name}")
 
         self.generic_visit(node)
 
@@ -330,12 +328,11 @@ class OrmVisitor(ast.NodeVisitor):
         """Detect list comprehension over QuerySets."""
         # [user.name for user in User.objects.all()]
         for generator in node.generators:
-            if isinstance(generator.iter, ast.Call):
-                if isinstance(generator.iter.func, ast.Attribute):
-                    method_name = generator.iter.func.attr
-                    if method_name in SYNC_ORM_METHODS or method_name in ASYNC_ORM_METHODS:
-                        self.analysis.uses_orm = True
-                        self.analysis.orm_operations.add(f"comprehension_{method_name}")
+            if isinstance(generator.iter, ast.Call) and isinstance(generator.iter.func, ast.Attribute):
+                method_name = generator.iter.func.attr
+                if method_name in SYNC_ORM_METHODS or method_name in ASYNC_ORM_METHODS:
+                    self.analysis.uses_orm = True
+                    self.analysis.orm_operations.add(f"comprehension_{method_name}")
 
         self.generic_visit(node)
 

@@ -8,6 +8,7 @@ non-blocking and fully controlled by application logging config.
 """
 
 import atexit
+import contextlib
 import importlib
 import logging
 import logging.config
@@ -124,10 +125,7 @@ class LoggingConfig:
         if path in self.skip_paths:
             return False
 
-        if status_code and status_code in self.skip_status_codes:
-            return False
-
-        return True
+        return not (status_code and status_code in self.skip_status_codes)
 
 
 @dataclass
@@ -297,10 +295,8 @@ def setup_django_logging(force: bool = False) -> None:
         return
 
     if force and _QUEUE_LISTENER is not None:
-        try:
+        with contextlib.suppress(Exception):
             _QUEUE_LISTENER.stop()
-        except Exception:
-            pass
         _QUEUE_LISTENER = None
 
     try:

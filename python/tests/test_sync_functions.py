@@ -591,7 +591,7 @@ class TestAsyncSyncParityPathParameters:
 
         assert async_data["user_id"] == sync_data["user_id"] == 789
         assert async_data["is_async"] is True
-        assert "is_async" not in sync_data or sync_data.get("is_async") != True
+        assert "is_async" not in sync_data or not sync_data.get("is_async")
 
 
 class TestAsyncSyncParityRequestBody:

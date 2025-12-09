@@ -14,7 +14,7 @@ import msgspec
 from asgiref.sync import sync_to_async
 
 from .exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
-from .typing import HandlerMetadata, is_msgspec_struct, is_optional, unwrap_optional
+from .typing import FieldDefinition, HandlerMetadata, is_msgspec_struct, is_optional, unwrap_optional
 
 __all__ = [
     "convert_primitive",
@@ -90,7 +90,8 @@ def convert_primitive(value: str, annotation: Any) -> Any:
 def create_path_extractor(name: str, annotation: Any, alias: str | None = None) -> Callable:
     """Create a pre-compiled extractor for path parameters."""
     key = alias or name
-    converter = lambda v: convert_primitive(str(v), annotation)
+    def converter(v):
+        return convert_primitive(str(v), annotation)
 
     def extract(params_map: dict[str, Any]) -> Any:
         if key not in params_map:
@@ -109,7 +110,8 @@ def create_query_extractor(
     """Create a pre-compiled extractor for query parameters."""
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
-    converter = lambda v: convert_primitive(str(v), annotation)
+    def converter(v):
+        return convert_primitive(str(v), annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
@@ -133,7 +135,8 @@ def create_header_extractor(
     """Create a pre-compiled extractor for HTTP headers."""
     key = (alias or name).lower()
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
-    converter = lambda v: convert_primitive(str(v), annotation)
+    def converter(v):
+        return convert_primitive(str(v), annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
@@ -157,7 +160,8 @@ def create_cookie_extractor(
     """Create a pre-compiled extractor for cookies."""
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
-    converter = lambda v: convert_primitive(str(v), annotation)
+    def converter(v):
+        return convert_primitive(str(v), annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
@@ -181,7 +185,8 @@ def create_form_extractor(
     """Create a pre-compiled extractor for form fields."""
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
-    converter = lambda v: convert_primitive(str(v), annotation)
+    def converter(v):
+        return convert_primitive(str(v), annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default

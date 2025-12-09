@@ -503,7 +503,7 @@ class ViewSet(APIView):
                         # Manual mapping
                         fields = getattr(serializer_class, "__annotations__", {})
                         return [
-                            msgspec.convert({name: getattr(obj, name, None) for name in fields.keys()}, serializer_class)
+                            msgspec.convert({name: getattr(obj, name, None) for name in fields}, serializer_class)
                             for obj in instance
                         ]
                 else:
@@ -512,7 +512,7 @@ class ViewSet(APIView):
                         return serializer_class.from_model(instance)
                     else:
                         fields = getattr(serializer_class, "__annotations__", {})
-                        mapped = {name: getattr(instance, name, None) for name in fields.keys()}
+                        mapped = {name: getattr(instance, name, None) for name in fields}
                         return msgspec.convert(mapped, serializer_class)
             elif data is not None:
                 # Data is already validated by msgspec at parameter binding
@@ -564,7 +564,7 @@ class ListMixin:
                 else:
                     # Assume it's a msgspec.Struct, use convert
                     fields = getattr(serializer_class, "__annotations__", {})
-                    mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+                    mapped = {name: getattr(obj, name, None) for name in fields}
                     results.append(msgspec.convert(mapped, serializer_class))
             else:
                 results.append(obj)
@@ -602,7 +602,7 @@ class RetrieveMixin:
             else:
                 # Assume it's a msgspec.Struct, use convert
                 fields = getattr(serializer_class, "__annotations__", {})
-                mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+                mapped = {name: getattr(obj, name, None) for name in fields}
                 return msgspec.convert(mapped, serializer_class)
 
         return obj
@@ -655,7 +655,7 @@ class CreateMixin:
                 return serializer_class.from_model(obj)
             else:
                 fields = getattr(serializer_class, "__annotations__", {})
-                mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+                mapped = {name: getattr(obj, name, None) for name in fields}
                 return msgspec.convert(mapped, serializer_class)
 
         return obj
@@ -706,7 +706,7 @@ class UpdateMixin:
                 return serializer_class.from_model(obj)
             else:
                 fields = getattr(serializer_class, "__annotations__", {})
-                mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+                mapped = {name: getattr(obj, name, None) for name in fields}
                 return msgspec.convert(mapped, serializer_class)
 
         return obj
@@ -758,7 +758,7 @@ class PartialUpdateMixin:
                 return serializer_class.from_model(obj)
             else:
                 fields = getattr(serializer_class, "__annotations__", {})
-                mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+                mapped = {name: getattr(obj, name, None) for name in fields}
                 return msgspec.convert(mapped, serializer_class)
 
         return obj
@@ -928,7 +928,7 @@ class ModelViewSet(ViewSet):
             else:
                 # Fallback: manual conversion
                 fields = getattr(serializer_class, '__annotations__', {})
-                mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+                mapped = {name: getattr(obj, name, None) for name in fields}
                 results.append(msgspec.convert(mapped, serializer_class))
 
         return results
@@ -951,7 +951,7 @@ class ModelViewSet(ViewSet):
             return serializer_class.from_model(obj)
         else:
             fields = getattr(serializer_class, '__annotations__', {})
-            mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+            mapped = {name: getattr(obj, name, None) for name in fields}
             return msgspec.convert(mapped, serializer_class)
 
     async def create(self, request, data):
@@ -987,7 +987,7 @@ class ModelViewSet(ViewSet):
             return serializer_class.from_model(obj)
         else:
             fields = getattr(serializer_class, '__annotations__', {})
-            mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+            mapped = {name: getattr(obj, name, None) for name in fields}
             return msgspec.convert(mapped, serializer_class)
 
     async def update(self, request, data, **kwargs):
@@ -1024,7 +1024,7 @@ class ModelViewSet(ViewSet):
             return serializer_class.from_model(obj)
         else:
             fields = getattr(serializer_class, '__annotations__', {})
-            mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+            mapped = {name: getattr(obj, name, None) for name in fields}
             return msgspec.convert(mapped, serializer_class)
 
     async def partial_update(self, request, data, **kwargs):
@@ -1061,7 +1061,7 @@ class ModelViewSet(ViewSet):
             return serializer_class.from_model(obj)
         else:
             fields = getattr(serializer_class, '__annotations__', {})
-            mapped = {name: getattr(obj, name, None) for name in fields.keys()}
+            mapped = {name: getattr(obj, name, None) for name in fields}
             return msgspec.convert(mapped, serializer_class)
 
     async def destroy(self, request, **kwargs):

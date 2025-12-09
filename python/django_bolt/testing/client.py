@@ -7,6 +7,8 @@ This version uses the test_state.rs infrastructure which provides:
 """
 from __future__ import annotations
 
+import builtins
+import contextlib
 from collections.abc import Iterator
 from typing import Any
 
@@ -277,10 +279,8 @@ class TestClient(httpx.Client):
 
     def __exit__(self, *args):
         """Exit context manager and cleanup test app."""
-        try:
+        with contextlib.suppress(builtins.BaseException):
             _core.destroy_test_app(self.app_id)
-        except:
-            pass
         return super().__exit__(*args)
 
     # Override HTTP methods to support stream=True
@@ -389,10 +389,7 @@ class TestClient(httpx.Client):
                 buffer += chunk
 
                 # Split on newlines
-                if isinstance(buffer, bytes):
-                    lines = buffer.split(b"\n")
-                else:
-                    lines = buffer.split("\n")
+                lines = buffer.split(b"\n") if isinstance(buffer, bytes) else buffer.split("\n")
 
                 # Yield all complete lines, keep incomplete line in buffer
                 for line in lines[:-1]:

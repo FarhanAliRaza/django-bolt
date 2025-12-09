@@ -8,7 +8,6 @@ and IDE autocomplete.
 from collections.abc import Iterator
 from typing import (
     Any,
-    Generic,
     Protocol,
     TypeVar,
     runtime_checkable,
@@ -20,7 +19,7 @@ AuthT = TypeVar("AuthT")
 StateT = TypeVar("StateT", bound=dict[str, Any])
 
 
-class State(Generic[StateT]):
+class State[StateT: dict[str, Any]]:
     """
     Type-safe state container with attribute and dict access.
 

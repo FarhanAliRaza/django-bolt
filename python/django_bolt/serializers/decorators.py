@@ -202,7 +202,7 @@ def collect_field_validators(cls: type[Serializer]) -> dict[str, list[Callable[[
         if not hasattr(base, "__dict__"):
             continue
 
-        for name, value in base.__dict__.items():
+        for _name, value in base.__dict__.items():
             if callable(value) and hasattr(value, "__validator_field__"):
                 field_name = value.__validator_field__
                 if field_name not in validators:
@@ -225,7 +225,7 @@ def collect_model_validators(cls: type[Serializer]) -> list[Callable[[Serializer
         if not hasattr(base, "__dict__"):
             continue
 
-        for name, value in base.__dict__.items():
+        for _name, value in base.__dict__.items():
             if callable(value) and hasattr(value, "__model_validator__"):
                 validators.append(value)
 
@@ -245,7 +245,7 @@ def collect_computed_fields(cls: type[Serializer]) -> dict[str, ComputedFieldCon
         if not hasattr(base, "__dict__"):
             continue
 
-        for name, value in base.__dict__.items():
+        for _name, value in base.__dict__.items():
             if callable(value) and hasattr(value, "__computed_field__"):
                 config: ComputedFieldConfig = value.__computed_field__
                 # Use alias if provided, otherwise use method name

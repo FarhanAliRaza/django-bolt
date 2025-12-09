@@ -194,7 +194,7 @@ def test_unified_viewset_custom_lookup_field(api):
     """Test unified ViewSet with custom lookup_field."""
 
     # Create article
-    article = async_to_sync(Article.objects.acreate)(
+    async_to_sync(Article.objects.acreate)(
         title="Test Article",
         content="Test Content",
         author="test-author-slug",

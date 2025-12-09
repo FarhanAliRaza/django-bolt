@@ -112,7 +112,7 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
     # Common: JSON wrapper
     elif isinstance(result, JSON):
         # Sync version of serialize_json_response
-        has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+        has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
         if has_custom_content_type:
             headers = [(k.lower(), v) for k, v in result.headers.items()]
         else:
@@ -149,7 +149,7 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
         return serialize_file_streaming_response(result)
     elif isinstance(result, ResponseClass):
         # Sync version of serialize_generic_response
-        has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+        has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
         if has_custom_content_type:
             headers = [(k.lower(), v) for k, v in result.headers.items()]
         else:
@@ -175,7 +175,7 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
 async def serialize_generic_response(result: ResponseClass, response_tp: Any | None, meta: HandlerMetadata | None = None) -> ResponseTuple:
     """Serialize generic Response object with custom headers."""
     # Check if content-type is already provided in custom headers
-    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
 
     if has_custom_content_type:
         # Use only custom headers (including custom content-type)
@@ -202,7 +202,7 @@ async def serialize_generic_response(result: ResponseClass, response_tp: Any | N
 async def serialize_json_response(result: JSON, response_tp: Any | None, meta: HandlerMetadata | None = None) -> ResponseTuple:
     """Serialize JSON response object."""
     # Check if content-type is already provided in custom headers
-    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
 
     if has_custom_content_type:
         # Use only custom headers (including custom content-type)
@@ -229,7 +229,7 @@ async def serialize_json_response(result: JSON, response_tp: Any | None, meta: H
 def serialize_plaintext_response(result: PlainText) -> ResponseTuple:
     """Serialize plain text response."""
     # Check if content-type is already provided in custom headers
-    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
 
     if has_custom_content_type:
         # Use only custom headers (including custom content-type)
@@ -246,7 +246,7 @@ def serialize_plaintext_response(result: PlainText) -> ResponseTuple:
 def serialize_html_response(result: HTML) -> ResponseTuple:
     """Serialize HTML response."""
     # Check if content-type is already provided in custom headers
-    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers.keys())
+    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
 
     if has_custom_content_type:
         # Use only custom headers (including custom content-type)

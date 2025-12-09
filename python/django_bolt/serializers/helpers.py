@@ -52,17 +52,13 @@ def create_serializer(
     model_fields = {f.name: f for f in model._meta.get_fields()}
 
     # Determine which fields to include
-    if fields is not None:
-        fields_to_include = set(fields)
-    else:
-        fields_to_include = set(model_fields.keys())
+    fields_to_include = set(fields) if fields is not None else set(model_fields.keys())
 
     if exclude:
         fields_to_include -= set(exclude)
 
     # Build field annotations
     annotations: dict[str, Any] = {}
-    namespace: dict[str, Any] = {}
 
     for field_name in fields_to_include:
         if field_name not in model_fields:

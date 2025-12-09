@@ -6,6 +6,7 @@ from pathlib import Path
 try:
     import django
     from django.conf import settings
+
     # Import with alias for use in _info() function
     from django.conf import settings as dj_settings
 except ImportError:

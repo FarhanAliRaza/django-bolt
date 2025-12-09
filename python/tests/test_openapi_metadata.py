@@ -242,7 +242,7 @@ def test_action_metadata_passed_to_route():
 
     # Find the registered handler
     deactivate_route = None
-    for method, path, handler_id, handler in api._routes:
+    for _method, path, _handler_id, handler in api._routes:
         if path == "/users/{pk}/deactivate":
             deactivate_route = handler
             break

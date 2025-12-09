@@ -109,7 +109,6 @@ def custom_auth_api():
     )
     async def get_admin_data(request):
         """Admin endpoint with custom user mapping."""
-        user = request.user
         # Guard ensures user loaded, so safe to access
         return {
             "message": "admin access granted",
@@ -238,7 +237,7 @@ class TestCustomAuthBackendUserLoading:
     def test_custom_backend_maps_key_to_user(self, custom_auth_api):
         """Test that custom backend properly maps API key to user."""
         # Create admin user with explicit commit
-        admin_user = User.objects.create(username="admin")
+        User.objects.create(username="admin")
 
         with TestClient(custom_auth_api) as client:
             response = client.get(
@@ -270,7 +269,7 @@ class TestSessionUserLoading:
         api = BoltAPI()
 
         # Create a test user with explicit commit
-        user = User.objects.create(username="sessionuser")
+        User.objects.create(username="sessionuser")
 
         @api.get(
             "/session-test",
@@ -376,7 +375,7 @@ class TestSyncHandlerWithCustomBackend:
             }
 
         # Create test user
-        user = User.objects.create(username="testuser")
+        User.objects.create(username="testuser")
 
         with TestClient(api) as client:
             response = client.get(
@@ -421,7 +420,7 @@ class TestSyncHandlerWithCustomBackend:
             }
 
         # Create test user
-        user = User.objects.create(username="asyncuser")
+        User.objects.create(username="asyncuser")
 
         with TestClient(api) as client:
             response = client.get(

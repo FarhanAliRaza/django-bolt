@@ -4,6 +4,8 @@ Pytest configuration for Django-Bolt tests.
 Ensures Django settings are properly reset between tests.
 Provides utilities for subprocess-based testing.
 """
+import builtins
+import contextlib
 import logging
 import os
 import platform
@@ -147,20 +149,16 @@ def spawn_process(command):
 def kill_process(process):
     """Kill a subprocess and its process group"""
     if platform.system() == "Windows":
-        try:
+        with contextlib.suppress(builtins.BaseException):
             process.send_signal(signal.CTRL_BREAK_EVENT)
-        except:
-            pass
-        try:
+        with contextlib.suppress(builtins.BaseException):
             process.kill()
-        except:
-            pass
     else:
         try:
             os.killpg(os.getpgid(process.pid), signal.SIGKILL)
         except ProcessLookupError:
             pass
-        except:
+        except Exception:
             pass
 
 

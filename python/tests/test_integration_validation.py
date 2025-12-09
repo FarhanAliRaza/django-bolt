@@ -74,7 +74,7 @@ def test_crud_operations_validation():
     assert len(api._routes) == 6
 
     # Verify parameter sources
-    for method, path, handler_id, fn in api._routes:
+    for method, path, _handler_id, fn in api._routes:
         meta = api._handler_meta[fn]
 
         if method == "GET" and path == "/users":
@@ -153,7 +153,7 @@ def test_authentication_headers():
     assert len(api._routes) == 2
 
     # Verify header sources
-    for method, path, handler_id, fn in api._routes:
+    for _method, _path, _handler_id, fn in api._routes:
         meta = api._handler_meta[fn]
         for field in meta["fields"]:
             assert field.source == "header"
@@ -259,7 +259,7 @@ def test_nested_resources_with_path_params():
         return {"org": org_id, "team": team_id, "member": member_id}
 
     # Verify all path params detected
-    for method, path, handler_id, fn in api._routes:
+    for _method, path, _handler_id, fn in api._routes:
         meta = api._handler_meta[fn]
         path_fields = [f for f in meta["fields"] if f.source == "path"]
 
@@ -282,8 +282,10 @@ def test_optional_and_required_parameters():
         category: str,                    # Required (no default)
         min_price: float = 0,            # Optional (has default)
         max_price: float | None = None,  # Optional (nullable)
-        tags: list[str] = []             # Optional (default empty list)
+        tags: list[str] = None             # Optional (default empty list)
     ):
+        if tags is None:
+            tags = []
         return {"items": []}
 
     meta = api._handler_meta[api._routes[0][3]]
@@ -354,7 +356,7 @@ def test_real_world_api_structure():
     assert len(api._routes) == 6
 
     # Verify no GET endpoints have body params
-    for method, path, handler_id, fn in api._routes:
+    for method, path, _handler_id, fn in api._routes:
         if method == "GET":
             meta = api._handler_meta[fn]
             body_fields = [f for f in meta["fields"] if f.source == "body"]

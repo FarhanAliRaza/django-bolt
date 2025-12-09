@@ -51,10 +51,7 @@ class TestChoicesFieldDetection:
         # The origin will be str after unwrapping Annotated
 
         # If it's Annotated, get the first arg (the actual type)
-        if hasattr(field_type, "__origin__"):
-            actual_type = get_args(field_type)[0]
-        else:
-            actual_type = field_type
+        actual_type = get_args(field_type)[0] if hasattr(field_type, "__origin__") else field_type
 
         assert actual_type is str
 

@@ -302,7 +302,7 @@ class TestStaticRouteMetadata:
 
         # Find the static handler
         static_handler = None
-        for method, path, handler_id, handler in api._routes:
+        for _method, path, _handler_id, handler in api._routes:
             if '/static/' in path and '{path:path}' in path:
                 static_handler = handler
                 break
@@ -332,7 +332,7 @@ class TestStaticRouteMetadata:
 
         # Find the static handler
         static_handler = None
-        for method, path, handler_id, handler in api._routes:
+        for _method, path, _handler_id, handler in api._routes:
             if '/static/' in path and '{path:path}' in path:
                 static_handler = handler
                 break
@@ -363,7 +363,7 @@ class TestStaticRouteMetadata:
 
         # Find the static handler
         static_handler = None
-        for method, path, handler_id, handler in api._routes:
+        for _method, path, _handler_id, handler in api._routes:
             if '/static/' in path and '{path:path}' in path:
                 static_handler = handler
                 break

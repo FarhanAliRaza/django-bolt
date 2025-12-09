@@ -219,7 +219,7 @@ def get_msgspec_type_for_django_field(field: models.Field, **field_kwargs: Any) 
     elif isinstance(field, models.TextField):
         base_type = str
 
-    elif isinstance(field, models.EmailField) or isinstance(field, models.URLField) or isinstance(field, models.SlugField):
+    elif isinstance(field, (models.EmailField, models.URLField, models.SlugField)):
         constraints["max_length"] = field.max_length
         base_type = str
 

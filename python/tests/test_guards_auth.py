@@ -95,7 +95,7 @@ class TestPermissionGuards:
         assert guard.to_metadata() == {"type": "allow_any"}
 
         # Should allow without auth context
-        assert guard.has_permission(None) == True
+        assert guard.has_permission(None)
 
     def test_is_authenticated(self):
         """Test IsAuthenticated guard"""
@@ -104,11 +104,11 @@ class TestPermissionGuards:
         assert guard.to_metadata() == {"type": "is_authenticated"}
 
         # Should deny without auth context
-        assert guard.has_permission(None) == False
+        assert not guard.has_permission(None)
 
         # Should allow with auth context
         ctx = AuthContext(user_id="user123")
-        assert guard.has_permission(ctx) == True
+        assert guard.has_permission(ctx)
 
     def test_is_admin(self):
         """Test IsAdminUser guard"""
@@ -116,15 +116,15 @@ class TestPermissionGuards:
         assert guard.guard_name == "is_superuser"
 
         # Should deny without auth
-        assert guard.has_permission(None) == False
+        assert not guard.has_permission(None)
 
         # Should deny non-admin user
         ctx = AuthContext(user_id="user123", is_superuser=False)
-        assert guard.has_permission(ctx) == False
+        assert not guard.has_permission(ctx)
 
         # Should allow admin user
         ctx = AuthContext(user_id="admin", is_superuser=True)
-        assert guard.has_permission(ctx) == True
+        assert guard.has_permission(ctx)
 
     def test_is_staff(self):
         """Test IsStaff guard"""
@@ -133,11 +133,11 @@ class TestPermissionGuards:
 
         # Should deny non-staff
         ctx = AuthContext(user_id="user", is_staff=False)
-        assert guard.has_permission(ctx) == False
+        assert not guard.has_permission(ctx)
 
         # Should allow staff
         ctx = AuthContext(user_id="staff", is_staff=True)
-        assert guard.has_permission(ctx) == True
+        assert guard.has_permission(ctx)
 
     def test_has_permission(self):
         """Test HasPermission guard"""
@@ -150,11 +150,11 @@ class TestPermissionGuards:
 
         # Should deny without permission
         ctx = AuthContext(user_id="user", permissions={"users.view"})
-        assert guard.has_permission(ctx) == False
+        assert not guard.has_permission(ctx)
 
         # Should allow with permission
         ctx = AuthContext(user_id="user", permissions={"users.delete", "users.view"})
-        assert guard.has_permission(ctx) == True
+        assert guard.has_permission(ctx)
 
     def test_has_any_permission(self):
         """Test HasAnyPermission guard"""
@@ -166,11 +166,11 @@ class TestPermissionGuards:
 
         # Should deny without any permission
         ctx = AuthContext(user_id="user", permissions={"users.view"})
-        assert guard.has_permission(ctx) == False
+        assert not guard.has_permission(ctx)
 
         # Should allow with one permission
         ctx = AuthContext(user_id="user", permissions={"users.view", "users.create"})
-        assert guard.has_permission(ctx) == True
+        assert guard.has_permission(ctx)
 
     def test_has_all_permissions(self):
         """Test HasAllPermissions guard"""
@@ -181,11 +181,11 @@ class TestPermissionGuards:
 
         # Should deny without all permissions
         ctx = AuthContext(user_id="user", permissions={"users.create"})
-        assert guard.has_permission(ctx) == False
+        assert not guard.has_permission(ctx)
 
         # Should allow with all permissions
         ctx = AuthContext(user_id="user", permissions={"users.create", "users.delete", "users.view"})
-        assert guard.has_permission(ctx) == True
+        assert guard.has_permission(ctx)
 
 
 class TestRouteDecoratorAPI:
@@ -200,7 +200,7 @@ class TestRouteDecoratorAPI:
             return {"message": "admin only"}
 
         # Check that metadata was compiled
-        handler = api._handlers[0]
+        api._handlers[0]
         handler_id = 0
         assert handler_id in api._handler_middleware
 
@@ -334,7 +334,7 @@ class TestJWTTokenHandling:
         # Verify we can decode it
         decoded = jwt.decode(token, secret, algorithms=["HS256"])
         assert decoded["sub"] == "user123"
-        assert decoded["is_staff"] == True
+        assert decoded["is_staff"]
         assert "users.view" in decoded["permissions"]
 
     def test_expired_jwt(self):
@@ -401,7 +401,6 @@ class TestEdgeCases:
             return {"message": "no guards"}
 
         # Should not create metadata if guards list is empty
-        handler_id = 0
         # Empty guards should result in no metadata or default behavior
 
     def test_none_auth_parameter(self):
@@ -414,7 +413,7 @@ class TestEdgeCases:
 
         # Should fall back to global defaults
         handler_id = 0
-        metadata = api._handler_middleware.get(handler_id)
+        api._handler_middleware.get(handler_id)
         # Verify it uses global defaults or no auth
 
     def test_mixed_guard_types(self):

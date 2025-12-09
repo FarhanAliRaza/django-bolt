@@ -160,7 +160,7 @@ class BaseMiddleware(ABC):
 
         # Convert method list to set for O(1) lookup
         if self.exclude_methods:
-            self._exclude_methods_set = set(m.upper() for m in self.exclude_methods)
+            self._exclude_methods_set = {m.upper() for m in self.exclude_methods}
 
     async def __call__(self, request: Request) -> Response:
         """Process request, checking exclusions first."""
@@ -181,10 +181,7 @@ class BaseMiddleware(ABC):
             return True
 
         # Check path exclusion (regex match)
-        if self._exclude_pattern and self._exclude_pattern.match(request.path):
-            return True
-
-        return False
+        return bool(self._exclude_pattern and self._exclude_pattern.match(request.path))
 
     @abstractmethod
     async def process_request(self, request: Request) -> Response:
@@ -564,10 +561,7 @@ class ErrorHandlerMiddleware(BaseMiddleware):
         except Exception as e:
             self.logger.exception(f"Unhandled exception: {e}")
 
-            if self.debug:
-                detail = traceback.format_exc()
-            else:
-                detail = "Internal Server Error"
+            detail = traceback.format_exc() if self.debug else "Internal Server Error"
 
             raise HTTPException(500, detail)
 

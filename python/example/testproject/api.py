@@ -400,7 +400,7 @@ async def generate_token(token_req: TokenRequest):
     }
     ```
     """
-    User = get_user_model()
+    get_user_model()
 
     # Authenticate the user
     user = await aauthenticate(username=token_req.username, password=token_req.password)
@@ -546,7 +546,6 @@ class BenchPayload(msgspec.Struct):
 async def bench_parse(req: Request, payload: BenchPayload):
     # msgspec validates and decodes in one pass; just return minimal data
 
-    context = req.context
     return {"ok": True, "n": len(payload.items), "count": payload.count}
 
 
@@ -639,7 +638,7 @@ async def file_static():
 @no_compress
 async def stream_plain():
     def gen():
-        for i in range(100):
+        for _i in range(100):
             yield "x"
     return StreamingResponse(gen(), media_type="text/plain")
 
@@ -824,7 +823,7 @@ async def error_validation(user: UserCreate):
 @api.get("/errors/internal")
 async def error_internal():
     """Example of generic exception that triggers debug mode behavior.
-    
+
     In DEBUG=True: Returns 500 with full traceback
     In DEBUG=False: Returns 500 with generic message
     """
@@ -1094,7 +1093,7 @@ class StreamViewSet(ViewSet):
     async def get(self, request):
         """GET /cbv-stream - Stream plain text."""
         def gen():
-            for i in range(100):
+            for _i in range(100):
                 yield "x"
         return StreamingResponse(gen(), media_type="text/plain")
 
@@ -1181,7 +1180,7 @@ class ChatCompletionsViewSet(ViewSet):
         if payload.stream:
             async def agen():
                 delay = max(0, payload.delay_ms or 0) / 1000.0
-                for i in range(max(1, payload.n_chunks)):
+                for _i in range(max(1, payload.n_chunks)):
                     chunk = ChatCompletionChunk(
                         id=chat_id,
                         created=created,

@@ -277,7 +277,7 @@ def test_jwt_expiration():
     # Verify it's expired
     try:
         jwt.decode(expired_token, "secret", algorithms=["HS256"])
-        assert False, "Should have raised ExpiredSignatureError"
+        raise AssertionError("Should have raised ExpiredSignatureError")
     except jwt.ExpiredSignatureError:
         pass  # Expected
 

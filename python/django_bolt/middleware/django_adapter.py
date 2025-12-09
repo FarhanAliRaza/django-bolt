@@ -13,6 +13,7 @@ Performance considerations:
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import io
 import logging
@@ -20,6 +21,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from asgiref.sync import async_to_sync
+
+from ..middleware_response import MiddlewareResponse
 
 # Use "django_bolt" logger directly (not "django_bolt.middleware") because
 # Django's LOGGING config often sets propagate=False on "django_bolt",
@@ -40,9 +43,6 @@ except ImportError:
     sync_to_async = None
     iscoroutinefunction = None
     markcoroutinefunction = None
-
-# Import MiddlewareResponse at module level (used at runtime in _to_bolt_response)
-from ..middleware_response import MiddlewareResponse
 
 if TYPE_CHECKING:
     from ..request import Request
@@ -233,10 +233,8 @@ class DjangoMiddleware:
         # Check if we already have a Django request in context (from outer middleware)
         # This ensures session, user, etc. set by outer middleware are preserved
         existing_ctx = None
-        try:
+        with contextlib.suppress(LookupError):
             existing_ctx = _request_context.get()
-        except LookupError:
-            pass
 
         if existing_ctx and "django_request" in existing_ctx:
             # Reuse existing Django request (preserves session, user, etc.)
@@ -512,40 +510,6 @@ class DjangoMiddlewareStack:
         Creates Django's middleware chain with a single async bridge at the innermost layer.
         """
         self.get_response = get_response
-
-        # Create the innermost get_response bridge (Bolt response conversion)
-        # This is called ONCE after ALL Django middleware have processed
-        async def get_response_bridge(django_request: HttpRequest) -> HttpResponse:
-            """
-            Innermost bridge: calls Bolt's get_response and converts response.
-
-            This is called ONCE per request, after all Django middleware
-            have done their process_request work.
-            """
-            try:
-                ctx = _request_context.get()
-            except LookupError as e:
-                raise RuntimeError(
-                    "Request context not set. This usually means the middleware chain "
-                    "was not properly initialized."
-                ) from e
-
-            bolt_request = ctx["bolt_request"]
-
-            # Sync Django request attributes to Bolt request BEFORE calling handler
-            # This ensures request.user is available in the handler (set by AuthenticationMiddleware)
-            _sync_request_attributes(django_request, bolt_request)
-
-            # Call Bolt's next middleware/handler
-            bolt_resp = await self.get_response(bolt_request)
-
-            ctx["bolt_response"] = bolt_resp
-
-            # Sync again after handler in case middleware modified attributes
-            _sync_request_attributes(django_request, bolt_request)
-
-            # Convert Bolt response to Django response for middleware chain
-            return _to_django_response(bolt_resp)
 
         # SYNC MODE OPTIMIZATION:
         # Django's __acall__ uses sync_to_async for every process_request/process_response

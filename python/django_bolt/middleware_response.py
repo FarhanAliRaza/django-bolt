@@ -8,7 +8,6 @@ This is in a separate module to avoid circular imports:
 """
 from __future__ import annotations
 
-
 Response = tuple[int, list[tuple[str, str]], bytes]
 
 
@@ -32,7 +31,7 @@ class MiddlewareResponse:
         """Create from internal tuple format."""
         status_code, headers_list, body = response
         # Convert list of tuples to dict for middleware
-        headers = {k: v for k, v in headers_list}
+        headers = dict(headers_list)
         return cls(status_code, headers, body)
 
     def to_tuple(self) -> Response:

@@ -399,7 +399,7 @@ class SchemaGenerator:
             required=["detail"],
         )
 
-    def _extract_security(self, handler_id: int) -> list[SecurityReq] | None:
+    def _extract_security(self, handler_id: int) -> list[dict[str, list[str]]] | None:
         """Extract security requirements from handler middleware.
 
         Args:
@@ -415,7 +415,7 @@ class SchemaGenerator:
             return None
 
         # Convert auth backends to security requirements
-        security: list[SecurityReq] = []
+        security: list[dict[str, list[str]]] = []
         for auth_backend in auth_config:
             backend_name = auth_backend.__class__.__name__
 

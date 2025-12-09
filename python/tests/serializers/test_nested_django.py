@@ -313,7 +313,7 @@ class TestNestedWithinNested:
         commenter = Author.objects.create(
             name="Henry", email="henry@example.com"
         )
-        comment = Comment.objects.create(
+        Comment.objects.create(
             post=post, author=commenter, text="Great post!"
         )
 

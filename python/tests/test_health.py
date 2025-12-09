@@ -271,7 +271,7 @@ class TestHealthCheckScenarios:
         hc.add_check(slow_check1)
         hc.add_check(slow_check2)
 
-        results = await hc.run_checks()
+        await hc.run_checks()
         elapsed = time.time() - start_time
 
         # If checks run sequentially, would take ~0.2s

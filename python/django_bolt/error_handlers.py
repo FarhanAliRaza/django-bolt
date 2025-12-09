@@ -271,10 +271,7 @@ def handle_exception(
     # Check Django's DEBUG setting dynamically only if debug is not explicitly set
     if debug is None:
         try:
-            if django_settings and django_settings.configured:
-                debug = django_settings.DEBUG
-            else:
-                debug = False
+            debug = django_settings.DEBUG if django_settings and django_settings.configured else False
         except (ImportError, AttributeError):
             debug = False
 

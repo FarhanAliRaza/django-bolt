@@ -33,6 +33,8 @@ if not settings.configured:
     )
     django.setup()
 
+import contextlib
+
 from django_bolt import BoltAPI, WebSocket
 from django_bolt.testing import ConnectionClosed, WebSocketTestClient
 from django_bolt.websocket import CloseCode
@@ -431,7 +433,7 @@ class TestWebSocketErrors:
     async def test_handler_error(self, api):
         """Test handler error handling."""
         with pytest.raises(ValueError) as exc_info:
-            async with WebSocketTestClient(api, "/ws/error") as ws:
+            async with WebSocketTestClient(api, "/ws/error"):
                 await asyncio.sleep(0.1)  # Give handler time to error
 
         assert "Test error" in str(exc_info.value)
@@ -509,10 +511,8 @@ class TestWebSocketState:
         async def state_handler(websocket: WebSocket):
             await websocket.accept()
             await websocket.send_text("ready")
-            try:
+            with contextlib.suppress(Exception):
                 await websocket.receive_text()
-            except Exception:
-                pass
 
         return api
 
@@ -590,7 +590,7 @@ class TestWebSocketGuards:
     async def test_protected_route_without_auth(self, api):
         """Test protected route fails without JWT token."""
         with pytest.raises(PermissionError) as exc_info:
-            async with WebSocketTestClient(api, "/ws/protected") as ws:
+            async with WebSocketTestClient(api, "/ws/protected"):
                 pass
 
         assert "Authentication required" in str(exc_info.value)
@@ -612,7 +612,7 @@ class TestWebSocketGuards:
         headers = {"Authorization": f"Bearer {token}"}
 
         with pytest.raises(PermissionError) as exc_info:
-            async with WebSocketTestClient(api, "/ws/admin", headers=headers) as ws:
+            async with WebSocketTestClient(api, "/ws/admin", headers=headers):
                 pass
 
         assert "Permission denied" in str(exc_info.value)
@@ -634,7 +634,7 @@ class TestWebSocketGuards:
         headers = {"Authorization": f"Bearer {token}"}
 
         with pytest.raises(PermissionError) as exc_info:
-            async with WebSocketTestClient(api, "/ws/permission", headers=headers) as ws:
+            async with WebSocketTestClient(api, "/ws/permission", headers=headers):
                 pass
 
         assert "Permission denied" in str(exc_info.value)

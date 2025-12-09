@@ -146,7 +146,6 @@ class Item(msgspec.Struct):
 # Create a separate API instance with middleware enabled
 # This demonstrates how to use Django middleware + custom Python middleware
 middleware_api = BoltAPI(
-    # No prefix needed - mount() will add the prefix
     # Load Django middleware from settings.MIDDLEWARE
     django_middleware=True,
     # Add custom Python middleware (pass classes, not instances)
@@ -185,11 +184,8 @@ async def middleware_demo(request: Request):
 
     # Access Django user (from Django's AuthenticationMiddleware)
     # auser is an async callable from Django, so we need to call it: await request.auser()
-    user = await request.auser()
-    
-    # return render(request, "about.html", {})
-
-    return {
+    # user = await request.auser()
+    data = {
         "message": "Middleware demo - check response headers!",
         "middleware_data": {
             # From RequestIdMiddleware
@@ -201,10 +197,10 @@ async def middleware_demo(request: Request):
             # From TimingMiddleware
             "start_time": state.get("start_time"),
         },
-        "django_user": {
-            "is_authenticated": user.is_authenticated if user else False,
-            "username": user.username if user and user.is_authenticated else None,
-        },
+        # "django_user": {
+        #     "is_authenticated": user.is_authenticated if user else False,
+        #     "username": user.username if user and user.is_authenticated else None,
+        # },
         "tips": [
             "Check X-Request-ID header in response",
             "Check X-Tenant-ID header in response",
@@ -212,6 +208,9 @@ async def middleware_demo(request: Request):
             "Try: curl -H 'X-Tenant-ID: my-tenant' to set tenant",
         ]
     }
+    # return render(request, "about.html#hello", data)
+
+    return data
 
 
 # Mount the middleware API as a sub-application (FastAPI-style)

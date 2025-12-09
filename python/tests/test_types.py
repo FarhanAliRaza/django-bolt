@@ -19,12 +19,16 @@ class UserCreate(msgspec.Struct):
 def test_request_protocol_has_expected_attributes():
     """Test that Request protocol has expected methods and properties."""
     # Verify protocol has expected attributes
+    # Note: Protocol defines the interface, PyRequest (Rust) implements it
     assert hasattr(Request, "method")
     assert hasattr(Request, "path")
     assert hasattr(Request, "body")
     assert hasattr(Request, "context")
-    assert hasattr(Request, "get")
-    assert hasattr(Request, "__getitem__")
+    assert hasattr(Request, "user")
+    assert hasattr(Request, "state")
+    assert hasattr(Request, "headers")
+    assert hasattr(Request, "cookies")
+    assert hasattr(Request, "query")
 
 
 def test_request_type_in_handler():

@@ -180,8 +180,13 @@ class LoggingMiddleware:
                 try:
                     if random.random() > float(self.config.sample_rate):
                         return
-                except Exception:
-                    pass
+                except Exception as e:
+                    # If sampling check fails, log the request anyway (fail-open)
+                    logging.getLogger(__name__).warning(
+                        "Failed to apply sampling rate for request logging. "
+                        "Logging request without sampling. Error: %s",
+                        e
+                    )
             # Slow-only gate
             if self.config.min_duration_ms is not None:
                 duration_ms_check = (duration * 1000.0)

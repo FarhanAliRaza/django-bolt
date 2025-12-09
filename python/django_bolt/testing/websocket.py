@@ -201,7 +201,6 @@ class WebSocketTestClient:
     def _cleanup_app(self) -> None:
         """Cleanup test app instance."""
         if self._app_id is not None:
-            from django_bolt import _core
             with contextlib.suppress(Exception):
                 _core.destroy_test_app(self._app_id)
             self._app_id = None
@@ -218,8 +217,6 @@ class WebSocketTestClient:
             ValueError: If no handler found for path
             PermissionError: If guards fail
         """
-        from django_bolt import _core
-
         app_id = self._get_or_create_app_id()
 
         # Build headers list for Rust

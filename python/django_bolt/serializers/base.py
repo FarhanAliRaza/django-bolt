@@ -1239,9 +1239,8 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 continue
 
             # Skip default values if exclude_defaults (using pre-computed map)
-            if default_values is not None and field_name in default_values:
-                if value == default_values[field_name]:
-                    continue
+            if default_values is not None and field_name in default_values and value == default_values[field_name]:
+                continue
 
             # Use alias if by_alias and alias is defined
             output_key = field_name

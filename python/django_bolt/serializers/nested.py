@@ -94,9 +94,12 @@ def Nested(
                 title: str
                 author_id: int  # Just the ID, no nested object
     """
+    # Import locally to avoid circular dependency with base.py
+    # ruff: noqa: PLC0415
+    from .base import Serializer as BaseSerializer
+
     # Type safety: Validate that serializer_class is actually a Serializer subclass
     # This catches errors at definition time rather than at validation time
-    from .base import Serializer as BaseSerializer
 
     if not isinstance(serializer_class, type):
         raise TypeError(

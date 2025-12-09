@@ -53,7 +53,7 @@ class RequestIdMiddleware:
 
     async def __call__(self, request):
         """Called for each request."""
-        import uuid
+        import uuid  # noqa: PLC0415
 
         # Generate request ID and add to request state
         request_id = str(uuid.uuid4())[:8]
@@ -171,7 +171,7 @@ async def middleware_demo(request: Request):
     Test with:
         curl http://localhost:8000/middleware/demo
     """
-    from django.contrib import messages
+    from django.contrib import messages  # noqa: PLC0415
 
     # Add messages using Django's messages framework
     messages.info(request, "This is an info message")

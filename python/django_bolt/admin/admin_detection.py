@@ -2,10 +2,13 @@
 Utilities for detecting and configuring Django admin integration.
 """
 
+import logging
 import sys
 
 from django.conf import settings
 from django.urls import get_resolver
+
+logger = logging.getLogger(__name__)
 
 
 def is_admin_installed() -> bool:
@@ -120,8 +123,12 @@ def get_static_url_prefix() -> str | None:
             static_url = settings.STATIC_URL
             # Remove leading/trailing slashes
             return static_url.strip('/')
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(
+            "Failed to get STATIC_URL from Django settings. "
+            "Static file serving may not work correctly. Error: %s",
+            e
+        )
 
     return None
 

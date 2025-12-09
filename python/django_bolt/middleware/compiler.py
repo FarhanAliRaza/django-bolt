@@ -1,9 +1,12 @@
 """Middleware compilation utilities."""
+import logging
 from collections.abc import Callable
 from typing import Any
 
 from ..auth.backends import get_default_authentication_classes
 from ..auth.guards import get_default_permission_classes
+
+logger = logging.getLogger(__name__)
 
 
 def compile_middleware_meta(
@@ -77,16 +80,26 @@ def compile_middleware_meta(
                     try:
                         instance = guard()
                         guard_list.append(instance.to_metadata())
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to instantiate guard class %s for metadata compilation. "
+                            "Guard will be skipped. Error: %s",
+                            guard.__class__.__name__ if hasattr(guard, '__class__') else type(guard).__name__,
+                            e
+                        )
             elif isinstance(guard, type):
                 # It's a class reference, instantiate it
                 try:
                     instance = guard()
                     if hasattr(instance, 'to_metadata'):
                         guard_list.append(instance.to_metadata())
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "Failed to instantiate guard class %s for metadata compilation. "
+                        "Guard will be skipped. Error: %s",
+                        guard.__name__ if hasattr(guard, '__name__') else str(guard),
+                        e
+                    )
     else:
         # Use global default permission classes
         for guard in get_default_permission_classes():

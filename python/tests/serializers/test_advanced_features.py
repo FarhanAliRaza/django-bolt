@@ -664,7 +664,7 @@ class TestSubsetMethod:
         UserMini = UserSerializer.subset("id", "name", "age")
 
         # Get type hints from the subset class
-        from typing import get_type_hints
+        from typing import get_type_hints  # noqa: PLC0415
         hints = get_type_hints(UserMini)
 
         assert hints["id"] is int

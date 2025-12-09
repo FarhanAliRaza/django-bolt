@@ -12,6 +12,8 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 
+from django.utils.csp import CSP
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -216,9 +218,6 @@ else:
 
 
 BOLT_MAX_SYNC_STREAMING_THREADS = 1000
-
-
-from django.utils.csp import CSP
 
 MIDDLEWARE += [
     'django.middleware.csp.ContentSecurityPolicyMiddleware',

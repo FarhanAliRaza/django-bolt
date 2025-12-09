@@ -92,6 +92,7 @@ select = [
     "UP",     # pyupgrade
     "ARG",    # flake8-unused-arguments
     "SIM",    # flake8-simplify
+    "S110",   # try-except-pass detected (no silent exception passing)
     "PLC0415", # import-outside-top-level (no imports inside functions/classes)
 ]
 ignore = [

@@ -415,7 +415,7 @@ def test_is_admin_guard_with_class_view(api):
 @pytest.mark.django_db
 def test_has_permission_guard_with_class_view(api):
     """Test HasPermission guard with class-based views."""
-    from django_bolt.auth.jwt_utils import create_jwt_for_user
+    from django_bolt.auth.jwt_utils import create_jwt_for_user  # noqa: PLC0415
 
     # Create permission
     content_type = ContentType.objects.get_for_model(User)
@@ -600,8 +600,8 @@ def test_streaming_response_with_class_view(api):
 
 def test_viewset_with_all_features(api):
     """Test ViewSet with authentication, guards, and validation."""
-    from django_bolt.auth import JWTAuthentication
-    from django_bolt.auth.guards import IsAuthenticated
+    from django_bolt.auth import JWTAuthentication  # noqa: PLC0415
+    from django_bolt.auth.guards import IsAuthenticated  # noqa: PLC0415
 
     @api.view("/articles")
     class ArticleViewSet(ViewSet):
@@ -928,7 +928,7 @@ def test_viewset_with_multiple_custom_actions(api):
 
 def test_custom_action_with_auth_and_guards(api):
     """Test custom action methods INSIDE ViewSet with authentication and guards."""
-    from django_bolt.auth import APIKeyAuthentication, IsAuthenticated
+    from django_bolt.auth import APIKeyAuthentication, IsAuthenticated  # noqa: PLC0415
 
     class DocumentViewSet(ViewSet):
         # Class-level auth applies to all methods

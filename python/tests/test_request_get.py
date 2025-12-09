@@ -6,8 +6,8 @@ import time
 import jwt
 
 from django_bolt import BoltAPI
-from django_bolt.auth import JWTAuthentication
-from django_bolt.auth.guards import IsAuthenticated
+from django_bolt.auth import JWTAuthentication  # noqa: PLC0415
+from django_bolt.auth.guards import IsAuthenticated  # noqa: PLC0415
 from django_bolt.testing import TestClient
 
 

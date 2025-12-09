@@ -16,7 +16,7 @@ from django_bolt.testing import TestClient
 @pytest.mark.django_db(transaction=True)
 def test_admin_root_redirect():
     """Test /admin/ returns content (redirect or login page) via TestClient."""
-    from django_bolt.admin.admin_detection import should_enable_admin
+    from django_bolt.admin.admin_detection import should_enable_admin  # noqa: PLC0415
     if not should_enable_admin():
         pytest.skip("Django admin not enabled")
 
@@ -51,7 +51,7 @@ def test_admin_root_redirect():
 @pytest.mark.django_db(transaction=True)
 def test_admin_login_page():
     """Test /admin/login/ returns HTML page (not empty body) via TestClient."""
-    from django_bolt.admin.admin_detection import should_enable_admin
+    from django_bolt.admin.admin_detection import should_enable_admin  # noqa: PLC0415
     if not should_enable_admin():
         pytest.skip("Django admin not enabled")
 

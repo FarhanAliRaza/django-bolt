@@ -233,8 +233,11 @@ def test_request_property_access():
 
 
 def test_request_import_from_main_module():
-    """Test that Request can be imported from django_bolt."""
-    from django_bolt import Request as ImportedRequest  # noqa: F401
+    """Test that Request can be imported from django_bolt.
+
+    This test intentionally uses a local import to verify the import mechanism works.
+    """
+    from django_bolt import Request as ImportedRequest  # noqa: PLC0415 - testing import mechanism
 
     # Should be the same class (ImportedRequest is the same as the module-level Request)
     # This test verifies the import works, even though we compare with module-level Request

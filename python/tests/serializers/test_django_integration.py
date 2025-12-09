@@ -51,7 +51,7 @@ from django_bolt.serializers.types import (
 )
 
 # Import test models
-from tests.test_models import Author, BlogPost, Comment, Tag, User, UserProfile
+from tests.test_models import Author, BlogPost, Comment, Tag, User, UserProfile  # noqa: PLC0415
 
 # =============================================================================
 # Serializers for testing
@@ -1092,7 +1092,7 @@ class TestCreateSerializerHelpersWithDjango:
 
     def test_create_serializer_from_django_model(self):
         """Test creating serializer from Django model."""
-        from django.contrib.auth.models import User as DjangoUser
+        from django.contrib.auth.models import User as DjangoUser  # noqa: PLC0415
 
         UserSerializer = create_serializer(
             DjangoUser,
@@ -1107,7 +1107,7 @@ class TestCreateSerializerHelpersWithDjango:
     @pytest.mark.django_db
     def test_create_serializer_set_with_django(self):
         """Test create_serializer_set with Django model."""
-        from django.contrib.auth.models import User as DjangoUser
+        from django.contrib.auth.models import User as DjangoUser  # noqa: PLC0415
 
         UserCreate, UserUpdate, UserPublic = create_serializer_set(
             DjangoUser,

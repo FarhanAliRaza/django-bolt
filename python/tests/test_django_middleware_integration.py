@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import msgspec
 import pytest
+from django.contrib.sessions.middleware import SessionMiddleware
+from django.http import HttpResponse
+from django.middleware.common import CommonMiddleware
 
 from django_bolt import BoltAPI
-from django_bolt.middleware import DjangoMiddleware, DjangoMiddlewareStack
+from django_bolt.middleware import DjangoMiddleware, DjangoMiddlewareStack, TimingMiddleware
 from django_bolt.testing import TestClient
 
 
@@ -32,13 +35,11 @@ class TestDjangoMiddlewareAdapter:
 
     def test_django_middleware_creation(self):
         """Test creating DjangoMiddleware wrapper."""
-        from django.contrib.sessions.middleware import SessionMiddleware
         middleware = DjangoMiddleware(SessionMiddleware)
         assert middleware.middleware_class == SessionMiddleware
 
     def test_django_middleware_from_string(self):
         """Test creating DjangoMiddleware from import path."""
-        from django.contrib.sessions.middleware import SessionMiddleware
         middleware = DjangoMiddleware(
             "django.contrib.sessions.middleware.SessionMiddleware"
         )
@@ -46,7 +47,6 @@ class TestDjangoMiddlewareAdapter:
 
     def test_django_middleware_repr(self):
         """Test string representation."""
-        from django.contrib.sessions.middleware import SessionMiddleware
         middleware = DjangoMiddleware(SessionMiddleware)
         assert "SessionMiddleware" in repr(middleware)
 
@@ -61,16 +61,11 @@ class TestDjangoMiddlewareStack:
 
     def test_middleware_stack_creation(self):
         """Test creating DjangoMiddlewareStack."""
-        from django.contrib.sessions.middleware import SessionMiddleware
-        from django.middleware.common import CommonMiddleware
-
         stack = DjangoMiddlewareStack([SessionMiddleware, CommonMiddleware])
         assert len(stack.middleware_classes) == 2
 
     def test_middleware_stack_repr(self):
         """Test string representation of stack."""
-        from django.contrib.sessions.middleware import SessionMiddleware
-
         stack = DjangoMiddlewareStack([SessionMiddleware])
         assert "SessionMiddleware" in repr(stack)
 
@@ -179,7 +174,6 @@ class ShortCircuitMiddleware:
 
     def __call__(self, request):
         if request.path == "/blocked":
-            from django.http import HttpResponse
             return HttpResponse("Blocked by middleware", status=403)
         return self.get_response(request)
 
@@ -297,7 +291,6 @@ class ExceptionCatchingMiddleware:
         try:
             return self.get_response(request)
         except ValueError as e:
-            from django.http import HttpResponse
             return HttpResponse(f"Caught error: {e}", status=400)
 
 
@@ -331,8 +324,6 @@ class TestMixedMiddlewareHTTPCycle:
 
     def test_bolt_and_django_middleware_together(self):
         """Test Bolt middleware and Django middleware work together."""
-        from django_bolt.middleware import TimingMiddleware
-
         api = BoltAPI(
             django_middleware=['django.contrib.sessions.middleware.SessionMiddleware'],
             middleware=[TimingMiddleware],
@@ -382,7 +373,7 @@ class TestMessagesFramework:
 
         @api.get("/test")
         async def test_route(request):
-            from django.contrib import messages
+            from django.contrib import messages  # noqa: PLC0415
 
             # Add messages - this requires _messages to be set by MessageMiddleware
             messages.info(request, "Test info message")

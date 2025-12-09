@@ -3,11 +3,13 @@ Integration tests for parameter validation with real-world use cases.
 
 Tests the complete flow from route registration to request handling.
 """
+import re
+
 import msgspec
 import pytest
 
 from django_bolt import BoltAPI
-from django_bolt.params import Cookie, Form, Header, Path, Query
+from django_bolt.params import Cookie, File, Form, Header, Path, Query
 
 
 class User(msgspec.Struct):
@@ -165,8 +167,6 @@ def test_authentication_headers():
 
 def test_file_upload_endpoints():
     """Test file upload with form data."""
-    from django_bolt.params import File
-
     api = BoltAPI()
 
     @api.post("/upload")
@@ -264,7 +264,6 @@ def test_nested_resources_with_path_params():
         path_fields = [f for f in meta["fields"] if f.source == "path"]
 
         # Count expected path params
-        import re
         expected_params = len(re.findall(r'\{(\w+)\}', path))
         assert len(path_fields) == expected_params
 

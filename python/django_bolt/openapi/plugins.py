@@ -8,6 +8,12 @@ from .. import _json
 if TYPE_CHECKING:
     pass
 
+# Import yaml at module level with try/except for optional dependency
+try:
+    import yaml
+except ImportError:
+    yaml = None  # type: ignore
+
 __all__ = (
     "OpenAPIRenderPlugin",
     "JsonRenderPlugin",
@@ -122,11 +128,9 @@ class YamlRenderPlugin(OpenAPIRenderPlugin):
 
     def render(self, openapi_schema: dict[str, Any], schema_url: str) -> str:
         """Render OpenAPI schema as YAML."""
-        try:
-            # Import yaml here because it's an optional dependency
-            import yaml
+        if yaml is not None:
             return yaml.dump(openapi_schema, default_flow_style=False)
-        except ImportError:
+        else:
             # Fallback to JSON if PyYAML not installed
             return "# PyYAML not installed. Install with: pip install pyyaml\n" + self.render_json(openapi_schema)
 

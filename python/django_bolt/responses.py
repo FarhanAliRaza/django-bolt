@@ -28,11 +28,8 @@ def initialize_file_response_settings():
     try:
         if django_settings and hasattr(django_settings, 'BOLT_ALLOWED_FILE_PATHS'):
             allowed_paths = django_settings.BOLT_ALLOWED_FILE_PATHS
-            if allowed_paths:
-                # Resolve all paths once at startup
-                _ALLOWED_FILE_PATHS_CACHE = [Path(p).resolve() for p in allowed_paths]
-            else:
-                _ALLOWED_FILE_PATHS_CACHE = None
+            # Resolve all paths once at startup
+            _ALLOWED_FILE_PATHS_CACHE = [Path(p).resolve() for p in allowed_paths] if allowed_paths else None
         else:
             _ALLOWED_FILE_PATHS_CACHE = None
     except ImportError:

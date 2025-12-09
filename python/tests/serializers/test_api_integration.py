@@ -15,6 +15,8 @@ async and sync endpoints work seamlessly with sync tests through TestClient.
 
 from __future__ import annotations
 
+import hashlib
+from datetime import datetime
 from typing import Annotated
 
 import pytest
@@ -22,9 +24,18 @@ from asgiref.sync import sync_to_async
 from msgspec import Meta
 
 from django_bolt.api import BoltAPI
-from django_bolt.serializers import Nested, Serializer, field_validator
+from django_bolt.exceptions import BadRequest
+from django_bolt.serializers import (
+    Email,
+    Nested,
+    NonEmptyStr,
+    Serializer,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 from django_bolt.testing import TestClient
-from tests.test_models import Author, BlogPost, Comment, Tag
+from tests.test_models import Author, BlogPost, Comment, Tag, User
 
 # ============================================================================
 # SERIALIZERS - Define all serializers for nested relationships
@@ -773,13 +784,6 @@ class TestAPI4MixedValidation:
 # API 5: User Authentication & Profile Management - Full Cycle Tests
 # ============================================================================
 
-# Import additional dependencies
-import hashlib
-
-from django_bolt.exceptions import BadRequest
-from django_bolt.serializers import model_validator
-from tests.test_models import User
-
 
 # User Authentication Serializers
 class UserSerializer(Serializer):
@@ -1037,10 +1041,6 @@ class TestAPI5UserRegistration:
 # ============================================================================
 # API 6: Advanced Serializer Features with Full Object Assertions
 # ============================================================================
-
-from datetime import datetime
-
-from django_bolt.serializers import Email, NonEmptyStr, computed_field
 
 
 class AdvancedAuthorSerializer(Serializer):

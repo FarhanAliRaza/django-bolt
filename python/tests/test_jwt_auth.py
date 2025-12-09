@@ -10,7 +10,7 @@ import time
 
 import jwt
 import pytest
-from django.conf import settings
+from django.conf import settings  # noqa: PLC0415
 from django.contrib.auth import get_user_model
 
 from django_bolt import BoltAPI

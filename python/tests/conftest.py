@@ -22,8 +22,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 def pytest_configure(config):
     """Configure Django settings for pytest-django."""
-    import django
-    from django.conf import settings
+    import django  # noqa: PLC0415
+    from django.conf import settings  # noqa: PLC0415
 
     # Skip configuration if DJANGO_SETTINGS_MODULE is already set
     # This allows specific test modules to use their own Django settings
@@ -97,11 +97,11 @@ def django_db_setup(django_db_blocker):
 
     Note: We skip the default django_db_setup to have better control over test database.
     """
-    import os
+    import os  # noqa: PLC0415
 
-    from django.conf import settings
-    from django.core.management import call_command
-    from django.db import connection
+    from django.conf import settings  # noqa: PLC0415
+    from django.core.management import call_command  # noqa: PLC0415
+    from django.db import connection  # noqa: PLC0415
 
     with django_db_blocker.unblock():
         # Ensure test database directory exists
@@ -117,7 +117,7 @@ def django_db_setup(django_db_blocker):
         # Create test model tables manually since they're not in migrations
         # But only if they don't already exist (for persistent file-based databases)
         with connection.schema_editor() as schema_editor:
-            from .test_models import Article, Author, BlogPost, Comment, Tag, User, UserProfile
+            from .test_models import Article, Author, BlogPost, Comment, Tag, User, UserProfile  # noqa: PLC0415
 
             models = [Article, Author, Tag, BlogPost, Comment, User, UserProfile]
             for model in models:

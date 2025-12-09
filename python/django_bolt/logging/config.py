@@ -196,9 +196,13 @@ def get_default_logging_config() -> LoggingConfig:
             settings_slow_ms = getattr(settings, "DJANGO_BOLT_LOG_SLOW_MS", None)
             # Default base level by DEBUG
             log_level = "DEBUG" if debug else "WARNING"
-    except (AttributeError, Exception):
+    except (AttributeError, Exception) as e:
         # Django not available or not configured, use default
-        pass
+        logging.getLogger(__name__).debug(
+            "Failed to read Django settings for logging configuration. "
+            "Using default log level. Error: %s",
+            e
+        )
 
     # Choose log level: Django settings override > default determined by DEBUG
     if settings_level:
@@ -266,8 +270,14 @@ def _ensure_queue_logging(base_level: str) -> QueueHandler:
             try:
                 if _QUEUE_LISTENER is not None and hasattr(_QUEUE_LISTENER, '_thread') and _QUEUE_LISTENER._thread is not None:
                     _QUEUE_LISTENER.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                # Listener may already be stopped or in an invalid state
+                # This can happen during normal shutdown, so log as debug
+                logging.getLogger(__name__).debug(
+                    "Failed to stop queue listener during cleanup. "
+                    "Listener may already be stopped. Error: %s",
+                    e
+                )
 
         atexit.register(_cleanup_listener)
         _QUEUE_LISTENER = listener

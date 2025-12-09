@@ -4,19 +4,12 @@ Provides default exception handlers that convert Python exceptions into
 structured HTTP error responses.
 """
 
+import logging
 import re
 import traceback
 from typing import Any
 
 import msgspec
-
-# Django import - may fail if Django not configured
-try:
-    from django.conf import settings as django_settings
-    from django.views.debug import ExceptionReporter
-except ImportError:
-    django_settings = None
-    ExceptionReporter = None
 
 from . import _json
 from .exceptions import (
@@ -25,6 +18,16 @@ from .exceptions import (
     ResponseValidationError,
     ValidationException,
 )
+
+logger = logging.getLogger(__name__)
+
+# Django import - may fail if Django not configured
+try:
+    from django.conf import settings as django_settings
+    from django.views.debug import ExceptionReporter
+except ImportError:
+    django_settings = None
+    ExceptionReporter = None
 
 
 def format_error_response(
@@ -230,9 +233,13 @@ def generic_exception_handler(
                     [("content-type", "text/html; charset=utf-8")],
                     html_content.encode("utf-8")
                 )
-        except Exception:
+        except Exception as e:
             # Fallback to standard traceback formatting in JSON
-            pass
+            logger.debug(
+                "Failed to generate Django ExceptionReporter HTML. "
+                "Falling back to JSON traceback format. Error: %s",
+                e
+            )
 
         # Fallback to JSON with traceback
         tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)

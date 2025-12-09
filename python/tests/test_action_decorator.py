@@ -14,7 +14,7 @@ import pytest
 from django_bolt import BoltAPI, ViewSet, action
 from django_bolt.testing import TestClient
 
-from .test_models import Article
+from .test_models import Article  # noqa: PLC0415
 
 # --- Fixtures ---
 

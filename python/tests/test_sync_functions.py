@@ -4,7 +4,7 @@ Tests that sync and async handlers work correctly with parameters, dependencies,
 """
 from __future__ import annotations
 
-import inspect
+import inspect  # noqa: PLC0415
 import time
 from typing import Annotated
 
@@ -732,7 +732,7 @@ def orm_api():
                 "is_published": article.is_published,
             }
         except Article.DoesNotExist:
-            raise HTTPException(status_code=404, detail="Article not found")
+            raise HTTPException(status_code=404, detail="Article not found") from None
 
     @api.post("/sync/articles")
     def sync_create_article(article: ArticleCreate):
@@ -781,7 +781,7 @@ def orm_api():
                 "is_published": db_article.is_published,
             }
         except Article.DoesNotExist:
-            raise HTTPException(status_code=404, detail="Article not found")
+            raise HTTPException(status_code=404, detail="Article not found") from None
 
     @api.delete("/sync/articles/{article_id}")
     def sync_delete_article(article_id: int):
@@ -791,7 +791,7 @@ def orm_api():
             article.delete()
             return {"message": f"Article {article_id} deleted successfully"}
         except Article.DoesNotExist:
-            raise HTTPException(status_code=404, detail="Article not found")
+            raise HTTPException(status_code=404, detail="Article not found") from None
 
     # ========================
     # Async ORM Handlers
@@ -831,7 +831,7 @@ def orm_api():
                 "is_async": True,
             }
         except Article.DoesNotExist:
-            raise HTTPException(status_code=404, detail="Article not found")
+            raise HTTPException(status_code=404, detail="Article not found") from None
 
     @api.post("/async/articles")
     async def async_create_article(article: ArticleCreate):
@@ -882,7 +882,7 @@ def orm_api():
                 "is_async": True,
             }
         except Article.DoesNotExist:
-            raise HTTPException(status_code=404, detail="Article not found")
+            raise HTTPException(status_code=404, detail="Article not found") from None
 
     @api.delete("/async/articles/{article_id}")
     async def async_delete_article(article_id: int):
@@ -892,7 +892,7 @@ def orm_api():
             await article.adelete()
             return {"message": f"Article {article_id} deleted successfully", "is_async": True}
         except Article.DoesNotExist:
-            raise HTTPException(status_code=404, detail="Article not found")
+            raise HTTPException(status_code=404, detail="Article not found") from None
 
     # ========================
     # Complex Query Handlers

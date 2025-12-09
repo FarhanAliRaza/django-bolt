@@ -12,14 +12,16 @@ from dataclasses import dataclass, is_dataclass
 from enum import Enum
 from functools import reduce
 from operator import or_
-from typing import Any, TypedDict, Union, get_args, get_origin
+from typing import TYPE_CHECKING, Any, TypedDict, Union, get_args, get_origin
 
 import msgspec
 
-# Import Param and Depends for use in from_parameter method
-# Note: Imported here to avoid circular imports at module level
-# These are only used in the from_parameter classmethod
-if False:  # TYPE_CHECKING equivalent but doesn't require TYPE_CHECKING block
+# Import Param and Depends at top level for use in from_parameter method
+# These imports must be at module top to comply with PLC0415
+from .params import Depends as DependsMarker
+from .params import Param
+
+if TYPE_CHECKING:
     pass
 
 __all__ = [
@@ -395,10 +397,6 @@ class FieldDefinition:
         Returns:
             FieldDefinition instance
         """
-        # Import here to avoid circular import issues
-        from .params import Depends as DependsMarker
-        from .params import Param
-
         name = parameter.name
         default = parameter.default
 

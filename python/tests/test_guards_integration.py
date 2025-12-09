@@ -8,8 +8,8 @@ import time
 import django
 import jwt
 import pytest
-from django.conf import settings
-from django.core.management import call_command
+from django.conf import settings  # noqa: PLC0415
+from django.core.management import call_command  # noqa: PLC0415
 
 from django_bolt import BoltAPI
 from django_bolt.auth import (

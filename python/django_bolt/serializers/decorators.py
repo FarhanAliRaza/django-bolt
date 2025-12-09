@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, get_type_hints
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .base import Serializer
@@ -94,8 +97,13 @@ def computed_field(
         try:
             hints = get_type_hints(method)
             return_type = hints.get("return", Any)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                "Failed to get return type hints for computed field method %s. "
+                "Using Any as return type. Error: %s",
+                method.__name__ if hasattr(method, '__name__') else str(method),
+                e
+            )
 
         # Store computed field metadata on the method
         method.__computed_field__ = ComputedFieldConfig(

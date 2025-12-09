@@ -54,6 +54,24 @@ make smoke      # Test basic endpoints
 make orm-smoke  # Test ORM endpoints (requires seeded data)
 ```
 
+### Code Quality & Linting
+
+```bash
+# Run ruff linter on all code (library, tests, examples)
+make lint       # or: make ruff
+
+# Check only library code (excludes tests and examples)
+make lint-lib   # Should always pass - library code must be clean
+
+# Fix auto-fixable errors
+make ruff-fix
+
+# Format code with ruff
+make format
+```
+
+**Note**: Some S110 errors (try-except-pass) in test/example files are acceptable for WebSocket handlers where client disconnection is expected. All library code (`python/django_bolt/`) must pass all linting checks.
+
 ### Benchmarking
 
 ```bash

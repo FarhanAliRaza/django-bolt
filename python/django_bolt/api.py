@@ -1834,8 +1834,12 @@ class BoltAPI:
             try:
                 if logger.isEnabledFor(logging.INFO):
                     should_time = True
-            except Exception:
-                pass
+            except Exception as e:
+                logging.getLogger(__name__).debug(
+                    "Failed to check logger level for timing decision. "
+                    "Defaulting to no timing. Error: %s",
+                    e
+                )
             if not should_time:
                 # If slow-only is configured, we still need timing
                 should_time = bool(getattr(logging_middleware.config, 'min_duration_ms', None))

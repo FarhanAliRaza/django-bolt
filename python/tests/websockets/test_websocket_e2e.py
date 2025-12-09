@@ -5,6 +5,7 @@ Tests the full WebSocket lifecycle with actual handlers.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import Annotated
 
@@ -33,9 +34,8 @@ if not settings.configured:
     )
     django.setup()
 
-import contextlib
-
 from django_bolt import BoltAPI, WebSocket
+from django_bolt.auth import HasPermission, IsAdminUser, IsAuthenticated, JWTAuthentication
 from django_bolt.testing import ConnectionClosed, WebSocketTestClient
 from django_bolt.websocket import CloseCode
 
@@ -541,8 +541,6 @@ class TestWebSocketGuards:
 
     @pytest.fixture
     def api(self):
-        from django_bolt.auth import HasPermission, IsAdminUser, IsAuthenticated, JWTAuthentication
-
         api = BoltAPI()
 
         @api.websocket("/ws/public")

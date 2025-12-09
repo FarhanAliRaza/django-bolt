@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from django_bolt import BoltAPI
-from django_bolt.middleware import DjangoMiddlewareStack
+from django_bolt.middleware import DjangoMiddlewareStack, TimingMiddleware
 from django_bolt.middleware.django_loader import (
     DEFAULT_EXCLUDED_MIDDLEWARE,
     get_django_middleware_setting,
@@ -154,8 +154,6 @@ class TestBoltAPIIntegration:
 
     def test_boltapi_combines_django_and_custom_middleware(self):
         """Test BoltAPI stores both Django and custom middleware."""
-        from django_bolt.middleware import TimingMiddleware
-
         api = BoltAPI(
             django_middleware=['django.contrib.sessions.middleware.SessionMiddleware'],
             middleware=[TimingMiddleware],

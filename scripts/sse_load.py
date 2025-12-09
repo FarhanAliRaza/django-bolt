@@ -5,14 +5,17 @@ Measures real SSE streaming performance with concurrent clients.
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
-import aiohttp
-import time
-import sys
-import psutil
+import contextlib
 import os
+import sys
+import time
 from datetime import datetime
 from statistics import mean, stdev
+
+import aiohttp
+import psutil
 
 
 class SSELoadTest:
@@ -35,38 +38,39 @@ class SSELoadTest:
 
         try:
             # print(f"    Client {client_id}: Connecting...", flush=True)
-            async with aiohttp.ClientSession() as session:
-                async with session.get(self.url, timeout=aiohttp.ClientTimeout(total=None)) as resp:
-                    # print(f"    Client {client_id}: Connected (status {resp.status})", flush=True)
-                    if resp.status != 200:
-                        return {
-                            "client_id": client_id,
-                            "status": "failed",
-                            "error": f"HTTP {resp.status}",
-                            "messages": 0,
-                            "bytes": 0,
-                            "duration": 0,
-                        }
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(self.url, timeout=aiohttp.ClientTimeout(total=None)) as resp,
+            ):
+                # print(f"    Client {client_id}: Connected (status {resp.status})", flush=True)
+                if resp.status != 200:
+                    return {
+                        "client_id": client_id,
+                        "status": "failed",
+                        "error": f"HTTP {resp.status}",
+                        "messages": 0,
+                        "bytes": 0,
+                        "duration": 0,
+                    }
 
-                    # Stream until duration exceeded or connection closes
-                    # Add timeout to prevent hanging if chunks don't arrive
-                    async def stream() -> None:
-                        nonlocal messages, bytes_received
-                        async for chunk in resp.content.iter_any():
-                            elapsed = time.time() - client_start
-                            if elapsed > self.duration:
-                                break
+                # Stream until duration exceeded or connection closes
+                # Add timeout to prevent hanging if chunks don't arrive
+                async def stream() -> None:
+                    nonlocal messages, bytes_received
+                    async for chunk in resp.content.iter_any():
+                        elapsed = time.time() - client_start
+                        if elapsed > self.duration:
+                            break
 
-                            if chunk:
-                                messages += 1
-                                bytes_received += len(chunk)
+                        if chunk:
+                            messages += 1
+                            bytes_received += len(chunk)
 
-                    try:
-                        await asyncio.wait_for(stream(), timeout=self.duration + 5)
-                    except asyncio.TimeoutError:
-                        pass  # Duration exceeded, stop streaming
+                # Duration exceeded, stop streaming
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(stream(), timeout=self.duration + 5)
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             error = "Timeout"
         except aiohttp.ClientError as e:
             error = f"Connection error: {str(e)[:50]}"
@@ -108,7 +112,7 @@ class SSELoadTest:
     async def run(self) -> None:
         """Run the load test"""
         print(f"\n{'='*70}")
-        print(f"SSE Load Test")
+        print("SSE Load Test")
         print(f"{'='*70}")
         print(f"URL: {self.url}")
         print(f"Concurrent Clients: {self.num_clients}")
@@ -129,7 +133,6 @@ class SSELoadTest:
             print(f"  Waiting for {len(tasks)} clients to connect and run for {self.duration}s...", flush=True)
 
             # Run batch tasks and CPU sampling concurrently
-            batch_start = time.time()
             batch_tasks = asyncio.gather(*tasks)
             cpu_sampler = self._sample_cpu_during_batch(self.duration + 5)  # Sample until after clients finish
 
@@ -162,7 +165,7 @@ class SSELoadTest:
         print(f"Failed: {len(failed)} ({len(failed)/self.num_clients*100:.1f}%)")
 
         if failed:
-            print(f"\nFailure Details:")
+            print("\nFailure Details:")
             for r in failed[:5]:  # Show first 5 failures
                 print(f"  Client {r['client_id']}: {r['error']}")
             if len(failed) > 5:
@@ -183,21 +186,21 @@ class SSELoadTest:
                 print(f"  StDev: {stdev(messages_list):.1f}")
             print(f"  Min/Max: {min(messages_list)}/{max(messages_list)}")
 
-            print(f"\nData Transfer:")
+            print("\nData Transfer:")
             print(f"  Total Bytes: {sum(bytes_list):,} ({sum(bytes_list)/1024/1024:.2f} MB)")
             print(f"  Avg Bytes/Client: {mean(bytes_list):,.0f}")
             total_duration = sum(duration_list)
             if total_duration > 0:
                 print(f"  Throughput: {sum(bytes_list)/total_duration/1024/1024:.2f} MB/s")
 
-            print(f"\nConnection Duration:")
+            print("\nConnection Duration:")
             print(f"  Avg Duration: {mean(duration_list):.2f}s")
             if len(duration_list) > 1:
                 print(f"  StDev: {stdev(duration_list):.2f}s")
             print(f"  Min/Max: {min(duration_list):.2f}s / {max(duration_list):.2f}s")
 
-            print(f"\nMessaging Rate:")
-            avg_rate = mean([m / d for m, d in zip(messages_list, duration_list)])
+            print("\nMessaging Rate:")
+            avg_rate = mean([m / d for m, d in zip(messages_list, duration_list, strict=True)])
             print(f"  Avg Messages/sec/client: {avg_rate:.2f}")
             print(f"  Total Messages/sec: {sum(messages_list)/mean(duration_list):.2f}")
 
@@ -219,8 +222,6 @@ class SSELoadTest:
 
 async def main() -> None:
     """Main entry point"""
-    import argparse
-
     parser = argparse.ArgumentParser(
         description="SSE Load Test - Measures concurrent SSE streaming performance"
     )

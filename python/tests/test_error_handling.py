@@ -6,7 +6,7 @@ from unittest.mock import patch
 import django
 import msgspec
 import pytest
-from django.conf import settings
+from django.conf import settings  # noqa: PLC0415
 
 from django_bolt.error_handlers import (
     format_error_response,

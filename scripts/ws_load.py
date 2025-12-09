@@ -5,14 +5,15 @@ Measures real WebSocket performance with concurrent clients.
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
-import time
-import sys
-import psutil
 import os
+import sys
+import time
 from datetime import datetime
 from statistics import mean, stdev
 
+import psutil
 import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
@@ -73,7 +74,7 @@ class WebSocketLoadTest:
                             latency = (recv_time - send_time) * 1000  # ms
                             latencies.append(latency)
 
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             pass  # No response, continue
 
                         # Wait before next message
@@ -82,7 +83,7 @@ class WebSocketLoadTest:
                     except ConnectionClosed:
                         break
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             error = "Connection timeout"
         except WebSocketException as e:
             error = f"WebSocket error: {str(e)[:50]}"
@@ -136,7 +137,7 @@ class WebSocketLoadTest:
     async def run(self) -> None:
         """Run the load test"""
         print(f"\n{'='*70}")
-        print(f"WebSocket Load Test")
+        print("WebSocket Load Test")
         print(f"{'='*70}")
         print(f"URL: {self.url}")
         print(f"Concurrent Clients: {self.num_clients}")
@@ -198,7 +199,7 @@ class WebSocketLoadTest:
         print(f"Failed: {len(failed)} ({len(failed)/self.num_clients*100:.1f}%)")
 
         if failed:
-            print(f"\nFailure Details:")
+            print("\nFailure Details:")
             for r in failed[:5]:  # Show first 5 failures
                 print(f"  Client {r['client_id']}: {r['error']}")
             if len(failed) > 5:
@@ -227,7 +228,7 @@ class WebSocketLoadTest:
             if len(sent_list) > 1:
                 print(f"  StDev Sent: {stdev(sent_list):.1f}")
 
-            print(f"\nData Transfer:")
+            print("\nData Transfer:")
             total_bytes = sum(bytes_sent_list) + sum(bytes_recv_list)
             print(f"  Total Bytes: {total_bytes:,} ({total_bytes/1024/1024:.2f} MB)")
             print(f"  Bytes Sent: {sum(bytes_sent_list):,}")
@@ -237,7 +238,7 @@ class WebSocketLoadTest:
                 print(f"  Throughput: {total_bytes/avg_duration/1024:.2f} KB/s")
 
             if all_latencies:
-                print(f"\nLatency (round-trip):")
+                print("\nLatency (round-trip):")
                 print(f"  Avg: {mean(all_latencies):.2f} ms")
                 if len(all_latencies) > 1:
                     print(f"  StDev: {stdev(all_latencies):.2f} ms")
@@ -252,14 +253,14 @@ class WebSocketLoadTest:
                 print(f"  P95: {p95:.2f} ms")
                 print(f"  P99: {p99:.2f} ms")
 
-            print(f"\nConnection Duration:")
+            print("\nConnection Duration:")
             print(f"  Avg Duration: {mean(duration_list):.2f}s")
             if len(duration_list) > 1:
                 print(f"  StDev: {stdev(duration_list):.2f}s")
             print(f"  Min/Max: {min(duration_list):.2f}s / {max(duration_list):.2f}s")
 
-            print(f"\nMessaging Rate:")
-            avg_rate = mean([s / d for s, d in zip(sent_list, duration_list)])
+            print("\nMessaging Rate:")
+            avg_rate = mean([s / d for s, d in zip(sent_list, duration_list, strict=True)])
             print(f"  Avg Messages/sec/client: {avg_rate:.2f}")
             print(f"  Total Messages/sec: {sum(sent_list)/mean(duration_list):.2f}")
 
@@ -284,8 +285,6 @@ class WebSocketLoadTest:
 
 async def main() -> None:
     """Main entry point"""
-    import argparse
-
     parser = argparse.ArgumentParser(
         description="WebSocket Load Test - Measures concurrent WebSocket performance"
     )

@@ -10,7 +10,7 @@ This test suite verifies that the new unified ViewSet pattern works correctly:
 """
 import msgspec
 import pytest
-from asgiref.sync import async_to_sync
+from asgiref.sync import async_to_sync  # noqa: PLC0415
 
 from django_bolt import BoltAPI, ViewSet, action
 from django_bolt.testing import TestClient

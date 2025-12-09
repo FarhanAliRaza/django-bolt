@@ -676,7 +676,7 @@ class TestNestedFieldValidation:
     def test_nested_author_missing_email_field(self):
         """Test that missing required email field raises error."""
 
-        with pytest.raises(Exception):  # Could be ValidationError or TypeError
+        with pytest.raises(TypeError):  # Missing required parameter
             AuthorSerializer(
                 id=1,
                 name="Henry"

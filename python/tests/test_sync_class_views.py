@@ -19,7 +19,7 @@ import pytest
 
 from django_bolt import BoltAPI
 from django_bolt.auth.backends import JWTAuthentication
-from django_bolt.auth.guards import IsAuthenticated
+from django_bolt.auth.guards import IsAuthenticated  # noqa: PLC0415
 from django_bolt.exceptions import HTTPException
 from django_bolt.params import Depends
 from django_bolt.testing import TestClient

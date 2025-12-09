@@ -10,7 +10,7 @@ This test suite verifies that:
 """
 from __future__ import annotations
 
-import inspect
+import inspect  # noqa: PLC0415
 
 import msgspec
 

@@ -2,7 +2,6 @@
 Utilities for detecting and configuring Django admin integration.
 """
 
-import re
 import sys
 from typing import List, Optional, Tuple
 

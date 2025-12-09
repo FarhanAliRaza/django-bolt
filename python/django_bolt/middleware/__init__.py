@@ -53,7 +53,6 @@ from .middleware import (
     BaseMiddleware,
     Middleware,
     GetResponse,
-    CallNext,  # Legacy alias for GetResponse
     MiddlewareType,
     # Decorators
     middleware,
@@ -80,7 +79,6 @@ __all__ = [
     "BaseMiddleware",
     "Middleware",
     "GetResponse",
-    "CallNext",  # Legacy alias
     "MiddlewareType",
     # Configuration
     "CompressionConfig",

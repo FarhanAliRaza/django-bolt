@@ -20,7 +20,7 @@ from .decorators import (
     collect_field_validators,
     collect_model_validators,
 )
-from .fields import FieldConfig, _FieldMarker, _UNSET
+from .fields import FieldConfig, _FieldMarker
 from .nested import get_nested_config, validate_nested_field
 
 logger = logging.getLogger(__name__)

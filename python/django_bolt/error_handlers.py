@@ -23,7 +23,6 @@ from .exceptions import (
     RequestValidationError,
     ResponseValidationError,
     ValidationException,
-    InternalServerError,
 )
 
 

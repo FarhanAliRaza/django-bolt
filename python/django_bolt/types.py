@@ -28,7 +28,7 @@ except ImportError:
     from typing_extensions import TypedDict, NotRequired
 
 if TYPE_CHECKING:
-    from .request import Request as TypedRequest
+    pass
 
 
 

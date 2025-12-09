@@ -3,8 +3,7 @@
 Provides standard health check endpoints for monitoring and load balancers.
 """
 
-from typing import Dict, Any, Callable, List, Optional
-import asyncio
+from typing import Dict, Any, Callable, List
 
 
 class HealthCheck:

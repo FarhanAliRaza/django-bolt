@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import inspect
-from typing import Optional, Any, Callable, TYPE_CHECKING
+from typing import Optional, Any
 from django.contrib.auth import get_user_model
 
 

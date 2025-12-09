@@ -8,15 +8,15 @@ from __future__ import annotations
 
 import inspect
 import msgspec
-from dataclasses import dataclass, field, is_dataclass
+from dataclasses import dataclass, is_dataclass
 from enum import Enum
-from typing import Any, Callable, get_origin, get_args, Union, Optional, List, Dict, Annotated, TypedDict
+from typing import Any, Callable, get_origin, get_args, Union, Optional, List, TypedDict
 
 # Import Param and Depends for use in from_parameter method
 # Note: Imported here to avoid circular imports at module level
 # These are only used in the from_parameter classmethod
 if False:  # TYPE_CHECKING equivalent but doesn't require TYPE_CHECKING block
-    from .params import Param, Depends as DependsMarker
+    pass
 
 __all__ = [
     "FieldDefinition",

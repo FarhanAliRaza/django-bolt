@@ -13,17 +13,14 @@ Performance is the utmost priority - the middleware system is designed for zero 
 from __future__ import annotations
 
 import re
-import inspect
 import logging
 import time
 import uuid
 import warnings
 from abc import ABC, abstractmethod
 from typing import (
-    Any,
     Awaitable,
     Callable,
-    Dict,
     List,
     Optional,
     Pattern,
@@ -48,8 +45,6 @@ if TYPE_CHECKING:
 # Type alias for get_response function (Django-style)
 GetResponse = Callable[["Request"], Awaitable["Response"]]
 
-# Legacy alias for backwards compatibility
-CallNext = GetResponse
 
 # Type alias for middleware class (Django-style: takes get_response in __init__)
 MiddlewareType = Union[
@@ -565,7 +560,6 @@ class ErrorHandlerMiddleware(BaseMiddleware):
 
     async def process_request(self, request: "Request") -> "Response":
         from ..exceptions import HTTPException
-        from ..responses import Response
 
         try:
             return await self.get_response(request)
@@ -593,7 +587,6 @@ __all__ = [
     "BaseMiddleware",
     "Middleware",
     "GetResponse",
-    "CallNext",  # Legacy alias
     "MiddlewareType",
     # Decorators
     "middleware",

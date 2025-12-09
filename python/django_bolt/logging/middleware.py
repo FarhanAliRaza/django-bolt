@@ -3,10 +3,9 @@
 Provides request/response logging with support for Django's logging configuration.
 """
 
-import time
 import random
 import logging
-from typing import Dict, Any, Optional, Callable, Awaitable
+from typing import Dict, Any, Optional
 from .config import LoggingConfig
 
 

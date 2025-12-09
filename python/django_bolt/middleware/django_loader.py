@@ -70,7 +70,6 @@ def load_django_middleware(
     """
     from django.conf import settings
     from django.utils.module_loading import import_string
-    from .django_adapter import DjangoMiddleware
 
     if config is False or config is None:
         return []

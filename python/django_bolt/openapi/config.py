@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional, List, Dict
+from typing import TYPE_CHECKING, Optional, List, Dict
 
 from .plugins import ScalarRenderPlugin
 from .spec import (

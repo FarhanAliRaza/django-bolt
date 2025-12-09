@@ -16,7 +16,7 @@ from __future__ import annotations
 import contextvars
 import io
 import logging
-from typing import Any, Callable, Optional, Type, Union, TYPE_CHECKING
+from typing import Any, Callable, Type, Union, TYPE_CHECKING
 from asgiref.sync import async_to_sync
 
 # Use "django_bolt" logger directly (not "django_bolt.middleware") because
@@ -42,7 +42,6 @@ except ImportError:
 if TYPE_CHECKING:
     from ..request import Request
     from ..responses import Response
-    from .middleware import CallNext
 
 
 # Context variable to hold per-request state for the get_response bridge

@@ -1,6 +1,5 @@
 import importlib
 import os
-import sys
 from pathlib import Path
 
 # Django imports - may fail if Django not configured

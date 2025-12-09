@@ -47,7 +47,7 @@ Middleware:
 from .api import BoltAPI
 from .responses import Response, JSON, StreamingResponse
 from .middleware import CompressionConfig
-from .router import Router, APIRouter
+from .router import Router
 
 # Type-safe Request object
 from .request import Request, State
@@ -122,7 +122,6 @@ from .middleware import (
     MiddlewareProtocol,
     BaseMiddleware,
     Middleware,
-    CallNext,
     # Decorators
     middleware,
     rate_limit,
@@ -171,7 +170,6 @@ __all__ = [
     "Depends",
     # Router
     "Router",
-    "APIRouter",
     # Types
     "RequestProtocol",
     "UserType",
@@ -219,7 +217,6 @@ __all__ = [
     "MiddlewareProtocol",
     "BaseMiddleware",
     "Middleware",
-    "CallNext",
     # Middleware - Decorators
     "middleware",
     "rate_limit",

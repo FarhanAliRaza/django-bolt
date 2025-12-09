@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time
-from decimal import Decimal
-from typing import Any, Annotated, Callable, Literal, Type, TypeVar, get_args
+from typing import Any, Annotated, Callable, Literal, Type, TypeVar
 from uuid import UUID
 
-import msgspec
 from django.db import models
 from msgspec import Meta
 

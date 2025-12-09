@@ -4,9 +4,7 @@ Router for Django-Bolt API.
 Provides hierarchical routing with middleware inheritance.
 Routes defined on a router inherit the router's middleware, auth, and guards.
 """
-from __future__ import annotations
-
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .middleware import MiddlewareType
@@ -216,8 +214,4 @@ class Router:
         return chain
 
 
-# Alias for backwards compatibility
-APIRouter = Router
-
-
-__all__ = ["Router", "APIRouter"]
+__all__ = ["Router"]

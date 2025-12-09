@@ -10,7 +10,7 @@ import asyncio
 import logging
 import traceback
 from typing import Any, Dict, List, Tuple
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import urlencode
 
 from django.core.asgi import get_asgi_application
 

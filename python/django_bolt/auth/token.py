@@ -6,10 +6,9 @@ happens in Rust for performance, but this provides Python-side utilities for
 token creation and inspection.
 """
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Set
-import msgspec
+from typing import Any, Dict, List, Optional
 import jwt
 
 
@@ -327,7 +326,3 @@ class Token:
             permissions=permissions,
             extras=extra_claims,
         )
-
-
-# Alias for backwards compatibility with Litestar-style naming
-JWTToken = Token

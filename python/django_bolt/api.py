@@ -1889,9 +1889,16 @@ class BoltAPI:
             else:
                 request["user"] = None
 
-            # 3. Check if we need to execute middleware (for mounted sub-apps)
-            # Middleware runs for handlers from mounted BoltAPI instances that have middleware
-            api_with_middleware = original_api if original_api and original_api.middleware else None
+            # 3. Check if we need to execute middleware
+            # Middleware runs for:
+            # - Mounted sub-apps (original_api has middleware)
+            # - Main API (self has middleware)
+            if original_api and original_api.middleware:
+                api_with_middleware = original_api
+            elif self.middleware:
+                api_with_middleware = self
+            else:
+                api_with_middleware = None
 
             if api_with_middleware:
                 # Execute through middleware chain (Django-style)

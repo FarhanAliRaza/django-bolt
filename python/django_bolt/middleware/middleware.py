@@ -482,7 +482,6 @@ class TimingMiddleware(BaseMiddleware):
 
         request.state["request_id"] = request_id
         request.state["start_time"] = start_time
-
         response = await self.get_response(request)
 
         elapsed = time.perf_counter() - start_time

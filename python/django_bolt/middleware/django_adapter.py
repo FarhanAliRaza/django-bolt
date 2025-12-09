@@ -359,29 +359,40 @@ class DjangoMiddleware:
         - request.session (SessionMiddleware)
         - request.csrf_processing_done (CsrfViewMiddleware)
 
-        Performance: Only sync known attributes - avoid dir() which is O(100+) per call.
+        Custom middleware can add arbitrary attributes which are synced to request.state
+        since PyRequest is a Rust object with fixed attributes.
         """
-        # Sync user directly to bolt_request.user (same as Django)
+        # Sync user directly to bolt_request.user (same as Django) - this is writable
         if hasattr(django_request, 'user'):
             bolt_request.user = django_request.user
 
-        # Sync session
+        # Sync auser to state
+        if hasattr(django_request, 'auser'):
+            bolt_request.state["auser"] = django_request.auser
+
+        # Sync session to state
         if hasattr(django_request, 'session'):
-            bolt_request.state["_django_session"] = django_request.session
+            bolt_request.state["session"] = django_request.session
+
+        # Sync _messages for Django's messages framework
+        # This enables {% for message in messages %} in templates when using MessageMiddleware
+        # Uses state dict - reading works via __getattr__ (request._messages)
+        if hasattr(django_request, '_messages'):
+            bolt_request.state["_messages"] = django_request._messages
 
         # Sync CSRF token
         if hasattr(django_request, 'META') and 'CSRF_COOKIE' in django_request.META:
             bolt_request.state["_csrf_token"] = django_request.META['CSRF_COOKIE']
 
-        # Sync other common middleware attributes (explicit list for performance)
-        # Avoid dir() which is extremely slow - O(100+) operations per request
-        for attr in ('csrf_processing_done', 'csrf_cookie_needs_reset', '_messages'):
+        # Sync other common middleware attributes to state
+        for attr in ('csrf_processing_done', 'csrf_cookie_needs_reset'):
             try:
                 value = getattr(django_request, attr, None)
                 if value is not None:
-                    bolt_request.state[f"_django_{attr}"] = value
+                    bolt_request.state[attr] = value
             except (AttributeError, TypeError):
                 continue
+
 
     def _to_django_response(self, response: "Response") -> HttpResponse:
         """Convert Bolt Response/MiddlewareResponse to Django HttpResponse."""
@@ -729,29 +740,37 @@ def _sync_request_attributes(
     - request.session (SessionMiddleware)
     - request.csrf_processing_done (CsrfViewMiddleware)
 
-    Performance: Only sync known attributes - avoid dir() which is O(100+) per call.
+    Custom middleware can add arbitrary attributes which are synced to request.state
+    since PyRequest is a Rust object with fixed attributes.
     """
-    # Sync user (SimpleLazyObject) for sync access
-    # Sync auser (async callable) for async access via `await request.auser()`
+    # Sync user (SimpleLazyObject) for sync access - this is a writable attribute on PyRequest
     if hasattr(django_request, 'user'):
         bolt_request.user = django_request.user
+
+    # Sync auser (async callable) for async access via `await request.state["auser"]()`
     if hasattr(django_request, 'auser'):
         bolt_request.state["auser"] = django_request.auser
 
-    # Sync session
+    # Sync session to state
     if hasattr(django_request, 'session'):
-        bolt_request.state["_django_session"] = django_request.session
+        bolt_request.state["session"] = django_request.session
+
+    # Sync _messages for Django's messages framework
+    # This enables {% for message in messages %} in templates when using MessageMiddleware
+    # Uses state dict - reading works via __getattr__ (request._messages)
+    if hasattr(django_request, '_messages'):
+        bolt_request.state["_messages"] = django_request._messages
 
     # Sync CSRF token
     if hasattr(django_request, 'META') and 'CSRF_COOKIE' in django_request.META:
         bolt_request.state["_csrf_token"] = django_request.META['CSRF_COOKIE']
 
-    # Sync other common middleware attributes (explicit list for performance)
-    for attr in ('csrf_processing_done', 'csrf_cookie_needs_reset', '_messages'):
+    # Sync other common middleware attributes to state
+    for attr in ('csrf_processing_done', 'csrf_cookie_needs_reset'):
         try:
             value = getattr(django_request, attr, None)
             if value is not None:
-                bolt_request.state[f"_django_{attr}"] = value
+                bolt_request.state[attr] = value
         except (AttributeError, TypeError):
             continue
 

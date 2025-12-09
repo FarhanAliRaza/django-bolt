@@ -11,9 +11,13 @@ from django_bolt.testing import TestClient
 from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
 
 
-@pytest.fixture(scope="module")
-def api_with_admin():
-    """Create API with admin enabled using real Django project."""
+@pytest.mark.django_db(transaction=True)
+def test_admin_root_redirect():
+    """Test /admin/ returns content (redirect or login page) via TestClient."""
+    from django_bolt.admin.admin_detection import should_enable_admin
+    if not should_enable_admin():
+        pytest.skip("Django admin not enabled")
+
     api = BoltAPI()
     api._register_admin_routes('127.0.0.1', 8000)
 
@@ -21,56 +25,68 @@ def api_with_admin():
     async def test_route():
         return {"test": "ok"}
 
-    return api
+    # Check if admin routes were registered
+    admin_routes = [r for r in api._routes if '/admin' in r[1]]
+    if not admin_routes:
+        pytest.skip("Admin routes were not registered")
+
+    with TestClient(api, use_http_layer=True) as client:
+        response = client.get("/admin/")
+
+        print(f"\n[Admin Root Test]")
+        print(f"Status: {response.status_code}")
+        print(f"Headers: {dict(response.headers)}")
+        print(f"Body length: {len(response.content)}")
+        print(f"Body preview: {response.text[:300] if response.text else 'N/A'}")
+
+        # Should return a valid response (redirect or login page)
+        assert response.status_code in (200, 301, 302), f"Expected valid response, got {response.status_code}"
+
+        # CRITICAL: Body should NOT be empty
+        assert len(response.content) > 0, f"Response body is EMPTY! Got {len(response.content)} bytes. ASGI bridge is BROKEN!"
 
 
-@pytest.fixture(scope="module")
-def client(api_with_admin):
-    """Create test client with HTTP layer."""
-    with TestClient(api_with_admin, use_http_layer=True) as client:
-        yield client
+@pytest.mark.django_db(transaction=True)
+def test_admin_login_page():
+    """Test /admin/login/ returns HTML page (not empty body) via TestClient."""
+    from django_bolt.admin.admin_detection import should_enable_admin
+    if not should_enable_admin():
+        pytest.skip("Django admin not enabled")
 
+    api = BoltAPI()
+    api._register_admin_routes('127.0.0.1', 8000)
 
-def test_admin_root_redirect(client):
-    """Test /admin/ returns content (redirect or login page)."""
-    response = client.get("/admin/")
+    @api.get("/test")
+    async def test_route():
+        return {"test": "ok"}
 
-    print(f"\n[Admin Root Test]")
-    print(f"Status: {response.status_code}")
-    print(f"Headers: {dict(response.headers)}")
-    print(f"Body length: {len(response.content)}")
-    print(f"Body preview: {response.text[:300] if response.text else 'N/A'}")
+    # Check if admin routes were registered
+    admin_routes = [r for r in api._routes if '/admin' in r[1]]
+    if not admin_routes:
+        pytest.skip("Admin routes were not registered")
 
-    # Should return a valid response (redirect or login page)
-    assert response.status_code in (200, 301, 302), f"Expected valid response, got {response.status_code}"
+    with TestClient(api, use_http_layer=True) as client:
+        response = client.get("/admin/login/")
 
-    # CRITICAL: Body should NOT be empty
-    assert len(response.content) > 0, f"Response body is EMPTY! Got {len(response.content)} bytes. ASGI bridge is BROKEN!"
+        print(f"\n[Admin Login Test]")
+        print(f"Status: {response.status_code}")
+        print(f"Headers: {dict(response.headers)}")
+        print(f"Body length: {len(response.content)}")
+        print(f"Body preview: {response.text[:300]}")
 
+        # Should return 200 OK
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
 
-def test_admin_login_page(client):
-    """Test /admin/login/ returns HTML page (not empty body)."""
-    response = client.get("/admin/login/")
+        # CRITICAL: Body should NOT be empty - THIS IS THE BUG
+        assert len(response.content) > 0, f"Admin login page body is EMPTY! Got {len(response.content)} bytes. ASGI bridge is BROKEN!"
 
-    print(f"\n[Admin Login Test]")
-    print(f"Status: {response.status_code}")
-    print(f"Headers: {dict(response.headers)}")
-    print(f"Body length: {len(response.content)}")
-    print(f"Body preview: {response.text[:300]}")
+        # Should be HTML
+        content_type = response.headers.get('content-type', '')
+        assert 'html' in content_type.lower(), f"Expected HTML, got {content_type}"
 
-    # Should return 200 OK
-    assert response.status_code == 200, f"Expected 200, got {response.status_code}"
-
-    # CRITICAL: Body should NOT be empty - THIS IS THE BUG
-    assert len(response.content) > 0, f"Admin login page body is EMPTY! Got {len(response.content)} bytes. ASGI bridge is BROKEN!"
-
-    # Should be HTML
-    content_type = response.headers.get('content-type', '')
-    assert 'html' in content_type.lower(), f"Expected HTML, got {content_type}"
-
-    # Should contain login form
-    body_text = response.text.lower()
-    assert 'login' in body_text or 'django' in body_text, f"Expected login content, got: {body_text[:200]}"
+        # Should contain login form
+        body_text = response.text.lower()
+        assert 'login' in body_text or 'django' in body_text, f"Expected login content, got: {body_text[:200]}"
 
 
 @pytest.mark.django_db

@@ -100,10 +100,13 @@ def get_admin_route_patterns() -> List[Tuple[str, List[str]]]:
     # Also add exact /admin route (without trailing slash)
     # NOTE: NormalizePath::trim() in Rust strips trailing slashes from incoming requests,
     # so we register routes WITHOUT trailing slashes to match the normalized paths.
+    # However, for TestClient with use_http_layer=True, we also need the trailing slash version.
     admin_root = f'/{admin_prefix}'
+    admin_root_slash = f'/{admin_prefix}/'
 
     return [
         (admin_root, methods),
+        (admin_root_slash, methods),
         (admin_pattern, methods),
     ]
 

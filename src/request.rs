@@ -14,7 +14,7 @@ pub struct PyRequest {
     pub context: Option<Py<PyDict>>, // Middleware context data
     // None if no auth context or user not found
     pub user: Option<Py<PyAny>>,
-    pub state: Py<PyDict>, // Arbitrary state for middleware to store data
+    pub state: Py<PyDict>, // Arbitrary state for middleware AND dynamic attributes (e.g. _messages)
 }
 
 #[pymethods]
@@ -240,6 +240,25 @@ impl PyRequest {
                 Ok(())
             }
             _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
+        }
+    }
+
+    /// Get unknown attributes from state dict.
+    ///
+    /// This enables Django middleware to read arbitrary attributes on the request
+    /// object (e.g., request._messages) which are stored in the state dict.
+    /// Note: __getattr__ is only called when attribute is NOT found via normal lookup.
+    ///
+    /// Example:
+    ///     messages = request._messages  # Reads from state["_messages"]
+    fn __getattr__(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
+        let state_dict = self.state.bind(py);
+        match state_dict.get_item(name)? {
+            Some(value) => Ok(value.unbind()),
+            None => Err(pyo3::exceptions::PyAttributeError::new_err(format!(
+                "'Request' object has no attribute '{}'",
+                name
+            ))),
         }
     }
 }

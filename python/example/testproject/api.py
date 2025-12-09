@@ -158,59 +158,37 @@ middleware_api = BoltAPI(
 
 
 @middleware_api.get("/demo")
-# @rate_limit(rps=100, burst=200)  # Rust-accelerated rate limiting
 async def middleware_demo(request: Request):
     """
-    Demonstrates both Django and custom middleware in action.
+    Demonstrates Django middleware + messages framework with Django-Bolt.
 
     This endpoint shows:
-    1. Django middleware (SessionMiddleware, AuthenticationMiddleware from settings.MIDDLEWARE)
+    1. Django middleware (SessionMiddleware, AuthenticationMiddleware, MessageMiddleware)
     2. Custom RequestIdMiddleware (adds X-Request-ID header)
-    3. Custom TenantMiddleware (adds X-Tenant-ID header, extracts from request)
-    4. Built-in TimingMiddleware (adds X-Response-Time header)
-    5. Rust-accelerated @rate_limit decorator
-
-    Response headers will include:
-    - X-Request-ID: Unique request identifier
-    - X-Tenant-ID: Tenant from header or "default"
-    - X-Response-Time: Request duration
+    3. Custom TenantMiddleware (adds X-Tenant-ID header)
+    4. Django messages framework ({% for message in messages %} in templates)
 
     Test with:
-        curl -v http://localhost:8000/middleware/demo
-        curl -v -H "X-Tenant-ID: acme-corp" http://localhost:8000/middleware/demo
+        curl http://localhost:8000/middleware/demo
     """
-    # Access data set by our custom middleware
-    state = request.state
+    from django.contrib import messages
 
-    # Access Django user (from Django's AuthenticationMiddleware)
-    # auser is an async callable from Django, so we need to call it: await request.auser()
-    # user = await request.auser()
-    data = {
-        "message": "Middleware demo - check response headers!",
-        "middleware_data": {
-            # From RequestIdMiddleware
-            "request_id": state.get("request_id"),
-            "request_number": state.get("request_number"),
-            # From TenantMiddleware
-            "tenant_id": state.get("tenant_id"),
-            "tenant_loaded": state.get("tenant_loaded", False),
-            # From TimingMiddleware
-            "start_time": state.get("start_time"),
-        },
-        # "django_user": {
-        #     "is_authenticated": user.is_authenticated if user else False,
-        #     "username": user.username if user and user.is_authenticated else None,
-        # },
-        "tips": [
-            "Check X-Request-ID header in response",
-            "Check X-Tenant-ID header in response",
-            "Check X-Response-Time header in response",
-            "Try: curl -H 'X-Tenant-ID: my-tenant' to set tenant",
-        ]
-    }
-    return render(request, "about.html#hello", data)
+    # Add messages using Django's messages framework
+    messages.info(request, "This is an info message")
+    messages.success(request, "Operation completed successfully!")
+    messages.warning(request, "This is a warning message")
+    messages.error(request, "This is an error message")
 
-    return data
+    # Access Django user
+    user = await request.auser()
+
+    # Render template that displays messages
+    return render(request, "messages_demo.html", {
+        "title": "Middleware & Messages Demo",
+        "user": user,
+        "request_id": request.state.get("request_id"),
+        "tenant_id": request.state.get("tenant_id"),
+    })
 
 
 # Mount the middleware API as a sub-application (FastAPI-style)

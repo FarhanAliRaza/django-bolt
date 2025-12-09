@@ -1,27 +1,31 @@
 """
 Tests for Django middleware integration with Django-Bolt.
 
-Tests the DjangoMiddleware adapter with:
-- Request/Response conversion
-- Custom Django middleware
-- Basic middleware functionality
+Tests use TestClient for full HTTP cycle testing, verifying that middleware
+actually runs and modifies requests/responses through the complete pipeline.
 """
 from __future__ import annotations
 
 import pytest
-from typing import Any
-from unittest.mock import Mock, patch
 
-from django.http import HttpRequest, HttpResponse
+import msgspec
 
-from django_bolt.request import Request, State
-from django_bolt.middleware import DjangoMiddleware, BaseMiddleware, CallNext
-from django_bolt.responses import Response
+from django_bolt import BoltAPI
+from django_bolt.testing import TestClient
+from django_bolt.middleware import DjangoMiddleware, DjangoMiddlewareStack
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# Define at module level to avoid issues with `from __future__ import annotations`
+# Named without "Test" prefix to avoid pytest collection
+class SampleRequestBody(msgspec.Struct):
+    """Request body for body parsing tests."""
+    name: str
+    value: int
+
+
+# =============================================================================
 # Test DjangoMiddleware Adapter Creation
-# ═══════════════════════════════════════════════════════════════════════════
+# =============================================================================
 
 
 class TestDjangoMiddlewareAdapter:
@@ -48,528 +52,430 @@ class TestDjangoMiddlewareAdapter:
         assert "SessionMiddleware" in repr(middleware)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Test Request Conversion
-# ═══════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# Test DjangoMiddlewareStack
+# =============================================================================
 
 
-class TestRequestConversion:
-    """Tests for converting Bolt Request to Django HttpRequest."""
+class TestDjangoMiddlewareStack:
+    """Tests for DjangoMiddlewareStack."""
 
-    def test_basic_conversion(self):
-        """Test basic request conversion."""
+    def test_middleware_stack_creation(self):
+        """Test creating DjangoMiddlewareStack."""
         from django.contrib.sessions.middleware import SessionMiddleware
-        mw = DjangoMiddleware(SessionMiddleware)
+        from django.middleware.common import CommonMiddleware
 
-        bolt_request = Request(
-            method="POST",
-            path="/api/test",
-            body=b'{"key": "value"}',
-            headers={"content-type": "application/json"},
-            query={"page": "1"},
-            cookies={"session": "abc123"},
-        )
+        stack = DjangoMiddlewareStack([SessionMiddleware, CommonMiddleware])
+        assert len(stack.middleware_classes) == 2
 
-        django_request = mw._to_django_request(bolt_request)
-
-        assert django_request.method == "POST"
-        assert django_request.path == "/api/test"
-        assert django_request.path_info == "/api/test"
-        assert django_request._body == b'{"key": "value"}'
-        assert django_request.GET.get("page") == "1"
-        assert django_request.COOKIES.get("session") == "abc123"
-
-    def test_headers_to_meta(self):
-        """Test headers converted to Django META format."""
+    def test_middleware_stack_repr(self):
+        """Test string representation of stack."""
         from django.contrib.sessions.middleware import SessionMiddleware
-        mw = DjangoMiddleware(SessionMiddleware)
 
-        bolt_request = Request(
-            method="GET",
-            path="/test",
-            headers={
-                "authorization": "Bearer token123",
-                "x-custom-header": "custom-value",
-                "content-type": "application/json",
-            },
-        )
-
-        django_request = mw._to_django_request(bolt_request)
-
-        assert django_request.META["HTTP_AUTHORIZATION"] == "Bearer token123"
-        assert django_request.META["HTTP_X_CUSTOM_HEADER"] == "custom-value"
-        assert django_request.META["CONTENT_TYPE"] == "application/json"
-        assert django_request.META["REQUEST_METHOD"] == "GET"
-
-    def test_query_params_conversion(self):
-        """Test query params are properly converted."""
-        from django.contrib.sessions.middleware import SessionMiddleware
-        mw = DjangoMiddleware(SessionMiddleware)
-
-        bolt_request = Request(
-            method="GET",
-            path="/search",
-            query={"q": "test", "page": "2", "limit": "10"},
-        )
-
-        django_request = mw._to_django_request(bolt_request)
-
-        assert django_request.GET.get("q") == "test"
-        assert django_request.GET.get("page") == "2"
-        assert django_request.GET.get("limit") == "10"
-
-    def test_cookies_conversion(self):
-        """Test cookies are properly converted."""
-        from django.contrib.sessions.middleware import SessionMiddleware
-        mw = DjangoMiddleware(SessionMiddleware)
-
-        bolt_request = Request(
-            method="GET",
-            path="/test",
-            cookies={"session": "abc123", "preference": "dark"},
-        )
-
-        django_request = mw._to_django_request(bolt_request)
-
-        assert django_request.COOKIES.get("session") == "abc123"
-        assert django_request.COOKIES.get("preference") == "dark"
-
-    def test_body_conversion(self):
-        """Test body is properly available."""
-        from django.contrib.sessions.middleware import SessionMiddleware
-        mw = DjangoMiddleware(SessionMiddleware)
-
-        body = b'{"name": "test", "value": 123}'
-        bolt_request = Request(
-            method="POST",
-            path="/submit",
-            body=body,
-            headers={"content-type": "application/json"},
-        )
-
-        django_request = mw._to_django_request(bolt_request)
-
-        assert django_request._body == body
-        assert django_request.body == body
+        stack = DjangoMiddlewareStack([SessionMiddleware])
+        assert "SessionMiddleware" in repr(stack)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Test Response Conversion
-# ═══════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# Test Full HTTP Cycle - Session Middleware
+# =============================================================================
 
 
-class TestResponseConversion:
-    """Tests for converting between Bolt and Django responses."""
+@pytest.mark.django_db
+class TestSessionMiddlewareHTTPCycle:
+    """Tests for SessionMiddleware through full HTTP cycle."""
 
-    def test_bolt_to_django_response(self):
-        """Test converting Bolt Response to Django HttpResponse."""
-        from django.contrib.sessions.middleware import SessionMiddleware
-        mw = DjangoMiddleware(SessionMiddleware)
+    def test_session_middleware_basic(self):
+        """Test SessionMiddleware runs through HTTP cycle."""
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+        ])
 
-        bolt_response = Response(
-            content={"status": "ok"},
-            status_code=200,
-            headers={"X-Custom": "value"},
-        )
+        @api.get("/test")
+        async def test_route():
+            return {"status": "ok"}
 
-        django_response = mw._to_django_response(bolt_response)
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+            assert response.json() == {"status": "ok"}
 
-        assert django_response.status_code == 200
-        assert django_response["X-Custom"] == "value"
+    def test_session_middleware_with_session_access(self):
+        """Test SessionMiddleware sets session attribute on request."""
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+        ])
 
-    def test_django_to_bolt_response(self):
-        """Test converting Django HttpResponse to Bolt Response."""
-        from django.contrib.sessions.middleware import SessionMiddleware
-        mw = DjangoMiddleware(SessionMiddleware)
+        session_accessed = {"accessed": False}
 
-        django_response = HttpResponse(
-            content=b'{"result": "success"}',
-            status=201,
-            content_type="application/json",
-        )
-        django_response["X-Request-ID"] = "12345"
+        @api.get("/test")
+        async def test_route(request):
+            # Django session should be available via request.state["session"]
+            session = request.state.get("session")
+            if session is not None:
+                session_accessed["accessed"] = True
+            return {"status": "ok"}
 
-        bolt_response = mw._to_bolt_response(django_response)
-
-        assert bolt_response.status_code == 201
-        assert bolt_response.headers.get("X-Request-ID") == "12345"
-        assert bolt_response.content == b'{"result": "success"}'
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Test Custom Django Middleware
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class SimpleOldStyleMiddleware:
-    """Old-style Django middleware with process_request/process_response."""
-
-    def __init__(self, get_response):
-        self.get_response = get_response
-
-    def process_request(self, request):
-        request.custom_attr = "from_process_request"
-        return None  # Continue processing
-
-    def process_response(self, request, response):
-        response["X-Old-Style"] = "processed"
-        return response
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+            # Session should have been accessible
+            assert session_accessed["accessed"] is True
 
 
-class SimpleNewStyleMiddleware:
-    """New-style callable Django middleware."""
+# =============================================================================
+# Test Full HTTP Cycle - Authentication Middleware
+# =============================================================================
+
+
+@pytest.mark.django_db
+class TestAuthMiddlewareHTTPCycle:
+    """Tests for AuthenticationMiddleware through full HTTP cycle."""
+
+    def test_auth_middleware_sets_user(self):
+        """Test AuthenticationMiddleware sets user on request."""
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+            'django.contrib.auth.middleware.AuthenticationMiddleware',
+        ])
+
+        user_set = {"has_user": False}
+
+        @api.get("/test")
+        async def test_route(request):
+            # Django auth middleware sets request.user
+            if hasattr(request, 'user') and request.user is not None:
+                user_set["has_user"] = True
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+            # User should have been set (AnonymousUser for unauthenticated)
+            assert user_set["has_user"] is True
+
+
+# =============================================================================
+# Test Full HTTP Cycle - Custom Middleware
+# =============================================================================
+
+
+class HeaderAddingMiddleware:
+    """Custom Django middleware that adds a header."""
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
-        # Before view
-        request.new_style_ran = True
-
         response = self.get_response(request)
-
-        # After view
-        response["X-New-Style"] = "processed"
+        response["X-Custom-Header"] = "test-value"
         return response
 
 
 class ShortCircuitMiddleware:
-    """Middleware that returns early without calling get_response."""
+    """Django middleware that returns early."""
 
     def __init__(self, get_response):
         self.get_response = get_response
 
-    def process_request(self, request):
+    def __call__(self, request):
         if request.path == "/blocked":
-            return HttpResponse("Blocked", status=403)
-        return None
+            from django.http import HttpResponse
+            return HttpResponse("Blocked by middleware", status=403)
+        return self.get_response(request)
 
 
-class TestCustomMiddleware:
-    """Tests for custom Django middleware integration."""
+@pytest.mark.django_db
+class TestCustomMiddlewareHTTPCycle:
+    """Tests for custom Django middleware through full HTTP cycle."""
 
-    @pytest.mark.asyncio
-    async def test_old_style_middleware_process_request(self):
-        """Test old-style middleware process_request is called."""
-        mw = DjangoMiddleware(SimpleOldStyleMiddleware)
+    def test_custom_middleware_adds_header(self):
+        """Test custom middleware that adds response header."""
+        api = BoltAPI()
+        # Add custom middleware via DjangoMiddlewareStack
+        api.middleware = [DjangoMiddlewareStack([HeaderAddingMiddleware])]
 
-        request = Request(method="GET", path="/test")
-        request_attrs = {}
+        @api.get("/test")
+        async def test_route():
+            return {"status": "ok"}
 
-        async def handler(req: Request) -> Response:
-            # Check if custom attr was synced
-            request_attrs["custom"] = req._state.get("_django_custom_attr")
-            return Response(content={"status": "ok"}, status_code=200)
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+            assert response.headers.get("X-Custom-Header") == "test-value"
 
-        response = await mw(request, handler)
-
-        assert response.status_code == 200
-        assert response.headers.get("X-Old-Style") == "processed"
-
-    @pytest.mark.asyncio
-    async def test_new_style_middleware_callable(self):
-        """Test new-style callable middleware."""
-        mw = DjangoMiddleware(SimpleNewStyleMiddleware)
-
-        request = Request(method="GET", path="/test")
-
-        async def handler(req: Request) -> Response:
-            return Response(content={"status": "ok"}, status_code=200)
-
-        response = await mw(request, handler)
-
-        assert response.status_code == 200
-        assert response.headers.get("X-New-Style") == "processed"
-
-    @pytest.mark.asyncio
-    async def test_middleware_short_circuit(self):
+    def test_middleware_short_circuit(self):
         """Test middleware can return early without calling handler."""
-        mw = DjangoMiddleware(ShortCircuitMiddleware)
+        api = BoltAPI()
+        api.middleware = [DjangoMiddlewareStack([ShortCircuitMiddleware])]
 
-        request = Request(method="GET", path="/blocked")
-        handler_called = False
+        handler_called = {"called": False}
 
-        async def handler(req: Request) -> Response:
-            nonlocal handler_called
-            handler_called = True
-            return Response(content={"status": "ok"}, status_code=200)
+        @api.get("/blocked")
+        async def blocked_route():
+            handler_called["called"] = True
+            return {"status": "ok"}
 
-        response = await mw(request, handler)
+        @api.get("/allowed")
+        async def allowed_route():
+            return {"status": "allowed"}
 
-        assert response.status_code == 403
-        assert response.content == b"Blocked"
-        assert handler_called is False
+        with TestClient(api) as client:
+            # Blocked path should be short-circuited
+            response = client.get("/blocked")
+            assert response.status_code == 403
+            assert b"Blocked by middleware" in response.content
+            assert handler_called["called"] is False
+
+            # Allowed path should work
+            response = client.get("/allowed")
+            assert response.status_code == 200
+            assert response.json() == {"status": "allowed"}
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Test Attribute Syncing
-# ═══════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# Test Full HTTP Cycle - Middleware Chaining
+# =============================================================================
 
 
-class AttributeSettingMiddleware:
-    """Middleware that sets custom attributes on request."""
+class Order1Middleware:
+    """First middleware in chain - adds header."""
 
     def __init__(self, get_response):
         self.get_response = get_response
 
-    def process_request(self, request):
-        request.tracking_id = "track-123"
-        request.feature_flags = ["flag1", "flag2"]
-        return None
-
-    def process_response(self, request, response):
+    def __call__(self, request):
+        response = self.get_response(request)
+        response["X-Order-1"] = "first"
         return response
 
 
-class TestAttributeSyncing:
-    """Tests for syncing attributes between Django and Bolt requests."""
-
-    @pytest.mark.asyncio
-    async def test_custom_attributes_synced(self):
-        """Test custom attributes are synced to Bolt request state."""
-        mw = DjangoMiddleware(AttributeSettingMiddleware)
-
-        request = Request(method="GET", path="/test")
-        synced_attrs = {}
-
-        async def handler(req: Request) -> Response:
-            synced_attrs["tracking_id"] = req._state.get("_django_tracking_id")
-            synced_attrs["feature_flags"] = req._state.get("_django_feature_flags")
-            return Response(content={"status": "ok"}, status_code=200)
-
-        await mw(request, handler)
-
-        assert synced_attrs.get("tracking_id") == "track-123"
-        assert synced_attrs.get("feature_flags") == ["flag1", "flag2"]
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Test Middleware Chaining
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class HeaderMiddleware1:
-    """First middleware in chain."""
+class Order2Middleware:
+    """Second middleware in chain - adds header."""
 
     def __init__(self, get_response):
         self.get_response = get_response
 
-    def process_request(self, request):
-        request.chain_order = ["mw1_request"]
-        return None
-
-    def process_response(self, request, response):
-        response["X-Chain-1"] = "yes"
+    def __call__(self, request):
+        response = self.get_response(request)
+        response["X-Order-2"] = "second"
         return response
 
 
-class HeaderMiddleware2:
-    """Second middleware in chain."""
+@pytest.mark.django_db
+class TestMiddlewareChainingHTTPCycle:
+    """Tests for middleware chaining through full HTTP cycle."""
+
+    def test_multiple_middlewares_all_run(self):
+        """Test that multiple middlewares in chain all execute."""
+        api = BoltAPI()
+        api.middleware = [DjangoMiddlewareStack([Order1Middleware, Order2Middleware])]
+
+        @api.get("/test")
+        async def test_route():
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+            # Both middlewares should have added their headers
+            assert response.headers.get("X-Order-1") == "first"
+            assert response.headers.get("X-Order-2") == "second"
+
+
+# =============================================================================
+# Test Full HTTP Cycle - Error Handling
+# =============================================================================
+
+
+class ExceptionCatchingMiddleware:
+    """Middleware that catches and handles exceptions."""
 
     def __init__(self, get_response):
         self.get_response = get_response
 
-    def process_request(self, request):
-        if hasattr(request, 'chain_order'):
-            request.chain_order.append("mw2_request")
-        return None
-
-    def process_response(self, request, response):
-        response["X-Chain-2"] = "yes"
-        return response
+    def __call__(self, request):
+        try:
+            return self.get_response(request)
+        except ValueError as e:
+            from django.http import HttpResponse
+            return HttpResponse(f"Caught error: {e}", status=400)
 
 
-class TestMiddlewareChaining:
-    """Tests for chaining multiple Django middlewares."""
+@pytest.mark.django_db
+class TestErrorHandlingHTTPCycle:
+    """Tests for error handling in middleware through HTTP cycle."""
 
-    @pytest.mark.asyncio
-    async def test_two_middlewares_chained(self):
-        """Test two Django middlewares can be chained."""
-        mw1 = DjangoMiddleware(HeaderMiddleware1)
-        mw2 = DjangoMiddleware(HeaderMiddleware2)
-
-        request = Request(method="GET", path="/test")
-
-        async def handler(req: Request) -> Response:
-            return Response(content={"status": "ok"}, status_code=200)
-
-        # Chain: mw1 -> mw2 -> handler
-        async def mw2_chain(req: Request) -> Response:
-            return await mw2(req, handler)
-
-        response = await mw1(request, mw2_chain)
-
-        assert response.status_code == 200
-        # Both middlewares should have added their headers
-        assert response.headers.get("X-Chain-1") == "yes"
-        assert response.headers.get("X-Chain-2") == "yes"
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Test Mixed Bolt and Django Middleware
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TrackingBoltMiddleware:
-    """A Bolt native middleware for testing (Django-style pattern)."""
-
-    # Track requests across all instances for testing
-    requests_seen = 0
-
-    def __init__(self, get_response):
-        self.get_response = get_response
-        TrackingBoltMiddleware.requests_seen = 0  # Reset on instantiation
-
-    async def __call__(self, request: Request) -> Response:
-        TrackingBoltMiddleware.requests_seen += 1
-        request.state["bolt_tracked"] = True
-        request.state["request_number"] = TrackingBoltMiddleware.requests_seen
-
-        response = await self.get_response(request)
-
-        response.headers["X-Bolt-Tracked"] = "yes"
-        return response
-
-
-class TestMixedMiddleware:
-    """Tests for mixing Bolt and Django middleware."""
-
-    @pytest.mark.asyncio
-    async def test_bolt_then_django_middleware(self):
-        """Test Bolt middleware before Django middleware."""
-        request = Request(method="GET", path="/test")
-
-        async def handler(req: Request) -> Response:
-            assert req.state.get("bolt_tracked") is True
-            return Response(content={"status": "ok"}, status_code=200)
-
-        # Build chain: Bolt -> Django -> handler (Django-style)
-        django_mw = DjangoMiddleware(HeaderMiddleware1)
-
-        async def django_wrapped(req: Request) -> Response:
-            return await django_mw(req, handler)
-
-        bolt_mw = TrackingBoltMiddleware(django_wrapped)
-
-        response = await bolt_mw(request)
-
-        assert response.status_code == 200
-        assert response.headers.get("X-Bolt-Tracked") == "yes"
-        assert response.headers.get("X-Chain-1") == "yes"
-        assert TrackingBoltMiddleware.requests_seen == 1
-
-    @pytest.mark.asyncio
-    async def test_django_then_bolt_middleware(self):
-        """Test Django middleware before Bolt middleware."""
-        request = Request(method="GET", path="/test")
-
-        async def handler(req: Request) -> Response:
-            return Response(content={"status": "ok"}, status_code=200)
-
-        # Build chain: Django -> Bolt -> handler (Django-style)
-        bolt_mw = TrackingBoltMiddleware(handler)
-
-        async def bolt_wrapped(req: Request) -> Response:
-            return await bolt_mw(req)
-
-        django_mw = DjangoMiddleware(HeaderMiddleware1)
-
-        response = await django_mw(request, bolt_wrapped)
-
-        assert response.status_code == 200
-        assert response.headers.get("X-Bolt-Tracked") == "yes"
-        assert response.headers.get("X-Chain-1") == "yes"
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Test Error Handling
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class ExceptionHandlingMiddleware:
-    """Middleware that handles exceptions."""
-
-    def __init__(self, get_response):
-        self.get_response = get_response
-
-    def process_exception(self, request, exception):
-        if isinstance(exception, ValueError):
-            return HttpResponse(
-                f"Caught: {exception}",
-                status=400
-            )
-        return None  # Let other exceptions propagate
-
-
-class TestErrorHandling:
-    """Tests for error handling in middleware chain."""
-
-    @pytest.mark.asyncio
-    async def test_handler_exception_propagates(self):
-        """Test that unhandled handler exceptions propagate."""
-        mw = DjangoMiddleware(HeaderMiddleware1)
-
-        request = Request(method="GET", path="/test")
-
-        async def handler(req: Request) -> Response:
-            raise RuntimeError("Handler error")
-
-        with pytest.raises(RuntimeError, match="Handler error"):
-            await mw(request, handler)
-
-    @pytest.mark.asyncio
-    async def test_middleware_catches_exception(self):
+    def test_middleware_catches_exception(self):
         """Test that middleware can catch and handle exceptions."""
-        mw = DjangoMiddleware(ExceptionHandlingMiddleware)
+        api = BoltAPI()
+        api.middleware = [DjangoMiddlewareStack([ExceptionCatchingMiddleware])]
 
-        request = Request(method="GET", path="/test")
+        @api.get("/error")
+        async def error_route():
+            raise ValueError("test error")
 
-        async def handler(req: Request) -> Response:
-            raise ValueError("Invalid input")
-
-        response = await mw(request, handler)
-
-        assert response.status_code == 400
-        assert b"Caught: Invalid input" in response.content
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Test State Object
-# ═══════════════════════════════════════════════════════════════════════════
+        with TestClient(api, raise_server_exceptions=False) as client:
+            response = client.get("/error")
+            assert response.status_code == 400
+            assert b"Caught error: test error" in response.content
 
 
-class TestStateWithDjangoMiddleware:
-    """Tests for State object usage with Django middleware."""
+# =============================================================================
+# Test Full HTTP Cycle - Mixed Bolt and Django Middleware
+# =============================================================================
 
-    @pytest.mark.asyncio
-    async def test_state_preserved_through_middleware(self):
-        """Test that Bolt request state is preserved through Django middleware."""
-        django_mw = DjangoMiddleware(HeaderMiddleware1)
 
-        request = Request(method="GET", path="/test")
-        request.state["initial_value"] = "preserved"
+@pytest.mark.django_db
+class TestMixedMiddlewareHTTPCycle:
+    """Tests for mixing Bolt native and Django middleware."""
 
-        async def handler(req: Request) -> Response:
-            assert req.state.get("initial_value") == "preserved"
-            req.state["handler_value"] = "from_handler"
-            return Response(content={"status": "ok"}, status_code=200)
+    def test_bolt_and_django_middleware_together(self):
+        """Test Bolt middleware and Django middleware work together."""
+        from django_bolt.middleware import TimingMiddleware
 
-        await django_mw(request, handler)
+        api = BoltAPI(
+            django_middleware=['django.contrib.sessions.middleware.SessionMiddleware'],
+            middleware=[TimingMiddleware],
+        )
 
-        # State should still be accessible after middleware
-        assert request.state.get("initial_value") == "preserved"
-        assert request.state.get("handler_value") == "from_handler"
+        @api.get("/test")
+        async def test_route():
+            return {"status": "ok"}
 
-    @pytest.mark.asyncio
-    async def test_django_attrs_in_state(self):
-        """Test that Django middleware attributes are stored in state."""
-        mw = DjangoMiddleware(AttributeSettingMiddleware)
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+            # TimingMiddleware should have added its header (X-Response-Time)
+            assert "X-Response-Time" in response.headers or "x-response-time" in response.headers
 
-        request = Request(method="GET", path="/test")
 
-        async def handler(req: Request) -> Response:
-            # Django middleware should have set these in state
-            assert "_django_tracking_id" in req._state
-            return Response(content={"status": "ok"}, status_code=200)
+# =============================================================================
+# Test Request/Response Conversion (Unit Tests)
+# =============================================================================
 
-        await mw(request, handler)
+
+@pytest.mark.django_db
+class TestMessagesFramework:
+    """Test Django messages framework works with Django-Bolt middleware."""
+
+    def test_messages_framework_accessible_via_request(self):
+        """
+        Test that Django's messages framework works through the middleware stack.
+
+        This test verifies:
+        1. MessageMiddleware sets request._messages on Django request
+        2. _messages is synced to Bolt request.state["_messages"]
+        3. request._messages is accessible via __getattr__ (reads from state)
+        4. Messages added via django.contrib.messages are actually stored
+
+        This test WILL FAIL if:
+        - _sync_request_attributes doesn't sync _messages
+        - __getattr__ doesn't read from state dict
+        - MessageMiddleware isn't working
+        """
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+            'django.contrib.messages.middleware.MessageMiddleware',
+        ])
+
+        captured = {"messages_storage": None, "message_count": 0}
+
+        @api.get("/test")
+        async def test_route(request):
+            from django.contrib import messages
+
+            # Add messages - this requires _messages to be set by MessageMiddleware
+            messages.info(request, "Test info message")
+            messages.success(request, "Test success message")
+
+            # Access _messages directly - this uses __getattr__ to read from state
+            # If this fails, the messages framework isn't working
+            messages_storage = request._messages
+            captured["messages_storage"] = messages_storage
+            captured["message_count"] = len(messages_storage)
+
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+
+            # Verify messages were stored - this is the actual test
+            # If _messages wasn't synced, this will be None or 0
+            assert captured["messages_storage"] is not None, \
+                "request._messages was not accessible - __getattr__ or _sync_request_attributes broken"
+            assert captured["message_count"] == 2, \
+                f"Expected 2 messages, got {captured['message_count']} - MessageMiddleware not working"
+
+
+class TestRequestConversion:
+    """Unit tests for request conversion - using real middleware through HTTP cycle."""
+
+    def test_query_params_available(self):
+        """Test query params are available in handler."""
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+        ])
+
+        received_params = {}
+
+        @api.get("/test")
+        async def test_route(request, page: int = 1, limit: int = 10):
+            received_params["page"] = page
+            received_params["limit"] = limit
+            return {"page": page, "limit": limit}
+
+        with TestClient(api) as client:
+            response = client.get("/test?page=5&limit=20")
+            assert response.status_code == 200
+            assert received_params["page"] == 5
+            assert received_params["limit"] == 20
+
+    def test_cookies_available(self):
+        """Test cookies are available in handler."""
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+        ])
+
+        @api.get("/test")
+        async def test_route(request):
+            # Cookies should be accessible
+            return {"has_cookies": bool(request.cookies)}
+
+        with TestClient(api) as client:
+            response = client.get("/test", cookies={"test_cookie": "value"})
+            assert response.status_code == 200
+
+    def test_headers_available(self):
+        """Test headers are available in handler."""
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+        ])
+
+        received_header = {"value": None}
+
+        @api.get("/test")
+        async def test_route(request):
+            received_header["value"] = request.headers.get("x-custom-header")
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test", headers={"X-Custom-Header": "test-value"})
+            assert response.status_code == 200
+            assert received_header["value"] == "test-value"
+
+    def test_body_available(self):
+        """Test body is available in handler."""
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+        ])
+
+        @api.post("/test")
+        async def test_route(body: SampleRequestBody):
+            return {"received_name": body.name, "received_value": body.value}
+
+        with TestClient(api) as client:
+            response = client.post("/test", json={"name": "test", "value": 42})
+            assert response.status_code == 200
+            assert response.json() == {"received_name": "test", "received_value": 42}

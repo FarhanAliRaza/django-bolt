@@ -67,7 +67,7 @@ from .middleware import (
     ErrorHandlerMiddleware,
 )
 from .compression import CompressionConfig
-from .django_adapter import DjangoMiddleware
+from .django_adapter import DjangoMiddleware, DjangoMiddlewareStack
 from .django_loader import (
     load_django_middleware,
     get_django_middleware_setting,
@@ -96,6 +96,7 @@ __all__ = [
     "ErrorHandlerMiddleware",
     # Django compatibility
     "DjangoMiddleware",
+    "DjangoMiddlewareStack",
     "load_django_middleware",
     "get_django_middleware_setting",
     "DEFAULT_EXCLUDED_MIDDLEWARE",

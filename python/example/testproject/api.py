@@ -159,7 +159,7 @@ middleware_api = BoltAPI(
 
 
 @middleware_api.get("/demo")
-@rate_limit(rps=100, burst=200)  # Rust-accelerated rate limiting
+# @rate_limit(rps=100, burst=200)  # Rust-accelerated rate limiting
 async def middleware_demo(request: Request):
     """
     Demonstrates both Django and custom middleware in action.

@@ -98,8 +98,8 @@ def load_django_middleware(
             exclude_set.update(config["exclude"])
     # If config is True, use all from settings with default exclusions
 
-    # Build the middleware list
-    middleware_instances: List["MiddlewareType"] = []
+    # Collect middleware classes (not instances)
+    middleware_classes: list = []
 
     for middleware_path in django_middleware_list:
         # Check if we should include this middleware
@@ -110,15 +110,21 @@ def load_django_middleware(
 
         try:
             middleware_class = import_string(middleware_path)
-            wrapped = DjangoMiddleware(middleware_class)
-            middleware_instances.append(wrapped)
+            middleware_classes.append(middleware_class)
         except ImportError as e:
             import logging
             logging.getLogger("django_bolt").warning(
                 f"Could not import Django middleware '{middleware_path}': {e}"
             )
 
-    return middleware_instances
+    # Return a single DjangoMiddlewareStack that wraps ALL middleware
+    # This is a critical performance optimization:
+    # - Instead of N Bolt↔Django conversions (one per middleware)
+    # - We do just 1 conversion at start and 1 at end
+    if middleware_classes:
+        from .django_adapter import DjangoMiddlewareStack
+        return [DjangoMiddlewareStack(middleware_classes)]
+    return []
 
 
 def get_django_middleware_setting() -> List[str]:

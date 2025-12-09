@@ -35,6 +35,13 @@ def actix_to_asgi_scope(request: Dict[str, Any], server_host: str = "localhost",
     method = request.get("method", "GET")
     path = request.get("path", "/")
     query_params = request.get("query", {})
+
+    # Django admin expects trailing slashes on URLs (it will redirect without them).
+    # Since NormalizePath::trim() in Rust strips trailing slashes from incoming requests,
+    # we need to restore the trailing slash for Django to avoid redirect loops.
+    # Only add if path doesn't already end with / and is not just "/"
+    if path != "/" and not path.endswith("/"):
+        path = path + "/"
     headers_dict = request.get("headers", {})
 
     # Build query string from query params dict

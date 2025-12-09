@@ -360,9 +360,9 @@ class DjangoMiddleware:
 
         Performance: Only sync known attributes - avoid dir() which is O(100+) per call.
         """
-        # Sync user - store in state dict for handler access
+        # Sync user directly to bolt_request.user (same as Django)
         if hasattr(django_request, 'user'):
-            bolt_request.state["_django_user"] = django_request.user
+            bolt_request.user = django_request.user
 
         # Sync session
         if hasattr(django_request, 'session'):
@@ -518,23 +518,72 @@ class DjangoMiddlewareStack:
 
             bolt_request = ctx["bolt_request"]
 
+            # Sync Django request attributes to Bolt request BEFORE calling handler
+            # This ensures request.user is available in the handler (set by AuthenticationMiddleware)
+            _sync_request_attributes(django_request, bolt_request)
+
             # Call Bolt's next middleware/handler
             bolt_resp = await self.get_response(bolt_request)
 
             ctx["bolt_response"] = bolt_resp
 
-            # Sync Django request attributes back to Bolt request
+            # Sync again after handler in case middleware modified attributes
             _sync_request_attributes(django_request, bolt_request)
 
             # Convert Bolt response to Django response for middleware chain
             return _to_django_response(bolt_resp)
 
-        # Mark as async so Django middleware use __acall__
-        markcoroutinefunction(get_response_bridge)
+        # SYNC MODE OPTIMIZATION:
+        # Django's __acall__ uses sync_to_async for every process_request/process_response
+        # which adds massive overhead (thread pool call per middleware method).
+        # Instead, we use SYNC middleware mode and wrap the entire chain in ONE sync_to_async.
+        #
+        # Key insight: Django middleware are sync by default. By NOT marking get_response
+        # as async, Django uses __call__ (sync) instead of __acall__ (async with thread pool).
+        #
+        # Flow:
+        # 1. Our __call__ is async
+        # 2. We call sync_to_async(middleware_chain) ONCE
+        # 3. Inside that single thread, Django middleware run synchronously (fast!)
+        # 4. The innermost get_response_bridge is also sync, using async_to_sync to call Bolt
+
+        # Create SYNC innermost bridge (runs inside the thread pool)
+        from asgiref.sync import async_to_sync
+
+        def get_response_bridge_sync(django_request: HttpRequest) -> HttpResponse:
+            """
+            Sync bridge for Django middleware chain.
+            Runs inside sync_to_async thread, calls async handler via async_to_sync.
+            """
+            try:
+                ctx = _request_context.get()
+            except LookupError as e:
+                raise RuntimeError(
+                    "Request context not set. This usually means the middleware chain "
+                    "was not properly initialized."
+                ) from e
+
+            bolt_request = ctx["bolt_request"]
+
+            # Sync Django request attributes to Bolt request BEFORE calling handler
+            # This ensures request.user is available in the handler (set by AuthenticationMiddleware)
+            _sync_request_attributes(django_request, bolt_request)
+
+            # Call Bolt's async handler from sync context
+            bolt_resp = async_to_sync(self.get_response)(bolt_request)
+
+            ctx["bolt_response"] = bolt_resp
+
+            # Sync again after handler in case middleware modified attributes
+            _sync_request_attributes(django_request, bolt_request)
+
+            # Convert Bolt response to Django response for middleware chain
+            return _to_django_response(bolt_resp)
 
         # Build Django's native middleware chain (innermost to outermost)
-        # Each middleware wraps the previous one, with get_response_bridge at center
-        chain = get_response_bridge
+        # Using SYNC bridge - Django middleware will use __call__ not __acall__
+        chain = get_response_bridge_sync
+
         for middleware_class in reversed(self.middleware_classes):
             chain = middleware_class(chain)
 
@@ -569,12 +618,10 @@ class DjangoMiddlewareStack:
 
         try:
             # Execute entire Django middleware chain
-            if self._middleware_is_async:
-                django_response = await self._middleware_chain(django_request)
-            else:
-                django_response = await sync_to_async(
-                    self._middleware_chain, thread_sensitive=True
-                )(django_request)
+            # SYNC MODE: Entire chain runs in ONE thread pool call (not per-middleware)
+            django_response = await sync_to_async(
+                self._middleware_chain, thread_sensitive=True
+            )(django_request)
 
             # Single Django→Bolt conversion at the end
             return _to_bolt_response(django_response)
@@ -677,15 +724,19 @@ def _sync_request_attributes(
     Sync attributes added by Django middleware to Bolt request.
 
     Django middlewares commonly add:
-    - request.user (AuthenticationMiddleware)
+    - request.user (AuthenticationMiddleware) - SimpleLazyObject for sync access
+    - request.auser (AuthenticationMiddleware) - async callable for async access
     - request.session (SessionMiddleware)
     - request.csrf_processing_done (CsrfViewMiddleware)
 
     Performance: Only sync known attributes - avoid dir() which is O(100+) per call.
     """
-    # Sync user - store in state dict for handler access
+    # Sync user (SimpleLazyObject) for sync access
+    # Sync auser (async callable) for async access via `await request.auser()`
     if hasattr(django_request, 'user'):
-        bolt_request.state["_django_user"] = django_request.user
+        bolt_request.user = django_request.user
+    if hasattr(django_request, 'auser'):
+        bolt_request.state["auser"] = django_request.auser
 
     # Sync session
     if hasattr(django_request, 'session'):

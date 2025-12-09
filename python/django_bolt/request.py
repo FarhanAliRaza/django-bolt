@@ -361,6 +361,24 @@ class Request(Generic[UserT, AuthT, StateT]):
         """
         return self._django_request
 
+    @property
+    def auser(self) -> Any:
+        """
+        Async user getter (Django-style).
+
+        Returns the async user callable set by Django's AuthenticationMiddleware.
+        Use this in async handlers to load the user without blocking:
+
+            user = await request.auser()
+
+        This follows Django's pattern where `request.auser` is an async callable
+        that loads the user from the database asynchronously.
+
+        Returns:
+            Async callable that returns the user when awaited, or None if not set
+        """
+        return self._state.get("auser")
+
     # ═══════════════════════════════════════════════════════════════════════
     # User availability check (avoids exception)
     # ═══════════════════════════════════════════════════════════════════════

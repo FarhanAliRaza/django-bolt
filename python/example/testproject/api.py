@@ -184,9 +184,10 @@ async def middleware_demo(request: Request):
     state = request.state
 
     # Access Django user (from Django's AuthenticationMiddleware)
-    user = request.user
+    # auser is an async callable from Django, so we need to call it: await request.auser()
+    user = await request.auser()
     
-    return render(request, "about.html", {})
+    # return render(request, "about.html", {})
 
     return {
         "message": "Middleware demo - check response headers!",

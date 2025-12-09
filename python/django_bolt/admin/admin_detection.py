@@ -97,8 +97,10 @@ def get_admin_route_patterns() -> List[Tuple[str, List[str]]]:
     # Only use methods supported by django-bolt's router (GET, POST, PUT, PATCH, DELETE)
     methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
 
-    # Also add exact /admin/ route (without trailing path)
-    admin_root = f'/{admin_prefix}/'
+    # Also add exact /admin route (without trailing slash)
+    # NOTE: NormalizePath::trim() in Rust strips trailing slashes from incoming requests,
+    # so we register routes WITHOUT trailing slashes to match the normalized paths.
+    admin_root = f'/{admin_prefix}'
 
     return [
         (admin_root, methods),

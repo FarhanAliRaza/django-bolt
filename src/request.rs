@@ -58,6 +58,15 @@ impl PyRequest {
         }
     }
 
+    /// Set the user object (called by Django middleware via DjangoMiddlewareStack).
+    ///
+    /// This allows Django's AuthenticationMiddleware to set request.user
+    /// just like in standard Django.
+    #[setter]
+    fn set_user(&mut self, value: Py<PyAny>) {
+        self.user = Some(value);
+    }
+
     /// Get headers as a dict for middleware access.
     ///
     /// Example:
@@ -108,6 +117,28 @@ impl PyRequest {
     #[getter]
     fn state<'py>(&self, py: Python<'py>) -> Py<PyDict> {
         self.state.clone_ref(py)
+    }
+
+    /// Get the async user loader (Django-style).
+    ///
+    /// Returns the async user callable set by Django's AuthenticationMiddleware.
+    /// Use this in async handlers to load the user without blocking:
+    ///
+    ///     user = await request.auser()
+    ///
+    /// This follows Django's pattern where `request.auser` is an async callable
+    /// that loads the user from the database asynchronously.
+    ///
+    /// Returns:
+    ///     Async callable that returns the user when awaited, or None if not set
+    #[getter]
+    fn auser<'py>(&self, py: Python<'py>) -> Py<PyAny> {
+        // Get "auser" from state dict (set by Django middleware adapter)
+        let state_dict = self.state.bind(py);
+        match state_dict.get_item("auser") {
+            Ok(Some(auser)) => auser.unbind(),
+            _ => py.None(),
+        }
     }
 
     #[pyo3(signature = (key, /, default=None))]

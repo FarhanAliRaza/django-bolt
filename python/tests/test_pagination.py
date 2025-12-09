@@ -4,22 +4,22 @@ Real ORM-based tests for pagination functionality.
 Tests pagination with actual Django models, database queries, and HTTP requests.
 No mocking - tests the full integration stack.
 """
-import pytest
+
 import msgspec
-from typing import List
+import pytest
 
 from django_bolt import (
     BoltAPI,
-    ViewSet,
+    CursorPagination,
+    LimitOffsetPagination,
     ModelViewSet,
     PageNumberPagination,
-    LimitOffsetPagination,
-    CursorPagination,
+    ViewSet,
     paginate,
 )
 from django_bolt.testing import TestClient
-from .test_models import Article
 
+from .test_models import Article
 
 # ============================================================================
 # Schemas

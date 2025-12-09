@@ -4,22 +4,22 @@ Tests that sync and async handlers work correctly with parameters, dependencies,
 """
 from __future__ import annotations
 
-import inspect
+import inspect  # noqa: PLC0415
 import time
 from typing import Annotated
 
 import jwt
 import msgspec
 import pytest
-from asgiref.sync import async_to_sync
+
 from django_bolt import BoltAPI
-from django_bolt.auth import JWTAuthentication, IsAuthenticated
+from django_bolt.auth import IsAuthenticated, JWTAuthentication
 from django_bolt.exceptions import HTTPException
 from django_bolt.middleware import cors, rate_limit
-from django_bolt.params import Header, Query, Depends
+from django_bolt.params import Depends, Header, Query
 from django_bolt.testing import TestClient
-from .test_models import Article, Author, Tag, BlogPost, Comment
 
+from .test_models import Article
 
 # ========================
 # Shared Models
@@ -591,7 +591,7 @@ class TestAsyncSyncParityPathParameters:
 
         assert async_data["user_id"] == sync_data["user_id"] == 789
         assert async_data["is_async"] is True
-        assert "is_async" not in sync_data or sync_data.get("is_async") != True
+        assert "is_async" not in sync_data or not sync_data.get("is_async")
 
 
 class TestAsyncSyncParityRequestBody:
@@ -732,7 +732,7 @@ def orm_api():
                 "is_published": article.is_published,
             }
         except Article.DoesNotExist:
-            raise HTTPException(status_code=404, detail="Article not found")
+            raise HTTPException(status_code=404, detail="Article not found") from None
 
     @api.post("/sync/articles")
     def sync_create_article(article: ArticleCreate):
@@ -781,7 +781,7 @@ def orm_api():
                 "is_published": db_article.is_published,
             }
         except Article.DoesNotExist:
-            raise HTTPException(status_code=404, detail="Article not found")
+            raise HTTPException(status_code=404, detail="Article not found") from None
 
     @api.delete("/sync/articles/{article_id}")
     def sync_delete_article(article_id: int):
@@ -791,7 +791,7 @@ def orm_api():
             article.delete()
             return {"message": f"Article {article_id} deleted successfully"}
         except Article.DoesNotExist:
-            raise HTTPException(status_code=404, detail="Article not found")
+            raise HTTPException(status_code=404, detail="Article not found") from None
 
     # ========================
     # Async ORM Handlers
@@ -831,7 +831,7 @@ def orm_api():
                 "is_async": True,
             }
         except Article.DoesNotExist:
-            raise HTTPException(status_code=404, detail="Article not found")
+            raise HTTPException(status_code=404, detail="Article not found") from None
 
     @api.post("/async/articles")
     async def async_create_article(article: ArticleCreate):
@@ -882,7 +882,7 @@ def orm_api():
                 "is_async": True,
             }
         except Article.DoesNotExist:
-            raise HTTPException(status_code=404, detail="Article not found")
+            raise HTTPException(status_code=404, detail="Article not found") from None
 
     @api.delete("/async/articles/{article_id}")
     async def async_delete_article(article_id: int):
@@ -892,7 +892,7 @@ def orm_api():
             await article.adelete()
             return {"message": f"Article {article_id} deleted successfully", "is_async": True}
         except Article.DoesNotExist:
-            raise HTTPException(status_code=404, detail="Article not found")
+            raise HTTPException(status_code=404, detail="Article not found") from None
 
     # ========================
     # Complex Query Handlers

@@ -43,7 +43,7 @@ class OpenAPI(BaseSchemaObject):
     This MUST be in the form of a URI.
     """
 
-    servers: list[Server] = field(default_factory=lambda x: [Server(url="/")])  # type: ignore[misc, arg-type]
+    servers: list[Server] = field(default_factory=lambda: [Server(url="/")])  # type: ignore[misc, arg-type]
     """An array of Server Objects, which provide connectivity information to a target server.
 
     If the ``servers`` property is not provided, or is an empty array, the default value would be a

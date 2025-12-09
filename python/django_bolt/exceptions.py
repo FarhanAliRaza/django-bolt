@@ -1,6 +1,7 @@
-from typing import Any, Dict, Optional, List, Sequence
-from http import HTTPStatus
 import re
+from collections.abc import Sequence
+from http import HTTPStatus
+from typing import Any
 
 
 class BoltException(Exception):
@@ -43,17 +44,17 @@ class HTTPException(BoltException):
     """HTTP status code for this exception."""
     detail: str = ""
     """Exception details or message."""
-    headers: Dict[str, str]
+    headers: dict[str, str]
     """Headers to attach to the response."""
-    extra: Dict[str, Any] | List[Any] | None = None
+    extra: dict[str, Any] | list[Any] | None = None
     """Additional data to include in the response."""
 
     def __init__(
         self,
         status_code: int | None = None,
         detail: Any | None = None,
-        headers: Optional[Dict[str, str]] = None,
-        extra: Dict[str, Any] | List[Any] | None = None,
+        headers: dict[str, str] | None = None,
+        extra: dict[str, Any] | list[Any] | None = None,
     ):
         """Initialize HTTPException.
 
@@ -230,7 +231,7 @@ class GatewayTimeout(ServerException):
 
 # Helper functions for better error messages
 
-def parse_msgspec_decode_error(error: Exception, body_bytes: bytes) -> Dict[str, Any]:
+def parse_msgspec_decode_error(error: Exception, body_bytes: bytes) -> dict[str, Any]:
     """Parse msgspec.DecodeError to extract line/column information.
 
     Args:

@@ -2,11 +2,13 @@
 Utilities for detecting and configuring Django admin integration.
 """
 
+import logging
 import sys
-from typing import List, Optional, Tuple
 
 from django.conf import settings
 from django.urls import get_resolver
+
+logger = logging.getLogger(__name__)
 
 
 def is_admin_installed() -> bool:
@@ -22,7 +24,7 @@ def is_admin_installed() -> bool:
         return False
 
 
-def detect_admin_url_prefix() -> Optional[str]:
+def detect_admin_url_prefix() -> str | None:
     """
     Detect the URL prefix for Django admin by parsing urlpatterns.
 
@@ -58,11 +60,10 @@ def detect_admin_url_prefix() -> Optional[str]:
                 # Check if urlconf is a list containing admin patterns
                 if isinstance(urlconf, (list, tuple)):
                     for sub_pattern in urlconf:
-                        if hasattr(sub_pattern, 'callback') and hasattr(sub_pattern.callback, '__module__'):
-                            if 'admin' in sub_pattern.callback.__module__:
-                                pattern_str = str(url_pattern.pattern)
-                                prefix = pattern_str.rstrip('/^$')
-                                return prefix if prefix else 'admin'
+                        if hasattr(sub_pattern, 'callback') and hasattr(sub_pattern.callback, '__module__') and 'admin' in sub_pattern.callback.__module__:
+                            pattern_str = str(url_pattern.pattern)
+                            prefix = pattern_str.rstrip('/^$')
+                            return prefix if prefix else 'admin'
 
     except Exception as e:
         # If detection fails, log warning and return default
@@ -72,7 +73,7 @@ def detect_admin_url_prefix() -> Optional[str]:
     return 'admin'
 
 
-def get_admin_route_patterns() -> List[Tuple[str, List[str]]]:
+def get_admin_route_patterns() -> list[tuple[str, list[str]]]:
     """
     Get route patterns to register for Django admin.
 
@@ -110,7 +111,7 @@ def get_admin_route_patterns() -> List[Tuple[str, List[str]]]:
     ]
 
 
-def get_static_url_prefix() -> Optional[str]:
+def get_static_url_prefix() -> str | None:
     """
     Get the STATIC_URL prefix from Django settings.
 
@@ -122,8 +123,12 @@ def get_static_url_prefix() -> Optional[str]:
             static_url = settings.STATIC_URL
             # Remove leading/trailing slashes
             return static_url.strip('/')
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(
+            "Failed to get STATIC_URL from Django settings. "
+            "Static file serving may not work correctly. Error: %s",
+            e
+        )
 
     return None
 

@@ -22,10 +22,12 @@ from __future__ import annotations
 
 import base64
 import inspect
-import msgspec
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, TypeVar, Generic
+from collections.abc import Callable
 from functools import wraps
+from typing import Any, TypeVar
+
+import msgspec
 from asgiref.sync import sync_to_async
 
 from . import _json
@@ -42,7 +44,7 @@ __all__ = [
 T = TypeVar("T")
 
 
-class PaginatedResponse(msgspec.Struct, Generic[T]):
+class PaginatedResponse[T](msgspec.Struct):
     """
     Standard paginated response structure.
 
@@ -57,23 +59,23 @@ class PaginatedResponse(msgspec.Struct, Generic[T]):
         next_page: Next page number (None if no next page)
         previous_page: Previous page number (None if no previous page)
     """
-    items: List[T]
+    items: list[T]
     total: int
-    page: Optional[int] = None
-    page_size: Optional[int] = None
-    total_pages: Optional[int] = None
+    page: int | None = None
+    page_size: int | None = None
+    total_pages: int | None = None
     has_next: bool = False
     has_previous: bool = False
-    next_page: Optional[int] = None
-    previous_page: Optional[int] = None
+    next_page: int | None = None
+    previous_page: int | None = None
 
     # For LimitOffset pagination
-    limit: Optional[int] = None
-    offset: Optional[int] = None
+    limit: int | None = None
+    offset: int | None = None
 
     # For Cursor pagination
-    next_cursor: Optional[str] = None
-    previous_cursor: Optional[str] = None
+    next_cursor: str | None = None
+    previous_cursor: str | None = None
 
 
 class PaginationBase(ABC):
@@ -92,10 +94,10 @@ class PaginationBase(ABC):
     max_page_size: int = 1000
 
     # Name of the page size query parameter
-    page_size_query_param: Optional[str] = None
+    page_size_query_param: str | None = None
 
     @abstractmethod
-    async def get_page_params(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    async def get_page_params(self, request: dict[str, Any]) -> dict[str, Any]:
         """
         Extract pagination parameters from request.
 
@@ -111,7 +113,7 @@ class PaginationBase(ABC):
     async def paginate_queryset(
         self,
         queryset: Any,
-        request: Dict[str, Any],
+        request: dict[str, Any],
         **params: Any
     ) -> PaginatedResponse:
         """
@@ -149,7 +151,7 @@ class PaginationBase(ABC):
         else:
             return len(queryset)
 
-    async def _evaluate_queryset_slice(self, queryset: Any) -> List[Any]:
+    async def _evaluate_queryset_slice(self, queryset: Any) -> list[Any]:
         """
         Evaluate a queryset slice to a list.
 
@@ -209,7 +211,7 @@ class PaginationBase(ABC):
         # Not a model, return as-is
         return item
 
-    def _get_page_size(self, request: Dict[str, Any]) -> int:
+    def _get_page_size(self, request: dict[str, Any]) -> int:
         """
         Get page size from request, with validation.
 
@@ -258,7 +260,7 @@ class PageNumberPagination(PaginationBase):
     max_page_size: int = 1000
     page_size_query_param: str = "page_size"
 
-    async def get_page_params(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    async def get_page_params(self, request: dict[str, Any]) -> dict[str, Any]:
         """Extract page number and page_size from request."""
         query = request.get('query', {})
 
@@ -279,7 +281,7 @@ class PageNumberPagination(PaginationBase):
     async def paginate_queryset(
         self,
         queryset: Any,
-        request: Dict[str, Any],
+        request: dict[str, Any],
         **params: Any
     ) -> PaginatedResponse:
         """
@@ -346,7 +348,7 @@ class LimitOffsetPagination(PaginationBase):
     page_size: int = 100
     max_page_size: int = 1000
 
-    async def get_page_params(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    async def get_page_params(self, request: dict[str, Any]) -> dict[str, Any]:
         """Extract limit and offset from request."""
         query = request.get('query', {})
 
@@ -379,7 +381,7 @@ class LimitOffsetPagination(PaginationBase):
     async def paginate_queryset(
         self,
         queryset: Any,
-        request: Dict[str, Any],
+        request: dict[str, Any],
         **params: Any
     ) -> PaginatedResponse:
         """
@@ -473,7 +475,7 @@ class CursorPagination(PaginationBase):
         except Exception:
             return None
 
-    async def get_page_params(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    async def get_page_params(self, request: dict[str, Any]) -> dict[str, Any]:
         """Extract cursor and page_size from request."""
         query = request.get('query', {})
 
@@ -489,7 +491,7 @@ class CursorPagination(PaginationBase):
     async def paginate_queryset(
         self,
         queryset: Any,
-        request: Dict[str, Any],
+        request: dict[str, Any],
         **params: Any
     ) -> PaginatedResponse:
         """

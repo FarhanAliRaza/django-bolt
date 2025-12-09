@@ -24,10 +24,7 @@ Example:
 
 from __future__ import annotations
 
-from .types import WebSocket
-from .state import WebSocketState
 from .close_codes import (
-    CloseCode,
     WS_1000_NORMAL_CLOSURE,
     WS_1001_GOING_AWAY,
     WS_1002_PROTOCOL_ERROR,
@@ -37,18 +34,21 @@ from .close_codes import (
     WS_1011_INTERNAL_ERROR,
     WS_1012_SERVICE_RESTART,
     WS_1013_TRY_AGAIN_LATER,
+    CloseCode,
 )
 from .exceptions import (
-    WebSocketException,
-    WebSocketDisconnect,
     WebSocketClose,
+    WebSocketDisconnect,
+    WebSocketException,
 )
 from .handlers import (
+    get_websocket_param_name,
     is_websocket_handler,
     mark_websocket_handler,
-    get_websocket_param_name,
     run_websocket_handler,
 )
+from .state import WebSocketState
+from .types import WebSocket
 
 __all__ = [
     # Main type

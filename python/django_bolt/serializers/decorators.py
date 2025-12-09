@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Literal, TypeVar, get_type_hints
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, get_type_hints
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .base import Serializer
@@ -93,8 +97,13 @@ def computed_field(
         try:
             hints = get_type_hints(method)
             return_type = hints.get("return", Any)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                "Failed to get return type hints for computed field method %s. "
+                "Using Any as return type. Error: %s",
+                method.__name__ if hasattr(method, '__name__') else str(method),
+                e
+            )
 
         # Store computed field metadata on the method
         method.__computed_field__ = ComputedFieldConfig(
@@ -201,7 +210,7 @@ def collect_field_validators(cls: type[Serializer]) -> dict[str, list[Callable[[
         if not hasattr(base, "__dict__"):
             continue
 
-        for name, value in base.__dict__.items():
+        for _name, value in base.__dict__.items():
             if callable(value) and hasattr(value, "__validator_field__"):
                 field_name = value.__validator_field__
                 if field_name not in validators:
@@ -224,7 +233,7 @@ def collect_model_validators(cls: type[Serializer]) -> list[Callable[[Serializer
         if not hasattr(base, "__dict__"):
             continue
 
-        for name, value in base.__dict__.items():
+        for _name, value in base.__dict__.items():
             if callable(value) and hasattr(value, "__model_validator__"):
                 validators.append(value)
 
@@ -244,7 +253,7 @@ def collect_computed_fields(cls: type[Serializer]) -> dict[str, ComputedFieldCon
         if not hasattr(base, "__dict__"):
             continue
 
-        for name, value in base.__dict__.items():
+        for _name, value in base.__dict__.items():
             if callable(value) and hasattr(value, "__computed_field__"):
                 config: ComputedFieldConfig = value.__computed_field__
                 # Use alias if provided, otherwise use method name

@@ -1,22 +1,27 @@
 """Middleware compilation utilities."""
-from typing import Any, Callable, Dict, List, Optional, Set
+import logging
+from collections.abc import Callable
+from typing import Any
+
 from ..auth.backends import get_default_authentication_classes
 from ..auth.guards import get_default_permission_classes
+
+logger = logging.getLogger(__name__)
 
 
 def compile_middleware_meta(
     handler: Callable,
     method: str,
     path: str,
-    global_middleware: List[Any],
-    global_middleware_config: Dict[str, Any],
-    guards: Optional[List[Any]] = None,
-    auth: Optional[List[Any]] = None
-) -> Optional[Dict[str, Any]]:
+    global_middleware: list[Any],
+    global_middleware_config: dict[str, Any],
+    guards: list[Any] | None = None,
+    auth: list[Any] | None = None
+) -> dict[str, Any] | None:
     """Compile middleware metadata for a handler, including guards and auth."""
     # Check for handler-specific middleware
     handler_middleware = []
-    skip_middleware: Set[str] = set()
+    skip_middleware: set[str] = set()
 
     if hasattr(handler, '__bolt_middleware__'):
         handler_middleware = handler.__bolt_middleware__
@@ -75,16 +80,26 @@ def compile_middleware_meta(
                     try:
                         instance = guard()
                         guard_list.append(instance.to_metadata())
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to instantiate guard class %s for metadata compilation. "
+                            "Guard will be skipped. Error: %s",
+                            guard.__class__.__name__ if hasattr(guard, '__class__') else type(guard).__name__,
+                            e
+                        )
             elif isinstance(guard, type):
                 # It's a class reference, instantiate it
                 try:
                     instance = guard()
                     if hasattr(instance, 'to_metadata'):
                         guard_list.append(instance.to_metadata())
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "Failed to instantiate guard class %s for metadata compilation. "
+                        "Guard will be skipped. Error: %s",
+                        guard.__name__ if hasattr(guard, '__name__') else str(guard),
+                        e
+                    )
     else:
         # Use global default permission classes
         for guard in get_default_permission_classes():
@@ -119,9 +134,9 @@ def compile_middleware_meta(
 
 
 def add_optimization_flags_to_metadata(
-    metadata: Optional[Dict[str, Any]],
-    handler_meta: Dict[str, Any]
-) -> Dict[str, Any]:
+    metadata: dict[str, Any] | None,
+    handler_meta: dict[str, Any]
+) -> dict[str, Any]:
     """
     Add optimization flags to middleware metadata.
 
@@ -149,7 +164,7 @@ def add_optimization_flags_to_metadata(
     return metadata
 
 
-def middleware_to_dict(mw: Any) -> Optional[Dict[str, Any]]:
+def middleware_to_dict(mw: Any) -> dict[str, Any] | None:
     """
     Convert middleware specification to dictionary for Rust metadata.
 

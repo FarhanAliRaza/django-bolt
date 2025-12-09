@@ -12,6 +12,8 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 
+from django.utils.csp import CSP
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -59,10 +61,10 @@ TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
         'DIRS': [
-            
+
             BASE_DIR / "templates"
-            
-            
+
+
             ],
         'APP_DIRS': True,
         'OPTIONS': {
@@ -71,7 +73,7 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'django.template.context_processors.csp',
-            
+
             ],
         },
     },
@@ -190,8 +192,8 @@ if not DEBUG:
         "root": {"handlers": ["console"], "level": "ERROR"},
     }
 else:
-    
-    
+
+
     LOGGING = {
         "version": 1,
         "disable_existing_loggers": False,
@@ -213,12 +215,9 @@ else:
         },
         "root": {"handlers": ["console"], "level": "INFO"},
     }
-    
-    
+
+
 BOLT_MAX_SYNC_STREAMING_THREADS = 1000
-
-
-from django.utils.csp import CSP
 
 MIDDLEWARE += [
     'django.middleware.csp.ContentSecurityPolicyMiddleware',

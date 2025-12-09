@@ -1,9 +1,10 @@
 """Request parsing utilities for form and multipart data."""
 import logging
 import traceback
-from typing import Any, Dict, Tuple
 from io import BytesIO
+from typing import Any
 from urllib.parse import parse_qs
+
 import multipart
 
 # Django import - may fail if Django not configured
@@ -27,7 +28,7 @@ def get_max_upload_size() -> int:
     return _MAX_UPLOAD_SIZE
 
 
-def parse_form_data(request: Dict[str, Any], headers_map: Dict[str, str]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def parse_form_data(request: dict[str, Any], headers_map: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any]]:
     """Parse form and multipart data from request using python "multipart" library."""
     content_type = headers_map.get("content-type", "")
 
@@ -35,8 +36,8 @@ def parse_form_data(request: Dict[str, Any], headers_map: Dict[str, str]) -> Tup
     if not content_type.startswith(("application/x-www-form-urlencoded", "multipart/form-data")):
         return {}, {}
 
-    form_map: Dict[str, Any] = {}
-    files_map: Dict[str, Any] = {}
+    form_map: dict[str, Any] = {}
+    files_map: dict[str, Any] = {}
 
     if content_type.startswith("application/x-www-form-urlencoded"):
         body_bytes: bytes = request["body"]
@@ -49,7 +50,7 @@ def parse_form_data(request: Dict[str, Any], headers_map: Dict[str, str]) -> Tup
     return form_map, files_map
 
 
-def parse_multipart_data(request: Dict[str, Any], content_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def parse_multipart_data(request: dict[str, Any], content_type: str) -> tuple[dict[str, Any], dict[str, Any]]:
     """
     Parse multipart form data using python "multipart" library.
 
@@ -57,8 +58,8 @@ def parse_multipart_data(request: Dict[str, Any], content_type: str) -> Tuple[Di
     size limits, and header parsing.
     """
 
-    form_map: Dict[str, Any] = {}
-    files_map: Dict[str, Any] = {}
+    form_map: dict[str, Any] = {}
+    files_map: dict[str, Any] = {}
 
     # Parse content-type header to get boundary
     content_type_parsed, content_type_options = multipart.parse_options_header(content_type)

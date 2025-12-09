@@ -25,34 +25,33 @@ constraints. This is msgspec's design - Meta constraints are for parsing.
 from datetime import datetime
 from typing import Annotated
 
-import pytest
 import msgspec
+import pytest
 
 from django_bolt.serializers import (
-    Serializer,
+    URL,
+    Email,
     Meta,
+    Nested,
+    NonEmptyStr,
+    PositiveInt,
+    Serializer,
     computed_field,
+    create_serializer,
+    create_serializer_set,
     field,
     field_validator,
     model_validator,
-    create_serializer,
-    create_serializer_set,
-    Nested,
-    Email,
-    URL,
-    NonEmptyStr,
-    PositiveInt,
 )
 from django_bolt.serializers.types import (
-    Username,
-    Percentage,
     Latitude,
     Longitude,
+    Percentage,
+    Username,
 )
 
 # Import test models
-from tests.test_models import Author, Tag, BlogPost, Comment, User, UserProfile
-
+from tests.test_models import Author, BlogPost, Comment, Tag, User, UserProfile  # noqa: PLC0415
 
 # =============================================================================
 # Serializers for testing
@@ -1093,7 +1092,7 @@ class TestCreateSerializerHelpersWithDjango:
 
     def test_create_serializer_from_django_model(self):
         """Test creating serializer from Django model."""
-        from django.contrib.auth.models import User as DjangoUser
+        from django.contrib.auth.models import User as DjangoUser  # noqa: PLC0415
 
         UserSerializer = create_serializer(
             DjangoUser,
@@ -1108,7 +1107,7 @@ class TestCreateSerializerHelpersWithDjango:
     @pytest.mark.django_db
     def test_create_serializer_set_with_django(self):
         """Test create_serializer_set with Django model."""
-        from django.contrib.auth.models import User as DjangoUser
+        from django.contrib.auth.models import User as DjangoUser  # noqa: PLC0415
 
         UserCreate, UserUpdate, UserPublic = create_serializer_set(
             DjangoUser,

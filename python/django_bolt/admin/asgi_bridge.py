@@ -9,18 +9,17 @@ to handle requests for admin routes.
 import asyncio
 import logging
 import traceback
-from typing import Any, Dict, List, Tuple
+from typing import Any
 from urllib.parse import urlencode
 
 from django.core.asgi import get_asgi_application
 
 from ..bootstrap import ensure_django_ready
 
-
 logger = logging.getLogger(__name__)
 
 
-def actix_to_asgi_scope(request: Dict[str, Any], server_host: str = "localhost", server_port: int = 8000) -> Dict[str, Any]:
+def actix_to_asgi_scope(request: dict[str, Any], server_host: str = "localhost", server_port: int = 8000) -> dict[str, Any]:
     """
     Convert django-bolt PyRequest dict to ASGI3 scope dict.
 
@@ -128,7 +127,7 @@ def create_receive_callable(body: bytes):
     return receive
 
 
-def create_send_callable(response_holder: Dict[str, Any]):
+def create_send_callable(response_holder: dict[str, Any]):
     """
     Create ASGI3 send callable that collects response.
 
@@ -138,7 +137,7 @@ def create_send_callable(response_holder: Dict[str, Any]):
     Returns:
         Async callable that implements ASGI send channel
     """
-    async def send(message: Dict[str, Any]):
+    async def send(message: dict[str, Any]):
         msg_type = message.get("type")
 
         if msg_type == "http.response.start":
@@ -215,7 +214,7 @@ class ASGIFallbackHandler:
 
         return self._asgi_app
 
-    async def handle_request(self, request: Dict[str, Any]) -> Tuple[int, List[Tuple[str, str]], bytes]:
+    async def handle_request(self, request: dict[str, Any]) -> tuple[int, list[tuple[str, str]], bytes]:
         """
         Handle request by converting to ASGI and calling Django app.
 

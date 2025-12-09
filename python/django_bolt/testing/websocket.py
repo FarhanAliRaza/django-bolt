@@ -21,13 +21,19 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
-from typing import Any, AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable
+from typing import Any
 
-from django_bolt import BoltAPI
-from django_bolt.websocket import WebSocket, CloseCode
-from django_bolt.websocket.handlers import get_websocket_param_name
-from django_bolt.websocket.handlers import build_websocket_request
+from django_bolt import BoltAPI, _core
+from django_bolt.websocket import CloseCode, WebSocket
+from django_bolt.websocket.handlers import build_websocket_request, get_websocket_param_name
+
+try:
+    from django.conf import settings
+except ImportError:
+    settings = None  # type: ignore
 
 
 def _read_cors_settings_from_django() -> dict | None:
@@ -38,8 +44,6 @@ def _read_cors_settings_from_django() -> dict | None:
         Keys: origins, credentials, methods, headers, expose_headers, max_age
     """
     try:
-        from django.conf import settings
-
         # Check if any CORS setting is defined
         has_origins = hasattr(settings, 'CORS_ALLOWED_ORIGINS')
         has_all_origins = hasattr(settings, 'CORS_ALLOW_ALL_ORIGINS') and settings.CORS_ALLOW_ALL_ORIGINS
@@ -170,8 +174,6 @@ class WebSocketTestClient:
         if self._app_id is not None:
             return self._app_id
 
-        from django_bolt import _core
-
         # Create a test app instance for this WebSocket test with CORS config
         # This ensures WebSocket origin validation uses same config as HTTP
         self._app_id = _core.create_test_app(self.api._dispatch, False, self._cors_config)
@@ -199,11 +201,8 @@ class WebSocketTestClient:
     def _cleanup_app(self) -> None:
         """Cleanup test app instance."""
         if self._app_id is not None:
-            from django_bolt import _core
-            try:
+            with contextlib.suppress(Exception):
                 _core.destroy_test_app(self._app_id)
-            except Exception:
-                pass
             self._app_id = None
 
     def _find_handler_via_rust(self) -> tuple[bool, int, Callable, dict[str, Any], dict[str, Any]]:
@@ -218,8 +217,6 @@ class WebSocketTestClient:
             ValueError: If no handler found for path
             PermissionError: If guards fail
         """
-        from django_bolt import _core
-
         app_id = self._get_or_create_app_id()
 
         # Build headers list for Rust
@@ -271,7 +268,7 @@ class WebSocketTestClient:
         # Put all messages in queue for client to receive
         await self._server_to_client.put(message)
 
-    async def __aenter__(self) -> "WebSocketTestClient":
+    async def __aenter__(self) -> WebSocketTestClient:
         """Enter async context - start the WebSocket handler.
 
         Routes through Rust for path matching, authentication, and guard evaluation.
@@ -343,10 +340,8 @@ class WebSocketTestClient:
         # Cancel handler task if still running
         if self._handler_task and not self._handler_task.done():
             self._handler_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._handler_task
-            except asyncio.CancelledError:
-                pass
 
         # Cleanup test app instance
         self._cleanup_app()
@@ -411,8 +406,8 @@ class WebSocketTestClient:
                 self._server_to_client.get(),
                 timeout=timeout
             )
-        except asyncio.TimeoutError:
-            raise TimeoutError(f"No message received within {timeout}s")
+        except TimeoutError as e:
+            raise TimeoutError(f"No message received within {timeout}s") from e
 
     async def receive_text(self, timeout: float = 5.0) -> str:
         """Receive a text message from the server."""

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-import msgspec
-from typing import TYPE_CHECKING, Any, Callable, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any
+from urllib.parse import parse_qs
 
-from .state import WebSocketState
+import msgspec
+
 from .close_codes import CloseCode
 from .exceptions import WebSocketDisconnect
+from .state import WebSocketState
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -72,8 +75,6 @@ class WebSocket:
     def query_params(self) -> dict[str, str]:
         """Query parameters parsed from query string."""
         if not hasattr(self, "_query_params"):
-            from urllib.parse import parse_qs
-
             qs = self.query_string.decode("utf-8", errors="replace")
             parsed = parse_qs(qs, keep_blank_values=True)
             self._query_params = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}

@@ -424,6 +424,8 @@ pub async fn handle_websocket_upgrade_with_handler(
                     &headers,
                     peer_addr.as_deref(),
                     rate_config,
+                    req.method().as_str(),
+                    req.path(),
                 ) {
                     return Ok(response);
                 }

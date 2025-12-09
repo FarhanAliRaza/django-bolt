@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .base import BaseSchemaObject
 
@@ -76,3 +76,28 @@ class PathItem(BaseSchemaObject):
     `Reference Object <https://spec.openapis.org/oas/v3.1.0#referenceObject>`_ to link to parameters that are defined at
     the `OpenAPI Object's components/parameters <https://spec.openapis.org/oas/v3.1.0#componentsParameters>`_.
     """
+
+    extensions: dict[str, Any] | None = None
+    """OpenAPI extensions (fields starting with x-) for this path item.
+
+    Example: {"x-websocket": True} to mark a WebSocket endpoint.
+    """
+
+    @property
+    def _exclude_fields(self) -> set[str]:
+        """Exclude extensions field from default serialization as we handle it manually."""
+        return {"extensions"}
+
+    def to_schema(self) -> dict[str, Any]:
+        """Convert PathItem to schema dict, including extensions."""
+        schema = super().to_schema()
+
+        # Add extensions with x- prefix
+        if self.extensions:
+            for key, value in self.extensions.items():
+                # Ensure key starts with x-
+                if not key.startswith("x-"):
+                    key = f"x-{key}"
+                schema[key] = value
+
+        return schema

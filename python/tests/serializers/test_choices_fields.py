@@ -51,10 +51,7 @@ class TestChoicesFieldDetection:
         # The origin will be str after unwrapping Annotated
 
         # If it's Annotated, get the first arg (the actual type)
-        if hasattr(field_type, "__origin__"):
-            actual_type = get_args(field_type)[0]
-        else:
-            actual_type = field_type
+        actual_type = get_args(field_type)[0] if hasattr(field_type, "__origin__") else field_type
 
         assert actual_type is str
 
@@ -88,11 +85,7 @@ class TestChoicesFieldDetection:
         field_type = get_msgspec_type_for_django_field(field)
 
         # IntegerField may have range validators, so check the unwrapped type
-        if hasattr(field_type, "__origin__"):
-            # It's an Annotated type, get the actual type
-            actual_type = get_args(field_type)[0]
-        else:
-            actual_type = field_type
+        actual_type = get_args(field_type)[0] if hasattr(field_type, "__origin__") else field_type
 
         assert actual_type is int
 
@@ -148,7 +141,7 @@ class TestChoicesIntegrationWithArticleModel:
     @pytest.mark.django_db
     def test_article_status_field_as_literal(self):
         """Test that Article.status field is detected as Literal type."""
-        from tests.test_models import Article
+        from tests.test_models import Article  # noqa: PLC0415
 
         # Get the status field from Article model
         status_field = Article._meta.get_field("status")
@@ -195,7 +188,7 @@ class TestChoicesIntegrationWithArticleModel:
     @pytest.mark.django_db
     def test_create_serializer_detects_choices(self):
         """Test that create_serializer helper detects choices fields."""
-        from tests.test_models import Article
+        from tests.test_models import Article  # noqa: PLC0415
 
         # Create serializer using helper
         ArticleSerializer = create_serializer(

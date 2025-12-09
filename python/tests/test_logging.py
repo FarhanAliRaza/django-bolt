@@ -10,14 +10,15 @@ These tests validate the behavior documented in docs/LOGGING.md:
 """
 
 import logging
-import time
-import pytest
 from logging.handlers import QueueHandler
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock
 
+import pytest
 from django.conf import settings
+
+import django_bolt.logging.config as config_module
 from django_bolt.logging import LoggingConfig, LoggingMiddleware, create_logging_middleware
-from django_bolt.logging.config import setup_django_logging, _ensure_queue_logging, _QUEUE_LISTENER
+from django_bolt.logging.config import _ensure_queue_logging, setup_django_logging
 
 
 class TestLoggingConfig:
@@ -731,11 +732,10 @@ class TestQueueBasedLogging:
     def test_ensure_queue_logging_creates_queue_listener(self):
         """_ensure_queue_logging should create and start a QueueListener."""
         # Reset global state for test
-        import django_bolt.logging.config as config_module
         config_module._QUEUE_LISTENER = None
         config_module._QUEUE = None
 
-        handler = _ensure_queue_logging("INFO")
+        _ensure_queue_logging("INFO")
 
         # Should have created listener
         assert config_module._QUEUE_LISTENER is not None, "QueueListener should be created"
@@ -751,7 +751,6 @@ class TestQueueBasedLogging:
             )
 
         # Reset global state
-        import django_bolt.logging.config as config_module
         config_module._LOGGING_CONFIGURED = False
         config_module._QUEUE_LISTENER = None
         config_module._QUEUE = None
@@ -789,7 +788,6 @@ class TestQueueBasedLogging:
             )
 
         # Reset global state
-        import django_bolt.logging.config as config_module
         config_module._LOGGING_CONFIGURED = False
 
         # Count handlers before
@@ -814,8 +812,6 @@ class TestQueueBasedLogging:
                 DEBUG=True,
                 SECRET_KEY='test-secret-key',
             )
-
-        import django_bolt.logging.config as config_module
 
         # First call
         config_module._LOGGING_CONFIGURED = False

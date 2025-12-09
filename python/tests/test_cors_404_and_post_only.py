@@ -10,6 +10,7 @@ These tests would FAIL without the fixes in handler.rs.
 """
 
 import pytest
+
 from django_bolt import BoltAPI
 from django_bolt.middleware import cors
 from django_bolt.testing import TestClient

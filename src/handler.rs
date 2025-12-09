@@ -220,6 +220,8 @@ pub async fn handle_request(
                 &headers,
                 peer_addr.as_deref(),
                 rate_config,
+                &method,
+                &path,
             ) {
                 return response;
             }

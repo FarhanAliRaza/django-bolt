@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 import inspect
+from typing import TYPE_CHECKING, Annotated, Any, get_args, get_origin
+
 import msgspec
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, get_origin, get_args, Annotated
 
 from ..typing import is_msgspec_struct, is_optional
 from .spec import (
     OpenAPI,
-    Operation,
-    PathItem,
-    Parameter,
-    RequestBody,
-    OpenAPIResponse,
     OpenAPIMediaType,
-    Schema,
+    OpenAPIResponse,
+    Operation,
+    Parameter,
+    PathItem,
     Reference,
+    RequestBody,
+    Schema,
     Tag,
 )
 
@@ -37,7 +38,7 @@ class SchemaGenerator:
         """
         self.api = api
         self.config = config
-        self.schemas: Dict[str, Schema] = {}  # Component schemas registry
+        self.schemas: dict[str, Schema] = {}  # Component schemas registry
 
     def generate(self) -> OpenAPI:
         """Generate complete OpenAPI schema.
@@ -48,9 +49,10 @@ class SchemaGenerator:
         openapi = self.config.to_openapi_schema()
 
         # Generate path items from routes and collect tags
-        paths: Dict[str, PathItem] = {}
+        paths: dict[str, PathItem] = {}
         collected_tags: set[str] = set()
 
+        # Process HTTP routes
         for method, path, handler_id, handler in self.api._routes:
             # Skip OpenAPI docs routes (always excluded)
             if path.startswith(self.config.path):
@@ -89,6 +91,49 @@ class SchemaGenerator:
             method_lower = method.lower()
             setattr(paths[path], method_lower, operation)
 
+        # Process WebSocket routes
+        for ws_path, handler_id, handler in self.api._websocket_routes:
+            # Skip OpenAPI docs routes (always excluded)
+            if ws_path.startswith(self.config.path):
+                continue
+
+            # Skip paths based on exclude_paths configuration
+            should_exclude = False
+            for exclude_prefix in self.config.exclude_paths:
+                if ws_path.startswith(exclude_prefix):
+                    should_exclude = True
+                    break
+
+            if should_exclude:
+                continue
+
+            if ws_path not in paths:
+                paths[ws_path] = PathItem()
+
+            # Get handler metadata
+            meta = self.api._handler_meta.get(handler, {})
+
+            # Create WebSocket operation (as GET with upgrade)
+            operation = self._create_websocket_operation(
+                handler=handler,
+                path=ws_path,
+                meta=meta,
+                handler_id=handler_id,
+            )
+
+            # Collect tags from operation
+            if operation.tags:
+                collected_tags.update(operation.tags)
+
+            # Mark path item as WebSocket and add GET operation
+            # WebSockets start with HTTP upgrade from GET request
+            paths[ws_path].get = operation
+
+            # Add x-websocket extension to mark this as a WebSocket endpoint
+            if paths[ws_path].extensions is None:
+                paths[ws_path].extensions = {}
+            paths[ws_path].extensions['x-websocket'] = True
+
         openapi.paths = paths
 
         # Add component schemas
@@ -105,7 +150,7 @@ class SchemaGenerator:
         handler: Any,
         method: str,
         path: str,
-        meta: Dict[str, Any],
+        meta: dict[str, Any],
         handler_id: int,
     ) -> Operation:
         """Create OpenAPI Operation for a route handler.
@@ -164,9 +209,139 @@ class SchemaGenerator:
 
         return operation
 
+    def _create_websocket_operation(
+        self,
+        handler: Any,
+        path: str,
+        meta: dict[str, Any],
+        handler_id: int,
+    ) -> Operation:
+        """Create OpenAPI Operation for a WebSocket handler.
+
+        WebSocket connections start as HTTP GET requests with an Upgrade header.
+        This method creates an OpenAPI operation that documents the WebSocket endpoint.
+
+        Args:
+            handler: Handler function.
+            path: Route path.
+            meta: Handler metadata from BoltAPI.
+            handler_id: Handler ID.
+
+        Returns:
+            Operation object for WebSocket endpoint.
+        """
+        # Prefer explicit metadata over docstring extraction
+        summary = meta.get("openapi_summary")
+        description = meta.get("openapi_description")
+
+        # Fallback to docstring if not explicitly set
+        if (summary is None or description is None) and self.config.use_handler_docstrings and handler.__doc__:
+            doc = inspect.cleandoc(handler.__doc__)
+            lines = doc.split("\n", 1)
+            if summary is None:
+                summary = lines[0]
+            if description is None and len(lines) > 1:
+                description = lines[1].strip()
+
+        # Add WebSocket indicator to summary/description
+        if summary and not summary.lower().startswith("websocket"):
+            summary = f"WebSocket: {summary}"
+        elif not summary:
+            summary = "WebSocket Connection"
+
+        if description:
+            description = (
+                f"**WebSocket Endpoint**\n\n{description}\n\n"
+                "This endpoint establishes a WebSocket connection. Use `ws://` or `wss://` protocol."
+            )
+        else:
+            description = (
+                "**WebSocket Endpoint**\n\n"
+                "Establishes a WebSocket connection for real-time bidirectional communication.\n\n"
+                "Use `ws://` or `wss://` protocol to connect."
+            )
+
+        # Extract parameters (path params, query params, headers, cookies)
+        # Skip body/form/file parameters as WebSocket doesn't use request body
+        parameters = self._extract_parameters(meta, path)
+
+        # Add required WebSocket upgrade headers as parameters
+        upgrade_headers = [
+            Parameter(
+                name="Upgrade",
+                param_in="header",
+                required=True,
+                schema=Schema(type="string", enum=["websocket"]),
+                description="Must be 'websocket' to upgrade the connection",
+            ),
+            Parameter(
+                name="Connection",
+                param_in="header",
+                required=True,
+                schema=Schema(type="string", enum=["Upgrade"]),
+                description="Must be 'Upgrade' to upgrade the connection",
+            ),
+        ]
+        parameters.extend(upgrade_headers)
+
+        # WebSocket endpoints don't have traditional HTTP responses
+        # Document the 101 Switching Protocols response
+        responses = {
+            "101": OpenAPIResponse(
+                description="Switching Protocols - WebSocket connection established",
+                headers={
+                    "Upgrade": Parameter(
+                        name="Upgrade",
+                        param_in="header",
+                        schema=Schema(type="string", enum=["websocket"]),
+                    ),
+                    "Connection": Parameter(
+                        name="Connection",
+                        param_in="header",
+                        schema=Schema(type="string", enum=["Upgrade"]),
+                    ),
+                },
+            ),
+            "400": OpenAPIResponse(
+                description="Bad Request - Invalid WebSocket upgrade request",
+            ),
+            "403": OpenAPIResponse(
+                description="Forbidden - Authentication or authorization failed",
+            ),
+        }
+
+        # Extract security requirements
+        security = self._extract_security(handler_id)
+
+        # Prefer explicit tags over auto-extracted tags
+        tags = meta.get("openapi_tags")
+        if tags is None:
+            # Fallback to auto-extraction from handler module or class name
+            tags = self._extract_tags(handler)
+
+        # Add "WebSocket" tag if not present
+        if tags:
+            if "WebSocket" not in tags and "Websocket" not in tags and "websocket" not in tags:
+                tags = ["WebSocket"] + tags
+        else:
+            tags = ["WebSocket"]
+
+        operation = Operation(
+            summary=summary,
+            description=description,
+            parameters=parameters or None,
+            request_body=None,  # WebSocket doesn't use HTTP request body
+            responses=responses,
+            security=security,
+            tags=tags,
+            operation_id=f"websocket_{handler.__name__}",
+        )
+
+        return operation
+
     def _extract_parameters(
-        self, meta: Dict[str, Any], path: str
-    ) -> List[Parameter]:
+        self, meta: dict[str, Any], path: str
+    ) -> list[Parameter]:
         """Extract OpenAPI parameters from handler metadata.
 
         Args:
@@ -176,7 +351,7 @@ class SchemaGenerator:
         Returns:
             List of Parameter objects.
         """
-        parameters: List[Parameter] = []
+        parameters: list[Parameter] = []
         fields = meta.get("fields", [])
 
         for field in fields:
@@ -222,7 +397,7 @@ class SchemaGenerator:
 
         return parameters
 
-    def _extract_request_body(self, meta: Dict[str, Any]) -> Optional[RequestBody]:
+    def _extract_request_body(self, meta: dict[str, Any]) -> RequestBody | None:
         """Extract OpenAPI RequestBody from handler metadata.
 
         Args:
@@ -290,8 +465,8 @@ class SchemaGenerator:
         )
 
     def _extract_responses(
-        self, meta: Dict[str, Any], handler_id: int
-    ) -> Dict[str, OpenAPIResponse]:
+        self, meta: dict[str, Any], handler_id: int
+    ) -> dict[str, OpenAPIResponse]:
         """Extract OpenAPI responses from handler metadata.
 
         Args:
@@ -301,7 +476,7 @@ class SchemaGenerator:
         Returns:
             Dictionary mapping status codes to Response objects.
         """
-        responses: Dict[str, OpenAPIResponse] = {}
+        responses: dict[str, OpenAPIResponse] = {}
 
         # Get response type
         response_type = meta.get("response_type")
@@ -398,7 +573,7 @@ class SchemaGenerator:
             required=["detail"],
         )
 
-    def _extract_security(self, handler_id: int) -> Optional[List[SecurityReq]]:
+    def _extract_security(self, handler_id: int) -> list[dict[str, list[str]]] | None:
         """Extract security requirements from handler middleware.
 
         Args:
@@ -414,7 +589,7 @@ class SchemaGenerator:
             return None
 
         # Convert auth backends to security requirements
-        security: List[SecurityReq] = []
+        security: list[dict[str, list[str]]] = []
         for auth_backend in auth_config:
             backend_name = auth_backend.__class__.__name__
 
@@ -427,7 +602,7 @@ class SchemaGenerator:
 
         return security or None
 
-    def _extract_tags(self, handler: Any) -> Optional[List[str]]:
+    def _extract_tags(self, handler: Any) -> list[str] | None:
         """Extract tags for grouping operations.
 
         Args:
@@ -451,7 +626,7 @@ class SchemaGenerator:
 
         return None
 
-    def _collect_tags(self, collected_tag_names: set[str]) -> Optional[List[Tag]]:
+    def _collect_tags(self, collected_tag_names: set[str]) -> list[Tag] | None:
         """Collect and merge tags from operations with config tags.
 
         Args:
@@ -464,7 +639,7 @@ class SchemaGenerator:
             return None
 
         # Start with existing tags from config
-        tag_objects: Dict[str, Tag] = {}
+        tag_objects: dict[str, Tag] = {}
         if self.config.tags:
             for tag in self.config.tags:
                 tag_objects[tag.name] = tag
@@ -549,13 +724,13 @@ class SchemaGenerator:
                 return self._struct_to_schema(type_annotation)
 
         # Handle list/List
-        if origin in (list, List):
+        if origin in (list, list):
             item_type = args[0] if args else Any
             item_schema = self._type_to_schema(item_type, register_component=register_component)
             return Schema(type="array", items=item_schema)
 
         # Handle dict/Dict
-        if origin in (dict, Dict):
+        if origin in (dict, dict):
             return Schema(type="object", additional_properties=True)
 
         # Handle primitive types

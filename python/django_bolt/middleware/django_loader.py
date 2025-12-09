@@ -19,7 +19,13 @@ Usage:
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Set, Union, TYPE_CHECKING
+import logging
+from typing import TYPE_CHECKING, Any
+
+from django.conf import settings
+from django.utils.module_loading import import_string
+
+from .django_adapter import DjangoMiddlewareStack
 
 if TYPE_CHECKING:
     from .middleware import MiddlewareType
@@ -31,10 +37,10 @@ DEFAULT_EXCLUDED_MIDDLEWARE: set = set()  # Empty by default - load everything
 
 
 def load_django_middleware(
-    config: Union[bool, List[str], Dict[str, Any]] = True,
+    config: bool | list[str] | dict[str, Any] = True,
     *,
     exclude_defaults: bool = True,
-) -> List["MiddlewareType"]:
+) -> list[MiddlewareType]:
     """
     Load middleware from Django's settings.MIDDLEWARE configuration.
 
@@ -68,9 +74,6 @@ def load_django_middleware(
             })
         )
     """
-    from django.conf import settings
-    from django.utils.module_loading import import_string
-
     if config is False or config is None:
         return []
 
@@ -81,8 +84,8 @@ def load_django_middleware(
         return []
 
     # Determine which middleware to include/exclude
-    include_set: Optional[Set[str]] = None
-    exclude_set: Set[str] = set()
+    include_set: set[str] | None = None
+    exclude_set: set[str] = set()
 
     if exclude_defaults:
         exclude_set.update(DEFAULT_EXCLUDED_MIDDLEWARE)
@@ -111,7 +114,6 @@ def load_django_middleware(
             middleware_class = import_string(middleware_path)
             middleware_classes.append(middleware_class)
         except ImportError as e:
-            import logging
             logging.getLogger("django_bolt").warning(
                 f"Could not import Django middleware '{middleware_path}': {e}"
             )
@@ -121,12 +123,11 @@ def load_django_middleware(
     # - Instead of N Bolt↔Django conversions (one per middleware)
     # - We do just 1 conversion at start and 1 at end
     if middleware_classes:
-        from .django_adapter import DjangoMiddlewareStack
         return [DjangoMiddlewareStack(middleware_classes)]
     return []
 
 
-def get_django_middleware_setting() -> List[str]:
+def get_django_middleware_setting() -> list[str]:
     """
     Get the current MIDDLEWARE setting from Django.
 
@@ -134,7 +135,6 @@ def get_django_middleware_setting() -> List[str]:
         List of middleware class paths from settings.MIDDLEWARE
     """
     try:
-        from django.conf import settings
         return list(getattr(settings, 'MIDDLEWARE', []))
     except Exception:
         return []

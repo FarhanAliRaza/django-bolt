@@ -12,20 +12,19 @@ Includes:
 from __future__ import annotations
 
 from typing import (
-    Protocol,
+    TYPE_CHECKING,
     Any,
-    Dict,
-    List,
-    Optional,
+    Protocol,
     overload,
     runtime_checkable,
-    TYPE_CHECKING,
 )
 
 try:
-    from typing import TypedDict, NotRequired
+    from typing import NotRequired, TypedDict
 except ImportError:
-    from typing_extensions import TypedDict, NotRequired
+    from typing import NotRequired
+
+    from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     pass
@@ -55,15 +54,15 @@ class DjangoModel(Protocol):
     """
 
     # ORM methods
-    def save(self, force_insert: bool = False, force_update: bool = False, using: Optional[str] = None, update_fields: Optional[list[str]] = None) -> None: ...
-    def delete(self, using: Optional[str] = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]: ...
-    def refresh_from_db(self, using: Optional[str] = None, fields: Optional[list[str]] = None) -> None: ...
-    def full_clean(self, exclude: Optional[list[str]] = None, validate_unique: bool = True) -> None: ...
+    def save(self, force_insert: bool = False, force_update: bool = False, using: str | None = None, update_fields: list[str] | None = None) -> None: ...
+    def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]: ...
+    def refresh_from_db(self, using: str | None = None, fields: list[str] | None = None) -> None: ...
+    def full_clean(self, exclude: list[str] | None = None, validate_unique: bool = True) -> None: ...
 
     # Async ORM methods
-    async def asave(self, force_insert: bool = False, force_update: bool = False, using: Optional[str] = None, update_fields: Optional[list[str]] = None) -> None: ...
-    async def adelete(self, using: Optional[str] = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]: ...
-    async def arefresh_from_db(self, using: Optional[str] = None, fields: Optional[list[str]] = None) -> None: ...
+    async def asave(self, force_insert: bool = False, force_update: bool = False, using: str | None = None, update_fields: list[str] | None = None) -> None: ...
+    async def adelete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]: ...
+    async def arefresh_from_db(self, using: str | None = None, fields: list[str] | None = None) -> None: ...
 
 
 class UserType(DjangoModel, Protocol):
@@ -102,7 +101,7 @@ class UserType(DjangoModel, Protocol):
     def is_authenticated(self) -> bool: ...
 
     # User auth methods
-    def set_password(self, raw_password: Optional[str]) -> None: ...
+    def set_password(self, raw_password: str | None) -> None: ...
     def check_password(self, raw_password: str) -> bool: ...
     def set_unusable_password(self) -> None: ...
     def has_usable_password(self) -> bool: ...
@@ -136,7 +135,7 @@ class AuthContext(Protocol):
     """
 
     # Core fields
-    user_id: Optional[str]
+    user_id: str | None
     """User identifier extracted from credentials (user ID, API key ID, etc.)"""
 
     is_staff: bool
@@ -149,10 +148,10 @@ class AuthContext(Protocol):
     """Authentication backend used: 'jwt', 'api_key', 'session', etc."""
 
     # Optional fields
-    permissions: Optional[set[str]]
+    permissions: set[str] | None
     """User permissions/scopes (optional, may be provided by some backends)"""
 
-    claims: Optional[Dict[str, Any]]
+    claims: dict[str, Any] | None
     """Full claims dict (optional, e.g., JWT claims for JWT authentication)"""
 
 
@@ -288,7 +287,7 @@ class Request(Protocol):
         ...
 
     @property
-    def context(self) -> Optional[AuthContext]:
+    def context(self) -> AuthContext | None:
         """
         Authentication/middleware context with full type information.
 
@@ -317,7 +316,7 @@ class Request(Protocol):
         ...
 
     @property
-    def user(self) -> Optional[UserType]:
+    def user(self) -> UserType | None:
         """
         Lazy-loaded Django user object from authentication context.
 
@@ -479,8 +478,8 @@ class JWTClaims(TypedDict, total=False):
     email: str
     is_staff: bool
     is_superuser: bool
-    permissions: List[str]
-    groups: List[str]
+    permissions: list[str]
+    groups: list[str]
 
 
 class APIKeyAuth(TypedDict, total=False):
@@ -498,9 +497,9 @@ class APIKeyAuth(TypedDict, total=False):
     """
     key_id: str
     key_name: str
-    permissions: List[str]
+    permissions: list[str]
     rate_limit: NotRequired[int]
-    metadata: NotRequired[Dict[str, Any]]
+    metadata: NotRequired[dict[str, Any]]
 
 
 class SessionAuth(TypedDict, total=False):
@@ -554,7 +553,7 @@ class TracingState(TypedDict, total=False):
     trace_id: str
     span_id: str
     parent_span_id: NotRequired[str]
-    baggage: NotRequired[Dict[str, str]]
+    baggage: NotRequired[dict[str, str]]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -570,7 +569,7 @@ class MiddlewareResponse(TypedDict, total=False):
     """
     body: bytes
     status_code: int
-    headers: Dict[str, str]
+    headers: dict[str, str]
 
 
 __all__ = [

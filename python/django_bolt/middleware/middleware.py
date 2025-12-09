@@ -12,25 +12,23 @@ Performance is the utmost priority - the middleware system is designed for zero 
 """
 from __future__ import annotations
 
-import re
 import logging
+import re
 import time
+import traceback
 import uuid
 import warnings
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
+from re import Pattern
 from typing import (
-    Awaitable,
-    Callable,
-    List,
-    Optional,
-    Pattern,
+    TYPE_CHECKING,
     Protocol,
-    Set,
-    Type,
     Union,
     runtime_checkable,
-    TYPE_CHECKING,
 )
+
+from ..exceptions import HTTPException
 
 if TYPE_CHECKING:
     from ..request import Request
@@ -49,7 +47,7 @@ GetResponse = Callable[["Request"], Awaitable["Response"]]
 # Type alias for middleware class (Django-style: takes get_response in __init__)
 MiddlewareType = Union[
     "MiddlewareProtocol",
-    Type["BaseMiddleware"],
+    type["BaseMiddleware"],
     "DjangoMiddlewareAdapter",
 ]
 
@@ -95,7 +93,7 @@ class MiddlewareProtocol(Protocol):
     def __init__(self, get_response: GetResponse) -> None:
         ...
 
-    async def __call__(self, request: "Request") -> "Response":
+    async def __call__(self, request: Request) -> Response:
         ...
 
 
@@ -133,14 +131,14 @@ class BaseMiddleware(ABC):
     """
 
     # Paths to exclude from this middleware (supports wildcards)
-    exclude_paths: Optional[List[str]] = None
+    exclude_paths: list[str] | None = None
 
     # HTTP methods to exclude
-    exclude_methods: Optional[List[str]] = None
+    exclude_methods: list[str] | None = None
 
     # Compiled exclusion pattern (set during __init__)
-    _exclude_pattern: Optional[Pattern] = None
-    _exclude_methods_set: Optional[Set[str]] = None
+    _exclude_pattern: Pattern | None = None
+    _exclude_methods_set: set[str] | None = None
 
     def __init__(self, get_response: GetResponse) -> None:
         """
@@ -162,9 +160,9 @@ class BaseMiddleware(ABC):
 
         # Convert method list to set for O(1) lookup
         if self.exclude_methods:
-            self._exclude_methods_set = set(m.upper() for m in self.exclude_methods)
+            self._exclude_methods_set = {m.upper() for m in self.exclude_methods}
 
-    async def __call__(self, request: "Request") -> "Response":
+    async def __call__(self, request: Request) -> Response:
         """Process request, checking exclusions first."""
         # Check exclusions (fast path)
         if self._should_skip(request):
@@ -172,7 +170,7 @@ class BaseMiddleware(ABC):
 
         return await self.process_request(request)
 
-    def _should_skip(self, request: "Request") -> bool:
+    def _should_skip(self, request: Request) -> bool:
         """
         Check if this request should skip the middleware.
 
@@ -183,13 +181,10 @@ class BaseMiddleware(ABC):
             return True
 
         # Check path exclusion (regex match)
-        if self._exclude_pattern and self._exclude_pattern.match(request.path):
-            return True
-
-        return False
+        return bool(self._exclude_pattern and self._exclude_pattern.match(request.path))
 
     @abstractmethod
-    async def process_request(self, request: "Request") -> "Response":
+    async def process_request(self, request: Request) -> Response:
         """
         Process the request. Override this in subclasses.
 
@@ -230,7 +225,7 @@ class Middleware(ABC):
         self.get_response = get_response
 
     @abstractmethod
-    async def process_request(self, request: "Request") -> "Response":
+    async def process_request(self, request: Request) -> Response:
         """
         Process the request.
 
@@ -244,7 +239,7 @@ class Middleware(ABC):
         """
         pass
 
-    async def __call__(self, request: "Request") -> "Response":
+    async def __call__(self, request: Request) -> Response:
         """Process request through middleware."""
         return await self.process_request(request)
 
@@ -326,9 +321,9 @@ def rate_limit(rps: int = 100, burst: int = None, key: str = "ip"):
 
 
 def cors(
-    origins: Union[List[str], str] = None,
-    methods: List[str] = None,
-    headers: List[str] = None,
+    origins: list[str] | str = None,
+    methods: list[str] = None,
+    headers: list[str] = None,
     credentials: bool = False,
     max_age: int = 3600
 ):
@@ -471,7 +466,7 @@ class TimingMiddleware(BaseMiddleware):
             return {"request_id": request_id}
     """
 
-    async def process_request(self, request: "Request") -> "Response":
+    async def process_request(self, request: Request) -> Response:
         request_id = str(uuid.uuid4())
         start_time = time.perf_counter()
 
@@ -502,7 +497,7 @@ class LoggingMiddleware(BaseMiddleware):
     def __init__(
         self,
         get_response: GetResponse,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger | None = None,
         log_body: bool = False,
         log_headers: bool = False,
         log_level: int = logging.INFO
@@ -513,7 +508,7 @@ class LoggingMiddleware(BaseMiddleware):
         self.log_headers = log_headers
         self.log_level = log_level
 
-    async def process_request(self, request: "Request") -> "Response":
+    async def process_request(self, request: Request) -> Response:
         # Log request
         log_data = {
             "method": request.method,
@@ -558,9 +553,7 @@ class ErrorHandlerMiddleware(BaseMiddleware):
         self.debug = debug
         self.logger = logging.getLogger("django_bolt.errors")
 
-    async def process_request(self, request: "Request") -> "Response":
-        from ..exceptions import HTTPException
-
+    async def process_request(self, request: Request) -> Response:
         try:
             return await self.get_response(request)
         except HTTPException:
@@ -568,13 +561,9 @@ class ErrorHandlerMiddleware(BaseMiddleware):
         except Exception as e:
             self.logger.exception(f"Unhandled exception: {e}")
 
-            if self.debug:
-                import traceback
-                detail = traceback.format_exc()
-            else:
-                detail = "Internal Server Error"
+            detail = traceback.format_exc() if self.debug else "Internal Server Error"
 
-            raise HTTPException(500, detail)
+            raise HTTPException(500, detail) from None
 
 
 # Placeholder for DjangoMiddleware - imported from django_adapter module

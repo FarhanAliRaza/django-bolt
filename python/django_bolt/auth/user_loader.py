@@ -10,16 +10,16 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import inspect
-from typing import Optional, Any
-from django.contrib.auth import get_user_model
+from typing import Any
 
+from django.contrib.auth import get_user_model
 
 # Global registry of auth backend instances for user resolution
 _auth_backend_registry: dict[str, Any] = {}
 
 # Global shared thread pool for user loading - avoids expensive pool creation per request
 # Using max_workers=4 to limit resource usage while allowing concurrent user loads
-_user_loader_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+_user_loader_executor: concurrent.futures.ThreadPoolExecutor | None = None
 
 
 def _get_executor() -> concurrent.futures.ThreadPoolExecutor:
@@ -45,14 +45,14 @@ def register_auth_backend(backend_name: str, backend_instance: Any) -> None:
     _auth_backend_registry[backend_name] = backend_instance
 
 
-def get_registered_backend(backend_name: str) -> Optional[Any]:
+def get_registered_backend(backend_name: str) -> Any | None:
     """Get a registered auth backend by name."""
     return _auth_backend_registry.get(backend_name)
 
 
 async def load_user(
-    user_id: Optional[str], backend_name: Optional[str], auth_context: Optional[dict] = None
-) -> Optional[Any]:
+    user_id: str | None, backend_name: str | None, auth_context: dict | None = None
+) -> Any | None:
     """
     Eagerly load user from auth context.
 
@@ -85,11 +85,11 @@ async def load_user(
 
 
 def load_user_sync(
-    user_id: Optional[str],
-    backend_name: Optional[str],
-    auth_context: Optional[dict] = None,
+    user_id: str | None,
+    backend_name: str | None,
+    auth_context: dict | None = None,
     is_async_context: bool = False,
-) -> Optional[Any]:
+) -> Any | None:
     """
     Synchronously load user from auth context.
 
@@ -121,7 +121,7 @@ def load_user_sync(
 
     # If backend has async get_user (but no sync version), call it via thread pool
     if backend and hasattr(backend, "get_user"):
-        get_user_method = getattr(backend, "get_user")
+        get_user_method = backend.get_user
         if inspect.iscoroutinefunction(get_user_method):
             def run_async_get_user():
                 return asyncio.run(get_user_method(user_id, auth_context or {}))

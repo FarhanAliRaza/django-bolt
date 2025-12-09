@@ -4,11 +4,15 @@ from pathlib import Path
 
 # Django imports - may fail if Django not configured
 try:
-    from django.conf import settings
     import django
+    from django.conf import settings
+
+    # Import with alias for use in _info() function
+    from django.conf import settings as dj_settings
 except ImportError:
     settings = None
     django = None
+    dj_settings = None
 
 
 def ensure_django_ready() -> dict:
@@ -22,7 +26,7 @@ def ensure_django_ready() -> dict:
         settings_module = _detect_settings_module()
         if settings_module:
             os.environ["DJANGO_SETTINGS_MODULE"] = settings_module
-    
+
     if not settings_module:
         raise RuntimeError(
             "Django settings module not found. Please ensure:\n"
@@ -30,17 +34,16 @@ def ensure_django_ready() -> dict:
             "2. DJANGO_SETTINGS_MODULE environment variable is set\n"
             "3. Your project has a valid settings.py file"
         )
-    
+
     try:
         importlib.import_module(settings_module)
-        import django
         django.setup()
         return _info()
     except ImportError as e:
         raise RuntimeError(
             f"Failed to import Django settings module '{settings_module}': {e}\n"
             "Please check that your settings module exists and is valid."
-        )
+        ) from e
 
 
 def _detect_settings_module() -> str | None:
@@ -68,7 +71,6 @@ def _detect_settings_module() -> str | None:
 
 def _info() -> dict:
     """Get information about the current Django configuration."""
-    from django.conf import settings as dj_settings
     db = dj_settings.DATABASES.get("default", {})
     return {
         "mode": "django_project",

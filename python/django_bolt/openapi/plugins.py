@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, List, Union
+from typing import TYPE_CHECKING, Any
 
 from .. import _json
 
 if TYPE_CHECKING:
-    from typing import Dict
+    pass
+
+# Import yaml at module level with try/except for optional dependency
+try:
+    import yaml
+except ImportError:
+    yaml = None  # type: ignore
 
 __all__ = (
     "OpenAPIRenderPlugin",
@@ -30,7 +36,7 @@ class OpenAPIRenderPlugin(ABC):
     def __init__(
         self,
         *,
-        path: Union[str, List[str]],
+        path: str | list[str],
         media_type: str = "text/html; charset=utf-8",
         favicon: str = _default_favicon,
         style: str = _default_style,
@@ -49,7 +55,7 @@ class OpenAPIRenderPlugin(ABC):
         self.style = style
 
     @staticmethod
-    def render_json(openapi_schema: Dict[str, Any]) -> str:
+    def render_json(openapi_schema: dict[str, Any]) -> str:
         """Render the OpenAPI schema as JSON string.
 
         Args:
@@ -61,7 +67,7 @@ class OpenAPIRenderPlugin(ABC):
         return _json.encode(openapi_schema).decode('utf-8')
 
     @abstractmethod
-    def render(self, openapi_schema: Dict[str, Any], schema_url: str) -> str:
+    def render(self, openapi_schema: dict[str, Any], schema_url: str) -> str:
         """Render the OpenAPI UI.
 
         Args:
@@ -91,13 +97,13 @@ class JsonRenderPlugin(OpenAPIRenderPlugin):
     def __init__(
         self,
         *,
-        path: Union[str, List[str]] = "/openapi.json",
+        path: str | list[str] = "/openapi.json",
         media_type: str = "application/vnd.oai.openapi+json",
         **kwargs: Any,
     ) -> None:
         super().__init__(path=path, media_type=media_type, **kwargs)
 
-    def render(self, openapi_schema: Dict[str, Any], schema_url: str) -> Dict[str, Any]:
+    def render(self, openapi_schema: dict[str, Any], schema_url: str) -> dict[str, Any]:
         """Render OpenAPI schema as dict.
 
         Returns the schema dict directly so django-bolt's serialization
@@ -112,19 +118,19 @@ class YamlRenderPlugin(OpenAPIRenderPlugin):
     def __init__(
         self,
         *,
-        path: Union[str, List[str]] = ["/openapi.yaml", "/openapi.yml"],
+        path: str | list[str] = None,
         media_type: str = "text/yaml; charset=utf-8",
         **kwargs: Any,
     ) -> None:
+        if path is None:
+            path = ["/openapi.yaml", "/openapi.yml"]
         super().__init__(path=path, media_type=media_type, **kwargs)
 
-    def render(self, openapi_schema: Dict[str, Any], schema_url: str) -> str:
+    def render(self, openapi_schema: dict[str, Any], schema_url: str) -> str:
         """Render OpenAPI schema as YAML."""
-        try:
-            # Import yaml here because it's an optional dependency
-            import yaml
+        if yaml is not None:
             return yaml.dump(openapi_schema, default_flow_style=False)
-        except ImportError:
+        else:
             # Fallback to JSON if PyYAML not installed
             return "# PyYAML not installed. Install with: pip install pyyaml\n" + self.render_json(openapi_schema)
 
@@ -139,7 +145,7 @@ class SwaggerRenderPlugin(OpenAPIRenderPlugin):
         js_url: str | None = None,
         css_url: str | None = None,
         standalone_preset_js_url: str | None = None,
-        path: Union[str, List[str]] = "/swagger",
+        path: str | list[str] = "/swagger",
         **kwargs: Any,
     ) -> None:
         """Initialize Swagger UI plugin.
@@ -160,7 +166,7 @@ class SwaggerRenderPlugin(OpenAPIRenderPlugin):
         )
         super().__init__(path=path, **kwargs)
 
-    def render(self, openapi_schema: Dict[str, Any], schema_url: str) -> str:
+    def render(self, openapi_schema: dict[str, Any], schema_url: str) -> str:
         """Render Swagger UI HTML page."""
         head = f"""
           <head>
@@ -207,7 +213,7 @@ class RedocRenderPlugin(OpenAPIRenderPlugin):
         version: str = "next",
         js_url: str | None = None,
         google_fonts: bool = True,
-        path: Union[str, List[str]] = "/redoc",
+        path: str | list[str] = "/redoc",
         **kwargs: Any,
     ) -> None:
         """Initialize Redoc plugin.
@@ -223,7 +229,7 @@ class RedocRenderPlugin(OpenAPIRenderPlugin):
         self.google_fonts = google_fonts
         super().__init__(path=path, **kwargs)
 
-    def render(self, openapi_schema: Dict[str, Any], schema_url: str) -> str:
+    def render(self, openapi_schema: dict[str, Any], schema_url: str) -> str:
         """Render Redoc HTML page."""
         head = f"""
           <head>
@@ -260,8 +266,8 @@ class ScalarRenderPlugin(OpenAPIRenderPlugin):
         version: str = "latest",
         js_url: str | None = None,
         css_url: str | None = None,
-        path: Union[str, List[str]] = ["/scalar", "/"],
-        options: Dict[str, Any] | None = None,
+        path: str | list[str] = None,
+        options: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize Scalar plugin.
@@ -274,12 +280,14 @@ class ScalarRenderPlugin(OpenAPIRenderPlugin):
             options: Scalar configuration options.
             **kwargs: Additional arguments to pass to base class.
         """
+        if path is None:
+            path = ["/scalar", "/"]
         self.js_url = js_url or f"https://cdn.jsdelivr.net/npm/@scalar/api-reference@{version}"
         self.css_url = css_url or self._default_css_url
         self.options = options
         super().__init__(path=path, **kwargs)
 
-    def render(self, openapi_schema: Dict[str, Any], schema_url: str) -> str:
+    def render(self, openapi_schema: dict[str, Any], schema_url: str) -> str:
         """Render Scalar HTML page."""
         head = f"""
                   <head>
@@ -329,7 +337,7 @@ class RapidocRenderPlugin(OpenAPIRenderPlugin):
         *,
         version: str = "9.3.4",
         js_url: str | None = None,
-        path: Union[str, List[str]] = "/rapidoc",
+        path: str | list[str] = "/rapidoc",
         **kwargs: Any,
     ) -> None:
         """Initialize Rapidoc plugin.
@@ -343,7 +351,7 @@ class RapidocRenderPlugin(OpenAPIRenderPlugin):
         self.js_url = js_url or f"https://unpkg.com/rapidoc@{version}/dist/rapidoc-min.js"
         super().__init__(path=path, **kwargs)
 
-    def render(self, openapi_schema: Dict[str, Any], schema_url: str) -> str:
+    def render(self, openapi_schema: dict[str, Any], schema_url: str) -> str:
         """Render Rapidoc HTML page."""
         head = f"""
           <head>
@@ -379,7 +387,7 @@ class StoplightRenderPlugin(OpenAPIRenderPlugin):
         version: str = "7.7.18",
         js_url: str | None = None,
         css_url: str | None = None,
-        path: Union[str, List[str]] = "/elements",
+        path: str | list[str] = "/elements",
         **kwargs: Any,
     ) -> None:
         """Initialize the OpenAPI UI render plugin.

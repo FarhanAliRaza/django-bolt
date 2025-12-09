@@ -3,8 +3,10 @@ Tests for QuerySet serialization optimization.
 
 These tests verify that field names are pre-computed at route registration time.
 """
-import msgspec
 from typing import get_origin
+
+import msgspec
+
 from django_bolt import BoltAPI
 from django_bolt.testing import TestClient
 
@@ -35,7 +37,7 @@ def test_metadata_precomputes_field_names():
     # Verify field names are pre-computed
     assert "response_field_names" in meta, "Field names should be pre-computed"
     assert set(meta["response_field_names"]) == {"id", "username"}
-    assert get_origin(meta["response_type"]) == list
+    assert get_origin(meta["response_type"]) is list
 
 
 def test_metadata_has_no_field_names_for_non_list_responses():

@@ -10,11 +10,11 @@ This test suite verifies that the new unified ViewSet pattern works correctly:
 """
 import msgspec
 import pytest
-from asgiref.sync import async_to_sync
+from asgiref.sync import async_to_sync  # noqa: PLC0415
+
 from django_bolt import BoltAPI, ViewSet, action
 from django_bolt.testing import TestClient
 from tests.test_models import Article
-
 
 # --- Schemas ---
 
@@ -192,10 +192,9 @@ def test_unified_viewset_basic_crud(api):
 @pytest.mark.django_db(transaction=True)
 def test_unified_viewset_custom_lookup_field(api):
     """Test unified ViewSet with custom lookup_field."""
-    from asgiref.sync import async_to_sync
 
     # Create article
-    article = async_to_sync(Article.objects.acreate)(
+    async_to_sync(Article.objects.acreate)(
         title="Test Article",
         content="Test Content",
         author="test-author-slug",
@@ -229,7 +228,6 @@ def test_unified_viewset_custom_lookup_field(api):
 @pytest.mark.django_db(transaction=True)
 def test_unified_viewset_with_custom_actions(api):
     """Test unified ViewSet with custom actions."""
-    from asgiref.sync import async_to_sync
 
     # Create test data
     async_to_sync(Article.objects.acreate)(

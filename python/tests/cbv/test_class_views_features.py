@@ -14,22 +14,23 @@ class-based views (APIView, ViewSet, ModelViewSet):
 - Streaming responses
 - File uploads/downloads
 """
-import pytest
-import msgspec
 from typing import Annotated
-from django.contrib.auth.models import User, Permission
-from django.contrib.contenttypes.models import ContentType
-from django_bolt import BoltAPI, action
-from django_bolt.testing import TestClient
-from django_bolt.views import APIView, ViewSet, ModelViewSet
-from django_bolt.params import Query, Path, Body, Header, Cookie, Form, File, Depends
-from django_bolt.exceptions import HTTPException
-from django_bolt.responses import StreamingResponse, FileResponse
-from django_bolt.auth import JWTAuthentication, APIKeyAuthentication, IsAuthenticated
-from django_bolt.auth.guards import IsAdminUser, IsStaff, HasPermission
-from django_bolt.auth.jwt_utils import create_jwt_for_user, get_current_user
-from django_bolt.middleware import cors, rate_limit, skip_middleware
 
+import msgspec
+import pytest
+from django.contrib.auth.models import Permission, User
+from django.contrib.contenttypes.models import ContentType
+
+from django_bolt import BoltAPI, action
+from django_bolt.auth import APIKeyAuthentication, IsAuthenticated, JWTAuthentication
+from django_bolt.auth.guards import HasPermission, IsAdminUser
+from django_bolt.auth.jwt_utils import create_jwt_for_user, get_current_user
+from django_bolt.exceptions import HTTPException
+from django_bolt.middleware import cors, rate_limit, skip_middleware
+from django_bolt.params import Body, Cookie, Depends, Header, Path, Query
+from django_bolt.responses import StreamingResponse
+from django_bolt.testing import TestClient
+from django_bolt.views import APIView, ModelViewSet, ViewSet
 
 # --- Fixtures ---
 
@@ -288,8 +289,6 @@ def test_jwt_authentication_with_class_view(api):
     NOTE: JWT authentication runs in Rust middleware, so we need to use
     use_http_layer=True to test it properly.
     """
-    from django.contrib.auth.models import User
-    from django_bolt.auth.jwt_utils import create_jwt_for_user
 
     # Create test user
     user = User.objects.create(username="testuser", email="test@example.com")
@@ -355,8 +354,6 @@ def test_api_key_authentication_with_class_view(api):
 @pytest.mark.django_db
 def test_is_authenticated_guard_with_class_view(api):
     """Test IsAuthenticated guard with class-based views."""
-    from django.contrib.auth.models import User
-    from django_bolt.auth.jwt_utils import create_jwt_for_user
 
     user = User.objects.create(username="testuser")
     token = create_jwt_for_user(user, secret="test-secret")
@@ -384,8 +381,6 @@ def test_is_authenticated_guard_with_class_view(api):
 @pytest.mark.django_db
 def test_is_admin_guard_with_class_view(api):
     """Test IsAdminUser guard with class-based views."""
-    from django.contrib.auth.models import User
-    from django_bolt.auth.jwt_utils import create_jwt_for_user
 
     # Regular user
     user = User.objects.create(username="regular", is_staff=False, is_superuser=False)
@@ -420,9 +415,7 @@ def test_is_admin_guard_with_class_view(api):
 @pytest.mark.django_db
 def test_has_permission_guard_with_class_view(api):
     """Test HasPermission guard with class-based views."""
-    from django.contrib.auth.models import User, Permission
-    from django.contrib.contenttypes.models import ContentType
-    from django_bolt.auth.jwt_utils import create_jwt_for_user
+    from django_bolt.auth.jwt_utils import create_jwt_for_user  # noqa: PLC0415
 
     # Create permission
     content_type = ContentType.objects.get_for_model(User)
@@ -479,8 +472,6 @@ def test_depends_with_class_view(api):
     NOTE: Uses transaction=True to avoid SQLite database locking issues
     when get_current_user makes async DB queries.
     """
-    from django.contrib.auth.models import User
-    from django_bolt.auth.jwt_utils import create_jwt_for_user, get_current_user
 
     user = User.objects.create(username="testuser", email="test@example.com")
     token = create_jwt_for_user(user, secret="test-secret")
@@ -609,8 +600,8 @@ def test_streaming_response_with_class_view(api):
 
 def test_viewset_with_all_features(api):
     """Test ViewSet with authentication, guards, and validation."""
-    from django_bolt.auth import JWTAuthentication
-    from django_bolt.auth.guards import IsAuthenticated
+    from django_bolt.auth import JWTAuthentication  # noqa: PLC0415
+    from django_bolt.auth.guards import IsAuthenticated  # noqa: PLC0415
 
     @api.view("/articles")
     class ArticleViewSet(ViewSet):
@@ -687,7 +678,6 @@ def test_model_viewset_integration(api):
 
 def test_cors_middleware_with_class_view(api):
     """Test CORS middleware decorator on class-based view methods."""
-    from django_bolt.middleware import cors
 
     class APIView_WithCORS(APIView):
         # Apply CORS to specific method
@@ -715,7 +705,6 @@ def test_cors_middleware_with_class_view(api):
 
 def test_rate_limit_middleware_with_class_view(api):
     """Test rate limit middleware decorator on class-based view methods."""
-    from django_bolt.middleware import rate_limit
 
     class APIView_WithRateLimit(APIView):
         # Apply rate limiting to specific method
@@ -742,7 +731,6 @@ def test_rate_limit_middleware_with_class_view(api):
 
 def test_skip_middleware_with_class_view(api):
     """Test skip_middleware decorator on class-based view methods."""
-    from django_bolt.middleware import skip_middleware
 
     class APIView_SkipMiddleware(APIView):
         # Skip specific middleware for this method
@@ -768,7 +756,6 @@ def test_skip_middleware_with_class_view(api):
 
 def test_multiple_middleware_decorators_with_class_view(api):
     """Test stacking multiple middleware decorators on class-based view methods."""
-    from django_bolt.middleware import cors, rate_limit
 
     class APIView_MultiMiddleware(APIView):
         # Stack multiple middleware decorators
@@ -793,7 +780,6 @@ def test_multiple_middleware_decorators_with_class_view(api):
 
 def test_custom_action_decorator_in_viewset(api):
     """Test @action decorator custom actions INSIDE a ViewSet class."""
-    from django_bolt import action
 
     class ArticleViewSet(ViewSet):
         queryset = []
@@ -860,7 +846,6 @@ def test_custom_action_decorator_in_viewset(api):
 
 def test_viewset_with_multiple_custom_actions(api):
     """Test ViewSet with many custom action methods defined INSIDE the class."""
-    from django_bolt import action
 
     class UserViewSet(ViewSet):
         lookup_field = 'user_id'  # Set lookup field to match parameter names
@@ -943,8 +928,7 @@ def test_viewset_with_multiple_custom_actions(api):
 
 def test_custom_action_with_auth_and_guards(api):
     """Test custom action methods INSIDE ViewSet with authentication and guards."""
-    from django_bolt.auth import APIKeyAuthentication, IsAuthenticated
-    from django_bolt import action
+    from django_bolt.auth import APIKeyAuthentication, IsAuthenticated  # noqa: PLC0415
 
     class DocumentViewSet(ViewSet):
         # Class-level auth applies to all methods
@@ -1039,7 +1023,6 @@ def test_custom_action_with_auth_and_guards(api):
 
 def test_nested_resource_actions_with_class_views(api):
     """Test nested resource ViewSet (e.g., comment moderation)."""
-    from django_bolt import action
 
     class CommentViewSet(ViewSet):
         async def retrieve(self, request, post_id: int, comment_id: int):

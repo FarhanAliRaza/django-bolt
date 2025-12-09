@@ -4,18 +4,12 @@ Provides default exception handlers that convert Python exceptions into
 structured HTTP error responses.
 """
 
-import msgspec
+import logging
 import re
 import traceback
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any
 
-# Django import - may fail if Django not configured
-try:
-    from django.conf import settings as django_settings
-    from django.views.debug import ExceptionReporter
-except ImportError:
-    django_settings = None
-    ExceptionReporter = None
+import msgspec
 
 from . import _json
 from .exceptions import (
@@ -25,13 +19,23 @@ from .exceptions import (
     ValidationException,
 )
 
+logger = logging.getLogger(__name__)
+
+# Django import - may fail if Django not configured
+try:
+    from django.conf import settings as django_settings
+    from django.views.debug import ExceptionReporter
+except ImportError:
+    django_settings = None
+    ExceptionReporter = None
+
 
 def format_error_response(
     status_code: int,
     detail: Any,
-    headers: Optional[Dict[str, str]] = None,
-    extra: Optional[Dict[str, Any] | List[Any]] = None,
-) -> Tuple[int, List[Tuple[str, str]], bytes]:
+    headers: dict[str, str] | None = None,
+    extra: dict[str, Any] | list[Any] | None = None,
+) -> tuple[int, list[tuple[str, str]], bytes]:
     """Format an error response.
 
     Args:
@@ -43,7 +47,7 @@ def format_error_response(
     Returns:
         Tuple of (status_code, headers, body)
     """
-    error_body: Dict[str, Any] = {"detail": detail}
+    error_body: dict[str, Any] = {"detail": detail}
 
     if extra is not None:
         error_body["extra"] = extra
@@ -57,7 +61,7 @@ def format_error_response(
     return status_code, response_headers, body_bytes
 
 
-def http_exception_handler(exc: HTTPException) -> Tuple[int, List[Tuple[str, str]], bytes]:
+def http_exception_handler(exc: HTTPException) -> tuple[int, list[tuple[str, str]], bytes]:
     """Handle HTTPException and convert to error response.
 
     Args:
@@ -74,7 +78,7 @@ def http_exception_handler(exc: HTTPException) -> Tuple[int, List[Tuple[str, str
     )
 
 
-def msgspec_validation_error_to_dict(error: msgspec.ValidationError) -> List[Dict[str, Any]]:
+def msgspec_validation_error_to_dict(error: msgspec.ValidationError) -> list[dict[str, Any]]:
     """Convert msgspec ValidationError to structured error list.
 
     Args:
@@ -131,7 +135,7 @@ def msgspec_validation_error_to_dict(error: msgspec.ValidationError) -> List[Dic
 
 def request_validation_error_handler(
     exc: RequestValidationError,
-) -> Tuple[int, List[Tuple[str, str]], bytes]:
+) -> tuple[int, list[tuple[str, str]], bytes]:
     """Handle RequestValidationError and convert to 422 response.
 
     Args:
@@ -165,7 +169,7 @@ def request_validation_error_handler(
 
 def response_validation_error_handler(
     exc: ResponseValidationError,
-) -> Tuple[int, List[Tuple[str, str]], bytes]:
+) -> tuple[int, list[tuple[str, str]], bytes]:
     """Handle ResponseValidationError and convert to 500 response.
 
     Args:
@@ -174,8 +178,13 @@ def response_validation_error_handler(
     Returns:
         Tuple of (status_code, headers, body)
     """
-    # Log the error (if logging is configured)
+    # Log response validation errors - these indicate bugs in handler return values
     errors = exc.errors()
+    logger.error(
+        "Response Validation Error: Handler returned invalid response. Errors: %s",
+        errors,
+        exc_info=exc,
+    )
 
     formatted_errors = []
     for error in errors:
@@ -200,8 +209,8 @@ def response_validation_error_handler(
 def generic_exception_handler(
     exc: Exception,
     debug: bool = False,
-    request: Optional[Any] = None,  # noqa: ARG001 - kept for API compatibility
-) -> Tuple[int, List[Tuple[str, str]], bytes]:
+    request: Any | None = None,  # noqa: ARG001 - kept for API compatibility
+) -> tuple[int, list[tuple[str, str]], bytes]:
     """Handle generic exceptions and convert to 500 response.
 
     Args:
@@ -212,6 +221,14 @@ def generic_exception_handler(
     Returns:
         Tuple of (status_code, headers, body)
     """
+    # ALWAYS log 500 errors - these are unexpected server errors
+    logger.error(
+        "Internal Server Error: %s - %s",
+        type(exc).__name__,
+        str(exc),
+        exc_info=exc,  # This includes full traceback in logs
+    )
+
     detail = "Internal Server Error"
     extra = None
 
@@ -229,9 +246,13 @@ def generic_exception_handler(
                     [("content-type", "text/html; charset=utf-8")],
                     html_content.encode("utf-8")
                 )
-        except Exception:
+        except Exception as e:
             # Fallback to standard traceback formatting in JSON
-            pass
+            logger.debug(
+                "Failed to generate Django ExceptionReporter HTML. "
+                "Falling back to JSON traceback format. Error: %s",
+                e
+            )
 
         # Fallback to JSON with traceback
         tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
@@ -253,9 +274,9 @@ def generic_exception_handler(
 
 def handle_exception(
     exc: Exception,
-    debug: Optional[bool] = None,
-    request: Optional[Any] = None,
-) -> Tuple[int, List[Tuple[str, str]], bytes]:
+    debug: bool | None = None,
+    request: Any | None = None,
+) -> tuple[int, list[tuple[str, str]], bytes]:
     """Main exception handler that routes to specific handlers.
 
     Args:
@@ -270,10 +291,7 @@ def handle_exception(
     # Check Django's DEBUG setting dynamically only if debug is not explicitly set
     if debug is None:
         try:
-            if django_settings and django_settings.configured:
-                debug = django_settings.DEBUG
-            else:
-                debug = False
+            debug = django_settings.DEBUG if django_settings and django_settings.configured else False
         except (ImportError, AttributeError):
             debug = False
 

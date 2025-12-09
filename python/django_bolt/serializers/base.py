@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import inspect
 import logging
-import sys
-from typing import TYPE_CHECKING, Any, ClassVar, Iterable, Literal, TypeVar, get_args, get_origin, get_type_hints
-
-from django.db.models import Model as DjangoModel
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar, get_args, get_origin, get_type_hints
 
 import msgspec
+from django.db.models import Model as DjangoModel
 from msgspec import ValidationError as MsgspecValidationError
 from msgspec import structs as msgspec_structs
 from msgspec._core import StructMeta
@@ -283,15 +282,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     frames_to_cleanup.append(frame)
 
             # Resolve type hints with local namespace
-            if sys.version_info >= (3, 11):
-                hints = get_type_hints(cls, globalns=None, localns=localns, include_extras=True)
-            else:
-                # For Python < 3.11, try typing_extensions first
-                try:
-                    from typing_extensions import get_type_hints as get_type_hints_ext
-                    hints = get_type_hints_ext(cls, globalns=None, localns=localns, include_extras=True)
-                except ImportError:
-                    hints = get_type_hints(cls, globalns=None, localns=localns)
+            hints = get_type_hints(cls, globalns=None, localns=localns, include_extras=True)
 
         except Exception:
             # Strategy 2: Fallback without local namespace (module-level classes)
@@ -538,7 +529,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     _setattr(self, field_name, validated_value)
             except (ValueError, TypeError) as e:
                 raise MsgspecValidationError(str(e)) from e
-            except Exception as e:
+            except Exception:
                 raise
 
         # Validate literal (choice) fields (now with O(1) frozenset lookup - optimization #3)
@@ -552,7 +543,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     )
             except (ValueError, TypeError) as e:
                 raise MsgspecValidationError(str(e)) from e
-            except Exception as e:
+            except Exception:
                 raise
 
     def _run_model_validators(self) -> None:
@@ -567,7 +558,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     pass
             except (ValueError, TypeError) as e:
                 raise MsgspecValidationError(str(e)) from e
-            except Exception as e:
+            except Exception:
                 raise
 
     def validate(self: T) -> T:
@@ -1248,9 +1239,8 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 continue
 
             # Skip default values if exclude_defaults (using pre-computed map)
-            if default_values is not None and field_name in default_values:
-                if value == default_values[field_name]:
-                    continue
+            if default_values is not None and field_name in default_values and value == default_values[field_name]:
+                continue
 
             # Use alias if by_alias and alias is defined
             output_key = field_name

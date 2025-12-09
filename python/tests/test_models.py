@@ -17,10 +17,10 @@ class Article(models.Model):
         (
             "published",
             "published"
-            
+
         )
     )
-    
+
     title = models.CharField(max_length=200)
     content = models.TextField()
     status = models.CharField(

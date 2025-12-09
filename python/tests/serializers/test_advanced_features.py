@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import pytest
 
 from django_bolt.serializers import (
     Serializer,
     SerializerView,
     computed_field,
-    field,
-    field_validator,
 )
 
 
@@ -56,7 +52,6 @@ class TestFieldFunction:
 
     def test_field_alias(self):
         """Test field alias for JSON output."""
-        from django_bolt.serializers.fields import FieldConfig
 
         # Create a serializer with field config
         class UserSerializer(Serializer):
@@ -669,11 +664,11 @@ class TestSubsetMethod:
         UserMini = UserSerializer.subset("id", "name", "age")
 
         # Get type hints from the subset class
-        from typing import get_type_hints
+        from typing import get_type_hints  # noqa: PLC0415
         hints = get_type_hints(UserMini)
 
-        assert hints["id"] == int
-        assert hints["name"] == str
+        assert hints["id"] is int
+        assert hints["name"] is str
 
 
 class TestFieldsMethod:

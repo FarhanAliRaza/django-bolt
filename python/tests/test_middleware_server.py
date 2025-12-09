@@ -1,15 +1,16 @@
 """
 Integration test for middleware with TestClient
 """
-import jwt
 import time
-import pytest
+
 import django
-from django.conf import settings
+import jwt
+import pytest
+from django.conf import settings  # noqa: PLC0415
+
 from django_bolt import BoltAPI
-from django_bolt.middleware import rate_limit, cors
-from django_bolt.auth import JWTAuthentication, APIKeyAuthentication
-from django_bolt.auth import IsAuthenticated
+from django_bolt.auth import APIKeyAuthentication, IsAuthenticated, JWTAuthentication
+from django_bolt.middleware import cors, rate_limit
 from django_bolt.testing import TestClient
 
 
@@ -88,7 +89,7 @@ def api():
     )
     async def context_endpoint(request: dict):
         """Test that middleware context is available"""
-        context = request.get("context", None)
+        context = request.get("context")
         return {
             "has_context": context is not None,
             "context_keys": list(context.keys()) if context and hasattr(context, 'keys') else []

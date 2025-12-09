@@ -14,9 +14,9 @@ import ast
 import inspect
 import textwrap
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Set
-
+from typing import Any
 
 __all__ = [
     "HandlerAnalysis",
@@ -167,21 +167,21 @@ class HandlerAnalysis:
     uses_orm: bool = False
     """Whether handler accesses Django ORM"""
 
-    orm_operations: Set[str] = field(default_factory=set)
+    orm_operations: set[str] = field(default_factory=set)
     """Set of ORM operations detected (e.g., {'filter', 'get', 'all'})"""
 
     # Blocking I/O detection
     has_blocking_io: bool = False
     """Whether handler has potential blocking I/O calls"""
 
-    blocking_operations: Set[str] = field(default_factory=set)
+    blocking_operations: set[str] = field(default_factory=set)
     """Set of blocking operations detected"""
 
     # Analysis metadata
     analysis_failed: bool = False
     """Whether AST analysis failed (e.g., couldn't get source)"""
 
-    failure_reason: Optional[str] = None
+    failure_reason: str | None = None
     """Reason for analysis failure if any"""
 
     @property
@@ -189,7 +189,7 @@ class HandlerAnalysis:
         """Whether handler is likely to block (any ORM usage or blocking I/O)."""
         return self.uses_orm or self.has_blocking_io
 
-    def get_warning_message(self, handler_name: str, path: str, is_async: bool) -> Optional[str]:
+    def get_warning_message(self, handler_name: str, path: str, is_async: bool) -> str | None:
         """
         Generate warning message if handler has potential issues.
 
@@ -277,10 +277,9 @@ class OrmVisitor(ast.NodeVisitor):
         # This reduces false positives like dict.get(), response.get(), etc.
         is_in_objects_chain = self._check_for_objects_chain(node)
 
-        if is_in_objects_chain:
-            if attr_name in SYNC_ORM_METHODS or attr_name in ASYNC_ORM_METHODS:
-                self.analysis.uses_orm = True
-                self.analysis.orm_operations.add(attr_name)
+        if is_in_objects_chain and (attr_name in SYNC_ORM_METHODS or attr_name in ASYNC_ORM_METHODS):
+            self.analysis.uses_orm = True
+            self.analysis.orm_operations.add(attr_name)
 
         # Check for model instance methods (save, delete, etc.)
         # These are called on model instances, not managers
@@ -317,12 +316,11 @@ class OrmVisitor(ast.NodeVisitor):
         """Detect iteration over QuerySets (blocking)."""
         # Check if iterating over something that looks like a QuerySet
         # e.g., for user in User.objects.all():
-        if isinstance(node.iter, ast.Call):
-            if isinstance(node.iter.func, ast.Attribute):
-                method_name = node.iter.func.attr
-                if method_name in SYNC_ORM_METHODS or method_name in ASYNC_ORM_METHODS:
-                    self.analysis.uses_orm = True
-                    self.analysis.orm_operations.add(f"iterate_{method_name}")
+        if isinstance(node.iter, ast.Call) and isinstance(node.iter.func, ast.Attribute):
+            method_name = node.iter.func.attr
+            if method_name in SYNC_ORM_METHODS or method_name in ASYNC_ORM_METHODS:
+                self.analysis.uses_orm = True
+                self.analysis.orm_operations.add(f"iterate_{method_name}")
 
         self.generic_visit(node)
 
@@ -330,12 +328,11 @@ class OrmVisitor(ast.NodeVisitor):
         """Detect list comprehension over QuerySets."""
         # [user.name for user in User.objects.all()]
         for generator in node.generators:
-            if isinstance(generator.iter, ast.Call):
-                if isinstance(generator.iter.func, ast.Attribute):
-                    method_name = generator.iter.func.attr
-                    if method_name in SYNC_ORM_METHODS or method_name in ASYNC_ORM_METHODS:
-                        self.analysis.uses_orm = True
-                        self.analysis.orm_operations.add(f"comprehension_{method_name}")
+            if isinstance(generator.iter, ast.Call) and isinstance(generator.iter.func, ast.Attribute):
+                method_name = generator.iter.func.attr
+                if method_name in SYNC_ORM_METHODS or method_name in ASYNC_ORM_METHODS:
+                    self.analysis.uses_orm = True
+                    self.analysis.orm_operations.add(f"comprehension_{method_name}")
 
         self.generic_visit(node)
 
@@ -393,7 +390,7 @@ def warn_blocking_handler(
     fn: Callable[..., Any],
     path: str,
     is_async: bool,
-    analysis: Optional[HandlerAnalysis] = None,
+    analysis: HandlerAnalysis | None = None,
 ) -> None:
     """
     Emit warning if handler has blocking operations.

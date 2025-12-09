@@ -5,14 +5,14 @@ Tests the full WebSocket lifecycle with actual handlers.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import Annotated
 
+import django
 import jwt
 import pytest
-import django
 from django.conf import settings
-
 
 # Configure Django before imports
 if not settings.configured:
@@ -35,9 +35,9 @@ if not settings.configured:
     django.setup()
 
 from django_bolt import BoltAPI, WebSocket
-from django_bolt.testing import WebSocketTestClient, ConnectionClosed
+from django_bolt.auth import HasPermission, IsAdminUser, IsAuthenticated, JWTAuthentication
+from django_bolt.testing import ConnectionClosed, WebSocketTestClient
 from django_bolt.websocket import CloseCode
-
 
 # Test secret for JWT tokens
 E2E_JWT_SECRET = "test-secret-key-for-websocket-e2e-jwt"
@@ -433,7 +433,7 @@ class TestWebSocketErrors:
     async def test_handler_error(self, api):
         """Test handler error handling."""
         with pytest.raises(ValueError) as exc_info:
-            async with WebSocketTestClient(api, "/ws/error") as ws:
+            async with WebSocketTestClient(api, "/ws/error"):
                 await asyncio.sleep(0.1)  # Give handler time to error
 
         assert "Test error" in str(exc_info.value)
@@ -511,10 +511,8 @@ class TestWebSocketState:
         async def state_handler(websocket: WebSocket):
             await websocket.accept()
             await websocket.send_text("ready")
-            try:
+            with contextlib.suppress(Exception):
                 await websocket.receive_text()
-            except Exception:
-                pass
 
         return api
 
@@ -543,8 +541,6 @@ class TestWebSocketGuards:
 
     @pytest.fixture
     def api(self):
-        from django_bolt.auth import IsAuthenticated, IsAdminUser, HasPermission, JWTAuthentication
-
         api = BoltAPI()
 
         @api.websocket("/ws/public")
@@ -592,7 +588,7 @@ class TestWebSocketGuards:
     async def test_protected_route_without_auth(self, api):
         """Test protected route fails without JWT token."""
         with pytest.raises(PermissionError) as exc_info:
-            async with WebSocketTestClient(api, "/ws/protected") as ws:
+            async with WebSocketTestClient(api, "/ws/protected"):
                 pass
 
         assert "Authentication required" in str(exc_info.value)
@@ -614,7 +610,7 @@ class TestWebSocketGuards:
         headers = {"Authorization": f"Bearer {token}"}
 
         with pytest.raises(PermissionError) as exc_info:
-            async with WebSocketTestClient(api, "/ws/admin", headers=headers) as ws:
+            async with WebSocketTestClient(api, "/ws/admin", headers=headers):
                 pass
 
         assert "Permission denied" in str(exc_info.value)
@@ -636,7 +632,7 @@ class TestWebSocketGuards:
         headers = {"Authorization": f"Bearer {token}"}
 
         with pytest.raises(PermissionError) as exc_info:
-            async with WebSocketTestClient(api, "/ws/permission", headers=headers) as ws:
+            async with WebSocketTestClient(api, "/ws/permission", headers=headers):
                 pass
 
         assert "Permission denied" in str(exc_info.value)

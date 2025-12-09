@@ -13,6 +13,7 @@ Inspired by Litestar's serialization approach.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from datetime import date, datetime, time
 from decimal import Decimal
 from ipaddress import (
@@ -24,7 +25,7 @@ from ipaddress import (
     IPv6Network,
 )
 from pathlib import Path, PurePath
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 from uuid import UUID
 
 import msgspec
@@ -139,7 +140,7 @@ def decode(value: bytes | str) -> Any:
     return _get_decoder().decode(value)
 
 
-def decode_typed(
+def decode_typed[T](
     value: bytes | str,
     target_type: type[T],
     strict: bool = True,

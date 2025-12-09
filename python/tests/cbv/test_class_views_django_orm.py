@@ -15,23 +15,20 @@ Tests cover:
 - DestroyMixin with obj.adelete()
 - End-to-end CRUD workflows
 """
-import pytest
 import msgspec
+import pytest
+
 from django_bolt import BoltAPI
 from django_bolt.testing import TestClient
 from django_bolt.views import (
     APIView,
-    ViewSet,
+    DestroyMixin,
     ListMixin,
     RetrieveMixin,
-    CreateMixin,
-    UpdateMixin,
-    PartialUpdateMixin,
-    DestroyMixin,
+    ViewSet,
 )
-from django_bolt.exceptions import HTTPException
-from ..test_models import Article
 
+from ..test_models import Article
 
 # --- Fixtures ---
 
@@ -44,7 +41,7 @@ def api():
 @pytest.fixture
 def sample_articles(db):
     """Create sample articles in the database."""
-    from asgiref.sync import async_to_sync
+    from asgiref.sync import async_to_sync  # noqa: PLC0415
 
     articles = []
     for i in range(1, 4):
@@ -269,7 +266,7 @@ def test_create_mixin_with_real_django_orm(api):
         assert "id" in data
 
         # Verify it's actually in the database
-        from asgiref.sync import async_to_sync
+        from asgiref.sync import async_to_sync  # noqa: PLC0415
         article_id = data["id"]
         article = async_to_sync(Article.objects.aget)(id=article_id)
         assert article.title == "New Article"
@@ -321,7 +318,7 @@ def test_update_mixin_with_real_django_orm(api, sample_articles):
         assert data["is_published"] is True
 
         # Verify database was updated
-        from asgiref.sync import async_to_sync
+        from asgiref.sync import async_to_sync  # noqa: PLC0415
         article = async_to_sync(Article.objects.aget)(id=article_id)
         assert article.title == "Updated Title"
         assert article.content == "Updated Content"
@@ -371,7 +368,7 @@ def test_partial_update_mixin_with_real_django_orm(api, sample_articles):
         assert data["title"] == "Partially Updated Title"
 
         # Verify database was updated and other fields unchanged
-        from asgiref.sync import async_to_sync
+        from asgiref.sync import async_to_sync  # noqa: PLC0415
         article = async_to_sync(Article.objects.aget)(id=article_id)
         assert article.title == "Partially Updated Title"
         assert article.content == original_content  # Unchanged
@@ -391,7 +388,7 @@ def test_destroy_mixin_with_real_django_orm(api, sample_articles):
     article_id = sample_articles[0].id
 
     # Verify article exists before deletion
-    from asgiref.sync import async_to_sync
+    from asgiref.sync import async_to_sync  # noqa: PLC0415
     exists_before = async_to_sync(Article.objects.filter(id=article_id).aexists)()
     assert exists_before is True
 

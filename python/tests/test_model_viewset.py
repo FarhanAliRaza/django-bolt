@@ -4,13 +4,14 @@ Tests for ModelViewSet and ReadOnlyModelViewSet (DRF-style usage).
 This test suite verifies that ModelViewSet and ReadOnlyModelViewSet work similarly
 to Django REST Framework's ModelViewSet, where you just set queryset and serializer_class.
 """
-import pytest
 import msgspec
+import pytest
 from asgiref.sync import async_to_sync
+
 from django_bolt import BoltAPI, ModelViewSet, ReadOnlyModelViewSet
 from django_bolt.testing import TestClient
-from .test_models import Article
 
+from .test_models import Article
 
 # --- Schemas ---
 
@@ -51,7 +52,7 @@ def test_readonly_model_viewset(api):
         content="Content 1",
         author="Author 1",
     )
-    article2 = async_to_sync(Article.objects.acreate)(
+    async_to_sync(Article.objects.acreate)(
         title="Article 2",
         content="Content 2",
         author="Author 2",
@@ -283,7 +284,7 @@ def test_model_viewset_custom_queryset(api):
 def test_model_viewset_lookup_field(api):
     """Test ModelViewSet with custom lookup_field."""
     # Create article
-    article = async_to_sync(Article.objects.acreate)(
+    async_to_sync(Article.objects.acreate)(
         title="Test Article",
         content="Content",
         author="test-author",

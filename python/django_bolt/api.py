@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import contextvars
 import inspect
 import logging
-import msgspec
 import re
 import sys
 import time
 import types
-from typing import Any, Callable, Dict, List, Tuple, Optional, Union, get_origin, get_args, Annotated, get_type_hints
+from collections.abc import Callable
+from typing import Annotated, Any, get_args, get_origin, get_type_hints
+
+import msgspec
 
 # Django import - may fail if Django not configured
 try:
@@ -17,72 +20,53 @@ except ImportError:
 
 
 # Import local modules
-from .exceptions import HTTPException
-from .params import Param, Depends as DependsMarker
-from .typing import FieldDefinition, HandlerMetadata, HandlerPattern
-from .middleware import CompressionConfig
-from .logging.middleware import create_logging_middleware, LoggingMiddleware
-from .exceptions import RequestValidationError, parse_msgspec_decode_error
-# Import modularized components
-from .binding import (
-    convert_primitive,
-    get_msgspec_decoder,
-    create_extractor_for_field,
-)
-from .typing import is_msgspec_struct
-from .request_parsing import parse_form_data
-from .dependencies import resolve_dependency
-from .serialization import serialize_response
-from .middleware.compiler import compile_middleware_meta, add_optimization_flags_to_metadata
-from .concurrency import sync_to_thread
-from .views import APIView, ViewSet
-from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
-from .decorators import ActionHandler
-from .error_handlers import handle_exception
-from .openapi.schema_generator import SchemaGenerator
-from .openapi import OpenAPIConfig, SwaggerRenderPlugin, RedocRenderPlugin, ScalarRenderPlugin, RapidocRenderPlugin, StoplightRenderPlugin
-from .openapi.routes import OpenAPIRouteRegistrar
-from .admin.routes import AdminRouteRegistrar
-from .admin.static_routes import StaticRouteRegistrar
-from .auth import get_default_authentication_classes, register_auth_backend
-from .auth.user_loader import load_user_sync
-from .analysis import analyze_handler, warn_blocking_handler
-from .websocket import mark_websocket_handler, WebSocket as WebSocketType
-
 from django.utils.functional import SimpleLazyObject
 
 from . import _json
+from .admin.routes import AdminRouteRegistrar
+from .admin.static_routes import StaticRouteRegistrar
+from .analysis import analyze_handler, warn_blocking_handler
+from .auth import get_default_authentication_classes, register_auth_backend
+from .auth.user_loader import load_user_sync
 
-Response = Tuple[int, List[Tuple[str, str]], bytes]
+# Import modularized components
+from .binding import (
+    convert_primitive,
+    create_extractor_for_field,
+    get_msgspec_decoder,
+)
+from .concurrency import sync_to_thread
+from .decorators import ActionHandler
+from .dependencies import resolve_dependency
+from .error_handlers import handle_exception
+from .exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
+from .logging.middleware import LoggingMiddleware, create_logging_middleware
+from .middleware import CompressionConfig
+from .middleware.compiler import add_optimization_flags_to_metadata, compile_middleware_meta
+from .middleware.django_loader import load_django_middleware
+from .middleware_response import MiddlewareResponse
+from .openapi import (
+    OpenAPIConfig,
+    RapidocRenderPlugin,
+    RedocRenderPlugin,
+    ScalarRenderPlugin,
+    StoplightRenderPlugin,
+    SwaggerRenderPlugin,
+)
+from .openapi.routes import OpenAPIRouteRegistrar
+from .openapi.schema_generator import SchemaGenerator
+from .params import Depends as DependsMarker
+from .params import Param
+from .request_parsing import parse_form_data
+from .router import Router
+from .serialization import serialize_response
+from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
+from .typing import FieldDefinition, HandlerMetadata, HandlerPattern, is_msgspec_struct
+from .views import APIView, ViewSet
+from .websocket import WebSocket as WebSocketType
+from .websocket import mark_websocket_handler
 
-
-class MiddlewareResponse:
-    """
-    Response wrapper for middleware compatibility.
-
-    Middleware expects response.status_code and response.headers attributes,
-    but our internal response format is a tuple (status_code, headers, body).
-    This class bridges the gap, allowing middleware to modify responses.
-    """
-    __slots__ = ('status_code', 'headers', 'body')
-
-    def __init__(self, status_code: int, headers: Dict[str, str], body: bytes):
-        self.status_code = status_code
-        self.headers = headers  # Dict for easy middleware modification
-        self.body = body
-
-    @classmethod
-    def from_tuple(cls, response: Response) -> "MiddlewareResponse":
-        """Create from internal tuple format."""
-        status_code, headers_list, body = response
-        # Convert list of tuples to dict for middleware
-        headers = {k: v for k, v in headers_list}
-        return cls(status_code, headers, body)
-
-    def to_tuple(self) -> Response:
-        """Convert back to internal tuple format."""
-        headers_list = [(k, v) for k, v in self.headers.items()]
-        return (self.status_code, headers_list, self.body)
+Response = tuple[int, list[tuple[str, str]], bytes]
 
 
 # Global registry for BoltAPI instances (used by autodiscovery)
@@ -104,18 +88,18 @@ def _extract_path_params(path: str) -> set[str]:
 
 
 def extract_parameter_value(
-    field: "FieldDefinition",
-    request: Dict[str, Any],
-    params_map: Dict[str, Any],
-    query_map: Dict[str, Any],
-    headers_map: Dict[str, str],
-    cookies_map: Dict[str, str],
-    form_map: Dict[str, Any],
-    files_map: Dict[str, Any],
+    field: FieldDefinition,
+    request: dict[str, Any],
+    params_map: dict[str, Any],
+    query_map: dict[str, Any],
+    headers_map: dict[str, str],
+    cookies_map: dict[str, str],
+    form_map: dict[str, Any],
+    files_map: dict[str, Any],
     meta: HandlerMetadata,
     body_obj: Any,
     body_loaded: bool
-) -> Tuple[Any, Any, bool]:
+) -> tuple[Any, Any, bool]:
     """
     Extract value for a handler parameter using FieldDefinition.
 
@@ -261,13 +245,13 @@ class BoltAPI:
     def __init__(
         self,
         prefix: str = "",
-        middleware: Optional[List[Any]] = None,
-        middleware_config: Optional[Dict[str, Any]] = None,
-        django_middleware: Optional[Union[bool, List[str], Dict[str, Any]]] = None,
+        middleware: list[Any] | None = None,
+        middleware_config: dict[str, Any] | None = None,
+        django_middleware: bool | list[str] | dict[str, Any] | None = None,
         enable_logging: bool = True,
-        logging_config: Optional[Any] = None,
-        compression: Optional[Any] = None,
-        openapi_config: Optional[Any] = None,
+        logging_config: Any | None = None,
+        compression: Any | None = None,
+        openapi_config: Any | None = None,
     ) -> None:
         """
         Initialize a BoltAPI instance.
@@ -286,11 +270,11 @@ class BoltAPI:
             compression: Compression configuration (CompressionConfig or False to disable)
             openapi_config: OpenAPI documentation configuration
         """
-        self._routes: List[Tuple[str, str, int, Callable]] = []
-        self._websocket_routes: List[Tuple[str, int, Callable]] = []  # (path, handler_id, handler)
-        self._handlers: Dict[int, Callable] = {}
-        self._handler_meta: Dict[Callable, HandlerMetadata] = {}
-        self._handler_middleware: Dict[int, Dict[str, Any]] = {}  # Middleware metadata per handler
+        self._routes: list[tuple[str, str, int, Callable]] = []
+        self._websocket_routes: list[tuple[str, int, Callable]] = []  # (path, handler_id, handler)
+        self._handlers: dict[int, Callable] = {}
+        self._handler_meta: dict[Callable, HandlerMetadata] = {}
+        self._handler_middleware: dict[int, dict[str, Any]] = {}  # Middleware metadata per handler
         self._next_handler_id = 0
         self.prefix = prefix.rstrip("/")  # Remove trailing slash
 
@@ -299,7 +283,6 @@ class BoltAPI:
 
         # Load Django middleware if configured
         if django_middleware:
-            from .middleware.django_loader import load_django_middleware
             self.middleware.extend(load_django_middleware(django_middleware))
 
         # Add custom middleware
@@ -338,7 +321,7 @@ class BoltAPI:
             try:
                 # Try to get Django project name from settings
                 title = getattr(django_settings, 'PROJECT_NAME', None) or getattr(django_settings, 'SITE_NAME', None) or "API" if django_settings else "API"
-            except:
+            except Exception:
                 title = "API"
 
             self.openapi_config = OpenAPIConfig(
@@ -356,7 +339,7 @@ class BoltAPI:
         else:
             self.openapi_config = openapi_config
 
-        self._openapi_schema: Optional[Dict[str, Any]] = None
+        self._openapi_schema: dict[str, Any] | None = None
         self._openapi_routes_registered = False
 
         # Django admin configuration (controlled by --no-admin flag)
@@ -375,13 +358,13 @@ class BoltAPI:
         self,
         path: str,
         *,
-        response_model: Optional[Any] = None,
-        status_code: Optional[int] = None,
-        guards: Optional[List[Any]] = None,
-        auth: Optional[List[Any]] = None,
-        tags: Optional[List[str]] = None,
-        summary: Optional[str] = None,
-        description: Optional[str] = None,
+        response_model: Any | None = None,
+        status_code: int | None = None,
+        guards: list[Any] | None = None,
+        auth: list[Any] | None = None,
+        tags: list[str] | None = None,
+        summary: str | None = None,
+        description: str | None = None,
     ):
         return self._route_decorator("GET", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
@@ -389,13 +372,13 @@ class BoltAPI:
         self,
         path: str,
         *,
-        response_model: Optional[Any] = None,
-        status_code: Optional[int] = None,
-        guards: Optional[List[Any]] = None,
-        auth: Optional[List[Any]] = None,
-        tags: Optional[List[str]] = None,
-        summary: Optional[str] = None,
-        description: Optional[str] = None,
+        response_model: Any | None = None,
+        status_code: int | None = None,
+        guards: list[Any] | None = None,
+        auth: list[Any] | None = None,
+        tags: list[str] | None = None,
+        summary: str | None = None,
+        description: str | None = None,
     ):
         return self._route_decorator("POST", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
@@ -403,13 +386,13 @@ class BoltAPI:
         self,
         path: str,
         *,
-        response_model: Optional[Any] = None,
-        status_code: Optional[int] = None,
-        guards: Optional[List[Any]] = None,
-        auth: Optional[List[Any]] = None,
-        tags: Optional[List[str]] = None,
-        summary: Optional[str] = None,
-        description: Optional[str] = None,
+        response_model: Any | None = None,
+        status_code: int | None = None,
+        guards: list[Any] | None = None,
+        auth: list[Any] | None = None,
+        tags: list[str] | None = None,
+        summary: str | None = None,
+        description: str | None = None,
     ):
         return self._route_decorator("PUT", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
@@ -417,13 +400,13 @@ class BoltAPI:
         self,
         path: str,
         *,
-        response_model: Optional[Any] = None,
-        status_code: Optional[int] = None,
-        guards: Optional[List[Any]] = None,
-        auth: Optional[List[Any]] = None,
-        tags: Optional[List[str]] = None,
-        summary: Optional[str] = None,
-        description: Optional[str] = None,
+        response_model: Any | None = None,
+        status_code: int | None = None,
+        guards: list[Any] | None = None,
+        auth: list[Any] | None = None,
+        tags: list[str] | None = None,
+        summary: str | None = None,
+        description: str | None = None,
     ):
         return self._route_decorator("PATCH", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
@@ -431,13 +414,13 @@ class BoltAPI:
         self,
         path: str,
         *,
-        response_model: Optional[Any] = None,
-        status_code: Optional[int] = None,
-        guards: Optional[List[Any]] = None,
-        auth: Optional[List[Any]] = None,
-        tags: Optional[List[str]] = None,
-        summary: Optional[str] = None,
-        description: Optional[str] = None,
+        response_model: Any | None = None,
+        status_code: int | None = None,
+        guards: list[Any] | None = None,
+        auth: list[Any] | None = None,
+        tags: list[str] | None = None,
+        summary: str | None = None,
+        description: str | None = None,
     ):
         return self._route_decorator("DELETE", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
@@ -445,13 +428,13 @@ class BoltAPI:
         self,
         path: str,
         *,
-        response_model: Optional[Any] = None,
-        status_code: Optional[int] = None,
-        guards: Optional[List[Any]] = None,
-        auth: Optional[List[Any]] = None,
-        tags: Optional[List[str]] = None,
-        summary: Optional[str] = None,
-        description: Optional[str] = None,
+        response_model: Any | None = None,
+        status_code: int | None = None,
+        guards: list[Any] | None = None,
+        auth: list[Any] | None = None,
+        tags: list[str] | None = None,
+        summary: str | None = None,
+        description: str | None = None,
     ):
         return self._route_decorator("HEAD", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
@@ -459,13 +442,13 @@ class BoltAPI:
         self,
         path: str,
         *,
-        response_model: Optional[Any] = None,
-        status_code: Optional[int] = None,
-        guards: Optional[List[Any]] = None,
-        auth: Optional[List[Any]] = None,
-        tags: Optional[List[str]] = None,
-        summary: Optional[str] = None,
-        description: Optional[str] = None,
+        response_model: Any | None = None,
+        status_code: int | None = None,
+        guards: list[Any] | None = None,
+        auth: list[Any] | None = None,
+        tags: list[str] | None = None,
+        summary: str | None = None,
+        description: str | None = None,
     ):
         return self._route_decorator("OPTIONS", path, response_model=response_model, status_code=status_code, guards=guards, auth=auth, tags=tags, summary=summary, description=description)
 
@@ -473,8 +456,8 @@ class BoltAPI:
         self,
         path: str,
         *,
-        guards: Optional[List[Any]] = None,
-        auth: Optional[List[Any]] = None,
+        guards: list[Any] | None = None,
+        auth: list[Any] | None = None,
     ):
         """
         Register a WebSocket endpoint with FastAPI-like syntax.
@@ -502,8 +485,8 @@ class BoltAPI:
         self,
         path: str,
         *,
-        guards: Optional[List[Any]] = None,
-        auth: Optional[List[Any]] = None,
+        guards: list[Any] | None = None,
+        auth: list[Any] | None = None,
     ):
         """Internal decorator for WebSocket routes."""
 
@@ -569,10 +552,10 @@ class BoltAPI:
         self,
         path: str,
         *,
-        methods: Optional[List[str]] = None,
-        guards: Optional[List[Any]] = None,
-        auth: Optional[List[Any]] = None,
-        status_code: Optional[int] = None,
+        methods: list[str] | None = None,
+        guards: list[Any] | None = None,
+        auth: list[Any] | None = None,
+        status_code: int | None = None,
     ):
         """
         Register a class-based view as a decorator.
@@ -675,9 +658,9 @@ class BoltAPI:
         self,
         path: str,
         *,
-        guards: Optional[List[Any]] = None,
-        auth: Optional[List[Any]] = None,
-        status_code: Optional[int] = None,
+        guards: list[Any] | None = None,
+        auth: list[Any] | None = None,
+        status_code: int | None = None,
         lookup_field: str = "pk"
     ):
         """
@@ -791,7 +774,7 @@ class BoltAPI:
 
         return decorator
 
-    def _register_custom_actions(self, view_cls: type, base_path: Optional[str], lookup_field: Optional[str]):
+    def _register_custom_actions(self, view_cls: type, base_path: str | None, lookup_field: str | None):
         """
         Scan a ViewSet class for custom action methods and register them.
 
@@ -891,13 +874,13 @@ class BoltAPI:
         method: str,
         path: str,
         *,
-        response_model: Optional[Any] = None,
-        status_code: Optional[int] = None,
-        guards: Optional[List[Any]] = None,
-        auth: Optional[List[Any]] = None,
-        tags: Optional[List[str]] = None,
-        summary: Optional[str] = None,
-        description: Optional[str] = None,
+        response_model: Any | None = None,
+        status_code: int | None = None,
+        guards: list[Any] | None = None,
+        auth: list[Any] | None = None,
+        tags: list[str] | None = None,
+        summary: str | None = None,
+        description: str | None = None,
     ):
         def decorator(fn: Callable):
             # Detect if handler is async or sync
@@ -991,7 +974,7 @@ class BoltAPI:
             return fn
         return decorator
 
-    def _extract_response_metadata(self, response_type: Any) -> Dict[str, Any]:
+    def _extract_response_metadata(self, response_type: Any) -> dict[str, Any]:
         """
         Extract serialization metadata from response type annotation.
 
@@ -1012,7 +995,7 @@ class BoltAPI:
 
         # Check if response type is list[Struct] for QuerySet optimization
         origin = get_origin(response_type)
-        if origin in (list, List):
+        if origin in (list, list):
             args = get_args(response_type)
             if args:
                 elem_type = args[0]
@@ -1027,7 +1010,7 @@ class BoltAPI:
 
     def _classify_handler_pattern(
         self,
-        fields: List[FieldDefinition],
+        fields: list[FieldDefinition],
         meta: HandlerMetadata,
         needs_form_parsing: bool
     ) -> HandlerPattern:
@@ -1122,7 +1105,7 @@ class BoltAPI:
             return meta
 
         # Parse each parameter into FieldDefinition
-        field_definitions: List[FieldDefinition] = []
+        field_definitions: list[FieldDefinition] = []
 
         for param in params:
             name = param.name
@@ -1261,7 +1244,7 @@ class BoltAPI:
             return meta
 
         # Parse each parameter into FieldDefinition, skipping WebSocket param
-        field_definitions: List[FieldDefinition] = []
+        field_definitions: list[FieldDefinition] = []
 
         for param in params:
             name = param.name
@@ -1344,10 +1327,10 @@ class BoltAPI:
 
         return meta
 
-    async def _build_handler_arguments(self, meta: HandlerMetadata, request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+    async def _build_handler_arguments(self, meta: HandlerMetadata, request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
         """Build arguments for handler invocation."""
-        args: List[Any] = []
-        kwargs: Dict[str, Any] = {}
+        args: list[Any] = []
+        kwargs: dict[str, Any] = {}
 
         # Access PyRequest mappings
         params_map = request["params"]
@@ -1365,7 +1348,7 @@ class BoltAPI:
         # Body decode cache
         body_obj: Any = None
         body_loaded: bool = False
-        dep_cache: Dict[Any, Any] = {}
+        dep_cache: dict[Any, Any] = {}
 
         # Use FieldDefinition objects directly
         fields = meta["fields"]
@@ -1395,7 +1378,7 @@ class BoltAPI:
 
         return args, kwargs
 
-    def _compile_argument_injector(self, meta: HandlerMetadata) -> Callable[[Dict[str, Any]], Tuple[List[Any], Dict[str, Any]]]:
+    def _compile_argument_injector(self, meta: HandlerMetadata) -> Callable[[dict[str, Any]], tuple[list[Any], dict[str, Any]]]:
         """
         Compile a specialized argument injector function for a handler.
 
@@ -1426,13 +1409,13 @@ class BoltAPI:
 
         # Fast path 1: Request-only mode (single request parameter)
         if mode == "request_only":
-            def injector_request_only(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+            def injector_request_only(request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
                 return ([request], {})
             return injector_request_only
 
         # Fast path 2: No parameters
         if not fields or pattern is HandlerPattern.NO_PARAMS:
-            def injector_no_params(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+            def injector_no_params(request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
                 return ([], {})
             return injector_no_params
 
@@ -1442,10 +1425,10 @@ class BoltAPI:
             # Pre-compute extractors list for direct access
             extractors = [(f.extractor, f.kind, f.name) for f in fields]
 
-            def injector_path_only(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+            def injector_path_only(request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
                 params_map = request["params"]
-                args: List[Any] = []
-                kwargs: Dict[str, Any] = {}
+                args: list[Any] = []
+                kwargs: dict[str, Any] = {}
                 for extractor, kind, name in extractors:
                     value = extractor(params_map)
                     if kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
@@ -1459,10 +1442,10 @@ class BoltAPI:
         if pattern is HandlerPattern.QUERY_ONLY:
             extractors = [(f.extractor, f.kind, f.name) for f in fields]
 
-            def injector_query_only(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+            def injector_query_only(request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
                 query_map = request["query"]
-                args: List[Any] = []
-                kwargs: Dict[str, Any] = {}
+                args: list[Any] = []
+                kwargs: dict[str, Any] = {}
                 for extractor, kind, name in extractors:
                     value = extractor(query_map)
                     if kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
@@ -1480,12 +1463,12 @@ class BoltAPI:
             field_name = field.name
 
             if is_positional:
-                def injector_body_only_positional(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+                def injector_body_only_positional(request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
                     body_bytes = request["body"]
                     return ([body_extractor(body_bytes)], {})
                 return injector_body_only_positional
             else:
-                def injector_body_only_kwarg(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+                def injector_body_only_kwarg(request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
                     body_bytes = request["body"]
                     return ([], {field_name: body_extractor(body_bytes)})
                 return injector_body_only_kwarg
@@ -1498,11 +1481,11 @@ class BoltAPI:
             # Maintain original field order for args
             field_order = [(f.source, i) for i, f in enumerate(fields)]
 
-            def injector_simple(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+            def injector_simple(request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
                 params_map = request["params"]
                 query_map = request["query"]
-                args: List[Any] = []
-                kwargs: Dict[str, Any] = {}
+                args: list[Any] = []
+                kwargs: dict[str, Any] = {}
 
                 # Extract in original field order
                 path_idx = 0
@@ -1532,10 +1515,10 @@ class BoltAPI:
             needs_cookies = meta.get("needs_cookies", True)
             needs_path_params = meta.get("needs_path_params", True)
 
-            async def injector_with_deps(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+            async def injector_with_deps(request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
                 """Optimized argument injector with dependency support."""
-                args: List[Any] = []
-                kwargs: Dict[str, Any] = {}
+                args: list[Any] = []
+                kwargs: dict[str, Any] = {}
 
                 params_map = request["params"] if needs_path_params else {}
                 query_map = request["query"] if needs_query else {}
@@ -1549,7 +1532,7 @@ class BoltAPI:
 
                 body_obj: Any = None
                 body_loaded: bool = False
-                dep_cache: Dict[Any, Any] = {}
+                dep_cache: dict[Any, Any] = {}
 
                 for field in fields:
                     if field.source == "request":
@@ -1610,10 +1593,10 @@ class BoltAPI:
         needs_cookies = meta.get("needs_cookies", True)
         needs_path_params = meta.get("needs_path_params", True)
 
-        def injector_full(request: Dict[str, Any]) -> Tuple[List[Any], Dict[str, Any]]:
+        def injector_full(request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
             """Full injector with pre-compiled extractors."""
-            args: List[Any] = []
-            kwargs: Dict[str, Any] = {}
+            args: list[Any] = []
+            kwargs: dict[str, Any] = {}
 
             params_map = request["params"] if needs_path_params else {}
             query_map = request["query"] if needs_query else {}
@@ -1688,12 +1671,12 @@ class BoltAPI:
 
         return int(he.status_code), headers, body
 
-    def _handle_generic_exception(self, e: Exception, request: Dict[str, Any] = None) -> Response:
+    def _handle_generic_exception(self, e: Exception, request: dict[str, Any] = None) -> Response:
         """Handle generic exception using error_handlers module."""
         # Use the error handler which respects Django DEBUG setting
         return handle_exception(e, debug=None, request=request)  # debug will be checked dynamically
 
-    def _build_middleware_chain(self, api: "BoltAPI") -> Optional[Callable]:
+    def _build_middleware_chain(self, api: BoltAPI) -> Callable | None:
         """
         Build the middleware chain for an API instance (Django-style).
 
@@ -1719,10 +1702,10 @@ class BoltAPI:
     async def _dispatch_with_middleware(
         self,
         handler: Callable,
-        request: Dict[str, Any],
+        request: dict[str, Any],
         handler_id: int,
-        api: "BoltAPI",
-        meta: Dict[str, Any],
+        api: BoltAPI,
+        meta: dict[str, Any],
     ) -> Response:
         """
         Execute the middleware chain and then the handler (Django-style).
@@ -1742,8 +1725,6 @@ class BoltAPI:
             api: The BoltAPI instance that owns this handler (may be sub-app)
             meta: Handler metadata
         """
-        import contextvars
-
         # Context variable for per-request handler execution
         # This allows the middleware chain to be built once and reused
         _handler_context: contextvars.ContextVar[dict] = getattr(
@@ -1820,7 +1801,7 @@ class BoltAPI:
         finally:
             _handler_context.reset(token)
 
-    async def _dispatch(self, handler: Callable, request: Dict[str, Any], handler_id: int = None) -> Response:
+    async def _dispatch(self, handler: Callable, request: dict[str, Any], handler_id: int = None) -> Response:
         """
         Optimized async dispatch that calls the handler and returns response tuple.
 
@@ -1853,8 +1834,12 @@ class BoltAPI:
             try:
                 if logger.isEnabledFor(logging.INFO):
                     should_time = True
-            except Exception:
-                pass
+            except Exception as e:
+                logging.getLogger(__name__).debug(
+                    "Failed to check logger level for timing decision. "
+                    "Defaulting to no timing. Error: %s",
+                    e
+                )
             if not should_time:
                 # If slow-only is configured, we still need timing
                 should_time = bool(getattr(logging_middleware.config, 'min_duration_ms', None))
@@ -1959,7 +1944,7 @@ class BoltAPI:
             return self._handle_generic_exception(e, request=request)
 
 
-    def _get_openapi_schema(self) -> Dict[str, Any]:
+    def _get_openapi_schema(self) -> dict[str, Any]:
         """Get or generate OpenAPI schema.
 
         Returns:
@@ -2012,7 +1997,7 @@ class BoltAPI:
         """
         registered = set()
 
-        for handler_id, metadata in self._handler_middleware.items():
+        for _handler_id, metadata in self._handler_middleware.items():
             # Get stored backend instances (stored during route decoration)
             backend_instances = metadata.get('_auth_backend_instances', [])
             for backend_instance in backend_instances:
@@ -2021,7 +2006,7 @@ class BoltAPI:
                     registered.add(backend_type)
                     register_auth_backend(backend_type, backend_instance)
 
-    def mount(self, path: str, app: "BoltAPI") -> None:
+    def mount(self, path: str, app: BoltAPI) -> None:
         """
         Mount a sub-application at a given path (FastAPI-style).
 
@@ -2116,7 +2101,7 @@ class BoltAPI:
         if app in _BOLT_API_REGISTRY:
             _BOLT_API_REGISTRY.remove(app)
 
-    def include_router(self, router: "Router", prefix: str = "") -> None:
+    def include_router(self, router: Router, prefix: str = "") -> None:
         """
         Include a Router's routes into this API.
 
@@ -2149,8 +2134,6 @@ class BoltAPI:
             router: Router instance containing routes to include
             prefix: Additional URL prefix to prepend (combined with router's prefix)
         """
-        from .router import Router
-
         if not isinstance(router, Router):
             raise TypeError(
                 f"include_router() expects a Router instance, got {type(router).__name__}. "
@@ -2161,7 +2144,7 @@ class BoltAPI:
         all_routes = router.get_all_routes()
 
         # Get router middleware chain (including parent routers)
-        router_middleware = router.get_middleware_chain()
+        router.get_middleware_chain()
 
         for method, route_path, handler, meta in all_routes:
             # Compute full path with optional prefix
@@ -2171,7 +2154,7 @@ class BoltAPI:
             route_auth = meta.pop('auth', None)
             route_guards = meta.pop('guards', None)
             route_tags = meta.pop('tags', None)
-            route_router_middleware = meta.pop('_router_middleware', [])
+            meta.pop('_router_middleware', [])
 
             # Get the appropriate decorator based on method
             decorator_method = getattr(self, method.lower(), None)
@@ -2190,4 +2173,3 @@ class BoltAPI:
             # Apply decorator to register handler
             decorator(handler)
 
-    

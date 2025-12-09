@@ -15,9 +15,8 @@ from typing import Annotated
 
 import msgspec
 import pytest
-from asgiref.sync import sync_to_async
-from django.db import models as django_models
-from msgspec import Meta, ValidationError as MsgspecValidationError
+from msgspec import Meta
+from msgspec import ValidationError as MsgspecValidationError
 
 from django_bolt.serializers import Nested, Serializer, field_validator
 from tests.test_models import Author, BlogPost, Comment, Tag
@@ -314,7 +313,7 @@ class TestNestedWithinNested:
         commenter = Author.objects.create(
             name="Henry", email="henry@example.com"
         )
-        comment = Comment.objects.create(
+        Comment.objects.create(
             post=post, author=commenter, text="Great post!"
         )
 
@@ -677,7 +676,7 @@ class TestNestedFieldValidation:
     def test_nested_author_missing_email_field(self):
         """Test that missing required email field raises error."""
 
-        with pytest.raises(Exception):  # Could be ValidationError or TypeError
+        with pytest.raises(TypeError):  # Missing required parameter
             AuthorSerializer(
                 id=1,
                 name="Henry"

@@ -14,28 +14,28 @@ from __future__ import annotations
 
 import json
 
-import pytest
 import msgspec
+import pytest
 
 from django_bolt.serializers import (
-    Serializer,
-    Email,
     URL,
+    Email,
     HttpsURL,
-    Phone,
-    Slug,
-    Username,
     NonEmptyStr,
-    PositiveInt,
     NonNegativeInt,
     Percentage,
+    Phone,
+    PositiveInt,
+    Serializer,
+    Slug,
+    Username,
 )
 from django_bolt.serializers.types import (
+    UUID,
+    HexColor,
     Latitude,
     Longitude,
     Port,
-    HexColor,
-    UUID,
 )
 
 

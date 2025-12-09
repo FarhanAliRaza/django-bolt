@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import warnings
 
-import pytest
-
 from django_bolt.analysis import (
     HandlerAnalysis,
     analyze_handler,
@@ -22,14 +20,14 @@ from django_bolt.analysis import (
 # Test handler functions for analysis
 def sync_handler_with_orm():
     """Sync handler that uses Django ORM."""
-    from django.contrib.auth.models import User
+    from django.contrib.auth.models import User  # noqa: PLC0415
     users = User.objects.filter(is_active=True)
     return list(users)
 
 
 def sync_handler_with_multiple_orm_calls():
     """Sync handler with multiple ORM operations."""
-    from django.contrib.auth.models import User
+    from django.contrib.auth.models import User  # noqa: PLC0415
     User.objects.create(username="test")
     users = User.objects.all()
     count = User.objects.count()
@@ -39,14 +37,14 @@ def sync_handler_with_multiple_orm_calls():
 
 async def async_handler_with_sync_orm():
     """Async handler that incorrectly uses sync ORM methods."""
-    from django.contrib.auth.models import User
+    from django.contrib.auth.models import User  # noqa: PLC0415
     users = User.objects.filter(is_active=True)
     return list(users)
 
 
 async def async_handler_with_async_orm():
     """Async handler using proper async ORM methods."""
-    from django.contrib.auth.models import User
+    from django.contrib.auth.models import User  # noqa: PLC0415
     user = await User.objects.aget(id=1)
     users = [u async for u in User.objects.aiterator()]
     return {"user": user, "users": users}
@@ -65,7 +63,7 @@ async def async_handler_no_orm():
 
 def sync_handler_with_iteration():
     """Sync handler that iterates over QuerySet."""
-    from django.contrib.auth.models import User
+    from django.contrib.auth.models import User  # noqa: PLC0415
     result = []
     for user in User.objects.all():
         result.append(user.username)
@@ -74,13 +72,13 @@ def sync_handler_with_iteration():
 
 def sync_handler_with_list_comprehension():
     """Sync handler with list comprehension over QuerySet."""
-    from django.contrib.auth.models import User
+    from django.contrib.auth.models import User  # noqa: PLC0415
     return [user.username for user in User.objects.filter(is_active=True)]
 
 
 def sync_handler_with_save():
     """Sync handler that saves a model instance."""
-    from django.contrib.auth.models import User
+    from django.contrib.auth.models import User  # noqa: PLC0415
     user = User(username="test")
     user.save()
     return {"id": user.id}
@@ -88,14 +86,14 @@ def sync_handler_with_save():
 
 def sync_handler_with_blocking_io():
     """Sync handler with blocking I/O operations."""
-    import time
+    import time  # noqa: PLC0415
     time.sleep(1)
     return {"waited": True}
 
 
 def sync_handler_with_requests():
     """Sync handler using requests library."""
-    import requests
+    import requests  # noqa: PLC0415 - intentional for testing blocking I/O detection
     response = requests.get("http://example.com")
     return {"status": response.status_code}
 

@@ -7,7 +7,7 @@ N ?= 10000
 P ?= 8
 WORKERS ?= 1
 
-.PHONY: build test-server test-server-bg kill bench clean orm-test setup-test-data seed-data orm-smoke compare-frameworks save-baseline test-py release delete-tag
+.PHONY: build test-server test-server-bg kill bench clean orm-test setup-test-data seed-data orm-smoke compare-frameworks save-baseline test-py lint lint-lib ruff ruff-fix format release delete-tag
 
 # Build Rust extension in release mode
 build:
@@ -43,6 +43,25 @@ test-py:
 	uv run --with pytest pytest python/tests -s -vv
 
 #   uv run --with pytest pytest python/tests/test_request_user.py -s -vv
+
+# Run ruff linter (checks library code - some S110 errors in tests/examples are expected)
+lint:
+	uv run ruff check .
+
+# Alias for lint
+ruff: lint
+
+# Check only library code (excludes tests and examples)
+lint-lib:
+	uv run ruff check python/django_bolt
+
+# Fix ruff errors automatically
+ruff-fix:
+	uv run ruff check . --fix
+
+# Format code with ruff
+format:
+	uv run ruff format .
 # Seed database with test data
 seed-data:
 	@echo "Seeding database..."

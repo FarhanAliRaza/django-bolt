@@ -9,25 +9,25 @@ Tests cover:
 - Mixins (ListMixin, RetrieveMixin, CreateMixin, etc.)
 - ViewSet
 """
-import pytest
+from typing import Any
+
 import msgspec
-from typing import Dict, Any, List
+import pytest
+
 from django_bolt import BoltAPI
+from django_bolt.auth.backends import JWTAuthentication
+from django_bolt.auth.guards import IsAuthenticated  # noqa: PLC0415
+from django_bolt.exceptions import HTTPException
+from django_bolt.params import Depends
 from django_bolt.views import (
     APIView,
-    ViewSet,
+    CreateMixin,
+    DestroyMixin,
     ListMixin,
     RetrieveMixin,
-    CreateMixin,
     UpdateMixin,
-    PartialUpdateMixin,
-    DestroyMixin,
+    ViewSet,
 )
-from django_bolt.params import Depends
-from django_bolt.exceptions import HTTPException
-from django_bolt.auth.guards import IsAuthenticated
-from django_bolt.auth.backends import JWTAuthentication
-
 
 # --- Test Fixtures ---
 
@@ -38,12 +38,12 @@ def api():
 
 
 def create_request(
-    path_params: Dict[str, Any] = None,
-    query_params: Dict[str, Any] = None,
-    headers: Dict[str, str] = None,
+    path_params: dict[str, Any] = None,
+    query_params: dict[str, Any] = None,
+    headers: dict[str, str] = None,
     body: bytes = b"{}",
-    auth: Dict[str, Any] = None,
-) -> Dict[str, Any]:
+    auth: dict[str, Any] = None,
+) -> dict[str, Any]:
     """Helper to create mock request dictionary."""
     return {
         "params": path_params or {},
@@ -165,7 +165,7 @@ async def test_bolt_api_view_dependency_injection(api):
     handler = api._routes[0][3]
 
     # Check that handler has correct signature
-    import inspect
+    import inspect  # noqa: PLC0415
     sig = inspect.signature(handler)
     assert "current_user" in sig.parameters
 
@@ -186,7 +186,7 @@ async def test_bolt_api_view_request_body(api):
     handler = api._routes[0][3]
 
     # Verify handler signature includes data parameter
-    import inspect
+    import inspect  # noqa: PLC0415
     sig = inspect.signature(handler)
     assert "data" in sig.parameters
 
@@ -206,7 +206,7 @@ async def test_bolt_api_view_return_annotation(api):
 
     # Check that handler signature includes return annotation
     handler = api._routes[0][3]
-    import inspect
+    import inspect  # noqa: PLC0415
     sig = inspect.signature(handler)
     assert sig.return_annotation == ResponseSchema
 
@@ -234,7 +234,7 @@ def test_bolt_api_view_class_level_guards(api):
 
 def test_bolt_api_view_route_level_guard_override(api):
     """Test route-level guards override class-level guards."""
-    from django_bolt.auth.guards import IsAdminUser
+    from django_bolt.auth.guards import IsAdminUser  # noqa: PLC0415
 
     # Override with route-level guards
     @api.view("/admin", guards=[IsAdminUser()])
@@ -370,7 +370,7 @@ async def test_create_mixin(api):
 
     # Verify handler signature
     handler = api._routes[0][3]
-    import inspect
+    import inspect  # noqa: PLC0415
     sig = inspect.signature(handler)
     assert "data" in sig.parameters
 
@@ -511,7 +511,7 @@ async def test_complete_crud_viewset(api):
             try:
                 return next(self.iterator)
             except StopIteration:
-                raise StopAsyncIteration
+                raise StopAsyncIteration from None
 
         async def aget(self, pk):
             if pk not in self.items:

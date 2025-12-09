@@ -15,8 +15,8 @@ Comprehensive comparison including:
 
 from __future__ import annotations
 
+import contextlib
 import timeit
-from datetime import datetime
 from typing import Annotated
 
 import msgspec
@@ -24,20 +24,25 @@ from msgspec import Meta
 from pydantic import (
     BaseModel,
     Field,
-    computed_field as pydantic_computed_field,
     field_validator,
     model_validator,
+)
+from pydantic import (
+    computed_field as pydantic_computed_field,
 )
 
 from django_bolt.serializers import (
     Serializer,
     computed_field,
     field,
+)
+from django_bolt.serializers import (
     field_validator as bolt_field_validator,
+)
+from django_bolt.serializers import (
     model_validator as bolt_model_validator,
 )
-from django_bolt.serializers.types import Email, HttpUrl, PositiveInt, NonEmptyStr
-
+from django_bolt.serializers.types import Email, HttpUrl, NonEmptyStr, PositiveInt
 
 # ============================================================================
 # Test Data
@@ -301,8 +306,6 @@ class PydanticComplexUser(BaseModel):
 def run_benchmarks():
     """Run comprehensive benchmarks."""
     iterations = 100000
-    iterations_medium = 50000
-    iterations_small = 10000
 
     print("=" * 80)
     print("SERIALIZER BENCHMARK: django-bolt (msgspec) vs Pydantic v2")
@@ -678,16 +681,12 @@ def run_benchmarks():
     iterations_error = 10000
 
     def bolt_validate():
-        try:
+        with contextlib.suppress(msgspec.ValidationError):
             msgspec.convert(invalid_data, type=BoltAuthorSimple)
-        except msgspec.ValidationError:
-            pass
 
     def pydantic_validate():
-        try:
+        with contextlib.suppress(Exception):
             PydanticAuthorSimple(**invalid_data)
-        except Exception:
-            pass
 
     bolt_time = timeit.timeit(bolt_validate, number=iterations_error)
     pydantic_time = timeit.timeit(pydantic_validate, number=iterations_error)

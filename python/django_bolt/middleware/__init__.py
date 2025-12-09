@@ -47,30 +47,30 @@ Usage:
         return {"status": "ok"}
 """
 
-from .middleware import (
-    # Protocols and base classes
-    MiddlewareProtocol,
-    BaseMiddleware,
-    Middleware,
-    GetResponse,
-    MiddlewareType,
-    # Decorators
-    middleware,
-    rate_limit,
-    cors,
-    skip_middleware,
-    no_compress,
-    # Built-in middleware (Python)
-    TimingMiddleware,
-    LoggingMiddleware,
-    ErrorHandlerMiddleware,
-)
 from .compression import CompressionConfig
 from .django_adapter import DjangoMiddleware, DjangoMiddlewareStack
 from .django_loader import (
-    load_django_middleware,
-    get_django_middleware_setting,
     DEFAULT_EXCLUDED_MIDDLEWARE,
+    get_django_middleware_setting,
+    load_django_middleware,
+)
+from .middleware import (
+    BaseMiddleware,
+    ErrorHandlerMiddleware,
+    GetResponse,
+    LoggingMiddleware,
+    Middleware,
+    # Protocols and base classes
+    MiddlewareProtocol,
+    MiddlewareType,
+    # Built-in middleware (Python)
+    TimingMiddleware,
+    cors,
+    # Decorators
+    middleware,
+    no_compress,
+    rate_limit,
+    skip_middleware,
 )
 
 __all__ = [

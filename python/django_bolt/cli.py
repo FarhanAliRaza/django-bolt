@@ -1,4 +1,6 @@
+import tomllib
 from pathlib import Path
+
 import click
 
 
@@ -10,8 +12,6 @@ def main():
 @main.command()
 def version():
     """Show Django-Bolt version."""
-    import tomllib
-
     cli_dir = Path(__file__).parent.resolve()
     toml_file = cli_dir / "../../pyproject.toml"
 

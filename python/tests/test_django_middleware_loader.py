@@ -10,14 +10,13 @@ from __future__ import annotations
 import pytest
 
 from django_bolt import BoltAPI
-from django_bolt.testing import TestClient
+from django_bolt.middleware import DjangoMiddlewareStack, TimingMiddleware
 from django_bolt.middleware.django_loader import (
-    load_django_middleware,
-    get_django_middleware_setting,
     DEFAULT_EXCLUDED_MIDDLEWARE,
+    get_django_middleware_setting,
+    load_django_middleware,
 )
-from django_bolt.middleware import DjangoMiddlewareStack
-
+from django_bolt.testing import TestClient
 
 # =============================================================================
 # Test Default Exclusions
@@ -31,7 +30,7 @@ class TestDefaultExclusions:
         """Test that there are no default exclusions - all middleware loaded."""
         # We now load ALL middleware from settings.MIDDLEWARE by default
         # Users can exclude specific middleware if needed via the exclude config
-        assert DEFAULT_EXCLUDED_MIDDLEWARE == set()
+        assert set() == DEFAULT_EXCLUDED_MIDDLEWARE
 
     def test_csrf_not_excluded_by_default(self):
         """Test that CSRF middleware is NOT excluded by default."""
@@ -155,8 +154,6 @@ class TestBoltAPIIntegration:
 
     def test_boltapi_combines_django_and_custom_middleware(self):
         """Test BoltAPI stores both Django and custom middleware."""
-        from django_bolt.middleware import TimingMiddleware
-
         api = BoltAPI(
             django_middleware=['django.contrib.sessions.middleware.SessionMiddleware'],
             middleware=[TimingMiddleware],

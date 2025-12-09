@@ -8,15 +8,14 @@ Python middleware classes (TimingMiddleware, etc.) run for custom logic only.
 import asyncio
 import json
 import time
+
 import jwt
-import pytest
-from django_bolt import BoltAPI
-from django_bolt.middleware import (
-    rate_limit, cors, skip_middleware, Middleware
-)
-from django_bolt.auth import JWTAuthentication, APIKeyAuthentication
-from django_bolt.auth import IsAuthenticated
 import msgspec
+import pytest
+
+from django_bolt import BoltAPI
+from django_bolt.auth import APIKeyAuthentication, IsAuthenticated, JWTAuthentication
+from django_bolt.middleware import Middleware, cors, rate_limit, skip_middleware
 
 
 # Test models
@@ -30,7 +29,7 @@ class CustomTestMiddleware(Middleware):
     def __init__(self, name: str):
         self.name = name
         self.call_count = 0
-    
+
     async def process_request(self, request, call_next):
         self.call_count += 1
         # Add marker to context
@@ -42,16 +41,16 @@ class CustomTestMiddleware(Middleware):
 
 class TestMiddlewareDecorators:
     """Test middleware decorator functionality"""
-    
+
     def test_rate_limit_decorator(self):
         """Test rate limit decorator attaches metadata"""
         api = BoltAPI()
-        
+
         @api.get("/limited")
         @rate_limit(rps=50, burst=100, key="ip")
         async def limited_endpoint():
             return {"status": "ok"}
-        
+
         # Check that middleware metadata was attached
         handler = api._handlers[0]
         assert hasattr(handler, '__bolt_middleware__')
@@ -61,25 +60,25 @@ class TestMiddlewareDecorators:
         assert middleware[0]['rps'] == 50
         assert middleware[0]['burst'] == 100
         assert middleware[0]['key'] == 'ip'
-    
+
     def test_cors_decorator(self):
         """Test CORS decorator attaches metadata"""
         api = BoltAPI()
-        
+
         @api.get("/cors-test")
         @cors(origins=["http://localhost:3000"], credentials=True, max_age=7200)
         async def cors_endpoint():
             return {"status": "ok"}
-        
+
         handler = api._handlers[0]
         assert hasattr(handler, '__bolt_middleware__')
         middleware = handler.__bolt_middleware__
         assert len(middleware) > 0
         assert middleware[0]['type'] == 'cors'
         assert middleware[0]['origins'] == ["http://localhost:3000"]
-        assert middleware[0]['credentials'] == True
+        assert middleware[0]['credentials']
         assert middleware[0]['max_age'] == 7200
-    
+
     def test_auth_via_guards(self):
         """Test authentication via guards parameter"""
         api = BoltAPI()
@@ -101,22 +100,22 @@ class TestMiddlewareDecorators:
         assert meta['auth_backends'][0]['type'] == 'jwt'
         assert meta['auth_backends'][0]['secret'] == 'test-secret'
         assert meta['auth_backends'][0]['algorithms'] == ["HS256", "HS384"]
-    
+
     def test_skip_middleware_decorator(self):
         """Test skip middleware decorator"""
         api = BoltAPI()
-        
+
         @api.get("/no-middleware")
         @skip_middleware("cors", "rate_limit")
         async def no_middleware_endpoint():
             return {"status": "ok"}
-        
+
         handler = api._handlers[0]
         assert hasattr(handler, '__bolt_skip_middleware__')
         skip = handler.__bolt_skip_middleware__
         assert "cors" in skip
         assert "rate_limit" in skip
-    
+
     def test_multiple_middleware(self):
         """Test multiple middleware decorators on same route"""
         api = BoltAPI()
@@ -148,7 +147,7 @@ class TestMiddlewareDecorators:
 
 class TestGlobalMiddleware:
     """Test global middleware configuration"""
-    
+
     def test_global_middleware_config(self):
         """Test setting global middleware via BoltAPI constructor"""
         api = BoltAPI(
@@ -164,12 +163,12 @@ class TestGlobalMiddleware:
                 }
             }
         )
-        
+
         assert 'cors' in api.middleware_config
         assert 'rate_limit' in api.middleware_config
         assert api.middleware_config['cors']['origins'] == ['*']
         assert api.middleware_config['rate_limit']['rps'] == 1000
-    
+
     def test_global_middleware_instances(self):
         """Test setting global middleware instances (Python middleware)"""
         # Create custom Python middleware instances
@@ -183,7 +182,7 @@ class TestGlobalMiddleware:
 
 class TestMiddlewareMetadata:
     """Test middleware metadata compilation"""
-    
+
     def test_middleware_metadata_compilation(self):
         """Test that middleware metadata is compiled correctly"""
         api = BoltAPI(
@@ -191,25 +190,25 @@ class TestMiddlewareMetadata:
                 'cors': {'origins': ['*']}
             }
         )
-        
+
         @api.get("/test")
         @rate_limit(rps=100)
         async def test_endpoint():
             return {"status": "ok"}
-        
+
         # Check handler middleware metadata
         assert len(api._handler_middleware) > 0
         handler_id = 0
         meta = api._handler_middleware[handler_id]
-        
+
         assert 'middleware' in meta
         assert len(meta['middleware']) == 2  # Global CORS + route rate_limit
-        
+
         # Check types
         types = [m['type'] for m in meta['middleware']]
         assert 'cors' in types
         assert 'rate_limit' in types
-    
+
     def test_skip_global_middleware(self):
         """Test skipping global middleware on specific routes"""
         api = BoltAPI(
@@ -218,15 +217,15 @@ class TestMiddlewareMetadata:
                 'rate_limit': {'rps': 100}
             }
         )
-        
+
         @api.get("/no-cors")
         @skip_middleware("cors")
         async def no_cors_endpoint():
             return {"status": "ok"}
-        
+
         handler_id = 0
         meta = api._handler_middleware[handler_id]
-        
+
         # Should only have rate_limit, not cors
         assert len(meta['middleware']) == 1
         assert meta['middleware'][0]['type'] == 'rate_limit'
@@ -235,12 +234,12 @@ class TestMiddlewareMetadata:
 
 class TestMiddlewareExecution:
     """Test middleware execution in the pipeline"""
-    
+
     @pytest.mark.asyncio
     async def test_request_dispatch_with_middleware(self):
         """Test that dispatch works with middleware metadata"""
         api = BoltAPI()
-        
+
         @api.get("/test")
         @cors(origins=["*"])
         async def test_endpoint(request: dict):
@@ -250,7 +249,7 @@ class TestMiddlewareExecution:
                 "has_context": context is not None,
                 "context_type": type(context).__name__ if context else None
             }
-        
+
         # Create test request
         test_request = {
             "method": "GET",
@@ -262,42 +261,42 @@ class TestMiddlewareExecution:
             "cookies": {},
             "context": None  # Will be populated by middleware
         }
-        
+
         # Get handler
         handler = api._handlers[0]
-        
+
         # Dispatch
         result = await api._dispatch(handler, test_request)
         status, headers, body = result
-        
+
         assert status == 200
         data = json.loads(body)
         assert "has_context" in data
-    
+
     @pytest.mark.asyncio
     async def test_custom_middleware_execution(self):
         """Test custom middleware execution"""
         test_mw = CustomTestMiddleware("test1")
         api = BoltAPI(middleware=[test_mw])
-        
+
         @api.get("/test")
         async def test_endpoint():
             return {"status": "ok"}
-        
+
         # Note: This tests the Python side only
         # Rust middleware execution happens in the server
         assert test_mw.call_count == 0  # Not executed yet
-    
+
     @pytest.mark.asyncio
     async def test_response_model_with_middleware(self):
         """Test response model validation with middleware"""
         api = BoltAPI()
-        
+
         @api.post("/items", response_model=ItemModel)
         @cors(origins=["*"])
         async def create_item(item: ItemModel) -> ItemModel:
             return item
-        
+
         test_request = {
             "method": "POST",
             "path": "/items",
@@ -308,11 +307,11 @@ class TestMiddlewareExecution:
             "cookies": {},
             "context": None
         }
-        
+
         handler = api._handlers[0]
         result = await api._dispatch(handler, test_request)
         status, headers, body = result
-        
+
         assert status == 200
         data = msgspec.json.decode(body)
         assert data["id"] == 1
@@ -321,7 +320,7 @@ class TestMiddlewareExecution:
 
 class TestAuthTokenGeneration:
     """Test JWT token generation for auth testing"""
-    
+
     def test_generate_valid_jwt(self):
         """Generate a valid JWT token for testing"""
         secret = "test-secret"
@@ -331,15 +330,15 @@ class TestAuthTokenGeneration:
             "iat": int(time.time()),
             "custom_claim": "test_value"
         }
-        
+
         token = jwt.encode(payload, secret, algorithm="HS256")
         assert token is not None
-        
+
         # Verify we can decode it
         decoded = jwt.decode(token, secret, algorithms=["HS256"])
         assert decoded["sub"] == "user123"
         assert decoded["custom_claim"] == "test_value"
-    
+
     def test_generate_expired_jwt(self):
         """Generate an expired JWT token for testing"""
         secret = "test-secret"
@@ -348,13 +347,13 @@ class TestAuthTokenGeneration:
             "exp": int(time.time()) - 3600,  # 1 hour ago
             "iat": int(time.time()) - 7200
         }
-        
+
         token = jwt.encode(payload, secret, algorithm="HS256")
-        
+
         # Should raise error when verifying
         with pytest.raises(jwt.ExpiredSignatureError):
             jwt.decode(token, secret, algorithms=["HS256"])
-    
+
     def test_generate_invalid_signature_jwt(self):
         """Generate a JWT with wrong signature"""
         secret = "test-secret"
@@ -363,9 +362,9 @@ class TestAuthTokenGeneration:
             "sub": "user123",
             "exp": int(time.time()) + 3600
         }
-        
+
         token = jwt.encode(payload, wrong_secret, algorithm="HS256")
-        
+
         # Should raise error when verifying with correct secret
         with pytest.raises(jwt.InvalidSignatureError):
             jwt.decode(token, secret, algorithms=["HS256"])
@@ -373,36 +372,36 @@ class TestAuthTokenGeneration:
 
 class TestMiddlewareIntegration:
     """Integration tests for middleware with actual server"""
-    
+
     def test_middleware_registration(self):
         """Test that middleware gets registered with Rust"""
         api = BoltAPI()
-        
+
         @api.get("/middleware-test")
         @rate_limit(rps=100)
         @cors(origins=["http://localhost:3000"])
         async def test_endpoint():
             return {"status": "ok"}
-        
+
         # Check routes are registered
         assert len(api._routes) == 1
         method, path, handler_id, handler = api._routes[0]
         assert method == "GET"
         assert path == "/middleware-test"
-        
+
         # Check middleware metadata
         assert handler_id in api._handler_middleware
         meta = api._handler_middleware[handler_id]
         assert len(meta['middleware']) == 2
-        
+
         types = [m['type'] for m in meta['middleware']]
         assert 'rate_limit' in types
         assert 'cors' in types
-    
+
     def test_preflight_route(self):
         """Test OPTIONS preflight handling"""
         api = BoltAPI()
-        
+
         @api.get("/api/data")
         @cors(
             origins=["http://localhost:3000", "https://app.example.com"],
@@ -413,16 +412,16 @@ class TestMiddlewareIntegration:
         )
         async def get_data():
             return {"data": [1, 2, 3]}
-        
+
         # The preflight will be handled by Rust middleware
         # Here we just verify the metadata is correct
         meta = api._handler_middleware[0]
         cors_config = next(m for m in meta['middleware'] if m['type'] == 'cors')
-        
+
         assert cors_config['origins'] == ["http://localhost:3000", "https://app.example.com"]
         assert cors_config['methods'] == ["GET", "POST", "PUT"]
         assert cors_config['headers'] == ["Content-Type", "Authorization", "X-Custom"]
-        assert cors_config['credentials'] == True
+        assert cors_config['credentials']
         assert cors_config['max_age'] == 7200
 
 

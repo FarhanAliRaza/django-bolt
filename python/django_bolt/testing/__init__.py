@@ -25,7 +25,7 @@ Usage:
         assert response == "Echo: hello"
 """
 from django_bolt.testing.client import TestClient
-from django_bolt.testing.websocket import WebSocketTestClient, ConnectionClosed
+from django_bolt.testing.websocket import ConnectionClosed, WebSocketTestClient
 
 __all__ = [
     "TestClient",

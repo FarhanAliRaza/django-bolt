@@ -2,22 +2,24 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, Dict, List
-from .params import Depends as DependsMarker
+from collections.abc import Callable
+from typing import Any
+
 from .binding import convert_primitive
+from .params import Depends as DependsMarker
 from .typing import FieldDefinition
 
 
 async def resolve_dependency(
     dep_fn: Callable,
     depends_marker: DependsMarker,
-    request: Dict[str, Any],
-    dep_cache: Dict[Any, Any],
-    params_map: Dict[str, Any],
-    query_map: Dict[str, Any],
-    headers_map: Dict[str, str],
-    cookies_map: Dict[str, str],
-    handler_meta: Dict[Callable, Dict[str, Any]],
+    request: dict[str, Any],
+    dep_cache: dict[Any, Any],
+    params_map: dict[str, Any],
+    query_map: dict[str, Any],
+    headers_map: dict[str, str],
+    cookies_map: dict[str, str],
+    handler_meta: dict[Callable, dict[str, Any]],
     compile_binder: Callable,
     http_method: str,
     path: str
@@ -81,16 +83,16 @@ async def resolve_dependency(
 
 async def call_dependency(
     dep_fn: Callable,
-    dep_meta: Dict[str, Any],
-    request: Dict[str, Any],
-    params_map: Dict[str, Any],
-    query_map: Dict[str, Any],
-    headers_map: Dict[str, str],
-    cookies_map: Dict[str, str]
+    dep_meta: dict[str, Any],
+    request: dict[str, Any],
+    params_map: dict[str, Any],
+    query_map: dict[str, Any],
+    headers_map: dict[str, str],
+    cookies_map: dict[str, str]
 ) -> Any:
     """Call an async dependency function with resolved parameters."""
-    dep_args: List[Any] = []
-    dep_kwargs: Dict[str, Any] = {}
+    dep_args: list[Any] = []
+    dep_kwargs: dict[str, Any] = {}
 
     # Use FieldDefinition objects directly
     for field in dep_meta["fields"]:
@@ -109,16 +111,16 @@ async def call_dependency(
 
 def call_dependency_sync(
     dep_fn: Callable,
-    dep_meta: Dict[str, Any],
-    request: Dict[str, Any],
-    params_map: Dict[str, Any],
-    query_map: Dict[str, Any],
-    headers_map: Dict[str, str],
-    cookies_map: Dict[str, str]
+    dep_meta: dict[str, Any],
+    request: dict[str, Any],
+    params_map: dict[str, Any],
+    query_map: dict[str, Any],
+    headers_map: dict[str, str],
+    cookies_map: dict[str, str]
 ) -> Any:
     """Call a sync dependency function with resolved parameters."""
-    dep_args: List[Any] = []
-    dep_kwargs: Dict[str, Any] = {}
+    dep_args: list[Any] = []
+    dep_kwargs: dict[str, Any] = {}
 
     # Use FieldDefinition objects directly
     for field in dep_meta["fields"]:
@@ -136,11 +138,11 @@ def call_dependency_sync(
 
 
 def extract_dependency_value(
-    field: "FieldDefinition",
-    params_map: Dict[str, Any],
-    query_map: Dict[str, Any],
-    headers_map: Dict[str, str],
-    cookies_map: Dict[str, str]
+    field: FieldDefinition,
+    params_map: dict[str, Any],
+    query_map: dict[str, Any],
+    headers_map: dict[str, str],
+    cookies_map: dict[str, str]
 ) -> Any:
     """Extract value for a dependency parameter using FieldDefinition.
 

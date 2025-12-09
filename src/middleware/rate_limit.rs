@@ -29,6 +29,8 @@ pub fn check_rate_limit(
     headers: &AHashMap<String, String>,
     peer_addr: Option<&str>,
     config: &RateLimitConfig,
+    method: &str,
+    path: &str,
 ) -> Option<HttpResponse> {
     // Config is already parsed at startup - no GIL needed!
     let rps = config.rps;
@@ -97,6 +99,12 @@ pub fn check_rate_limit(
             // Calculate retry after in seconds
             let wait_time = not_until.wait_time_from(DefaultClock::default().now());
             let retry_after = wait_time.as_secs().max(1);
+
+            // Log rate limit exceeded
+            eprintln!(
+                "[django-bolt] Rate limit exceeded: {} {} | key: {} | limit: {} rps (burst: {}) | retry after: {}s",
+                method, path, key, rps, burst, retry_after
+            );
 
             Some(
                 HttpResponse::TooManyRequests()

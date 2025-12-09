@@ -6,19 +6,21 @@ with type-safe dependency injection.
 
 Uses pytest-django for proper Django configuration.
 """
-import pytest
-import jwt
 import time
-from django.conf import settings
+
+import jwt
+import pytest
+from django.conf import settings  # noqa: PLC0415
 from django.contrib.auth import get_user_model
+
 from django_bolt import BoltAPI
 from django_bolt.auth import (
+    IsAuthenticated,
+    JWTAuthentication,
     create_jwt_for_user,
-    get_current_user,
     extract_user_id_from_context,
     get_auth_context,
-    JWTAuthentication,
-    IsAuthenticated,
+    get_current_user,
 )
 from django_bolt.params import Depends
 
@@ -275,7 +277,7 @@ def test_jwt_expiration():
     # Verify it's expired
     try:
         jwt.decode(expired_token, "secret", algorithms=["HS256"])
-        assert False, "Should have raised ExpiredSignatureError"
+        raise AssertionError("Should have raised ExpiredSignatureError")
     except jwt.ExpiredSignatureError:
         pass  # Expected
 

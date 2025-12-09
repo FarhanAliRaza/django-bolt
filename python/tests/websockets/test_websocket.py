@@ -20,11 +20,10 @@ import jwt
 import pytest
 
 from django_bolt import BoltAPI, WebSocket
-from django_bolt.testing import WebSocketTestClient, ConnectionClosed
+from django_bolt.auth import HasPermission, IsAdminUser, IsAuthenticated, JWTAuthentication
+from django_bolt.param_functions import Cookie, Header, Query
+from django_bolt.testing import ConnectionClosed, WebSocketTestClient
 from django_bolt.websocket import CloseCode
-from django_bolt.auth import IsAuthenticated, IsAdminUser, HasPermission, JWTAuthentication
-from django_bolt.param_functions import Query, Header, Cookie
-
 
 # Test secret for JWT tokens
 TEST_JWT_SECRET = "test-secret-key-for-websocket-tests"

@@ -1,9 +1,10 @@
-from django_bolt import BoltAPI, action
-from django_bolt.views import ViewSet
-from django_bolt.exceptions import NotFound
 import msgspec
-from .models import BenchItem
 
+from django_bolt import BoltAPI, action
+from django_bolt.exceptions import NotFound
+from django_bolt.views import ViewSet
+
+from .models import BenchItem
 
 api = BoltAPI(prefix="/bench")
 
@@ -95,7 +96,7 @@ class BenchItemViewSet(ViewSet):
                 is_active=item.is_active
             )
         except BenchItem.DoesNotExist:
-            raise NotFound(detail=f"BenchItem {id} not found")
+            raise NotFound(detail=f"BenchItem {id} not found") from None
 
     async def create(self, item: BenchItemCreate) -> BenchItemSchema:
         """POST /bench/items - Create a new item."""
@@ -106,8 +107,8 @@ class BenchItemViewSet(ViewSet):
             description=item.description,
             is_active=item.is_active
         )
-        
-        
+
+
 
         return BenchItemSchema(
             id=item.id,
@@ -122,7 +123,7 @@ class BenchItemViewSet(ViewSet):
         try:
             item = await BenchItem.objects.aget(id=id)
         except BenchItem.DoesNotExist:
-            raise NotFound(detail=f"BenchItem {id} not found")
+            raise NotFound(detail=f"BenchItem {id} not found") from None
 
         # Update all fields
         if data.name is not None:
@@ -149,7 +150,7 @@ class BenchItemViewSet(ViewSet):
         try:
             item = await BenchItem.objects.aget(id=id)
         except BenchItem.DoesNotExist:
-            raise NotFound(detail=f"BenchItem {id} not found")
+            raise NotFound(detail=f"BenchItem {id} not found") from None
 
         # Only update provided fields
         if data.name is not None:
@@ -178,7 +179,7 @@ class BenchItemViewSet(ViewSet):
             await item.adelete()
             return {"deleted": True, "item_id": id}
         except BenchItem.DoesNotExist:
-            raise NotFound(detail=f"BenchItem {id} not found")
+            raise NotFound(detail=f"BenchItem {id} not found") from None
 
     # ========================================================================
     # Custom Actions
@@ -193,7 +194,7 @@ class BenchItemViewSet(ViewSet):
             await item.asave()
             return {"item_id": id, "value": item.value, "incremented": True}
         except BenchItem.DoesNotExist:
-            raise NotFound(detail=f"BenchItem {id} not found")
+            raise NotFound(detail=f"BenchItem {id} not found") from None
 
     @action(methods=["POST"], detail=True)
     async def toggle(self, request, id: int):
@@ -204,7 +205,7 @@ class BenchItemViewSet(ViewSet):
             await item.asave()
             return {"item_id": id, "is_active": item.is_active, "toggled": True}
         except BenchItem.DoesNotExist:
-            raise NotFound(detail=f"BenchItem {id} not found")
+            raise NotFound(detail=f"BenchItem {id} not found") from None
 
     @action(methods=["GET"], detail=False)
     async def search(self, request, query: str):

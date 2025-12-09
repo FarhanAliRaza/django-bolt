@@ -13,7 +13,6 @@ from django_bolt import BoltAPI, WebSocket
 from django_bolt.middleware import rate_limit
 from django_bolt.testing import WebSocketTestClient
 
-
 # --- Origin Validation Tests ---
 
 @pytest.mark.asyncio
@@ -209,7 +208,7 @@ async def test_websocket_no_rate_limit():
         await websocket.send_text("connected")
 
     # Multiple connections should all succeed
-    for i in range(5):
+    for _i in range(5):
         async with WebSocketTestClient(
             api,
             "/ws/unlimited",

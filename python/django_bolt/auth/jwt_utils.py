@@ -7,19 +7,21 @@ extract user information from request context.
 from __future__ import annotations
 
 import time
+from typing import Any
+
 import jwt
-from typing import Any, Dict, Optional
-from django.contrib.auth import get_user_model
 from django.conf import settings
+from django.contrib.auth import get_user_model
+
 from django_bolt.types import Request
 
 
 def create_jwt_for_user(
     user,
-    secret: Optional[str] = None,
+    secret: str | None = None,
     algorithm: str = "HS256",
     expires_in: int = 3600,
-    extra_claims: Optional[Dict[str, Any]] = None
+    extra_claims: dict[str, Any] | None = None
 ) -> str:
     """
     Create a JWT token for a Django User.
@@ -150,7 +152,7 @@ async def get_current_user(request: Request):
         return None
 
 
-def extract_user_id_from_context(request: Request) -> Optional[str]:
+def extract_user_id_from_context(request: Request) -> str | None:
     """
     Extract user_id from request context.
 
@@ -176,7 +178,7 @@ def extract_user_id_from_context(request: Request) -> Optional[str]:
     return context.get("user_id")
 
 
-def get_auth_context(request: Request) -> Dict[str, Any]:
+def get_auth_context(request: Request) -> dict[str, Any]:
     """
     Get the full authentication context from request.
 

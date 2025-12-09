@@ -4,8 +4,8 @@ Compression configuration for Django-Bolt.
 Provides configuration options for response compression (gzip, brotli, zstd).
 Compression levels are handled automatically by Actix Web with optimized defaults.
 """
-from typing import Literal
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass

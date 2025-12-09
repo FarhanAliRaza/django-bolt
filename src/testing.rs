@@ -115,6 +115,8 @@ pub fn handle_test_request(
                 &header_map,
                 None, // peer_addr not available in sync testing
                 rate_config,
+                &method,
+                &path,
             ) {
                 return Ok(http_response_to_tuple(response));
             }

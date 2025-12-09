@@ -315,6 +315,8 @@ pub fn handle_test_websocket(
                 &header_map,
                 Some("127.0.0.1"), // Test client IP
                 rate_config,
+                "GET", // Method not available in WebSocket upgrade
+                &path,
             ) {
                 return Err(pyo3::exceptions::PyPermissionError::new_err(
                     "Rate limit exceeded"
@@ -1116,6 +1118,8 @@ pub fn handle_actix_http_request(
                         &header_map,
                         None,
                         rate_cfg,
+                        &method,
+                        &path,
                     ) {
                         return Ok(response);
                     }

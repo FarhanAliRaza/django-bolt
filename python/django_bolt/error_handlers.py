@@ -178,8 +178,13 @@ def response_validation_error_handler(
     Returns:
         Tuple of (status_code, headers, body)
     """
-    # Log the error (if logging is configured)
+    # Log response validation errors - these indicate bugs in handler return values
     errors = exc.errors()
+    logger.error(
+        "Response Validation Error: Handler returned invalid response. Errors: %s",
+        errors,
+        exc_info=exc,
+    )
 
     formatted_errors = []
     for error in errors:
@@ -216,6 +221,14 @@ def generic_exception_handler(
     Returns:
         Tuple of (status_code, headers, body)
     """
+    # ALWAYS log 500 errors - these are unexpected server errors
+    logger.error(
+        "Internal Server Error: %s - %s",
+        type(exc).__name__,
+        str(exc),
+        exc_info=exc,  # This includes full traceback in logs
+    )
+
     detail = "Internal Server Error"
     extra = None
 

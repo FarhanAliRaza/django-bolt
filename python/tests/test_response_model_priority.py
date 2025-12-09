@@ -275,7 +275,7 @@ def test_non_struct_response_type():
     meta2 = api._handler_meta[get_data2]
 
     # Should have response_type but NOT field names
-    assert meta1["response_type"] == dict
+    assert meta1["response_type"] is dict
     assert "response_field_names" not in meta1
 
     assert meta2["response_type"] == list[int]
@@ -387,7 +387,7 @@ def test_response_model_with_delete():
     meta = api._handler_meta[handler]
 
 
-    assert meta["response_type"] == dict
+    assert meta["response_type"] is dict
     assert meta["http_method"] == "DELETE"
 
 

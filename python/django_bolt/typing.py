@@ -10,6 +10,8 @@ import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, is_dataclass
 from enum import Enum
+from functools import reduce
+from operator import or_
 from typing import Any, TypedDict, Union, get_args, get_origin
 
 import msgspec
@@ -201,7 +203,7 @@ def unwrap_optional(annotation: Any) -> Any:
     origin = get_origin(annotation)
     if origin is Union:
         args = tuple(a for a in get_args(annotation) if a is not type(None))
-        return args[0] if len(args) == 1 else Union[args]  # type: ignore
+        return args[0] if len(args) == 1 else reduce(or_, args)  # type: ignore
     return annotation
 
 

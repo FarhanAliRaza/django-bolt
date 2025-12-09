@@ -37,7 +37,7 @@ def test_metadata_precomputes_field_names():
     # Verify field names are pre-computed
     assert "response_field_names" in meta, "Field names should be pre-computed"
     assert set(meta["response_field_names"]) == {"id", "username"}
-    assert get_origin(meta["response_type"]) == list
+    assert get_origin(meta["response_type"]) is list
 
 
 def test_metadata_has_no_field_names_for_non_list_responses():

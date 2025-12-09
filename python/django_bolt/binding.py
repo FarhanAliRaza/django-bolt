@@ -63,14 +63,14 @@ def convert_primitive(value: str, annotation: Any) -> Any:
     if tp is int:
         try:
             return int(value)
-        except ValueError:
-            raise HTTPException(422, detail=f"Invalid integer value: '{value}'")
+        except ValueError as e:
+            raise HTTPException(422, detail=f"Invalid integer value: '{value}'") from e
 
     if tp is float:
         try:
             return float(value)
-        except ValueError:
-            raise HTTPException(422, detail=f"Invalid float value: '{value}'")
+        except ValueError as e:
+            raise HTTPException(422, detail=f"Invalid float value: '{value}'") from e
 
     if tp is bool:
         v = value.lower()
@@ -314,7 +314,7 @@ def create_extractor_for_field(field: FieldDefinition) -> Callable | None:
     else:
         # Fallback for unknown sources
         if default is not inspect.Parameter.empty:
-            return lambda *args, **kwargs: default
+            return lambda *_args, **_kwargs: default
         return None
 
 

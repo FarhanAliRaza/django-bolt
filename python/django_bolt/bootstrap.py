@@ -43,7 +43,7 @@ def ensure_django_ready() -> dict:
         raise RuntimeError(
             f"Failed to import Django settings module '{settings_module}': {e}\n"
             "Please check that your settings module exists and is valid."
-        )
+        ) from e
 
 
 def _detect_settings_module() -> str | None:

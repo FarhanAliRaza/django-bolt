@@ -1200,7 +1200,7 @@ async def get_post_admin(post_id: int):
 
 
 @api_6_advanced.get("/posts/{post_id}/full")
-async def get_post_full(post_id: int):
+async def get_post_full_unfiltered(post_id: int):
     """Get post with all fields (no field_set filtering)."""
     post = await (
         BlogPost.objects

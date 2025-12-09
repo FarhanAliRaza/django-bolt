@@ -57,11 +57,7 @@ class BoltTestTransport(httpx.BaseTransport):
             # For streaming/multipart requests, need to read the content first
             try:
                 # Try to read the request stream
-                if hasattr(request.stream, 'read'):
-                    body_bytes = request.stream.read()
-                else:
-                    # Fall back to iterating the stream
-                    body_bytes = b''.join(request.stream)
+                body_bytes = request.stream.read() if hasattr(request.stream, 'read') else b''.join(request.stream)
             except Exception:
                 # Last resort: try to get content directly
                 body_bytes = request.content if hasattr(request, "_content") else b''

@@ -667,8 +667,8 @@ class TestSubsetMethod:
         from typing import get_type_hints
         hints = get_type_hints(UserMini)
 
-        assert hints["id"] == int
-        assert hints["name"] == str
+        assert hints["id"] is int
+        assert hints["name"] is str
 
 
 class TestFieldsMethod:

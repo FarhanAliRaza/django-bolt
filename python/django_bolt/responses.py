@@ -166,7 +166,7 @@ class FileResponse:
         try:
             resolved_path = Path(path).resolve()
         except (OSError, RuntimeError) as e:
-            raise ValueError(f"Invalid file path: {e}")
+            raise ValueError(f"Invalid file path: {e}") from e
 
         # Check if the file exists and is a regular file (not a directory or special file)
         if not resolved_path.exists():

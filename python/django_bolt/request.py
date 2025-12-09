@@ -79,10 +79,10 @@ class State[StateT: dict[str, Any]]:
     def __getattr__(self, key: str) -> Any:
         try:
             return self._data[key]
-        except KeyError:
+        except KeyError as e:
             raise AttributeError(
                 f"'{type(self).__name__}' object has no attribute '{key}'"
-            )
+            ) from e
 
     def __setattr__(self, key: str, value: Any) -> None:
         if key == "_data":
@@ -93,8 +93,8 @@ class State[StateT: dict[str, Any]]:
     def __delattr__(self, key: str) -> None:
         try:
             del self._data[key]
-        except KeyError:
-            raise AttributeError(key)
+        except KeyError as e:
+            raise AttributeError(key) from e
 
     def __repr__(self) -> str:
         return f"State({self._data!r})"

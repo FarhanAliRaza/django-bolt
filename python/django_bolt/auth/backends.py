@@ -147,11 +147,11 @@ class JWTAuthentication(BaseAuthentication):
                         "JWTAuthentication secret cannot be empty. "
                         "Please provide a non-empty 'secret' parameter or set Django's SECRET_KEY."
                     )
-            except ImportError:
+            except ImportError as e:
                 raise ImproperlyConfigured(
                     "JWTAuthentication requires Django to be installed and configured, "
                     "or a 'secret' parameter must be explicitly provided."
-                )
+                ) from e
 
         # Revocation support (OPTIONAL - only checked if provided)
         self.revoked_token_handler = revoked_token_handler

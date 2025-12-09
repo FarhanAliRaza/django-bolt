@@ -563,7 +563,7 @@ class ErrorHandlerMiddleware(BaseMiddleware):
 
             detail = traceback.format_exc() if self.debug else "Internal Server Error"
 
-            raise HTTPException(500, detail)
+            raise HTTPException(500, detail) from None
 
 
 # Placeholder for DjangoMiddleware - imported from django_adapter module

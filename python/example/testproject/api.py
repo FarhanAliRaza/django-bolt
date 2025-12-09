@@ -433,7 +433,7 @@ async def read_root():
     return {"message": "Hello World"}
 
 @api.get("/sync", tags=["root"], summary="summary", description="description")
-def read_root():
+def read_root_sync():
     """
     Endpoint that returns a simple "Hello World" dictionary.
     """
@@ -480,7 +480,7 @@ class UserMiniSerializer(Serializer):
 
 
 @api.get("/sync-users", response_model=list[UserMiniSerializer])
-def read_10k_sync():
+def read_users_sync():
     """
     Sync version: Endpoint that returns 10k JSON objects.
 
@@ -502,18 +502,14 @@ def read_10k_sync():
 
 
 @api.get("/async-users")
-async def read_10k_sync() -> list[UserMini]:
+async def read_users_async() -> list[UserMini]:
     """
-    Sync version: Endpoint that returns 10k JSON objects.
+    Async version: Endpoint that returns 10k JSON objects.
 
     """
     users = User.objects.all()[0:100]
 
     return users
-    # users = list(users)
-    # return users
-
-    return User.objects.all()[:100]
 
 
 
@@ -629,7 +625,7 @@ async def file_static():
     return FileResponse(THIS_FILE, filename="api.py")
 
 @api.get("/file-static-nonexistent")
-async def file_static():
+async def file_static_nonexistent():
     return FileResponse("/path/to/nonexistent/file.txt", filename="asdfasd.py")
 
 # ==== Streaming endpoints for benchmarks ====

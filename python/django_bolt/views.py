@@ -297,7 +297,7 @@ class ViewSet(APIView):
         return queryset
 
     @property
-    def queryset(self):
+    def queryset(self):  # noqa: F811
         """
         Property that returns a fresh queryset clone on each access.
 
@@ -447,9 +447,9 @@ class ViewSet(APIView):
             # Use aget for async retrieval
             obj = await queryset.aget(**lookup_kwargs)
             return obj
-        except Exception:
+        except Exception as e:
             # Django raises DoesNotExist, but we convert to HTTPException
-            raise HTTPException(status_code=404, detail="Not found")
+            raise HTTPException(status_code=404, detail="Not found") from e
 
     def get_serializer_class(self, action: str | None = None):
         """

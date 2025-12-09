@@ -264,9 +264,8 @@ def _ensure_queue_logging(base_level: str) -> QueueHandler:
         def _cleanup_listener():
             """Safely stop the listener, handling already-stopped case."""
             try:
-                if _QUEUE_LISTENER is not None and hasattr(_QUEUE_LISTENER, '_thread'):
-                    if _QUEUE_LISTENER._thread is not None:
-                        _QUEUE_LISTENER.stop()
+                if _QUEUE_LISTENER is not None and hasattr(_QUEUE_LISTENER, '_thread') and _QUEUE_LISTENER._thread is not None:
+                    _QUEUE_LISTENER.stop()
             except Exception:
                 pass
 

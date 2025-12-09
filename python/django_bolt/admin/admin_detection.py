@@ -57,11 +57,10 @@ def detect_admin_url_prefix() -> str | None:
                 # Check if urlconf is a list containing admin patterns
                 if isinstance(urlconf, (list, tuple)):
                     for sub_pattern in urlconf:
-                        if hasattr(sub_pattern, 'callback') and hasattr(sub_pattern.callback, '__module__'):
-                            if 'admin' in sub_pattern.callback.__module__:
-                                pattern_str = str(url_pattern.pattern)
-                                prefix = pattern_str.rstrip('/^$')
-                                return prefix if prefix else 'admin'
+                        if hasattr(sub_pattern, 'callback') and hasattr(sub_pattern.callback, '__module__') and 'admin' in sub_pattern.callback.__module__:
+                            pattern_str = str(url_pattern.pattern)
+                            prefix = pattern_str.rstrip('/^$')
+                            return prefix if prefix else 'admin'
 
     except Exception as e:
         # If detection fails, log warning and return default

@@ -17,6 +17,7 @@ import contextvars
 import io
 import logging
 from typing import Any, Callable, Optional, Type, Union, TYPE_CHECKING
+from asgiref.sync import async_to_sync
 
 # Use "django_bolt" logger directly (not "django_bolt.middleware") because
 # Django's LOGGING config often sets propagate=False on "django_bolt",
@@ -548,7 +549,6 @@ class DjangoMiddlewareStack:
         # 4. The innermost get_response_bridge is also sync, using async_to_sync to call Bolt
 
         # Create SYNC innermost bridge (runs inside the thread pool)
-        from asgiref.sync import async_to_sync
 
         def get_response_bridge_sync(django_request: HttpRequest) -> HttpResponse:
             """

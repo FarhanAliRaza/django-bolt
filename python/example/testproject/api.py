@@ -208,7 +208,7 @@ async def middleware_demo(request: Request):
             "Try: curl -H 'X-Tenant-ID: my-tenant' to set tenant",
         ]
     }
-    # return render(request, "about.html#hello", data)
+    return render(request, "about.html#hello", data)
 
     return data
 

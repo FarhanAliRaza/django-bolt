@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::metadata::RateLimitConfig;
+use crate::response_builder;
+use crate::responses;
 
 type Limiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
@@ -106,17 +108,12 @@ pub fn check_rate_limit(
                 method, path, key, rps, burst, retry_after
             );
 
-            Some(
-                HttpResponse::TooManyRequests()
-                    .insert_header(("Retry-After", retry_after.to_string()))
-                    .insert_header(("X-RateLimit-Limit", rps.to_string()))
-                    .insert_header(("X-RateLimit-Burst", burst.to_string()))
-                    .content_type("application/json")
-                    .body(format!(
-                        r#"{{"detail":"Rate limit exceeded. Try again in {} seconds.","retry_after":{}}}"#,
-                        retry_after, retry_after
-                    ))
-            )
+            Some(response_builder::build_rate_limit_response(
+                retry_after,
+                rps,
+                burst,
+                responses::get_rate_limit_body(retry_after),
+            ))
         }
     }
 }

@@ -12,9 +12,12 @@ use tokio::io::AsyncReadExt;
 
 use crate::cors::{add_cors_headers_rust, add_cors_preflight_headers};
 use crate::error;
+use crate::headers::FastHeaders;
 use crate::middleware;
 use crate::middleware::auth::populate_auth_context;
 use crate::request::PyRequest;
+use crate::response_builder;
+use crate::responses;
 use crate::router::parse_query_string;
 use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
 use crate::streaming::{create_python_stream, create_sse_stream};
@@ -124,9 +127,7 @@ pub async fn handle_request(
 
             // Route not found - return 404 with CORS headers if global CORS is configured
             // This ensures browsers can read the 404 error message
-            let mut response = HttpResponse::NotFound()
-                .content_type("application/json")
-                .body(r#"{"detail":"Not Found"}"#);
+            let mut response = responses::error_404();
 
             // Add CORS headers using global config for 404 responses
             if let Some(ref global_cors) = state.global_cors_config {
@@ -172,7 +173,8 @@ pub async fn handle_request(
 
     // Extract headers early for middleware processing - pre-allocate with typical size
     // Headers are ALWAYS needed in Rust for middleware (auth, rate limiting, CORS)
-    let mut headers: AHashMap<String, String> = AHashMap::with_capacity(16);
+    // Use FastHeaders for optimized insertion of common headers (authorization, content-type, etc.)
+    let mut fast_headers = FastHeaders::with_capacity(16);
 
     // SECURITY: Use limits from AppState (configured once at startup)
     const MAX_HEADERS: usize = 100;
@@ -183,25 +185,24 @@ pub async fn handle_request(
         // Check header count limit
         header_count += 1;
         if header_count > MAX_HEADERS {
-            return HttpResponse::BadRequest()
-                .content_type("text/plain; charset=utf-8")
-                .body("Too many headers");
+            return responses::error_400_too_many_headers();
         }
 
         if let Ok(v) = value.to_str() {
             // SECURITY: Validate header value size
             if v.len() > max_header_size {
-                return HttpResponse::BadRequest()
-                    .content_type("text/plain; charset=utf-8")
-                    .body(format!(
-                        "Header value too large (max {} bytes)",
-                        max_header_size
-                    ));
+                return responses::error_400_header_too_large(max_header_size);
             }
 
-            headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
+            // FastHeaders uses perfect hash for common headers (authorization, content-type, etc.)
+            // This avoids HashMap overhead for the most frequent headers
+            fast_headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
         }
     }
+
+    // Convert to AHashMap for middleware compatibility
+    // This is done once after parsing - the benefit is in the fast insertion above
+    let headers = fast_headers.into_hashmap();
 
     // Get peer address for rate limiting fallback
     let peer_addr = req.peer_addr().map(|addr| addr.ip().to_string());
@@ -233,14 +234,10 @@ pub async fn handle_request(
         match validate_auth_and_guards(&headers, &route_meta.auth_backends, &route_meta.guards) {
             AuthGuardResult::Allow(ctx) => ctx,
             AuthGuardResult::Unauthorized => {
-                return HttpResponse::Unauthorized()
-                    .content_type("application/json")
-                    .body(r#"{"detail":"Authentication required"}"#);
+                return responses::error_401();
             }
             AuthGuardResult::Forbidden => {
-                return HttpResponse::Forbidden()
-                    .content_type("application/json")
-                    .body(r#"{"detail":"Permission denied"}"#);
+                return responses::error_403();
             }
         }
     } else {
@@ -488,21 +485,19 @@ pub async fn handle_request(
                     };
                 } else {
                     // Non-file response path: body already copied within GIL scope above
-                    let mut builder = HttpResponse::build(status);
-                    for (k, v) in headers {
-                        builder.append_header((k, v));
-                    }
-                    if skip_compression {
-                        builder.append_header(("Content-Encoding", "identity"));
-                    }
-
-                    // HEAD requests must have empty body per RFC 7231
+                    // Use optimized response builder
                     let response_body = if is_head_request {
                         Vec::new()
                     } else {
                         body_bytes
                     };
-                    let mut response = builder.body(response_body);
+
+                    let mut response = response_builder::build_response_with_headers(
+                        status,
+                        headers,
+                        skip_compression,
+                        response_body,
+                    );
 
                     // Add CORS headers if configured (NO GIL - uses Rust-native config)
                     if let Some(ref route_meta) = route_metadata {
@@ -695,43 +690,35 @@ pub async fn handle_request(
                     streaming
                 {
                     let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
-                    let mut builder = HttpResponse::build(status);
-                    for (k, v) in headers {
-                        builder.append_header((k, v));
-                    }
+
                     if media_type == "text/event-stream" {
                         // HEAD requests must have empty body per RFC 7231
                         if is_head_request {
-                            builder.content_type("text/event-stream");
-                            builder.append_header(("X-Accel-Buffering", "no"));
-                            builder.append_header((
-                                "Cache-Control",
-                                "no-cache, no-store, must-revalidate",
-                            ));
-                            builder.append_header(("Pragma", "no-cache"));
-                            builder.append_header(("Expires", "0"));
-                            if skip_compression {
-                                builder.append_header(("Content-Encoding", "identity"));
-                            }
+                            // Use optimized SSE response builder (batches all SSE headers)
+                            let mut builder = response_builder::build_sse_response(
+                                status,
+                                headers,
+                                skip_compression,
+                            );
                             return builder.body(Vec::<u8>::new());
                         }
 
+                        // Use optimized SSE response builder (batches all SSE headers)
                         let final_content_obj = content_obj;
-                        builder.append_header(("X-Accel-Buffering", "no"));
-                        builder.append_header((
-                            "Cache-Control",
-                            "no-cache, no-store, must-revalidate",
-                        ));
-                        builder.append_header(("Pragma", "no-cache"));
-                        builder.append_header(("Expires", "0"));
-                        if skip_compression {
-                            builder.append_header(("Content-Encoding", "identity"));
-                        }
-                        builder.content_type("text/event-stream");
-
+                        let mut builder = response_builder::build_sse_response(
+                            status,
+                            headers,
+                            skip_compression,
+                        );
                         let stream = create_sse_stream(final_content_obj, is_async_generator);
                         return builder.streaming(stream);
                     } else {
+                        // Non-SSE streaming responses
+                        let mut builder = HttpResponse::build(status);
+                        for (k, v) in headers {
+                            builder.append_header((k, v));
+                        }
+
                         // HEAD requests must have empty body per RFC 7231
                         if is_head_request {
                             if skip_compression {

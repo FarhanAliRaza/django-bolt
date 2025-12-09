@@ -4,15 +4,14 @@ Pytest configuration for Django-Bolt tests.
 Ensures Django settings are properly reset between tests.
 Provides utilities for subprocess-based testing.
 """
+import logging
 import os
-import pathlib
 import platform
 import signal
 import socket
 import subprocess
-import sys
 import time
-import logging
+
 import pytest
 
 # Suppress httpx INFO logs during tests
@@ -96,10 +95,11 @@ def django_db_setup(django_db_blocker):
 
     Note: We skip the default django_db_setup to have better control over test database.
     """
+    import os
+
+    from django.conf import settings
     from django.core.management import call_command
     from django.db import connection
-    from django.conf import settings
-    import os
 
     with django_db_blocker.unblock():
         # Ensure test database directory exists
@@ -115,7 +115,7 @@ def django_db_setup(django_db_blocker):
         # Create test model tables manually since they're not in migrations
         # But only if they don't already exist (for persistent file-based databases)
         with connection.schema_editor() as schema_editor:
-            from .test_models import Article, Author, Tag, BlogPost, Comment, User, UserProfile
+            from .test_models import Article, Author, BlogPost, Comment, Tag, User, UserProfile
 
             models = [Article, Author, Tag, BlogPost, Comment, User, UserProfile]
             for model in models:

@@ -5,21 +5,19 @@ Defines the interface for request objects. At runtime, handlers receive
 PyRequest from Rust (src/request.rs). This Protocol provides type hints
 and IDE autocomplete.
 """
+from collections.abc import Iterator
 from typing import (
-    TypeVar,
-    Generic,
     Any,
-    Dict,
-    Iterator,
+    Generic,
     Protocol,
+    TypeVar,
     runtime_checkable,
 )
-
 
 # Type variables for generic typing
 UserT = TypeVar("UserT")
 AuthT = TypeVar("AuthT")
-StateT = TypeVar("StateT", bound=Dict[str, Any])
+StateT = TypeVar("StateT", bound=dict[str, Any])
 
 
 class State(Generic[StateT]):
@@ -31,7 +29,7 @@ class State(Generic[StateT]):
 
     __slots__ = ("_data",)
 
-    def __init__(self, data: Dict[str, Any]) -> None:
+    def __init__(self, data: dict[str, Any]) -> None:
         object.__setattr__(self, "_data", data)
 
     def __getitem__(self, key: str) -> Any:
@@ -67,7 +65,7 @@ class State(Generic[StateT]):
     def pop(self, key: str, *args) -> Any:
         return self._data.pop(key, *args)
 
-    def update(self, other: Dict[str, Any] = None, **kwargs) -> None:
+    def update(self, other: dict[str, Any] = None, **kwargs) -> None:
         if other:
             self._data.update(other)
         if kwargs:
@@ -136,17 +134,17 @@ class Request(Protocol):
         ...
 
     @property
-    def headers(self) -> Dict[str, str]:
+    def headers(self) -> dict[str, str]:
         """Request headers"""
         ...
 
     @property
-    def cookies(self) -> Dict[str, str]:
+    def cookies(self) -> dict[str, str]:
         """Request cookies"""
         ...
 
     @property
-    def query(self) -> Dict[str, str]:
+    def query(self) -> dict[str, str]:
         """Query parameters"""
         ...
 
@@ -165,7 +163,7 @@ class Request(Protocol):
         ...
 
     @property
-    def state(self) -> Dict[str, Any]:
+    def state(self) -> dict[str, Any]:
         """Middleware state dict"""
         ...
 

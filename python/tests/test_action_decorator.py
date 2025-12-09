@@ -8,12 +8,13 @@ This test suite verifies that the @action decorator works correctly:
 - Custom path parameter
 - Auth/guards inheritance from class-level
 """
-import pytest
 import msgspec
+import pytest
+
 from django_bolt import BoltAPI, ViewSet, action
 from django_bolt.testing import TestClient
-from .test_models import Article
 
+from .test_models import Article
 
 # --- Fixtures ---
 

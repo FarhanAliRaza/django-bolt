@@ -10,14 +10,14 @@ These tests validate the behavior documented in docs/LOGGING.md:
 """
 
 import logging
-import time
-import pytest
 from logging.handlers import QueueHandler
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock
 
+import pytest
 from django.conf import settings
+
 from django_bolt.logging import LoggingConfig, LoggingMiddleware, create_logging_middleware
-from django_bolt.logging.config import setup_django_logging, _ensure_queue_logging, _QUEUE_LISTENER
+from django_bolt.logging.config import _ensure_queue_logging, setup_django_logging
 
 
 class TestLoggingConfig:

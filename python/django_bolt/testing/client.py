@@ -7,12 +7,18 @@ This version uses the test_state.rs infrastructure which provides:
 """
 from __future__ import annotations
 
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 import httpx
 from httpx import Response
 
-from django_bolt import BoltAPI
+from django_bolt import BoltAPI, _core
+
+try:
+    from django.conf import settings
+except ImportError:
+    settings = None  # type: ignore
 
 
 class BoltTestTransport(httpx.BaseTransport):
@@ -33,8 +39,6 @@ class BoltTestTransport(httpx.BaseTransport):
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         """Handle a request by routing it through Rust."""
-        from django_bolt import _core
-
         # Parse URL
         url = request.url
         path = url.path
@@ -101,7 +105,7 @@ class BoltTestTransport(httpx.BaseTransport):
             return Response(
                 status_code=500,
                 headers=[('content-type', 'text/plain')],
-                content=f"Test client error: {e}".encode('utf-8'),
+                content=f"Test client error: {e}".encode(),
                 request=request,
             )
 
@@ -139,8 +143,6 @@ class TestClient(httpx.Client):
             Keys: origins, credentials, methods, headers, expose_headers, max_age
         """
         try:
-            from django.conf import settings
-
             # Check if any CORS setting is defined
             has_origins = hasattr(settings, 'CORS_ALLOWED_ORIGINS')
             has_all_origins = hasattr(settings, 'CORS_ALLOW_ALL_ORIGINS') and settings.CORS_ALLOW_ALL_ORIGINS
@@ -217,8 +219,6 @@ class TestClient(httpx.Client):
                                  when cors_allowed_origins is None. Default True.
             **kwargs: Additional arguments passed to httpx.Client
         """
-        from django_bolt import _core
-
         # Build CORS config dict for Rust
         cors_config = None
 
@@ -277,8 +277,6 @@ class TestClient(httpx.Client):
 
     def __exit__(self, *args):
         """Exit context manager and cleanup test app."""
-        from django_bolt import _core
-
         try:
             _core.destroy_test_app(self.app_id)
         except:

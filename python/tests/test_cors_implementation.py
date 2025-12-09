@@ -13,6 +13,7 @@ are tested in actual server integration tests, not with TestClient.
 import warnings
 
 import pytest
+
 from django_bolt import BoltAPI
 from django_bolt.middleware import cors, skip_middleware
 from django_bolt.testing import TestClient

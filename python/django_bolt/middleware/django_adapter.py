@@ -16,7 +16,9 @@ from __future__ import annotations
 import contextvars
 import io
 import logging
-from typing import Any, Callable, Type, Union, TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
+
 from asgiref.sync import async_to_sync
 
 # Use "django_bolt" logger directly (not "django_bolt.middleware") because
@@ -25,9 +27,9 @@ from asgiref.sync import async_to_sync
 logger = logging.getLogger("django_bolt")
 
 try:
+    from asgiref.sync import iscoroutinefunction, markcoroutinefunction, sync_to_async
     from django.http import HttpRequest, HttpResponse, QueryDict
     from django.utils.module_loading import import_string
-    from asgiref.sync import sync_to_async, iscoroutinefunction, markcoroutinefunction
     DJANGO_AVAILABLE = True
 except ImportError:
     DJANGO_AVAILABLE = False
@@ -38,6 +40,9 @@ except ImportError:
     sync_to_async = None
     iscoroutinefunction = None
     markcoroutinefunction = None
+
+# Import MiddlewareResponse at module level (used at runtime in _to_bolt_response)
+from ..api import MiddlewareResponse
 
 if TYPE_CHECKING:
     from ..request import Request
@@ -103,7 +108,7 @@ class DjangoMiddleware:
 
     def __init__(
         self,
-        middleware_class_or_get_response: Union[Type, str, Callable],
+        middleware_class_or_get_response: type | str | Callable,
         **init_kwargs: Any
     ):
         """
@@ -211,7 +216,7 @@ class DjangoMiddleware:
         # and severe performance degradation.
         self._middleware_is_async = iscoroutinefunction(self._middleware_instance)
 
-    async def __call__(self, request: "Request") -> "Response":
+    async def __call__(self, request: Request) -> Response:
         """
         Process request through the Django middleware.
 
@@ -276,7 +281,7 @@ class DjangoMiddleware:
             if token is not None:
                 _request_context.reset(token)
 
-    def _to_django_request(self, request: "Request") -> HttpRequest:
+    def _to_django_request(self, request: Request) -> HttpRequest:
         """Convert Bolt Request to Django HttpRequest.
 
         Performance optimizations:
@@ -319,7 +324,7 @@ class DjangoMiddleware:
 
         return django_request
 
-    def _build_meta(self, request: "Request") -> dict:
+    def _build_meta(self, request: Request) -> dict:
         """Build Django META dict from Bolt request headers."""
         query_string = "&".join(
             f"{k}={v}" for k, v in request.query.items()
@@ -348,7 +353,7 @@ class DjangoMiddleware:
     def _sync_request_attributes(
         self,
         django_request: HttpRequest,
-        bolt_request: "Request"
+        bolt_request: Request
     ) -> None:
         """
         Sync attributes added by Django middleware to Bolt request.
@@ -393,7 +398,7 @@ class DjangoMiddleware:
                 continue
 
 
-    def _to_django_response(self, response: "Response") -> HttpResponse:
+    def _to_django_response(self, response: Response) -> HttpResponse:
         """Convert Bolt Response/MiddlewareResponse to Django HttpResponse."""
         # Handle different response types
         if hasattr(response, 'body'):
@@ -421,10 +426,8 @@ class DjangoMiddleware:
 
         return django_response
 
-    def _to_bolt_response(self, django_response: HttpResponse) -> "Response":
+    def _to_bolt_response(self, django_response: HttpResponse) -> MiddlewareResponse:
         """Convert Django HttpResponse to MiddlewareResponse for chain compatibility."""
-        from ..api import MiddlewareResponse
-
         headers = dict(django_response.items())
 
         return MiddlewareResponse(
@@ -602,7 +605,7 @@ class DjangoMiddlewareStack:
         # Check if outermost middleware is async
         self._middleware_is_async = iscoroutinefunction(self._middleware_chain)
 
-    async def __call__(self, request: "Request") -> "Response":
+    async def __call__(self, request: Request) -> Response:
         """
         Process request through the entire Django middleware stack.
 
@@ -656,7 +659,7 @@ class DjangoMiddlewareStack:
 # Module-level helper functions (shared by DjangoMiddleware and DjangoMiddlewareStack)
 # ============================================================================
 
-def _to_django_request(request: "Request") -> HttpRequest:
+def _to_django_request(request: Request) -> HttpRequest:
     """Convert Bolt Request to Django HttpRequest.
 
     Performance optimizations:
@@ -699,7 +702,7 @@ def _to_django_request(request: "Request") -> HttpRequest:
     return django_request
 
 
-def _build_meta(request: "Request") -> dict:
+def _build_meta(request: Request) -> dict:
     """Build Django META dict from Bolt request headers."""
     query_string = "&".join(
         f"{k}={v}" for k, v in request.query.items()
@@ -728,7 +731,7 @@ def _build_meta(request: "Request") -> dict:
 
 def _sync_request_attributes(
     django_request: HttpRequest,
-    bolt_request: "Request"
+    bolt_request: Request
 ) -> None:
     """
     Sync attributes added by Django middleware to Bolt request.
@@ -774,7 +777,7 @@ def _sync_request_attributes(
             continue
 
 
-def _to_django_response(response: "Response") -> HttpResponse:
+def _to_django_response(response: Response) -> HttpResponse:
     """Convert Bolt Response/MiddlewareResponse to Django HttpResponse."""
     # Handle different response types
     if hasattr(response, 'body'):
@@ -803,10 +806,8 @@ def _to_django_response(response: "Response") -> HttpResponse:
     return django_response
 
 
-def _to_bolt_response(django_response: HttpResponse) -> "Response":
+def _to_bolt_response(django_response: HttpResponse) -> MiddlewareResponse:
     """Convert Django HttpResponse to MiddlewareResponse for chain compatibility."""
-    from ..api import MiddlewareResponse
-
     headers = dict(django_response.items())
 
     return MiddlewareResponse(

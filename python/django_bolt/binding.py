@@ -6,15 +6,15 @@ extractor functions that avoid runtime type checking.
 """
 from __future__ import annotations
 
-
 import inspect
+from collections.abc import Callable
+from typing import Any, get_args, get_origin
+
 import msgspec
-from typing import Any, Dict, List, Callable, Optional, get_origin, get_args
 from asgiref.sync import sync_to_async
 
-from .typing import is_msgspec_struct, is_optional, unwrap_optional
-from .typing import HandlerMetadata
 from .exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
+from .typing import HandlerMetadata, is_msgspec_struct, is_optional, unwrap_optional
 
 __all__ = [
     "convert_primitive",
@@ -34,7 +34,7 @@ __all__ = [
 
 
 # Cache for msgspec decoders (performance optimization)
-_DECODER_CACHE: Dict[Any, msgspec.json.Decoder] = {}
+_DECODER_CACHE: dict[Any, msgspec.json.Decoder] = {}
 
 
 def get_msgspec_decoder(type_: Any) -> msgspec.json.Decoder:
@@ -87,12 +87,12 @@ def convert_primitive(value: str, annotation: Any) -> Any:
         return value
 
 
-def create_path_extractor(name: str, annotation: Any, alias: Optional[str] = None) -> Callable:
+def create_path_extractor(name: str, annotation: Any, alias: str | None = None) -> Callable:
     """Create a pre-compiled extractor for path parameters."""
     key = alias or name
     converter = lambda v: convert_primitive(str(v), annotation)
 
-    def extract(params_map: Dict[str, Any]) -> Any:
+    def extract(params_map: dict[str, Any]) -> Any:
         if key not in params_map:
             raise HTTPException(status_code=400, detail=f"Missing required path parameter: {key}")
         return converter(params_map[key])
@@ -104,7 +104,7 @@ def create_query_extractor(
     name: str,
     annotation: Any,
     default: Any,
-    alias: Optional[str] = None
+    alias: str | None = None
 ) -> Callable:
     """Create a pre-compiled extractor for query parameters."""
     key = alias or name
@@ -113,10 +113,10 @@ def create_query_extractor(
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
-        def extract(query_map: Dict[str, Any]) -> Any:
+        def extract(query_map: dict[str, Any]) -> Any:
             return converter(query_map[key]) if key in query_map else default_value
     else:
-        def extract(query_map: Dict[str, Any]) -> Any:
+        def extract(query_map: dict[str, Any]) -> Any:
             if key not in query_map:
                 raise HTTPException(status_code=400, detail=f"Missing required query parameter: {key}")
             return converter(query_map[key])
@@ -128,7 +128,7 @@ def create_header_extractor(
     name: str,
     annotation: Any,
     default: Any,
-    alias: Optional[str] = None
+    alias: str | None = None
 ) -> Callable:
     """Create a pre-compiled extractor for HTTP headers."""
     key = (alias or name).lower()
@@ -137,10 +137,10 @@ def create_header_extractor(
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
-        def extract(headers_map: Dict[str, str]) -> Any:
+        def extract(headers_map: dict[str, str]) -> Any:
             return converter(headers_map[key]) if key in headers_map else default_value
     else:
-        def extract(headers_map: Dict[str, str]) -> Any:
+        def extract(headers_map: dict[str, str]) -> Any:
             if key not in headers_map:
                 raise HTTPException(status_code=400, detail=f"Missing required header: {key}")
             return converter(headers_map[key])
@@ -152,7 +152,7 @@ def create_cookie_extractor(
     name: str,
     annotation: Any,
     default: Any,
-    alias: Optional[str] = None
+    alias: str | None = None
 ) -> Callable:
     """Create a pre-compiled extractor for cookies."""
     key = alias or name
@@ -161,10 +161,10 @@ def create_cookie_extractor(
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
-        def extract(cookies_map: Dict[str, str]) -> Any:
+        def extract(cookies_map: dict[str, str]) -> Any:
             return converter(cookies_map[key]) if key in cookies_map else default_value
     else:
-        def extract(cookies_map: Dict[str, str]) -> Any:
+        def extract(cookies_map: dict[str, str]) -> Any:
             if key not in cookies_map:
                 raise HTTPException(status_code=400, detail=f"Missing required cookie: {key}")
             return converter(cookies_map[key])
@@ -176,7 +176,7 @@ def create_form_extractor(
     name: str,
     annotation: Any,
     default: Any,
-    alias: Optional[str] = None
+    alias: str | None = None
 ) -> Callable:
     """Create a pre-compiled extractor for form fields."""
     key = alias or name
@@ -185,10 +185,10 @@ def create_form_extractor(
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
-        def extract(form_map: Dict[str, Any]) -> Any:
+        def extract(form_map: dict[str, Any]) -> Any:
             return converter(form_map[key]) if key in form_map else default_value
     else:
-        def extract(form_map: Dict[str, Any]) -> Any:
+        def extract(form_map: dict[str, Any]) -> Any:
             if key not in form_map:
                 raise HTTPException(status_code=400, detail=f"Missing required form field: {key}")
             return converter(form_map[key])
@@ -200,7 +200,7 @@ def create_file_extractor(
     name: str,
     annotation: Any,
     default: Any,
-    alias: Optional[str] = None
+    alias: str | None = None
 ) -> Callable:
     """Create a pre-compiled extractor for file uploads."""
     key = alias or name
@@ -208,10 +208,10 @@ def create_file_extractor(
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
-        def extract(files_map: Dict[str, Any]) -> Any:
+        def extract(files_map: dict[str, Any]) -> Any:
             return files_map.get(key, default_value)
     else:
-        def extract(files_map: Dict[str, Any]) -> Any:
+        def extract(files_map: dict[str, Any]) -> Any:
             if key not in files_map:
                 raise HTTPException(status_code=400, detail=f"Missing required file: {key}")
             return files_map[key]
@@ -262,7 +262,7 @@ def create_body_extractor(name: str, annotation: Any) -> Callable:
     return extract
 
 
-def create_extractor_for_field(field: "FieldDefinition") -> Optional[Callable]:
+def create_extractor_for_field(field: FieldDefinition) -> Callable | None:
     """
     Create a pre-compiled extractor function for a FieldDefinition.
 
@@ -313,7 +313,7 @@ def create_extractor_for_field(field: "FieldDefinition") -> Optional[Callable]:
         return None
 
 
-def create_extractor(field: Dict[str, Any]) -> Callable:
+def create_extractor(field: dict[str, Any]) -> Callable:
     """
     Create an optimized extractor function for a parameter field.
 
@@ -457,7 +457,7 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
         origin = get_origin(annotation)
 
         # Handle List[T]
-        if origin in (list, List):
+        if origin in (list, list):
             # Check if value is actually a list/iterable
             if not isinstance(value, (list, tuple)) and value is not None:
                 args = get_args(annotation)
@@ -528,7 +528,7 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
 
     # Fallback: Check if it's a list without metadata
     origin = get_origin(annotation)
-    if origin in (list, List):
+    if origin in (list, list):
         if not isinstance(value, (list, tuple)) and value is not None:
             args = get_args(annotation)
             elem_name = args[0].__name__ if args else 'Any'

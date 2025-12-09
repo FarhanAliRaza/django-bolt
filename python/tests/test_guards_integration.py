@@ -3,17 +3,24 @@ Integration tests for guards and authentication with TestClient.
 
 Tests the full request flow including Rust-side authentication and guard evaluation.
 """
-import jwt
 import time
-import pytest
+
 import django
+import jwt
+import pytest
 from django.conf import settings
 from django.core.management import call_command
+
 from django_bolt import BoltAPI
-from django_bolt.auth import JWTAuthentication, APIKeyAuthentication
 from django_bolt.auth import (
-    AllowAny, IsAuthenticated, IsAdminUser, IsStaff,
-    HasPermission, HasAnyPermission
+    AllowAny,
+    APIKeyAuthentication,
+    HasAnyPermission,
+    HasPermission,
+    IsAdminUser,
+    IsAuthenticated,
+    IsStaff,
+    JWTAuthentication,
 )
 from django_bolt.testing import TestClient
 

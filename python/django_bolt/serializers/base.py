@@ -5,11 +5,11 @@ from __future__ import annotations
 import inspect
 import logging
 import sys
-from typing import TYPE_CHECKING, Any, ClassVar, Iterable, Literal, TypeVar, get_args, get_origin, get_type_hints
-
-from django.db.models import Model as DjangoModel
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar, get_args, get_origin, get_type_hints
 
 import msgspec
+from django.db.models import Model as DjangoModel
 from msgspec import ValidationError as MsgspecValidationError
 from msgspec import structs as msgspec_structs
 from msgspec._core import StructMeta
@@ -538,7 +538,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     _setattr(self, field_name, validated_value)
             except (ValueError, TypeError) as e:
                 raise MsgspecValidationError(str(e)) from e
-            except Exception as e:
+            except Exception:
                 raise
 
         # Validate literal (choice) fields (now with O(1) frozenset lookup - optimization #3)
@@ -552,7 +552,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     )
             except (ValueError, TypeError) as e:
                 raise MsgspecValidationError(str(e)) from e
-            except Exception as e:
+            except Exception:
                 raise
 
     def _run_model_validators(self) -> None:
@@ -567,7 +567,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     pass
             except (ValueError, TypeError) as e:
                 raise MsgspecValidationError(str(e)) from e
-            except Exception as e:
+            except Exception:
                 raise
 
     def validate(self: T) -> T:

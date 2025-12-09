@@ -8,11 +8,10 @@ import asyncio
 import time
 from typing import Annotated
 
+import django
 import jwt
 import pytest
-import django
 from django.conf import settings
-
 
 # Configure Django before imports
 if not settings.configured:
@@ -35,9 +34,8 @@ if not settings.configured:
     django.setup()
 
 from django_bolt import BoltAPI, WebSocket
-from django_bolt.testing import WebSocketTestClient, ConnectionClosed
+from django_bolt.testing import ConnectionClosed, WebSocketTestClient
 from django_bolt.websocket import CloseCode
-
 
 # Test secret for JWT tokens
 E2E_JWT_SECRET = "test-secret-key-for-websocket-e2e-jwt"
@@ -543,7 +541,7 @@ class TestWebSocketGuards:
 
     @pytest.fixture
     def api(self):
-        from django_bolt.auth import IsAuthenticated, IsAdminUser, HasPermission, JWTAuthentication
+        from django_bolt.auth import HasPermission, IsAdminUser, IsAuthenticated, JWTAuthentication
 
         api = BoltAPI()
 

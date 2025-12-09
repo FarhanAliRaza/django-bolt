@@ -3,10 +3,11 @@ Integration tests for parameter validation with real-world use cases.
 
 Tests the complete flow from route registration to request handling.
 """
-import pytest
 import msgspec
+import pytest
+
 from django_bolt import BoltAPI
-from django_bolt.params import Query, Body, Header, Cookie, Form, Path
+from django_bolt.params import Cookie, Form, Header, Path, Query
 
 
 class User(msgspec.Struct):

@@ -11,10 +11,8 @@ This test suite verifies that:
 from __future__ import annotations
 
 import inspect
-from typing import List
 
 import msgspec
-import pytest
 
 from django_bolt import BoltAPI
 from django_bolt.serializers import Serializer
@@ -195,7 +193,7 @@ def test_serializer_field_extraction():
     # Get handler function name from previous decorator
     handler = list(api._handler_meta.keys())[-1]
     meta = api._handler_meta[handler]
-    
+
 
     # Verify all UserFull fields extracted
     assert "response_field_names" in meta
@@ -214,7 +212,7 @@ def test_plain_msgspec_struct_field_extraction():
     # Get handler function name from previous decorator
     handler = list(api._handler_meta.keys())[-1]
     meta = api._handler_meta[handler]
-    
+
 
     # Verify PlainStruct fields extracted
     assert "response_field_names" in meta
@@ -236,7 +234,7 @@ def test_no_response_type_specified():
     # Get handler function name from previous decorator
     handler = list(api._handler_meta.keys())[-1]
     meta = api._handler_meta[handler]
-    
+
 
     # Should not have response_type or field names
     assert "response_type" not in meta
@@ -254,7 +252,7 @@ def test_non_list_response_type():
     # Get handler function name from previous decorator
     handler = list(api._handler_meta.keys())[-1]
     meta = api._handler_meta[handler]
-    
+
 
     # Should have response_type but NOT field names (optimization only for list[Struct])
     assert meta["response_type"] == UserMini
@@ -314,7 +312,7 @@ def test_metadata_extraction_at_registration():
     # Get handler function name from previous decorator
     handler = list(api._handler_meta.keys())[-1]
     meta = api._handler_meta[handler]
-    
+
     assert "response_field_names" in meta
 
     # Still should be 1 (no additional calls)
@@ -336,7 +334,7 @@ def test_response_model_with_post():
     # Get handler function name from previous decorator
     handler = list(api._handler_meta.keys())[-1]
     meta = api._handler_meta[handler]
-    
+
 
     assert meta["response_type"] == UserMini
     assert meta["http_method"] == "POST"
@@ -353,7 +351,7 @@ def test_response_model_with_put():
     # Get handler function name from previous decorator
     handler = list(api._handler_meta.keys())[-1]
     meta = api._handler_meta[handler]
-    
+
 
     assert meta["response_type"] == UserMini
     assert meta["http_method"] == "PUT"
@@ -370,7 +368,7 @@ def test_response_model_with_patch():
     # Get handler function name from previous decorator
     handler = list(api._handler_meta.keys())[-1]
     meta = api._handler_meta[handler]
-    
+
 
     assert meta["response_type"] == UserMini
     assert meta["http_method"] == "PATCH"
@@ -387,7 +385,7 @@ def test_response_model_with_delete():
     # Get handler function name from previous decorator
     handler = list(api._handler_meta.keys())[-1]
     meta = api._handler_meta[handler]
-    
+
 
     assert meta["response_type"] == dict
     assert meta["http_method"] == "DELETE"
@@ -408,7 +406,7 @@ def test_compile_binder_focused_on_parameters():
     # Get handler function name from previous decorator
     handler = list(api._handler_meta.keys())[-1]
     meta = api._handler_meta[handler]
-    
+
 
     # Verify parameter fields extracted correctly
     assert "fields" in meta
@@ -432,14 +430,14 @@ def test_nested_list_extraction():
     """Test field extraction from nested list types."""
     api = BoltAPI()
 
-    @api.get("/users", response_model=List[UserMini])  # Using typing.List
+    @api.get("/users", response_model=list[UserMini])  # Using typing.List
     def get_users():
         pass
 
     # Get handler function name from previous decorator
     handler = list(api._handler_meta.keys())[-1]
     meta = api._handler_meta[handler]
-    
+
 
     # Should work with typing.List as well
     assert "response_field_names" in meta
@@ -462,7 +460,7 @@ def test_signature_preserved_with_response_model():
     # Get handler function name from previous decorator
     handler = list(api._handler_meta.keys())[-1]
     meta = api._handler_meta[handler]
-    
+
 
     # Verify signature preserved
     sig = meta["sig"]
@@ -488,7 +486,7 @@ def test_signature_preserved_with_annotation():
     # Get handler function name from previous decorator
     handler = list(api._handler_meta.keys())[-1]
     meta = api._handler_meta[handler]
-    
+
 
     # Verify signature preserved
     sig = meta["sig"]

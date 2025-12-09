@@ -3,7 +3,8 @@ Decorators for Django-Bolt.
 
 Provides decorators for ViewSet custom actions similar to Django REST Framework's @action decorator.
 """
-from typing import Any, Callable, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 
 class ActionHandler:
@@ -32,16 +33,16 @@ class ActionHandler:
     def __init__(
         self,
         fn: Callable,
-        methods: List[str],
+        methods: list[str],
         detail: bool,
-        path: Optional[str] = None,
-        auth: Optional[List[Any]] = None,
-        guards: Optional[List[Any]] = None,
-        response_model: Optional[Any] = None,
-        status_code: Optional[int] = None,
-        tags: Optional[List[str]] = None,
-        summary: Optional[str] = None,
-        description: Optional[str] = None,
+        path: str | None = None,
+        auth: list[Any] | None = None,
+        guards: list[Any] | None = None,
+        response_model: Any | None = None,
+        status_code: int | None = None,
+        tags: list[str] | None = None,
+        summary: str | None = None,
+        description: str | None = None,
     ):
         self.fn = fn
         self.methods = [m.upper() for m in methods]  # Normalize to uppercase
@@ -54,7 +55,7 @@ class ActionHandler:
         self.tags = tags
         self.summary = summary
         self.description = description
-   
+
 
     def __call__(self, *args, **kwargs):
         """Make the handler callable (delegates to wrapped function)."""
@@ -67,17 +68,17 @@ class ActionHandler:
 
 
 def action(
-    methods: List[str],
+    methods: list[str],
     detail: bool,
-    path: Optional[str] = None,
+    path: str | None = None,
     *,
-    auth: Optional[List[Any]] = None,
-    guards: Optional[List[Any]] = None,
-    response_model: Optional[Any] = None,
-    status_code: Optional[int] = None,
-    tags: Optional[List[str]] = None,
-    summary: Optional[str] = None,
-    description: Optional[str] = None,
+    auth: list[Any] | None = None,
+    guards: list[Any] | None = None,
+    response_model: Any | None = None,
+    status_code: int | None = None,
+    tags: list[str] | None = None,
+    summary: str | None = None,
+    description: str | None = None,
 ) -> Callable:
     """
     Decorator for ViewSet custom actions (DRF-style).

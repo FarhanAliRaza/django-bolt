@@ -7,8 +7,9 @@ token creation and inspection.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
 import jwt
 
 
@@ -23,8 +24,8 @@ def _normalize_datetime(value: datetime) -> datetime:
         A normalized datetime in UTC without microseconds
     """
     if value.tzinfo is not None:
-        value = value.astimezone(timezone.utc)
-    return value.replace(microsecond=0, tzinfo=timezone.utc)
+        value = value.astimezone(UTC)
+    return value.replace(microsecond=0, tzinfo=UTC)
 
 
 @dataclass
@@ -65,36 +66,36 @@ class Token:
     sub: str
     """Subject - typically the user ID or identifier (required)"""
 
-    iat: datetime = field(default_factory=lambda: _normalize_datetime(datetime.now(timezone.utc)))
+    iat: datetime = field(default_factory=lambda: _normalize_datetime(datetime.now(UTC)))
     """Issued at - timestamp when token was created"""
 
-    iss: Optional[str] = None
+    iss: str | None = None
     """Issuer - who issued the token (e.g., "my-auth-service")"""
 
-    aud: Optional[str] = None
+    aud: str | None = None
     """Audience - intended recipient (e.g., "my-api")"""
 
-    jti: Optional[str] = None
+    jti: str | None = None
     """JWT ID - unique identifier for this token (useful for revocation)"""
 
-    nbf: Optional[datetime] = None
+    nbf: datetime | None = None
     """Not before - token is not valid before this time"""
 
     # Django-Bolt specific claims
-    is_staff: Optional[bool] = None
+    is_staff: bool | None = None
     """Whether the user is staff"""
 
-    is_superuser: Optional[bool] = None
+    is_superuser: bool | None = None
     """Whether the user is a superuser/admin"""
 
-    is_admin: Optional[bool] = None
+    is_admin: bool | None = None
     """Alternative admin flag (checked along with is_superuser)"""
 
-    permissions: Optional[List[str]] = None
+    permissions: list[str] | None = None
     """List of permission strings (e.g., ["users.view", "posts.create"])"""
 
     # Extra custom claims
-    extras: Dict[str, Any] = field(default_factory=dict)
+    extras: dict[str, Any] = field(default_factory=dict)
     """Any additional custom claims not covered by standard fields"""
 
     # Internal flag to skip validation (used during decoding)
@@ -110,7 +111,7 @@ class Token:
         if isinstance(self.exp, datetime):
             self.exp = _normalize_datetime(self.exp)
             if not self._skip_validation:
-                now = _normalize_datetime(datetime.now(timezone.utc))
+                now = _normalize_datetime(datetime.now(UTC))
                 if self.exp.timestamp() <= now.timestamp():
                     raise ValueError("exp (expiration) must be in the future")
         else:
@@ -120,7 +121,7 @@ class Token:
         if isinstance(self.iat, datetime):
             self.iat = _normalize_datetime(self.iat)
             if not self._skip_validation:
-                now = _normalize_datetime(datetime.now(timezone.utc))
+                now = _normalize_datetime(datetime.now(UTC))
                 if self.iat.timestamp() > now.timestamp():
                     raise ValueError("iat (issued at) must be current or past time")
 
@@ -128,7 +129,7 @@ class Token:
         if self.nbf is not None and isinstance(self.nbf, datetime):
             self.nbf = _normalize_datetime(self.nbf)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Convert token to dictionary for encoding.
 
@@ -170,7 +171,7 @@ class Token:
         self,
         secret: str,
         algorithm: str = "HS256",
-        headers: Optional[Dict[str, Any]] = None,
+        headers: dict[str, Any] | None = None,
     ) -> str:
         """
         Encode the token into a JWT string.
@@ -205,8 +206,8 @@ class Token:
         encoded_token: str,
         secret: str,
         algorithm: str = "HS256",
-        audience: Optional[str] = None,
-        issuer: Optional[str] = None,
+        audience: str | None = None,
+        issuer: str | None = None,
         verify_exp: bool = True,
         verify_nbf: bool = True,
     ) -> "Token":
@@ -250,11 +251,11 @@ class Token:
             )
 
             # Convert timestamps back to datetime
-            exp = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
-            iat = datetime.fromtimestamp(payload.get("iat", payload["exp"] - 3600), tz=timezone.utc)
+            exp = datetime.fromtimestamp(payload["exp"], tz=UTC)
+            iat = datetime.fromtimestamp(payload.get("iat", payload["exp"] - 3600), tz=UTC)
             nbf = None
             if "nbf" in payload:
-                nbf = datetime.fromtimestamp(payload["nbf"], tz=timezone.utc)
+                nbf = datetime.fromtimestamp(payload["nbf"], tz=UTC)
 
             # Extract known fields
             known_fields = {
@@ -285,12 +286,12 @@ class Token:
     def create(
         cls,
         sub: str,
-        expires_delta: Optional[timedelta] = None,
-        issuer: Optional[str] = None,
-        audience: Optional[str] = None,
+        expires_delta: timedelta | None = None,
+        issuer: str | None = None,
+        audience: str | None = None,
         is_staff: bool = False,
         is_admin: bool = False,
-        permissions: Optional[List[str]] = None,
+        permissions: list[str] | None = None,
         **extra_claims: Any,
     ) -> "Token":
         """
@@ -312,7 +313,7 @@ class Token:
         if expires_delta is None:
             expires_delta = timedelta(hours=1)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         exp = now + expires_delta
 
         return cls(

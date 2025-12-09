@@ -15,9 +15,8 @@ from typing import Annotated
 
 import msgspec
 import pytest
-from asgiref.sync import sync_to_async
-from django.db import models as django_models
-from msgspec import Meta, ValidationError as MsgspecValidationError
+from msgspec import Meta
+from msgspec import ValidationError as MsgspecValidationError
 
 from django_bolt.serializers import Nested, Serializer, field_validator
 from tests.test_models import Author, BlogPost, Comment, Tag

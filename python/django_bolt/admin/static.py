@@ -8,9 +8,9 @@ import mimetypes
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Tuple, List
 
 from django.conf import settings
+
 try:
     from django.contrib.staticfiles.finders import find
 except ImportError:
@@ -20,7 +20,7 @@ from ..exceptions import HTTPException
 from ..responses import FileResponse
 
 
-def find_static_file(path: str) -> Optional[str]:
+def find_static_file(path: str) -> str | None:
     """
     Find a static file using Django's static file finders.
 
@@ -94,7 +94,7 @@ def guess_content_type(file_path: str) -> str:
     return type_map.get(ext, 'application/octet-stream')
 
 
-async def serve_static_file(path: str) -> Tuple[int, List[Tuple[str, str]], bytes]:
+async def serve_static_file(path: str) -> tuple[int, list[tuple[str, str]], bytes]:
     """
     Serve a static file using Django's static file system.
 
@@ -124,7 +124,7 @@ async def serve_static_file(path: str) -> Tuple[int, List[Tuple[str, str]], byte
     )
 
 
-def register_static_routes(api, static_url: Optional[str] = None):
+def register_static_routes(api, static_url: str | None = None):
     """
     Register static file serving routes on a BoltAPI instance.
 

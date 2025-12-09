@@ -18,13 +18,14 @@ from __future__ import annotations
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 
 from .revocation import create_revocation_handler
+
 
 @dataclass
 class AuthContext:
@@ -33,12 +34,12 @@ class AuthContext:
 
     This is populated in Rust and passed to Python handlers via request.context.
     """
-    user_id: Optional[str] = None
+    user_id: str | None = None
     is_staff: bool = False
     is_superuser: bool = False
     backend: str = "none"
-    claims: Optional[Dict[str, Any]] = None
-    permissions: Optional[Set[str]] = None
+    claims: dict[str, Any] | None = None
+    permissions: set[str] | None = None
 
 
 class BaseAuthentication(ABC):
@@ -56,7 +57,7 @@ class BaseAuthentication(ABC):
         pass
 
     @abstractmethod
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         """
         Compile this authentication backend into metadata for Rust.
 
@@ -64,7 +65,7 @@ class BaseAuthentication(ABC):
         """
         pass
 
-    async def get_user(self, user_id: Optional[str], auth_context: Dict[str, Any]) -> Optional[Any]:
+    async def get_user(self, user_id: str | None, auth_context: dict[str, Any]) -> Any | None:
         """
         Resolve a User instance from the authentication context.
 
@@ -104,7 +105,7 @@ class JWTAuthentication(BaseAuthentication):
     """
 
     # Class-level cached User model - resolved once on first use
-    _user_model: Optional[type] = None
+    _user_model: type | None = None
 
     @classmethod
     def _get_user_model(cls) -> type:
@@ -115,13 +116,13 @@ class JWTAuthentication(BaseAuthentication):
 
     def __init__(
         self,
-        secret: Optional[str] = None,
-        algorithms: Optional[List[str]] = None,
+        secret: str | None = None,
+        algorithms: list[str] | None = None,
         header: str = "authorization",
-        audience: Optional[str] = None,
-        issuer: Optional[str] = None,
-        revoked_token_handler: Optional[callable] = None,
-        revocation_store: Optional[Any] = None,
+        audience: str | None = None,
+        issuer: str | None = None,
+        revoked_token_handler: callable | None = None,
+        revocation_store: Any | None = None,
         require_jti: bool = False,
     ):
         self.secret = secret
@@ -169,7 +170,7 @@ class JWTAuthentication(BaseAuthentication):
     def scheme_name(self) -> str:
         return "jwt"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         metadata = {
             "type": "jwt",
             "secret": self.secret,
@@ -186,7 +187,7 @@ class JWTAuthentication(BaseAuthentication):
 
         return metadata
 
-    async def get_user(self, user_id: Optional[str], auth_context: Dict[str, Any]) -> Optional[Any]:
+    async def get_user(self, user_id: str | None, auth_context: dict[str, Any]) -> Any | None:
         """
         Load user from database using the user_id from JWT token.
 
@@ -205,7 +206,7 @@ class JWTAuthentication(BaseAuthentication):
             print(f"Error loading user {user_id} in JWTAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
             return None
 
-    def get_user_sync(self, user_id: Optional[str]) -> Optional[Any]:
+    def get_user_sync(self, user_id: str | None) -> Any | None:
         """
         Synchronously load user from database using the user_id from JWT token.
 
@@ -241,9 +242,9 @@ class APIKeyAuthentication(BaseAuthentication):
 
     def __init__(
         self,
-        api_keys: Optional[Set[str]] = None,
+        api_keys: set[str] | None = None,
         header: str = "x-api-key",
-        key_permissions: Optional[Dict[str, Set[str]]] = None,
+        key_permissions: dict[str, set[str]] | None = None,
     ):
         self.api_keys = api_keys or set()
         self.header = header
@@ -253,7 +254,7 @@ class APIKeyAuthentication(BaseAuthentication):
     def scheme_name(self) -> str:
         return "api_key"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         return {
             "type": "api_key",
             "api_keys": list(self.api_keys),
@@ -276,7 +277,7 @@ class SessionAuthentication(BaseAuthentication):
     """
 
     # Class-level cached User model - resolved once on first use
-    _user_model: Optional[type] = None
+    _user_model: type | None = None
 
     @classmethod
     def _get_user_model(cls) -> type:
@@ -292,12 +293,12 @@ class SessionAuthentication(BaseAuthentication):
     def scheme_name(self) -> str:
         return "session"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         return {
             "type": "session",
         }
 
-    async def get_user(self, user_id: Optional[str], auth_context: Dict[str, Any]) -> Optional[Any]:
+    async def get_user(self, user_id: str | None, auth_context: dict[str, Any]) -> Any | None:
         """
         Load user from database using the user_id from session.
 
@@ -315,7 +316,7 @@ class SessionAuthentication(BaseAuthentication):
             print(f"Error loading user {user_id} in SessionAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
             return None
 
-    def get_user_sync(self, user_id: Optional[str]) -> Optional[Any]:
+    def get_user_sync(self, user_id: str | None) -> Any | None:
         """
         Synchronously load user from database using the user_id from session.
 
@@ -335,7 +336,7 @@ class SessionAuthentication(BaseAuthentication):
             return None
 
 
-def get_default_authentication_classes() -> List[BaseAuthentication]:
+def get_default_authentication_classes() -> list[BaseAuthentication]:
     """
     Get default authentication classes from Django settings.
 
@@ -343,7 +344,7 @@ def get_default_authentication_classes() -> List[BaseAuthentication]:
     returns an empty list (no authentication by default).
     """
     try:
-        
+
         try:
             if hasattr(settings, 'BOLT_AUTHENTICATION_CLASSES'):
                 return settings.BOLT_AUTHENTICATION_CLASSES

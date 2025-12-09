@@ -9,13 +9,14 @@ Tests cover:
 - Type coercion and conversion
 """
 import json
-import pytest
+
 import msgspec
+import pytest
 
 from django_bolt import BoltAPI
-from django_bolt.binding import create_body_extractor, convert_primitive, get_msgspec_decoder, _DECODER_CACHE
+from django_bolt.binding import _DECODER_CACHE, convert_primitive, create_body_extractor, get_msgspec_decoder
 from django_bolt.error_handlers import handle_exception, msgspec_validation_error_to_dict
-from django_bolt.exceptions import RequestValidationError, HTTPException
+from django_bolt.exceptions import HTTPException, RequestValidationError
 
 
 class UserCreate(msgspec.Struct):

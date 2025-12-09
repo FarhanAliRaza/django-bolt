@@ -13,7 +13,6 @@ from django_bolt import BoltAPI, WebSocket
 from django_bolt.middleware import rate_limit
 from django_bolt.testing import WebSocketTestClient
 
-
 # --- Origin Validation Tests ---
 
 @pytest.mark.asyncio

@@ -3,7 +3,6 @@ Utilities for detecting and configuring Django admin integration.
 """
 
 import sys
-from typing import List, Optional, Tuple
 
 from django.conf import settings
 from django.urls import get_resolver
@@ -22,7 +21,7 @@ def is_admin_installed() -> bool:
         return False
 
 
-def detect_admin_url_prefix() -> Optional[str]:
+def detect_admin_url_prefix() -> str | None:
     """
     Detect the URL prefix for Django admin by parsing urlpatterns.
 
@@ -72,7 +71,7 @@ def detect_admin_url_prefix() -> Optional[str]:
     return 'admin'
 
 
-def get_admin_route_patterns() -> List[Tuple[str, List[str]]]:
+def get_admin_route_patterns() -> list[tuple[str, list[str]]]:
     """
     Get route patterns to register for Django admin.
 
@@ -110,7 +109,7 @@ def get_admin_route_patterns() -> List[Tuple[str, List[str]]]:
     ]
 
 
-def get_static_url_prefix() -> Optional[str]:
+def get_static_url_prefix() -> str | None:
     """
     Get the STATIC_URL prefix from Django settings.
 

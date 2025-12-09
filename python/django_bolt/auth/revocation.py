@@ -6,10 +6,10 @@ Revocation is OPTIONAL - only checked if user provides a handler.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, Set
-from datetime import datetime, timedelta, timezone
-from django.core.cache import caches
+from datetime import UTC, datetime, timedelta
+
 from django.apps import apps
+from django.core.cache import caches
 
 
 class RevocationStore(ABC):
@@ -33,7 +33,7 @@ class RevocationStore(ABC):
         pass
 
     @abstractmethod
-    async def revoke(self, jti: str, ttl: Optional[int] = None) -> None:
+    async def revoke(self, jti: str, ttl: int | None = None) -> None:
         """
         Revoke a token by its JTI.
 
@@ -87,12 +87,12 @@ class InMemoryRevocation(RevocationStore):
     """
 
     def __init__(self):
-        self._revoked: Set[str] = set()
+        self._revoked: set[str] = set()
 
     async def is_revoked(self, jti: str) -> bool:
         return jti in self._revoked
 
-    async def revoke(self, jti: str, ttl: Optional[int] = None) -> None:
+    async def revoke(self, jti: str, ttl: int | None = None) -> None:
         self._revoked.add(jti)
         # TTL not supported in memory (would need background cleanup)
 
@@ -161,7 +161,7 @@ class DjangoCacheRevocation(RevocationStore):
         # Django cache get is sync, but fast
         return self.cache.get(key) is not None
 
-    async def revoke(self, jti: str, ttl: Optional[int] = None) -> None:
+    async def revoke(self, jti: str, ttl: int | None = None) -> None:
         key = f"{self.key_prefix}{jti}"
         # TTL defaults to 30 days (longer than most refresh tokens)
         timeout = ttl or (86400 * 30)
@@ -243,8 +243,8 @@ class DjangoORMRevocation(RevocationStore):
     async def is_revoked(self, jti: str) -> bool:
         return await self.model.objects.filter(jti=jti).aexists()
 
-    async def revoke(self, jti: str, ttl: Optional[int] = None) -> None:
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl or 86400 * 30)
+    async def revoke(self, jti: str, ttl: int | None = None) -> None:
+        expires_at = datetime.now(UTC) + timedelta(seconds=ttl or 86400 * 30)
 
         await self.model.objects.aupdate_or_create(
             jti=jti,

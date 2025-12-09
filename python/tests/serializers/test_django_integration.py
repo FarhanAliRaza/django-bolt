@@ -25,34 +25,33 @@ constraints. This is msgspec's design - Meta constraints are for parsing.
 from datetime import datetime
 from typing import Annotated
 
-import pytest
 import msgspec
+import pytest
 
 from django_bolt.serializers import (
-    Serializer,
+    URL,
+    Email,
     Meta,
+    Nested,
+    NonEmptyStr,
+    PositiveInt,
+    Serializer,
     computed_field,
+    create_serializer,
+    create_serializer_set,
     field,
     field_validator,
     model_validator,
-    create_serializer,
-    create_serializer_set,
-    Nested,
-    Email,
-    URL,
-    NonEmptyStr,
-    PositiveInt,
 )
 from django_bolt.serializers.types import (
-    Username,
-    Percentage,
     Latitude,
     Longitude,
+    Percentage,
+    Username,
 )
 
 # Import test models
-from tests.test_models import Author, Tag, BlogPost, Comment, User, UserProfile
-
+from tests.test_models import Author, BlogPost, Comment, Tag, User, UserProfile
 
 # =============================================================================
 # Serializers for testing

@@ -1,10 +1,11 @@
 """
 Test parameter validation and inference system.
 """
-import pytest
 import msgspec
+import pytest
+
 from django_bolt import BoltAPI
-from django_bolt.params import Query, Body
+from django_bolt.params import Body, Query
 
 
 class UserCreate(msgspec.Struct):

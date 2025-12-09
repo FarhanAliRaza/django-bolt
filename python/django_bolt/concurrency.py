@@ -9,7 +9,8 @@ Inspired by Litestar's concurrency module.
 from __future__ import annotations
 
 import asyncio
-from typing import Callable, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
 from typing_extensions import ParamSpec
 

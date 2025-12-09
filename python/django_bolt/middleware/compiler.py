@@ -1,5 +1,7 @@
 """Middleware compilation utilities."""
-from typing import Any, Callable, Dict, List, Optional, Set
+from collections.abc import Callable
+from typing import Any
+
 from ..auth.backends import get_default_authentication_classes
 from ..auth.guards import get_default_permission_classes
 
@@ -8,15 +10,15 @@ def compile_middleware_meta(
     handler: Callable,
     method: str,
     path: str,
-    global_middleware: List[Any],
-    global_middleware_config: Dict[str, Any],
-    guards: Optional[List[Any]] = None,
-    auth: Optional[List[Any]] = None
-) -> Optional[Dict[str, Any]]:
+    global_middleware: list[Any],
+    global_middleware_config: dict[str, Any],
+    guards: list[Any] | None = None,
+    auth: list[Any] | None = None
+) -> dict[str, Any] | None:
     """Compile middleware metadata for a handler, including guards and auth."""
     # Check for handler-specific middleware
     handler_middleware = []
-    skip_middleware: Set[str] = set()
+    skip_middleware: set[str] = set()
 
     if hasattr(handler, '__bolt_middleware__'):
         handler_middleware = handler.__bolt_middleware__
@@ -119,9 +121,9 @@ def compile_middleware_meta(
 
 
 def add_optimization_flags_to_metadata(
-    metadata: Optional[Dict[str, Any]],
-    handler_meta: Dict[str, Any]
-) -> Dict[str, Any]:
+    metadata: dict[str, Any] | None,
+    handler_meta: dict[str, Any]
+) -> dict[str, Any]:
     """
     Add optimization flags to middleware metadata.
 
@@ -149,7 +151,7 @@ def add_optimization_flags_to_metadata(
     return metadata
 
 
-def middleware_to_dict(mw: Any) -> Optional[Dict[str, Any]]:
+def middleware_to_dict(mw: Any) -> dict[str, Any] | None:
     """
     Convert middleware specification to dictionary for Rust metadata.
 

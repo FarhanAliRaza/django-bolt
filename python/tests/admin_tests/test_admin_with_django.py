@@ -4,11 +4,13 @@ Tests for Django admin integration that actually use a Django project.
 These tests configure Django properly and will FAIL if ASGI bridge is broken.
 """
 
-import pytest
 import asyncio
+
+import pytest
+
+from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
 from django_bolt.api import BoltAPI
 from django_bolt.testing import TestClient
-from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
 
 
 @pytest.mark.django_db(transaction=True)
@@ -33,7 +35,7 @@ def test_admin_root_redirect():
     with TestClient(api, use_http_layer=True) as client:
         response = client.get("/admin/")
 
-        print(f"\n[Admin Root Test]")
+        print("\n[Admin Root Test]")
         print(f"Status: {response.status_code}")
         print(f"Headers: {dict(response.headers)}")
         print(f"Body length: {len(response.content)}")
@@ -68,7 +70,7 @@ def test_admin_login_page():
     with TestClient(api, use_http_layer=True) as client:
         response = client.get("/admin/login/")
 
-        print(f"\n[Admin Login Test]")
+        print("\n[Admin Login Test]")
         print(f"Status: {response.status_code}")
         print(f"Headers: {dict(response.headers)}")
         print(f"Body length: {len(response.content)}")
@@ -108,7 +110,7 @@ def test_asgi_bridge_direct_with_real_django():
 
     status, headers, body = asyncio.run(handler.handle_request(request))
 
-    print(f"\n[ASGI Bridge Direct Test]")
+    print("\n[ASGI Bridge Direct Test]")
     print(f"Status: {status}")
     print(f"Headers: {dict(headers)}")
     print(f"Body length: {len(body)}")
@@ -128,7 +130,7 @@ def test_asgi_bridge_direct_with_real_django():
     # Should be HTML content
     body_text = body.decode('utf-8', errors='ignore')
     assert 'html' in body_text.lower(), f"Expected HTML content, got: {body_text[:100]}"
-    assert 'django' in body_text.lower() or 'login' in body_text.lower(), f"Expected Django admin content"
+    assert 'django' in body_text.lower() or 'login' in body_text.lower(), "Expected Django admin content"
 
 
 @pytest.mark.django_db

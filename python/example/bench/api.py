@@ -1,9 +1,10 @@
-from django_bolt import BoltAPI, action
-from django_bolt.views import ViewSet
-from django_bolt.exceptions import NotFound
 import msgspec
-from .models import BenchItem
 
+from django_bolt import BoltAPI, action
+from django_bolt.exceptions import NotFound
+from django_bolt.views import ViewSet
+
+from .models import BenchItem
 
 api = BoltAPI(prefix="/bench")
 
@@ -106,8 +107,8 @@ class BenchItemViewSet(ViewSet):
             description=item.description,
             is_active=item.is_active
         )
-        
-        
+
+
 
         return BenchItemSchema(
             id=item.id,

@@ -10,6 +10,23 @@ from django.core.management.base import BaseCommand, CommandError
 from django_bolt import _core
 from django_bolt.api import BoltAPI
 
+try:
+    from django.utils import autoreload
+except ImportError:
+    autoreload = None
+
+try:
+    from django_bolt.logging.config import setup_django_logging
+    from django_bolt.responses import initialize_file_response_settings
+except ImportError:
+    setup_django_logging = None
+    initialize_file_response_settings = None
+
+try:
+    from django_bolt.admin.admin_detection import detect_admin_url_prefix
+except ImportError:
+    detect_admin_url_prefix = None
+
 
 class Command(BaseCommand):
     help = "Run Django-Bolt server with autodiscovered APIs"
@@ -75,9 +92,7 @@ class Command(BaseCommand):
 
     def run_with_autoreload(self, options):
         """Run server with auto-reload using Django's autoreload system"""
-        try:
-            from django.utils import autoreload
-        except ImportError:
+        if autoreload is None:
             self.stdout.write(
                 self.style.ERROR(
                     "[django-bolt] Error: Django autoreload not available. "
@@ -104,10 +119,10 @@ class Command(BaseCommand):
         """Start multiple processes with SO_REUSEPORT"""
         processes = options['processes']
         self.stdout.write(f"[django-bolt] Starting {processes} processes with SO_REUSEPORT")
-        
+
         # Store child PIDs for cleanup
         child_pids = []
-        
+
         def signal_handler(signum, frame):
             self.stdout.write("\n[django-bolt] Shutting down processes...")
             for pid in child_pids:
@@ -116,10 +131,10 @@ class Command(BaseCommand):
                 except ProcessLookupError:
                     pass
             sys.exit(0)
-        
+
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
-        
+
         # Fork processes
         for i in range(processes):
             pid = os.fork()
@@ -133,7 +148,7 @@ class Command(BaseCommand):
                 # Parent process
                 child_pids.append(pid)
                 self.stdout.write(f"[django-bolt] Started process {i} (PID: {pid})")
-        
+
         # Parent waits for children
         try:
             while True:
@@ -145,18 +160,16 @@ class Command(BaseCommand):
                     break
         except KeyboardInterrupt:
             pass
-    
+
     def start_single_process(self, options, process_id=None, dev_mode=False):
         """Start a single process server"""
         # Setup Django logging once at server startup (one-shot, respects existing LOGGING)
-        # Import here to avoid circular imports during module initialization
-        from django_bolt.logging.config import setup_django_logging
-        from django_bolt.responses import initialize_file_response_settings
-
-        setup_django_logging()
+        if setup_django_logging is not None:
+            setup_django_logging()
 
         # Initialize FileResponse settings cache once at server startup
-        initialize_file_response_settings()
+        if initialize_file_response_settings is not None:
+            initialize_file_response_settings()
 
         if process_id is not None:
             self.stdout.write(f"[django-bolt] Process {process_id}: Starting autodiscovery...")
@@ -201,10 +214,7 @@ class Command(BaseCommand):
         # Admin is controlled solely by --no-admin command-line flag
         admin_enabled = not options.get('no_admin', False)
 
-        if admin_enabled:
-            # Import here to avoid circular imports during module initialization
-            from django_bolt.admin.admin_detection import detect_admin_url_prefix
-
+        if admin_enabled and detect_admin_url_prefix is not None:
             # Register admin routes
             merged_api._register_admin_routes(options['host'], options['port'])
 
@@ -229,7 +239,7 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.SUCCESS(f"[django-bolt] Found {len(merged_api._routes)} routes")
             )
-        
+
         # Register routes with Rust
         rust_routes = []
         for method, path, handler_id, handler in merged_api._routes:
@@ -268,7 +278,7 @@ class Command(BaseCommand):
                 self.stdout.write(f"[django-bolt] Process {process_id}: Registered middleware for {len(middleware_data)} handlers")
             else:
                 self.stdout.write(f"[django-bolt] Registered middleware for {len(middleware_data)} handlers")
-        
+
         if process_id is not None:
             self.stdout.write(self.style.SUCCESS(f"[django-bolt] Process {process_id}: Starting server on http://{options['host']}:{options['port']}"))
             self.stdout.write(f"[django-bolt] Process {process_id}: Workers: {options['workers']}")

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time
-from typing import Any, Annotated, Callable, Literal, Type, TypeVar
+from typing import Annotated, Any, Literal, TypeVar
 from uuid import UUID
 
 from django.db import models
@@ -185,7 +186,7 @@ def field(
     return _FieldMarker(config=config)
 
 
-def get_msgspec_type_for_django_field(field: models.Field, **field_kwargs: Any) -> Type:
+def get_msgspec_type_for_django_field(field: models.Field, **field_kwargs: Any) -> type:
     """
     Convert a Django model field to a msgspec-compatible type annotation.
 
@@ -218,15 +219,7 @@ def get_msgspec_type_for_django_field(field: models.Field, **field_kwargs: Any) 
     elif isinstance(field, models.TextField):
         base_type = str
 
-    elif isinstance(field, models.EmailField):
-        constraints["max_length"] = field.max_length
-        base_type = str
-
-    elif isinstance(field, models.URLField):
-        constraints["max_length"] = field.max_length
-        base_type = str
-
-    elif isinstance(field, models.SlugField):
+    elif isinstance(field, models.EmailField) or isinstance(field, models.URLField) or isinstance(field, models.SlugField):
         constraints["max_length"] = field.max_length
         base_type = str
 
@@ -310,7 +303,7 @@ def create_msgspec_field_definition(
     field: models.Field,
     write_only: bool = False,
     read_only: bool = False,
-) -> tuple[str, Type, dict[str, Any]]:
+) -> tuple[str, type, dict[str, Any]]:
     """
     Create a msgspec field definition from a Django field.
 

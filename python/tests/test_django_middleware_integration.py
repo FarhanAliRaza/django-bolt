@@ -6,13 +6,12 @@ actually runs and modifies requests/responses through the complete pipeline.
 """
 from __future__ import annotations
 
+import msgspec
 import pytest
 
-import msgspec
-
 from django_bolt import BoltAPI
-from django_bolt.testing import TestClient
 from django_bolt.middleware import DjangoMiddleware, DjangoMiddlewareStack
+from django_bolt.testing import TestClient
 
 
 # Define at module level to avoid issues with `from __future__ import annotations`

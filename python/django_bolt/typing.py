@@ -7,10 +7,12 @@ msgspec-first, async-only design with focus on performance.
 from __future__ import annotations
 
 import inspect
-import msgspec
+from collections.abc import Callable
 from dataclasses import dataclass, is_dataclass
 from enum import Enum
-from typing import Any, Callable, get_origin, get_args, Union, Optional, List, TypedDict
+from typing import Any, TypedDict, Union, get_args, get_origin
+
+import msgspec
 
 # Import Param and Depends for use in from_parameter method
 # Note: Imported here to avoid circular imports at module level
@@ -61,7 +63,7 @@ class HandlerMetadata(TypedDict, total=False):
     sig: inspect.Signature
     """Function signature"""
 
-    fields: List[FieldDefinition]
+    fields: list[FieldDefinition]
     """List of parameter field definitions"""
 
     path_params: set[str]
@@ -88,7 +90,7 @@ class HandlerMetadata(TypedDict, total=False):
     """Default HTTP status code for successful responses"""
 
     # QuerySet serialization optimization (pre-computed at registration)
-    response_field_names: List[str]
+    response_field_names: list[str]
     """Pre-computed field names for QuerySet.values() call"""
 
     # Performance optimizations
@@ -100,7 +102,7 @@ class HandlerMetadata(TypedDict, total=False):
     """Whether handler is async (coroutine function)"""
 
     # OpenAPI documentation metadata
-    openapi_tags: List[str]
+    openapi_tags: list[str]
     """OpenAPI tags for grouping endpoints"""
 
     openapi_summary: str
@@ -182,7 +184,7 @@ def is_simple_type(annotation: Any) -> bool:
 def is_sequence_type(annotation: Any) -> bool:
     """Check if annotation is a sequence type like List[T]."""
     origin = get_origin(annotation)
-    return origin in (list, List, tuple, set, frozenset)
+    return origin in (list, list, tuple, set, frozenset)
 
 
 def is_optional(annotation: Any) -> bool:
@@ -290,10 +292,10 @@ class FieldDefinition:
     source: str
     """Parameter source: 'path', 'query', 'body', 'header', 'cookie', 'form', 'file', 'request', 'dependency'"""
 
-    alias: Optional[str] = None
+    alias: str | None = None
     """Alternative name for the parameter (e.g., 'user-id' for 'user_id')"""
 
-    embed: Optional[bool] = None
+    embed: bool | None = None
     """For body params: whether to embed in a wrapper object"""
 
     dependency: Any = None
@@ -303,7 +305,7 @@ class FieldDefinition:
     """Parameter kind (positional, keyword-only, etc.)"""
 
     # Pre-compiled extractor function (set at registration time)
-    extractor: Optional[Callable[..., Any]] = None
+    extractor: Callable[..., Any] | None = None
     """Pre-compiled extractor function for this parameter.
 
     Created at route registration time by the appropriate factory
@@ -312,11 +314,11 @@ class FieldDefinition:
     """
 
     # Cached type properties for performance
-    _is_optional: Optional[bool] = None
-    _is_simple: Optional[bool] = None
-    _is_struct: Optional[bool] = None
-    _unwrapped: Optional[Any] = None
-    _origin: Optional[Any] = None
+    _is_optional: bool | None = None
+    _is_simple: bool | None = None
+    _is_struct: bool | None = None
+    _unwrapped: Any | None = None
+    _origin: Any | None = None
 
     @property
     def is_optional(self) -> bool:
@@ -377,7 +379,7 @@ class FieldDefinition:
         path_params: set[str],
         http_method: str,
         explicit_marker: Any = None
-    ) -> "FieldDefinition":
+    ) -> FieldDefinition:
         """
         Create FieldDefinition from inspect.Parameter.
 
@@ -392,15 +394,16 @@ class FieldDefinition:
             FieldDefinition instance
         """
         # Import here to avoid circular import issues
-        from .params import Param, Depends as DependsMarker
+        from .params import Depends as DependsMarker
+        from .params import Param
 
         name = parameter.name
         default = parameter.default
 
         # Handle explicit markers
         source: str
-        alias: Optional[str] = None
-        embed: Optional[bool] = None
+        alias: str | None = None
+        embed: bool | None = None
         dependency: Any = None
 
         if isinstance(explicit_marker, Param):

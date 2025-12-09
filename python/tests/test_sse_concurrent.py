@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+
 import pytest
+
 from django_bolt import BoltAPI, StreamingResponse
 from django_bolt.testing import TestClient
 

@@ -4,12 +4,13 @@ Router for Django-Bolt API.
 Provides hierarchical routing with middleware inheritance.
 Routes defined on a router inherit the router's middleware, auth, and guards.
 """
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
-    from .middleware import MiddlewareType
     from .auth.backends import AuthenticationBackend
     from .auth.guards import Guard
+    from .middleware import MiddlewareType
 
 
 class Router:
@@ -61,11 +62,11 @@ class Router:
     def __init__(
         self,
         prefix: str = "",
-        tags: Optional[List[str]] = None,
-        dependencies: Optional[List[Any]] = None,
-        middleware: Optional[List["MiddlewareType"]] = None,
-        auth: Optional[List["AuthenticationBackend"]] = None,
-        guards: Optional[List["Guard"]] = None,
+        tags: list[str] | None = None,
+        dependencies: list[Any] | None = None,
+        middleware: list["MiddlewareType"] | None = None,
+        auth: list["AuthenticationBackend"] | None = None,
+        guards: list["Guard"] | None = None,
         parent: Optional["Router"] = None,
     ):
         """
@@ -86,9 +87,9 @@ class Router:
         self.middleware = middleware or []
         self.auth = auth
         self.guards = guards
-        self._routes: List[Tuple[str, str, Callable, Dict[str, Any]]] = []
+        self._routes: list[tuple[str, str, Callable, dict[str, Any]]] = []
         self._parent = parent
-        self._children: List["Router"] = []
+        self._children: list[Router] = []
 
         if parent:
             parent._children.append(self)
@@ -187,7 +188,7 @@ class Router:
         if prefix:
             router.prefix = prefix.rstrip("/") + router.prefix
 
-    def get_all_routes(self) -> List[Tuple[str, str, Callable, Dict[str, Any]]]:
+    def get_all_routes(self) -> list[tuple[str, str, Callable, dict[str, Any]]]:
         """
         Get all routes including from child routers.
 
@@ -201,7 +202,7 @@ class Router:
                 routes.append((method, full_path, handler, meta))
         return routes
 
-    def get_middleware_chain(self) -> List["MiddlewareType"]:
+    def get_middleware_chain(self) -> list["MiddlewareType"]:
         """
         Get the full middleware chain including parent middleware.
 

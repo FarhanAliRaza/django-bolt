@@ -6,7 +6,8 @@ that are compiled to Rust types for zero-GIL performance.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
@@ -27,7 +28,7 @@ class BasePermission(ABC):
         pass
 
     @abstractmethod
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         """
         Compile this permission guard into metadata for Rust.
 
@@ -35,7 +36,7 @@ class BasePermission(ABC):
         """
         pass
 
-    def has_permission(self, auth_context: Optional[Any]) -> bool:
+    def has_permission(self, auth_context: Any | None) -> bool:
         """
         Check if the authenticated user has permission (Python fallback).
 
@@ -57,10 +58,10 @@ class AllowAny(BasePermission):
     def guard_name(self) -> str:
         return "allow_any"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         return {"type": "allow_any"}
 
-    def has_permission(self, auth_context: Optional[Any]) -> bool:
+    def has_permission(self, auth_context: Any | None) -> bool:
         return True
 
 
@@ -75,10 +76,10 @@ class IsAuthenticated(BasePermission):
     def guard_name(self) -> str:
         return "is_authenticated"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         return {"type": "is_authenticated"}
 
-    def has_permission(self, auth_context: Optional[Any]) -> bool:
+    def has_permission(self, auth_context: Any | None) -> bool:
         return auth_context is not None and auth_context.user_id is not None
 
 
@@ -94,10 +95,10 @@ class IsAdminUser(BasePermission):
     def guard_name(self) -> str:
         return "is_superuser"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         return {"type": "is_superuser"}
 
-    def has_permission(self, auth_context: Optional[Any]) -> bool:
+    def has_permission(self, auth_context: Any | None) -> bool:
         return auth_context is not None and auth_context.is_superuser
 
 
@@ -113,10 +114,10 @@ class IsStaff(BasePermission):
     def guard_name(self) -> str:
         return "is_staff"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         return {"type": "is_staff"}
 
-    def has_permission(self, auth_context: Optional[Any]) -> bool:
+    def has_permission(self, auth_context: Any | None) -> bool:
         return auth_context is not None and auth_context.is_staff
 
 
@@ -138,13 +139,13 @@ class HasPermission(BasePermission):
     def guard_name(self) -> str:
         return "has_permission"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         return {
             "type": "has_permission",
             "permission": self.permission,
         }
 
-    def has_permission(self, auth_context: Optional[Any]) -> bool:
+    def has_permission(self, auth_context: Any | None) -> bool:
         if auth_context is None or auth_context.permissions is None:
             return False
         return self.permission in auth_context.permissions
@@ -165,13 +166,13 @@ class HasAnyPermission(BasePermission):
     def guard_name(self) -> str:
         return "has_any_permission"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         return {
             "type": "has_any_permission",
             "permissions": self.permissions,
         }
 
-    def has_permission(self, auth_context: Optional[Any]) -> bool:
+    def has_permission(self, auth_context: Any | None) -> bool:
         if auth_context is None or auth_context.permissions is None:
             return False
         return any(perm in auth_context.permissions for perm in self.permissions)
@@ -192,19 +193,19 @@ class HasAllPermissions(BasePermission):
     def guard_name(self) -> str:
         return "has_all_permissions"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         return {
             "type": "has_all_permissions",
             "permissions": self.permissions,
         }
 
-    def has_permission(self, auth_context: Optional[Any]) -> bool:
+    def has_permission(self, auth_context: Any | None) -> bool:
         if auth_context is None or auth_context.permissions is None:
             return False
         return all(perm in auth_context.permissions for perm in self.permissions)
 
 
-def get_default_permission_classes() -> List[BasePermission]:
+def get_default_permission_classes() -> list[BasePermission]:
     """
     Get default permission classes from Django settings.
 

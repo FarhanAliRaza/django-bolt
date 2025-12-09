@@ -6,7 +6,7 @@ keeping the BoltAPI class lean and focused.
 """
 from typing import TYPE_CHECKING
 
-from django_bolt.admin.admin_detection import should_enable_admin, get_admin_route_patterns
+from django_bolt.admin.admin_detection import get_admin_route_patterns, should_enable_admin
 from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
 
 if TYPE_CHECKING:

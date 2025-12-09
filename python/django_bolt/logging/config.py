@@ -8,18 +8,23 @@ non-blocking and fully controlled by application logging config.
 """
 
 import atexit
-from queue import Queue
-from logging.handlers import QueueHandler, QueueListener
+import importlib
 import logging
 import logging.config
-from typing import Callable, Optional, Set
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from logging.handlers import QueueHandler, QueueListener
+from queue import Queue
 
+try:
+    from django.conf import settings
+except ImportError:
+    settings = None
 
 # Global flag to prevent multiple logging reconfigurations
 _LOGGING_CONFIGURED = False
-_QUEUE_LISTENER: Optional[QueueListener] = None
-_QUEUE: Optional[Queue] = None
+_QUEUE_LISTENER: QueueListener | None = None
+_QUEUE: Queue | None = None
 
 
 @dataclass
@@ -33,22 +38,22 @@ class LoggingConfig:
     logger_name: str = "django.server"
 
     # Request logging fields
-    request_log_fields: Set[str] = field(default_factory=lambda: {
+    request_log_fields: set[str] = field(default_factory=lambda: {
         "method", "path", "status_code"
     })
 
     # Response logging fields
-    response_log_fields: Set[str] = field(default_factory=lambda: {
+    response_log_fields: set[str] = field(default_factory=lambda: {
         "status_code"
     })
 
     # Headers to obfuscate in logs (for security)
-    obfuscate_headers: Set[str] = field(default_factory=lambda: {
+    obfuscate_headers: set[str] = field(default_factory=lambda: {
         "authorization", "cookie", "x-api-key", "x-auth-token"
     })
 
     # Cookies to obfuscate in logs
-    obfuscate_cookies: Set[str] = field(default_factory=lambda: {
+    obfuscate_cookies: set[str] = field(default_factory=lambda: {
         "sessionid", "csrftoken"
     })
 
@@ -81,23 +86,23 @@ class LoggingConfig:
     error_log_level: str = "ERROR"
 
     # Custom exception logging handler
-    exception_logging_handler: Optional[Callable] = None
+    exception_logging_handler: Callable | None = None
 
     # Skip logging for specific paths (e.g., health checks)
-    skip_paths: Set[str] = field(default_factory=lambda: {
+    skip_paths: set[str] = field(default_factory=lambda: {
         "/health", "/ready", "/metrics"
     })
 
     # Skip logging for specific status codes
-    skip_status_codes: Set[int] = field(default_factory=set)
+    skip_status_codes: set[int] = field(default_factory=set)
 
     # Optional sampling of logs (0.0-1.0). When set, successful responses (2xx/3xx)
     # will only be logged with this probability. Errors (4xx/5xx) are not sampled.
-    sample_rate: Optional[float] = None
+    sample_rate: float | None = None
 
     # Only log successful responses slower than this threshold (milliseconds).
     # Errors (4xx/5xx) are not subject to the slow-only threshold.
-    min_duration_ms: Optional[int] = None
+    min_duration_ms: int | None = None
 
     def get_logger(self) -> logging.Logger:
         """Get the configured logger.
@@ -106,7 +111,7 @@ class LoggingConfig:
         """
         return logging.getLogger(self.logger_name)
 
-    def should_log_request(self, path: str, status_code: Optional[int] = None) -> bool:
+    def should_log_request(self, path: str, status_code: int | None = None) -> bool:
         """Check if a request should be logged.
 
         Args:
@@ -185,8 +190,7 @@ def get_default_logging_config() -> LoggingConfig:
     settings_sample = None
     settings_slow_ms = None
     try:
-        from django.conf import settings
-        if settings.configured:
+        if settings is not None and settings.configured:
             debug = settings.DEBUG
             # Optional overrides from Django settings
             settings_level = getattr(settings, "DJANGO_BOLT_LOG_LEVEL", None)
@@ -194,7 +198,7 @@ def get_default_logging_config() -> LoggingConfig:
             settings_slow_ms = getattr(settings, "DJANGO_BOLT_LOG_SLOW_MS", None)
             # Default base level by DEBUG
             log_level = "DEBUG" if debug else "WARNING"
-    except (ImportError, AttributeError, Exception):
+    except (AttributeError, Exception):
         # Django not available or not configured, use default
         pass
 
@@ -202,7 +206,7 @@ def get_default_logging_config() -> LoggingConfig:
     if settings_level:
         log_level = str(settings_level).upper()
 
-    sample_rate: Optional[float] = None
+    sample_rate: float | None = None
     if settings_sample is not None:
         try:
             sr = float(settings_sample)
@@ -211,7 +215,7 @@ def get_default_logging_config() -> LoggingConfig:
         except Exception:
             sample_rate = None
 
-    min_duration_ms: Optional[int] = None
+    min_duration_ms: int | None = None
     if settings_slow_ms is not None:
         try:
             min_duration_ms = max(0, int(settings_slow_ms))
@@ -300,10 +304,8 @@ def setup_django_logging(force: bool = False) -> None:
         _QUEUE_LISTENER = None
 
     try:
-        from django.conf import settings
-
         # Check if Django is configured
-        if not settings.configured:
+        if settings is None or not settings.configured:
             return
 
         # Check if LOGGING is explicitly configured in Django settings
@@ -312,7 +314,6 @@ def setup_django_logging(force: bool = False) -> None:
         has_explicit_logging = False
         try:
             # Try to import the actual settings module to check if LOGGING is defined
-            import importlib
             settings_module = importlib.import_module(settings.SETTINGS_MODULE)
             has_explicit_logging = hasattr(settings_module, 'LOGGING')
         except (AttributeError, ImportError):
@@ -345,7 +346,7 @@ def setup_django_logging(force: bool = False) -> None:
 
         _LOGGING_CONFIGURED = True
 
-    except (ImportError, AttributeError, Exception) as e:
+    except (ImportError, AttributeError, Exception):
         # If Django not available or configuration fails, use basic config
         logging.basicConfig(
             level=logging.INFO,

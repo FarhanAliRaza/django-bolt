@@ -5,7 +5,7 @@ This file tests the TestClient (V2) that routes through Rust with per-instance s
 from typing import Annotated
 
 import msgspec
-import pytest
+
 from django_bolt import BoltAPI
 from django_bolt.param_functions import Header
 from django_bolt.testing import TestClient

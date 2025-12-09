@@ -1,16 +1,17 @@
 import asyncio
-import os
 import json
+import os
+from typing import Annotated
 
 import msgspec
 import pytest
 
-from django_bolt import BoltAPI, JSON, StreamingResponse, Response
-from django_bolt.param_functions import Query, Path, Header, Cookie, Depends, Form, File as FileParam
-from django_bolt.responses import PlainText, HTML, Redirect, File, FileResponse
+from django_bolt import JSON, BoltAPI, Response, StreamingResponse
 from django_bolt.exceptions import HTTPException
+from django_bolt.param_functions import Cookie, Depends, Form, Header
+from django_bolt.param_functions import File as FileParam
+from django_bolt.responses import HTML, File, FileResponse, PlainText, Redirect
 from django_bolt.testing import TestClient
-from typing import Annotated
 
 
 @pytest.fixture(scope="module")
@@ -587,7 +588,7 @@ def test_head_method(client):
     response = client.head("/m")
     assert response.status_code == 200
     # HEAD should return headers but empty body
-    assert len(response.content) == 0 
+    assert len(response.content) == 0
 
 
 def test_head_with_params(client):

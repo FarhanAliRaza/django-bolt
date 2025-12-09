@@ -14,9 +14,9 @@ import ast
 import inspect
 import textwrap
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Set
-
+from typing import Any
 
 __all__ = [
     "HandlerAnalysis",
@@ -167,21 +167,21 @@ class HandlerAnalysis:
     uses_orm: bool = False
     """Whether handler accesses Django ORM"""
 
-    orm_operations: Set[str] = field(default_factory=set)
+    orm_operations: set[str] = field(default_factory=set)
     """Set of ORM operations detected (e.g., {'filter', 'get', 'all'})"""
 
     # Blocking I/O detection
     has_blocking_io: bool = False
     """Whether handler has potential blocking I/O calls"""
 
-    blocking_operations: Set[str] = field(default_factory=set)
+    blocking_operations: set[str] = field(default_factory=set)
     """Set of blocking operations detected"""
 
     # Analysis metadata
     analysis_failed: bool = False
     """Whether AST analysis failed (e.g., couldn't get source)"""
 
-    failure_reason: Optional[str] = None
+    failure_reason: str | None = None
     """Reason for analysis failure if any"""
 
     @property
@@ -189,7 +189,7 @@ class HandlerAnalysis:
         """Whether handler is likely to block (any ORM usage or blocking I/O)."""
         return self.uses_orm or self.has_blocking_io
 
-    def get_warning_message(self, handler_name: str, path: str, is_async: bool) -> Optional[str]:
+    def get_warning_message(self, handler_name: str, path: str, is_async: bool) -> str | None:
         """
         Generate warning message if handler has potential issues.
 
@@ -393,7 +393,7 @@ def warn_blocking_handler(
     fn: Callable[..., Any],
     path: str,
     is_async: bool,
-    analysis: Optional[HandlerAnalysis] = None,
+    analysis: HandlerAnalysis | None = None,
 ) -> None:
     """
     Emit warning if handler has blocking operations.

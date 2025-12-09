@@ -72,4 +72,42 @@ dev = [
     "pyyaml>=6.0",
     "maturin>=1.9.6",
     "django==6.0",
+    "ruff>=0.8",
+    "ty>=0.0.1a7",
 ]
+
+[tool.ruff]
+src = ["python"]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "ARG",    # flake8-unused-arguments
+    "SIM",    # flake8-simplify
+    "PLC0415", # import-outside-top-level (no imports inside functions/classes)
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # do not perform function calls in argument defaults (needed for Depends)
+    "ARG001", # unused function argument (common in handlers)
+    "ARG002", # unused method argument
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["django_bolt"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ty.environment]
+python-version = "3.12"
+extra-paths = ["python"]

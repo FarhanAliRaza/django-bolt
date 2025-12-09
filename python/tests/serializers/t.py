@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Annotated
 
 from django_bolt.serializers import (
+    URL,
+    Email,
     Meta,
+    Nested,
+    NonEmptyStr,
+    Percentage,
+    PositiveInt,
     Serializer,
+    Slug,
+    computed_field,
     field,
     field_validator,
     model_validator,
-    computed_field,
-    Nested,
-    Email,
-    Slug,
-    PositiveInt,
-    Percentage,
-    NonEmptyStr,
-    URL,
 )
+
 
 class AuthorSerializer(Serializer):
     """Serializer for Author model with computed field."""
@@ -81,7 +81,7 @@ class ProductSerializer(Serializer):
         return value.strip().title()
 
     @model_validator
-    def validate_pricing(self) -> "ProductSerializer":
+    def validate_pricing(self) -> ProductSerializer:
         if self.discount > 0 and self.price <= 0:
             raise ValueError("Cannot discount zero-priced item")
         return self

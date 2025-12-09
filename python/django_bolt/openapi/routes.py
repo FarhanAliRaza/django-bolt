@@ -4,7 +4,7 @@ OpenAPI route registration for BoltAPI.
 This module handles the registration of OpenAPI documentation routes
 (JSON, YAML, and UI plugins) separately from the main BoltAPI class.
 """
-from typing import Dict, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from django_bolt.openapi.plugins import JsonRenderPlugin, YamlRenderPlugin
 from django_bolt.openapi.schema_generator import SchemaGenerator
@@ -92,7 +92,7 @@ class OpenAPIRouteRegistrar:
 
         self.api._openapi_routes_registered = True
 
-    def _get_schema(self) -> Dict[str, Any]:
+    def _get_schema(self) -> dict[str, Any]:
         """Get or generate OpenAPI schema.
 
         Returns:

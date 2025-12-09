@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Any, Callable, Dict
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
+from urllib.parse import parse_qs
 
 if TYPE_CHECKING:
     from .types import WebSocket
 
 
-def build_websocket_request(scope: Dict[str, Any]) -> Dict[str, Any]:
+def build_websocket_request(scope: dict[str, Any]) -> dict[str, Any]:
     """
     Build a request-like dict from WebSocket scope for parameter injection.
 
@@ -32,8 +34,6 @@ def build_websocket_request(scope: Dict[str, Any]) -> Dict[str, Any]:
     - cookies: request cookies
     - body: empty bytes (WebSocket has no request body at connect time)
     """
-    from urllib.parse import parse_qs
-
     # Parse query string into dict
     query_string = scope.get("query_string", b"")
     if isinstance(query_string, bytes):
@@ -105,7 +105,7 @@ def get_websocket_param_name(func: Callable[..., Any]) -> str | None:
 
 async def run_websocket_handler(
     handler: Callable[..., Any],
-    websocket: "WebSocket",
+    websocket: WebSocket,
     path_params: dict[str, str] | None = None,
     **extra_kwargs: Any,
 ) -> None:

@@ -4,8 +4,10 @@ Tests that per-API logging configurations are preserved when multiple
 BoltAPI instances are merged (like during autodiscovery in runbolt).
 """
 
-import pytest
 import logging
+
+import pytest
+
 from django_bolt import BoltAPI
 from django_bolt.logging import LoggingConfig
 

@@ -24,13 +24,10 @@ import base64
 import inspect
 import msgspec
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, TypeVar, Generic, get_origin, get_args
+from typing import Any, Callable, Dict, List, Optional, TypeVar, Generic
 from functools import wraps
-from django.core.paginator import Paginator, Page, EmptyPage, PageNotAnInteger
 from asgiref.sync import sync_to_async
 
-from .params import Query
-from .typing import is_optional
 from . import _json
 
 __all__ = [

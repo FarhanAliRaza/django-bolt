@@ -1,8 +1,7 @@
 """Response serialization utilities."""
 from __future__ import annotations
 import mimetypes
-import msgspec
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, List, Optional, Tuple, TYPE_CHECKING
 from .responses import Response as ResponseClass, JSON, PlainText, HTML, Redirect, File, FileResponse, StreamingResponse
 from .binding import coerce_to_response_type_async, coerce_to_response_type
 from . import _json

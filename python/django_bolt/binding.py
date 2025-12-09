@@ -9,12 +9,11 @@ from __future__ import annotations
 
 import inspect
 import msgspec
-from typing import Any, Dict, List, Tuple, Callable, Optional, TYPE_CHECKING, get_origin, get_args
+from typing import Any, Dict, List, Callable, Optional, get_origin, get_args
 from asgiref.sync import sync_to_async
 
 from .typing import is_msgspec_struct, is_optional, unwrap_optional
 from .typing import HandlerMetadata
-from .concurrency import sync_to_thread
 from .exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
 
 __all__ = [
@@ -279,7 +278,6 @@ def create_extractor_for_field(field: "FieldDefinition") -> Optional[Callable]:
         (which are handled specially by the injector)
     """
     # Import here to avoid circular imports
-    from .typing import FieldDefinition
 
     source = field.source
     name = field.name

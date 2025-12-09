@@ -7,15 +7,12 @@ Adopts Litestar's queue-based logging approach so request logging stays
 non-blocking and fully controlled by application logging config.
 """
 
-import sys
-import os
 import atexit
 from queue import Queue
 from logging.handlers import QueueHandler, QueueListener
 import logging
 import logging.config
-from abc import ABC, abstractmethod
-from typing import Callable, Optional, Set, List, Dict, Any
+from typing import Callable, Optional, Set
 from dataclasses import dataclass, field
 
 

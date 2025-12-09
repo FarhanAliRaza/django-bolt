@@ -122,10 +122,10 @@ Elysia uses TypeScript's type inference through middleware chain:
 
 ```typescript
 new Elysia()
-    .derive(({ headers }) => ({
-        user: validateToken(headers.authorization)
-    }))
-    .get("/", ({ user }) => user.name)  // TypeScript knows user exists
+  .derive(({ headers }) => ({
+    user: validateToken(headers.authorization),
+  }))
+  .get("/", ({ user }) => user.name); // TypeScript knows user exists
 ```
 
 ### 3.5 Current Django-Bolt State
@@ -1075,6 +1075,8 @@ class DjangoMiddleware:
         if hasattr(django_request, 'user'):
             bolt_request.user = django_request.user
 
+
+
         # Sync session
         if hasattr(django_request, 'session'):
             bolt_request._state["_django_session"] = django_request.session
@@ -1597,11 +1599,11 @@ async def get_users(
 
 ### 12.1 Middleware Overhead
 
-| Middleware Type | Overhead | Location |
-|-----------------|----------|----------|
-| Rust (CORS, Rate Limit) | ~1-5μs | No GIL |
-| Native Bolt | ~10-50μs | Python |
-| Django Middleware | ~50-200μs | Python (with conversion) |
+| Middleware Type         | Overhead  | Location                 |
+| ----------------------- | --------- | ------------------------ |
+| Rust (CORS, Rate Limit) | ~1-5μs    | No GIL                   |
+| Native Bolt             | ~10-50μs  | Python                   |
+| Django Middleware       | ~50-200μs | Python (with conversion) |
 
 ### 12.2 Optimization Strategies
 
@@ -1614,12 +1616,12 @@ async def get_users(
 
 Target performance with full middleware stack:
 
-| Configuration | RPS | p99 Latency |
-|--------------|-----|-------------|
-| No middleware | 65,000 | 2ms |
-| Rust middleware only | 60,000 | 3ms |
-| + 2 Bolt middleware | 45,000 | 5ms |
-| + 3 Django middleware | 25,000 | 10ms |
+| Configuration         | RPS    | p99 Latency |
+| --------------------- | ------ | ----------- |
+| No middleware         | 65,000 | 2ms         |
+| Rust middleware only  | 60,000 | 3ms         |
+| + 2 Bolt middleware   | 45,000 | 5ms         |
+| + 3 Django middleware | 25,000 | 10ms        |
 
 ---
 

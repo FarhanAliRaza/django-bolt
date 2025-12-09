@@ -1,7 +1,69 @@
+"""
+Django-Bolt: High-performance API framework for Django.
+
+Provides Rust-powered API endpoints with 60k+ RPS performance, integrating
+with existing Django projects via Actix Web, PyO3, and msgspec.
+
+Quick Start:
+    from django_bolt import BoltAPI, Request
+
+    api = BoltAPI()
+
+    @api.get("/hello")
+    async def hello(request: Request) -> dict:
+        return {"message": "Hello, World!"}
+
+Type-Safe Requests:
+    from django_bolt import BoltAPI, Request
+    from django_bolt.types import JWTClaims
+    from myapp.models import User
+
+    api = BoltAPI()
+
+    @api.get("/profile", guards=[IsAuthenticated()])
+    async def profile(request: Request[User, JWTClaims, dict]) -> dict:
+        return {"email": request.user.email}  # IDE knows User has email
+
+Middleware:
+    from django_bolt import BoltAPI
+    from django_bolt.middleware import (
+        DjangoMiddleware,
+        TimingMiddleware,
+        LoggingMiddleware,
+    )
+    from django.contrib.sessions.middleware import SessionMiddleware
+    from django.contrib.auth.middleware import AuthenticationMiddleware
+
+    api = BoltAPI(
+        middleware=[
+            DjangoMiddleware(SessionMiddleware),
+            DjangoMiddleware(AuthenticationMiddleware),
+            TimingMiddleware(),
+            LoggingMiddleware(),
+        ]
+    )
+"""
+
 from .api import BoltAPI
 from .responses import Response, JSON, StreamingResponse
 from .middleware import CompressionConfig
-from .types import Request, UserType, AuthContext, DjangoModel
+from .router import Router
+
+# Type-safe Request object
+from .request import Request, State
+
+# Types and protocols
+from .types import (
+    Request as RequestProtocol,  # Protocol for type checking
+    UserType,
+    AuthContext,
+    DjangoModel,
+    JWTClaims,
+    APIKeyAuth,
+    SessionAuth,
+    TimingState,
+    TracingState,
+)
 from .params import Depends
 
 # Views module
@@ -36,7 +98,7 @@ from .auth import (
     # Authentication backends
     JWTAuthentication,
     APIKeyAuthentication,
-    SessionAuthentication, # Session authentication is not implemented
+    SessionAuthentication,
     AuthContext,
     # Guards/Permissions
     AllowAny,
@@ -56,16 +118,22 @@ from .auth import (
 
 # Middleware module
 from .middleware import (
+    # Protocols and base classes
+    MiddlewareProtocol,
+    BaseMiddleware,
     Middleware,
-    MiddlewareGroup,
-    MiddlewareConfig,
+    # Decorators
     middleware,
     rate_limit,
     cors,
     skip_middleware,
     no_compress,
-    CORSMiddleware,
-    RateLimitMiddleware,
+    # Built-in middleware (Python)
+    TimingMiddleware,
+    LoggingMiddleware,
+    ErrorHandlerMiddleware,
+    # Django compatibility
+    DjangoMiddleware,
 )
 
 # OpenAPI module
@@ -91,16 +159,27 @@ from .websocket import (
 )
 
 __all__ = [
+    # Core
     "BoltAPI",
     "Request",
-    "UserType",
-    "AuthContext",
-    "DjangoModel",
+    "State",
     "Response",
     "JSON",
     "StreamingResponse",
     "CompressionConfig",
     "Depends",
+    # Router
+    "Router",
+    # Types
+    "RequestProtocol",
+    "UserType",
+    "AuthContext",
+    "DjangoModel",
+    "JWTClaims",
+    "APIKeyAuth",
+    "SessionAuth",
+    "TimingState",
+    "TracingState",
     # Views
     "APIView",
     "ViewSet",
@@ -124,7 +203,7 @@ __all__ = [
     # Auth - Authentication
     "JWTAuthentication",
     "APIKeyAuthentication",
-    "SessionAuthentication", # Session authentication is not implemented
+    "SessionAuthentication",
     "AuthContext",
     # Auth - Guards/Permissions
     "AllowAny",
@@ -134,14 +213,22 @@ __all__ = [
     "HasPermission",
     "HasAnyPermission",
     "HasAllPermissions",
-    # Middleware
+    # Middleware - Protocols and base classes
+    "MiddlewareProtocol",
+    "BaseMiddleware",
+    "Middleware",
+    # Middleware - Decorators
     "middleware",
     "rate_limit",
     "cors",
     "skip_middleware",
     "no_compress",
-    "CORSMiddleware",
-    "RateLimitMiddleware",
+    # Middleware - Built-in (Python)
+    "TimingMiddleware",
+    "LoggingMiddleware",
+    "ErrorHandlerMiddleware",
+    # Middleware - Django compatibility
+    "DjangoMiddleware",
     # Auth - JWT Token & Utilities
     "Token",
     "create_jwt_for_user",
@@ -167,5 +254,3 @@ __all__ = [
 ]
 
 default_app_config = 'django_bolt.apps.DjangoBoltConfig'
-
-

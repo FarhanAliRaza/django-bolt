@@ -1,5 +1,9 @@
 """
 Test middleware functionality in Django-Bolt
+
+Note: CORS and rate limiting are handled in Rust for performance.
+The @cors() and @rate_limit() decorators attach metadata that Rust parses.
+Python middleware classes (TimingMiddleware, etc.) run for custom logic only.
 """
 import asyncio
 import json
@@ -8,8 +12,7 @@ import jwt
 import pytest
 from django_bolt import BoltAPI
 from django_bolt.middleware import (
-    rate_limit, cors, skip_middleware,
-    Middleware, MiddlewareGroup, CORSMiddleware, RateLimitMiddleware
+    rate_limit, cors, skip_middleware, Middleware
 )
 from django_bolt.auth import JWTAuthentication, APIKeyAuthentication
 from django_bolt.auth import IsAuthenticated
@@ -143,23 +146,6 @@ class TestMiddlewareDecorators:
         assert len(meta['auth_backends']) > 0
 
 
-class TestMiddlewareGroups:
-    """Test middleware grouping functionality"""
-
-    def test_middleware_group_creation(self):
-        """Test creating and combining middleware groups"""
-        cors_mw = CORSMiddleware(origins=["http://localhost:3000"])
-        rate_mw = RateLimitMiddleware(rps=100)
-
-        group1 = MiddlewareGroup(cors_mw, rate_mw)
-        assert len(group1.middleware) == 2
-
-        # Test combining groups
-        group2 = MiddlewareGroup(cors_mw)
-        combined = group1 + group2
-        assert len(combined.middleware) == 3
-
-
 class TestGlobalMiddleware:
     """Test global middleware configuration"""
     
@@ -185,15 +171,14 @@ class TestGlobalMiddleware:
         assert api.middleware_config['rate_limit']['rps'] == 1000
     
     def test_global_middleware_instances(self):
-        """Test setting global middleware instances"""
-        cors_mw = CORSMiddleware(origins=["http://localhost:3000"])
-        rate_mw = RateLimitMiddleware(rps=500)
-        
-        api = BoltAPI(middleware=[cors_mw, rate_mw])
-        
-        assert len(api.middleware) == 2
-        assert api.middleware[0] == cors_mw
-        assert api.middleware[1] == rate_mw
+        """Test setting global middleware instances (Python middleware)"""
+        # Create custom Python middleware instances
+        custom_mw = CustomTestMiddleware("global1")
+
+        api = BoltAPI(middleware=[custom_mw])
+
+        assert len(api.middleware) == 1
+        assert api.middleware[0] == custom_mw
 
 
 class TestMiddlewareMetadata:
@@ -451,42 +436,37 @@ if __name__ == "__main__":
     test_decorators.test_skip_middleware_decorator()
     test_decorators.test_multiple_middleware()
     print("✓ Decorator tests passed")
-    
-    print("\nTesting middleware groups...")
-    test_groups = TestMiddlewareGroups()
-    test_groups.test_middleware_group_creation()
-    print("✓ Group tests passed")
-    
+
     print("\nTesting global middleware...")
     test_global = TestGlobalMiddleware()
     test_global.test_global_middleware_config()
     test_global.test_global_middleware_instances()
     print("✓ Global middleware tests passed")
-    
+
     print("\nTesting middleware metadata...")
     test_meta = TestMiddlewareMetadata()
     test_meta.test_middleware_metadata_compilation()
     test_meta.test_skip_global_middleware()
     print("✓ Metadata tests passed")
-    
+
     print("\nTesting JWT generation...")
     test_auth = TestAuthTokenGeneration()
     test_auth.test_generate_valid_jwt()
     test_auth.test_generate_expired_jwt()
     test_auth.test_generate_invalid_signature_jwt()
     print("✓ JWT tests passed")
-    
+
     print("\nTesting middleware integration...")
     test_integration = TestMiddlewareIntegration()
     test_integration.test_middleware_registration()
     test_integration.test_preflight_route()
     print("✓ Integration tests passed")
-    
+
     print("\nRunning async tests...")
     test_exec = TestMiddlewareExecution()
     asyncio.run(test_exec.test_request_dispatch_with_middleware())
     asyncio.run(test_exec.test_custom_middleware_execution())
     asyncio.run(test_exec.test_response_model_with_middleware())
     print("✓ Async execution tests passed")
-    
+
     print("\n✅ All middleware tests passed!")

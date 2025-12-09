@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import inspect
 import msgspec
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, get_type_hints, get_origin, get_args, Annotated
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, get_origin, get_args, Annotated
 
 from ..typing import is_msgspec_struct, is_optional
-from ..params import Param
 from .spec import (
     OpenAPI,
     Operation,
@@ -16,7 +15,6 @@ from .spec import (
     OpenAPIMediaType,
     Schema,
     Reference,
-    SecurityRequirement,
     Tag,
 )
 

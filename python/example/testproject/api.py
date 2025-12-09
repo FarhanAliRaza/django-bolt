@@ -6,7 +6,7 @@ from typing import Annotated, List, Optional, Protocol
 
 import msgspec
 from msgspec import Meta, ValidationError
-
+from django_bolt.shortcuts import render
 from django.contrib.auth import aauthenticate, get_user_model
 
 from django_bolt import BoltAPI, CompressionConfig, JSON, OpenAPIConfig, RedocRenderPlugin, SwaggerRenderPlugin, WebSocket
@@ -20,7 +20,7 @@ from django_bolt.exceptions import (
     UnprocessableEntity,
 )
 from django_bolt.health import add_health_check, register_health_checks
-from django_bolt.middleware import cors, no_compress
+from django_bolt.middleware import cors, no_compress, rate_limit, TimingMiddleware, BaseMiddleware
 from django_bolt.param_functions import Cookie, Depends, File, Form, Header
 from django_bolt.responses import FileResponse, HTML, PlainText, Redirect, StreamingResponse
 from django_bolt.serializers import Serializer, field_validator, model_validator
@@ -30,6 +30,69 @@ from django_bolt.views import APIView, ViewSet
 import test_data
 from users.api import UserMini
 from users.models import User
+
+
+# ============================================================================
+# Custom Middleware Example
+# ============================================================================
+
+class RequestIdMiddleware:
+    """
+    Custom middleware that adds a request ID to every request.
+
+    Follows Django's middleware pattern:
+    - __init__(get_response): Called ONCE at startup
+    - __call__(request): Called for each request
+    """
+
+    def __init__(self, get_response):
+        """Called once at server startup - do expensive setup here."""
+        self.get_response = get_response
+        self.request_count = 0
+        print("[RequestIdMiddleware] Initialized at startup")
+
+    async def __call__(self, request):
+        """Called for each request."""
+        import uuid
+
+        # Generate request ID and add to request state
+        request_id = str(uuid.uuid4())[:8]
+        self.request_count += 1
+        request.state["request_id"] = request_id
+        request.state["request_number"] = self.request_count
+
+        # Process the request
+        response = await self.get_response(request)
+
+        # Add header to response
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+
+class TenantMiddleware(BaseMiddleware):
+    """
+    Custom middleware with path exclusions using BaseMiddleware helper.
+
+    BaseMiddleware provides:
+    - exclude_paths: Glob patterns to skip (compiled once at startup)
+    - exclude_methods: HTTP methods to skip (O(1) lookup)
+    """
+
+    exclude_paths = ["/health", "/docs", "/docs/*", "/openapi.json"]
+    exclude_methods = ["OPTIONS"]
+
+    async def process_request(self, request):
+        """Extract tenant from header and add to request state."""
+        tenant_id = request.headers.get("x-tenant-id", "default")
+        request.state["tenant_id"] = tenant_id
+        request.state["tenant_loaded"] = True
+
+        response = await self.get_response(request)
+
+        response.headers["X-Tenant-ID"] = tenant_id
+        return response
+
+
 # OpenAPI is enabled by default at /docs with Swagger UI
 # You can customize it by passing openapi_config:
 #
@@ -76,9 +139,66 @@ class Item(msgspec.Struct):
     is_offer: Optional[bool] = None
 
 
+# ============================================================================
+# Middleware Demo - Separate API with Django + Custom Middleware
+# ============================================================================
+
+# Create a separate API instance with middleware enabled
+# This demonstrates how to use Django middleware + custom Python middleware
+middleware_api = BoltAPI(
+    # Load Django middleware from settings.MIDDLEWARE
+    django_middleware=True,
+    # Add custom Python middleware (pass classes, not instances)
+    middleware=[
+        RequestIdMiddleware,  # Adds X-Request-ID header
+        TenantMiddleware,     # Adds tenant context (skips /health, /docs)
+        TimingMiddleware,     # Built-in: adds X-Response-Time header
+    ],
+)
+
+
+@middleware_api.get("/demo")
+async def middleware_demo(request: Request):
+    """
+    Demonstrates Django middleware + messages framework with Django-Bolt.
+
+    This endpoint shows:
+    1. Django middleware (SessionMiddleware, AuthenticationMiddleware, MessageMiddleware)
+    2. Custom RequestIdMiddleware (adds X-Request-ID header)
+    3. Custom TenantMiddleware (adds X-Tenant-ID header)
+    4. Django messages framework ({% for message in messages %} in templates)
+
+    Test with:
+        curl http://localhost:8000/middleware/demo
+    """
+    from django.contrib import messages
+
+    # Add messages using Django's messages framework
+    messages.info(request, "This is an info message")
+    messages.success(request, "Operation completed successfully!")
+    messages.warning(request, "This is a warning message")
+    messages.error(request, "This is an error message")
+
+    # Access Django user
+    user = await request.auser()
+
+    # Render template that displays messages
+    return render(request, "messages_demo.html", {
+        "title": "Middleware & Messages Demo",
+        "user": user,
+        "request_id": request.state.get("request_id"),
+        "tenant_id": request.state.get("tenant_id"),
+    })
+
+
+# Mount the middleware API as a sub-application (FastAPI-style)
+# This preserves the middleware_api's own middleware configuration
+api.mount("/middleware", middleware_api)
+
+
 @api.get("/health")
 async def health():
-    """Health check endpoint."""
+    """Health check endpoint (TenantMiddleware skips this path)."""
     return {"status": "healthy", "timestamp": time.time()}
 
 

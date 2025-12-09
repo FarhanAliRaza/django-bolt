@@ -427,6 +427,27 @@ kill -TERM -$SERVER_PID 2>/dev/null || true
 pkill -TERM -f "manage.py runbolt --host $HOST --port $PORT" 2>/dev/null || true
 
 echo ""
+echo "## Django Middleware Performance"
+
+# Start server for middleware test
+DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
+SERVER_PID=$!
+sleep 2
+
+# Sanity check middleware endpoint
+MCODE=$(curl -s -o /dev/null -w '%{http_code}' http://$HOST:$PORT/middleware/demo)
+if [ "$MCODE" != "200" ]; then
+  echo "Expected 200 from /middleware/demo but got $MCODE; skipping middleware benchmark." >&2
+else
+  echo "### Django Middleware + Messages Framework (/middleware/demo)"
+  echo "Tests: SessionMiddleware, AuthenticationMiddleware, MessageMiddleware, custom middleware, template rendering"
+  ab -k -c $C -n $N http://$HOST:$PORT/middleware/demo 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+fi
+
+kill -TERM -$SERVER_PID 2>/dev/null || true
+pkill -TERM -f "manage.py runbolt --host $HOST --port $PORT" 2>/dev/null || true
+
+echo ""
 echo "## Django Ninja-style Benchmarks"
 
 # JSON Parsing/Validation

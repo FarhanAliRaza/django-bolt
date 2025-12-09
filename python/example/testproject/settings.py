@@ -58,13 +58,20 @@ ROOT_URLCONF = 'testproject.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [
+            
+            BASE_DIR / "templates"
+            
+            
+            ],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'django.template.context_processors.csp',
+            
             ],
         },
     },
@@ -200,12 +207,30 @@ else:
             },
         },
         "loggers": {
-            "django": {"handlers": ["console"], "level": "DEBUG"},
-            "django.server": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-            "django_bolt": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+            "django": {"handlers": ["console"], "level": "INFO"},
+            "django.server": {"handlers": ["console"], "level": "INFO", "propagate": False},
+            "django_bolt": {"handlers": ["console"], "level": "INFO", "propagate": False},
         },
-        "root": {"handlers": ["console"], "level": "DEBUG"},
+        "root": {"handlers": ["console"], "level": "INFO"},
     }
     
     
 BOLT_MAX_SYNC_STREAMING_THREADS = 1000
+
+
+from django.utils.csp import CSP
+
+MIDDLEWARE += [
+    'django.middleware.csp.ContentSecurityPolicyMiddleware',
+]
+
+SECURE_CSP = {
+    "default-src": [CSP.SELF],
+    "script-src": [CSP.SELF, CSP.NONCE],  # Scripts require nonce!
+    "style-src": [CSP.SELF, CSP.UNSAFE_INLINE, "https://fonts.googleapis.com"],
+    "font-src": [CSP.SELF, "https://fonts.gstatic.com"],
+    "img-src": [CSP.SELF, "https:", "data:"],
+}
+
+
+

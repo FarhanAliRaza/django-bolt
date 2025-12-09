@@ -5,8 +5,8 @@ Provides explicit parameter source annotations and validation metadata.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Pattern
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
 
 __all__ = [
     "Param",

@@ -117,7 +117,7 @@ from .pagination import (
 from .params import Depends
 
 # Type-safe Request object
-from .request import Request, State
+from .request import Request
 from .responses import JSON, Response, StreamingResponse
 from .router import Router
 from .types import (
@@ -163,7 +163,6 @@ __all__ = [
     # Core
     "BoltAPI",
     "Request",
-    "State",
     "Response",
     "JSON",
     "StreamingResponse",

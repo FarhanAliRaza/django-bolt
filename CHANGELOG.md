@@ -2,6 +2,65 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.13]
+
+### Added
+
+- **Django middleware integration** - Full support for Django's middleware pattern with automatic loading from `settings.MIDDLEWARE`.
+- **DjangoMiddleware adapter** - Seamlessly wrap and use existing Django middleware in Bolt applications.
+- **Middleware loader** - Automatic discovery and loading of Django middleware with configurable selection.
+- **Ruff linting and type checking** - Added comprehensive code quality tooling with pyproject.toml configuration.
+
+### Changed
+
+- **Unified middleware pattern** - Middleware now uses Django's `__init__(get_response)` and `__call__(request)` pattern for consistency.
+- **Middleware architecture** - Complete redesign following the middleware design document with zero overhead as priority.
+- **Router enhancements** - Added `middleware`, `auth`, and `guards` parameters for router-level configuration with inheritance support.
+- **Response builder optimizations** - Refactored response building pipeline in Rust with dedicated modules (`response_builder.rs`, `responses.rs`, `headers.rs`).
+- **Code quality improvements** - Applied Ruff linting across entire codebase, improved type hints and imports.
+
+### Fixed
+
+- **Middleware error handling** - Improved exception catching and proper response generation in middleware pipeline.
+- **Error handling improvements** - Enhanced error messages to include original exception context for better debugging.
+- **Redirect Error in docs and admin** - Fixed Error because of path normalization that we added because websocket.
+
+## [0.3.12]
+
+### Added
+
+- **WebSocket parameter injection** - Pre-compiled injectors for improved WebSocket parameter handling (query, header, and cookie parameters).
+
+### Changed
+
+- **WebSocket performance** - Enhanced WebSocket route registration with pre-compiled metadata for better parameter handling.
+- **Admin route improvements** - Updated admin route registration to support both trailing and non-trailing slash versions.
+
+### Fixed
+
+- **WebSocket connection management** - Enhanced resource management and stability in WebSocket handlers.
+
+## [0.3.11]
+
+### Added
+
+- **WebSocket support** - Complete WebSocket implementation with FastAPI-like syntax using `@api.websocket()` decorator.
+- **WebSocket testing** - `WebSocketTestClient` for testing WebSocket handlers without network.
+- **WebSocket security** - Origin validation, authentication guards, and permission checks for WebSocket routes.
+- **WebSocket configuration** - Configurable via Django settings: channel size, heartbeat interval, client timeout, allowed origins.
+- **WebSocket documentation** - Comprehensive guide at `docs/WEBSOCKET.md`.
+
+### Changed
+
+- **Rust WebSocket infrastructure** - Actix-based WebSocket actor system with ASGI-style message queue bridge using tokio channels.
+- **WebSocket routing** - Zero-overhead WebSocket route matching with support for path parameters.
+
+### Fixed
+
+- **WebSocket resource leak** - Fixed thread pool exhaustion by using `pyo3_async_runtimes::into_future()`.
+- **WebSocket type coercion** - Fixed handling of `Annotated` types with PEP 563 string annotations.
+- **WebSocket error handling** - Proper panic safety with `catch_unwind` and differentiated setup vs runtime errors.
+
 ## [0.3.10]
 
 ### Changed

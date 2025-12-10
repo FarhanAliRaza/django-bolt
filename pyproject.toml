@@ -7,7 +7,7 @@ name = "django-bolt"
 version = "0.3.13"
 description = "High-performance API framework for Django with Rust-powered endpoints delivering 60k+ RPS"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
     { name = "Farhan", email = "farhanalirazaazeemi@gmail.com" }
@@ -69,9 +69,9 @@ dev = [
     "pytest-asyncio>=1.2.0",
     "pytest-django>=4.9.0",
     "pydantic>=2",
-    "pyyaml>=6.0",
+    "pyyaml>=5.2",
     "maturin>=1.9.6",
-    "django==6.0",
+    "django==5.2",
     "ruff>=0.8",
     "ty>=0.0.1a7",
 ]

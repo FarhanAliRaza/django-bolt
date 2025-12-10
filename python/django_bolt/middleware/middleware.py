@@ -566,8 +566,6 @@ class ErrorHandlerMiddleware(BaseMiddleware):
             raise HTTPException(500, detail) from None
 
 
-# Placeholder for DjangoMiddleware - imported from django_adapter module
-DjangoMiddlewareAdapter = None  # Will be set by django_adapter module
 
 
 __all__ = [

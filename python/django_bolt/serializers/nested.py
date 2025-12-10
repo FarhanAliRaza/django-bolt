@@ -201,9 +201,7 @@ def _validate_many_nested(
         )
 
     # Security: Check list size to prevent DoS attacks
-    print(f"DEBUG: validate_many_nested: len={len(value)}, max={config.max_items}, type={type(value)}")
     if config.max_items is not None and len(value) > config.max_items:
-        print("DEBUG: RAISING ValidationError for max_items!")
         raise ValidationError(
             detail=f"Too many items ({len(value)}). "
             f"Maximum allowed: {config.max_items}. "

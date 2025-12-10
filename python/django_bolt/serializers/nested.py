@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any, TypeVar
 if TYPE_CHECKING:
     from .base import Serializer
 
+from .errors import ErrorCollector, ValidationError
+
 T = TypeVar("T", bound="Serializer")
 logger = logging.getLogger(__name__)
 
@@ -142,11 +144,7 @@ def validate_nested_field(
         or list thereof)
 
     Raises:
-        ValueError: If validation fails
-
-    Note:
-        Deep nesting protection is handled by Python's recursion limit (~1000 levels).
-        If extremely deep nesting is attempted, Python will raise RecursionError automatically.
+        ValidationError: If validation fails
     """
     if value is None:
         return None
@@ -170,9 +168,12 @@ def _validate_single_nested(
     if isinstance(value, dict):
         try:
             return serializer_class(**value)
+        except ValidationError:
+            raise
         except Exception as e:
-            raise ValueError(
-                f"{field_name}: Failed to validate nested {serializer_class.__name__}: {e}"
+            # Wrap standard exceptions provided by msgspec or others
+            raise ValidationError(
+                detail=f"Failed to validate nested {serializer_class.__name__}: {e}"
             ) from e
 
     # If it's already a Serializer instance, validate it
@@ -180,8 +181,8 @@ def _validate_single_nested(
         return value
 
     # No longer accept plain IDs - use separate serializers for that
-    raise ValueError(
-        f"{field_name}: Expected {serializer_class.__name__} object or dict, "
+    raise ValidationError(
+        detail=f"Expected {serializer_class.__name__} object or dict, "
         f"got {type(value).__name__}. "
         f"Use a separate serializer with plain 'int' type for ID-only fields."
     )
@@ -195,39 +196,44 @@ def _validate_many_nested(
 ) -> Any:
     """Validate a list of nested objects (no ID fallback)."""
     if not isinstance(value, list):
-        raise ValueError(
-            f"{field_name}: Expected list for many=True relationship, got {type(value).__name__}"
+        raise ValidationError(
+            detail=f"Expected list for many=True relationship, got {type(value).__name__}"
         )
 
     # Security: Check list size to prevent DoS attacks
     if config.max_items is not None and len(value) > config.max_items:
-        raise ValueError(
-            f"{field_name}: Too many items ({len(value)}). "
+        raise ValidationError(
+            detail=f"Too many items ({len(value)}). "
             f"Maximum allowed: {config.max_items}. "
             f"This limit prevents resource exhaustion attacks. "
             f"If you need more items, increase max_items in Nested() configuration."
         )
 
     result = []
+    collector = ErrorCollector()
+    
     for idx, item in enumerate(value):
         # Handle dict values (convert to Serializer)
         if isinstance(item, dict):
             try:
                 result.append(serializer_class(**item))
+            except ValidationError as e:
+                # Merge nested validation errors with index path
+                collector.merge(e, prefix=str(idx))
             except Exception as e:
-                raise ValueError(
-                    f"{field_name}[{idx}]: Failed to validate nested {serializer_class.__name__}: {e}"
-                ) from e
+                collector.add_error(str(idx), str(e))
         # Handle Serializer instances
         elif isinstance(item, serializer_class):
             result.append(item)
         else:
             # No longer accept plain IDs - use separate serializers for that
-            raise ValueError(
-                f"{field_name}[{idx}]: Expected {serializer_class.__name__} object or dict, "
-                f"got {type(item).__name__}. "
-                f"Use a separate serializer with 'list[int]' type for ID-only fields."
+            collector.add_error(
+                str(idx),
+                f"Expected {serializer_class.__name__} object or dict, "
+                f"got {type(item).__name__}."
             )
+            
+    collector.raise_if_errors(detail=f"Validation failed for {field_name}")
 
     return result
 

@@ -184,6 +184,8 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         cls.__field_validators__ = collect_field_validators(cls)
         cls.__model_validators__ = collect_model_validators(cls)
         cls.__computed_fields__ = collect_computed_fields(cls)
+        # Collect Meta configuration (read_only, write_only, etc.)
+        cls._collect_meta_config()
 
         # Pre-compute validators as tuple for faster iteration (no dict overhead)
         cls.__field_validators_tuple__ = tuple(
@@ -428,10 +430,6 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         if cls.__has_field_markers__:
             self._fix_field_marker_defaults_impl()
 
-        # Fast path: skip validation if there are no validators
-        # This avoids function call overhead when there's nothing to validate
-        # Fast path: skip validation if there are no validators
-        # This avoids function call overhead when there's nothing to validate
         if cls.__skip_validation__ or _SKIP_VALIDATION.get():
             return
 

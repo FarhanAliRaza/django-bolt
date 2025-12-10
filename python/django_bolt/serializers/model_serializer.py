@@ -125,8 +125,11 @@ class ModelSerializerMeta(_SerializerMeta):
         namespace["__annotations__"] = new_annotations
         
         # Store model reference for later use
-        namespace["__model__"] = model
+        namespace["_django_model"] = model
         namespace["__model_fields_config__"] = frozenset(fields_to_include)
+        
+        # Alias Meta to Config so base Serializer picks up configuration
+        namespace["Config"] = meta
 
         return super().__new__(mcs, name, bases, namespace, **kwargs)
 
@@ -369,7 +372,7 @@ class ModelSerializer(Serializer, metaclass=ModelSerializerMeta):
     """
     
     # Class-level attributes set by metaclass
-    __model__: ClassVar[type[models.Model] | None] = None
+    _django_model: ClassVar[type[models.Model] | None] = None
     __model_fields_config__: ClassVar[frozenset[str]] = frozenset()
     
     class Meta:
@@ -396,7 +399,28 @@ class ModelSerializer(Serializer, metaclass=ModelSerializerMeta):
     @classmethod
     def get_model(cls) -> type[models.Model] | None:
         """Get the Django model class for this serializer."""
-        return getattr(cls, "__model__", None)
+        return getattr(cls, "_django_model", None)
+        
+    @classmethod
+    def _collect_meta_config(cls) -> None:
+        """Collect configuration from Meta class."""
+        super()._collect_meta_config()
+        
+        # Explicitly support DRF-style Meta
+        meta = getattr(cls, "Meta", None)
+        # print(f"DEBUG: {cls.__name__} _collect_meta_config. Meta: {meta}")
+        if meta:
+            ro = getattr(meta, "read_only", set())
+            wo = getattr(meta, "write_only", set())
+            # print(f"DEBUG: ro={ro}, wo={wo}")
+            
+            # Update the immutable sets
+            if ro:
+                cls.__read_only_fields__ = cls.__read_only_fields__ | frozenset(ro)
+            if wo:
+                cls.__write_only_fields__ = cls.__write_only_fields__ | frozenset(wo)
+            
+            # print(f"DEBUG: Final read_only={cls.__read_only_fields__}")
     
     def create(self, validated_data: dict[str, Any]) -> models.Model:
         """

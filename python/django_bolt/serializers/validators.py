@@ -220,7 +220,7 @@ class RangeValidator(Validator):
 class ChoicesValidator(Validator):
     """Validate that a value is one of the allowed choices."""
     
-    choices: tuple | list | set | frozenset
+    choices: tuple | frozenset
     message: str | None = None
     
     def __call__(self, value: Any) -> Any:
@@ -237,7 +237,6 @@ class ChoicesValidator(Validator):
     @property
     def error_code(self) -> str:
         return "choices"
-
 
 class UniqueValidator(Validator):
     """
@@ -332,7 +331,7 @@ class ExistsValidator(Validator):
 
 # Common regex patterns
 EMAIL_REGEX = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
-URL_REGEX = r"^https?://[^\s/$.?#].[^\s]*$"
+URL_REGEX = r"^https?://[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*(/[^\s]*)?$"
 SLUG_REGEX = r"^[-a-zA-Z0-9_]+$"
 UUID_REGEX = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 PHONE_REGEX = r"^\+?[1-9]\d{1,14}$"

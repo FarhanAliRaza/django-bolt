@@ -246,7 +246,7 @@ class ErrorCollector:
             ValidationError: If any errors were collected
         """
         if self._errors:
-            raise ValidationError(errors=self._errors, detail=detail)
+            raise ValidationError(errors=dict(self._errors), detail=detail)
     
     def to_validation_error(self, detail: str = "Validation error") -> ValidationError:
         """

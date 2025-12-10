@@ -30,10 +30,9 @@ from .decorators import (
     ComputedFieldConfig,
     collect_computed_fields,
     collect_field_validators,
-    collect_field_validators,
     collect_model_validators,
 )
-from .errors import ErrorCollector, FieldError, ValidationError
+from .errors import ErrorCollector, ValidationError
 from .validators import Validator
 from .fields import FieldConfig, _FieldMarker
 from .nested import get_nested_config, validate_nested_field
@@ -351,9 +350,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                             cls.__field_validators__[field_name] = []
                         cls.__field_validators__[field_name].append(meta)
                         new_validators_found = True
-
-            # Check if field is a Literal type (for Django choices validation)
-
+                        
             # Check if field is a Literal type (for Django choices validation)
             origin = get_origin(field_type)
             if origin is Literal:

@@ -14,15 +14,12 @@ from __future__ import annotations
 from typing import (
     TYPE_CHECKING,
     Any,
+    NotRequired,
     Protocol,
+    TypedDict,
     overload,
     runtime_checkable,
 )
-
-try:
-    from typing import NotRequired, TypedDict
-except ImportError:
-    from typing_extensions import NotRequired, TypedDict
 
 if TYPE_CHECKING:
     pass

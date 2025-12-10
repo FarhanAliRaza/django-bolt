@@ -6,7 +6,7 @@ This guide explains how to publish django-bolt wheels to PyPI using GitHub Actio
 
 Django-Bolt uses a modern publishing setup:
 - **Maturin**: Builds Rust extensions as Python wheels
-- **PyO3 abi3**: Single wheel supports Python 3.10-3.14+ (no per-version builds needed)
+- **PyO3 abi3**: Single wheel supports Python 3.12-3.14+ (no per-version builds needed)
 - **GitHub Actions**: Automated multi-platform wheel building
 - **PyPI Trusted Publishing**: Secure OIDC-based authentication (no API tokens)
 
@@ -21,7 +21,7 @@ When you create a git tag, GitHub Actions automatically:
    - **macOS**: x86_64, aarch64, universal2
    - **Windows**: x64, aarch64
 
-2. **Leverages abi3 stable ABI**: Thanks to `abi3-py310` in `Cargo.toml`, we build ONE wheel per platform that works for Python 3.10, 3.11, 3.12, 3.13, 3.14+ instead of separate wheels for each version.
+2. **Leverages abi3 stable ABI**: Thanks to `abi3-py312` in `Cargo.toml`, we build ONE wheel per platform that works for Python 3.12, 3.13, 3.14+ instead of separate wheels for each version.
 
 3. **Validates wheels**: Runs `twine check --strict` on all artifacts
 
@@ -35,10 +35,10 @@ The published wheels support:
 
 | Platform | Architectures | Python Versions |
 |----------|---------------|-----------------|
-| Linux (glibc) | x86_64, aarch64 | 3.10+ |
-| Linux (musl) | x86_64, aarch64 | 3.10+ |
-| macOS | x86_64, aarch64, universal2 | 3.10+ |
-| Windows | x64, aarch64 | 3.10+ |
+| Linux (glibc) | x86_64, aarch64 | 3.12+ |
+| Linux (musl) | x86_64, aarch64 | 3.12+ |
+| macOS | x86_64, aarch64, universal2 | 3.12+ |
+| Windows | x64, aarch64 | 3.12+ |
 
 ## One-Time Setup
 
@@ -131,7 +131,7 @@ If you prefer to release manually:
 ### What Happens After Tag Push
 
 **GitHub Actions automatically**:
-- Runs tests across Python 3.10-3.14
+- Runs tests across Python 3.12-3.14
 - Builds wheels for all platforms
 - Validates all wheels
 - Publishes to PyPI (if tests pass)
@@ -252,17 +252,17 @@ All use:
 ### Problem: Multiple Wheels Needed
 
 Traditional pure-Rust Python extensions need separate wheels for:
-- Each Python version (3.10, 3.11, 3.12, 3.13, 3.14)
+- Each Python version (3.12, 3.13, 3.14)
 - Each platform (Linux, macOS, Windows)
 - Each architecture (x86_64, aarch64, etc.)
 
-**Result**: 5 Python versions × 3 platforms × 2 architectures = **30+ wheels!**
+**Result**: 3 Python versions × 3 platforms × 2 architectures = **18+ wheels!**
 
 ### Solution: abi3 Stable ABI
 
 PyO3's `abi3-py310` uses Python's stable ABI:
 - Build once per platform/architecture
-- Works for ALL Python versions ≥ 3.10
+- Works for ALL Python versions ≥ 3.12
 - Reduces to: 3 platforms × 2-3 architectures = **~10 wheels**
 
 ### Why Maturin?

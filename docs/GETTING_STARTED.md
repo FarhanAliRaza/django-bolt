@@ -43,7 +43,7 @@ Django-Bolt integrates seamlessly with your existing Django projects - no need t
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.12+
 - Rust (for building the extension)
 - A Django project
 

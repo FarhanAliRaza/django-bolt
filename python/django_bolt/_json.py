@@ -140,7 +140,7 @@ def decode(value: bytes | str) -> Any:
     return _get_decoder().decode(value)
 
 
-def decode_typed(
+def decode_typed[T](
     value: bytes | str,
     target_type: type[T],
     strict: bool = True,

@@ -6,7 +6,7 @@ Revocation is OPTIONAL - only checked if user provides a handler.
 """
 
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from django.apps import apps
 from django.core.cache import caches
@@ -244,7 +244,7 @@ class DjangoORMRevocation(RevocationStore):
         return await self.model.objects.filter(jti=jti).aexists()
 
     async def revoke(self, jti: str, ttl: int | None = None) -> None:
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl or 86400 * 30)
+        expires_at = datetime.now(UTC) + timedelta(seconds=ttl or 86400 * 30)
 
         await self.model.objects.aupdate_or_create(
             jti=jti,

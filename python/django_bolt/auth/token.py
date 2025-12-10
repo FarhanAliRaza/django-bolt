@@ -7,7 +7,7 @@ token creation and inspection.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
@@ -15,17 +15,17 @@ import jwt
 
 def _normalize_datetime(value: datetime) -> datetime:
     """
-    Convert datetime to timezone.utc and strip microseconds for consistent JWT claims.
+    Convert datetime to UTC and strip microseconds for consistent JWT claims.
 
     Args:
         value: A datetime instance
 
     Returns:
-        A normalized datetime in timezone.utc without microseconds
+        A normalized datetime in UTC without microseconds
     """
     if value.tzinfo is not None:
-        value = value.astimezone(timezone.utc)
-    return value.replace(microsecond=0, tzinfo=timezone.utc)
+        value = value.astimezone(UTC)
+    return value.replace(microsecond=0, tzinfo=UTC)
 
 
 @dataclass
@@ -53,7 +53,7 @@ class Token:
     Example:
         >>> token = Token(
         ...     sub="user123",
-        ...     exp=datetime.now(timezone.utc) + timedelta(hours=1),
+        ...     exp=datetime.now(UTC) + timedelta(hours=1),
         ...     is_staff=True,
         ...     permissions=["users.view", "users.edit"]
         ... )
@@ -66,7 +66,7 @@ class Token:
     sub: str
     """Subject - typically the user ID or identifier (required)"""
 
-    iat: datetime = field(default_factory=lambda: _normalize_datetime(datetime.now(timezone.utc)))
+    iat: datetime = field(default_factory=lambda: _normalize_datetime(datetime.now(UTC)))
     """Issued at - timestamp when token was created"""
 
     iss: str | None = None
@@ -111,7 +111,7 @@ class Token:
         if isinstance(self.exp, datetime):
             self.exp = _normalize_datetime(self.exp)
             if not self._skip_validation:
-                now = _normalize_datetime(datetime.now(timezone.utc))
+                now = _normalize_datetime(datetime.now(UTC))
                 if self.exp.timestamp() <= now.timestamp():
                     raise ValueError("exp (expiration) must be in the future")
         else:
@@ -121,7 +121,7 @@ class Token:
         if isinstance(self.iat, datetime):
             self.iat = _normalize_datetime(self.iat)
             if not self._skip_validation:
-                now = _normalize_datetime(datetime.now(timezone.utc))
+                now = _normalize_datetime(datetime.now(UTC))
                 if self.iat.timestamp() > now.timestamp():
                     raise ValueError("iat (issued at) must be current or past time")
 
@@ -251,11 +251,11 @@ class Token:
             )
 
             # Convert timestamps back to datetime
-            exp = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
-            iat = datetime.fromtimestamp(payload.get("iat", payload["exp"] - 3600), tz=timezone.utc)
+            exp = datetime.fromtimestamp(payload["exp"], tz=UTC)
+            iat = datetime.fromtimestamp(payload.get("iat", payload["exp"] - 3600), tz=UTC)
             nbf = None
             if "nbf" in payload:
-                nbf = datetime.fromtimestamp(payload["nbf"], tz=timezone.utc)
+                nbf = datetime.fromtimestamp(payload["nbf"], tz=UTC)
 
             # Extract known fields
             known_fields = {
@@ -313,7 +313,7 @@ class Token:
         if expires_delta is None:
             expires_delta = timedelta(hours=1)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         exp = now + expires_delta
 
         return cls(

@@ -406,7 +406,7 @@ class WebSocketTestClient:
                 self._server_to_client.get(),
                 timeout=timeout
             )
-        except TimeoutError as e:
+        except asyncio.TimeoutError as e:
             raise TimeoutError(f"No message received within {timeout}s") from e
 
     async def receive_text(self, timeout: float = 5.0) -> str:

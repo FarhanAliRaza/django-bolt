@@ -25,7 +25,7 @@ import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from functools import wraps
-from typing import Any, TypeVar
+from typing import Any, Generic, TypeVar
 
 import msgspec
 from asgiref.sync import sync_to_async
@@ -44,7 +44,7 @@ __all__ = [
 T = TypeVar("T")
 
 
-class PaginatedResponse[T](msgspec.Struct):
+class PaginatedResponse(msgspec.Struct, Generic[T]):
     """
     Standard paginated response structure.
 

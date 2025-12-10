@@ -22,9 +22,7 @@ from typing import (
 try:
     from typing import NotRequired, TypedDict
 except ImportError:
-    from typing import NotRequired
-
-    from typing_extensions import TypedDict
+    from typing_extensions import NotRequired, TypedDict
 
 if TYPE_CHECKING:
     pass

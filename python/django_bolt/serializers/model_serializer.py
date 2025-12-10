@@ -408,19 +408,15 @@ class ModelSerializer(Serializer, metaclass=ModelSerializerMeta):
         
         # Explicitly support DRF-style Meta
         meta = getattr(cls, "Meta", None)
-        # print(f"DEBUG: {cls.__name__} _collect_meta_config. Meta: {meta}")
         if meta:
             ro = getattr(meta, "read_only", set())
             wo = getattr(meta, "write_only", set())
-            # print(f"DEBUG: ro={ro}, wo={wo}")
             
             # Update the immutable sets
             if ro:
                 cls.__read_only_fields__ = cls.__read_only_fields__ | frozenset(ro)
             if wo:
                 cls.__write_only_fields__ = cls.__write_only_fields__ | frozenset(wo)
-            
-            # print(f"DEBUG: Final read_only={cls.__read_only_fields__}")
     
     def create(self, validated_data: dict[str, Any]) -> models.Model:
         """

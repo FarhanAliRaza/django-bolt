@@ -100,12 +100,6 @@ class TestModelSerializerBasics:
         # This is needed to pick up read_only from _FieldMarker (like id)
         ReadOnlySerializer._lazy_collect_field_configs()
         
-        # Debugging info
-        print(f"Meta present: {hasattr(ReadOnlySerializer, 'Meta')}")
-        if hasattr(ReadOnlySerializer, 'Meta'):
-            print(f"Meta.read_only: {getattr(ReadOnlySerializer.Meta, 'read_only', 'MISSING')}")
-        print(f"ReadOnly Fields: {ReadOnlySerializer.__read_only_fields__}")
-
         assert "email" in ReadOnlySerializer.__read_only_fields__
         # id is auto-detected as read_only (AutoField)
         assert "id" in ReadOnlySerializer.__read_only_fields__

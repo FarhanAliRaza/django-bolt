@@ -24,9 +24,8 @@ constraints. This is msgspec's design - Meta constraints are for parsing.
 
 from datetime import datetime
 from typing import Annotated
-
-import msgspec
 import pytest
+import msgspec
 
 from django_bolt.serializers import (
     URL,
@@ -36,6 +35,7 @@ from django_bolt.serializers import (
     NonEmptyStr,
     PositiveInt,
     Serializer,
+    ValidationError,
     computed_field,
     create_serializer,
     create_serializer_set,
@@ -315,9 +315,9 @@ class TestFromModelWithDjango:
 
         serializer = UserSerializer.from_model(user)
 
-        # Validators should have run
-        assert serializer.username == "testuser"
-        assert serializer.email == "test@example.com"
+        # Validators are bypassed in from_model (suppress_validation)
+        assert serializer.username == "TestUser"
+        assert serializer.email == "TEST@EXAMPLE.COM"
 
 
 class TestToModelWithDjango:
@@ -444,9 +444,9 @@ class TestFieldValidatorsWithDjango:
 
         serializer = UserSerializer.from_model(user)
 
-        # Validators should lowercase
-        assert serializer.username == "mixedcase"
-        assert serializer.email == "upper@case.com"
+        # Validators are bypassed in from_model (suppress_validation)
+        assert serializer.username == "MixedCase"
+        assert serializer.email == "UPPER@CASE.COM"
 
     def test_field_validator_on_parse(self):
         """Test field validators run during JSON parsing."""
@@ -492,7 +492,7 @@ class TestModelValidatorsWithDjango:
     def test_model_validator_fails(self):
         """Test model validator raises on invalid data."""
         # Model validators raise msgspec.ValidationError (wrapping the ValueError)
-        with pytest.raises(msgspec.ValidationError, match="Passwords do not match"):
+        with pytest.raises(ValidationError, match="Passwords do not match"):
             UserCreateSerializer(
                 username="user",
                 email="user@example.com",
@@ -505,7 +505,7 @@ class TestModelValidatorsWithDjango:
         json_data = b'{"username": "user", "email": "user@example.com", "password": "abc", "password_confirm": "xyz"}'
 
         # Model validators raise msgspec.ValidationError
-        with pytest.raises(msgspec.ValidationError, match="Passwords do not match"):
+        with pytest.raises(ValidationError, match="Passwords do not match"):
             UserCreateSerializer.model_validate_json(json_data)
 
 
@@ -789,7 +789,7 @@ class TestValidatedTypesWithDjango:
         assert author.email == "valid@example.com"
 
         # Invalid email
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(ValidationError):
             StrictAuthorSerializer.model_validate_json(
                 b'{"name": "Test", "email": "invalid-email"}'
             )
@@ -806,11 +806,11 @@ class TestValidatedTypesWithDjango:
         assert item.quantity == 10
 
         # Invalid (zero)
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(ValidationError):
             ItemSerializer.model_validate_json(b'{"name": "Widget", "quantity": 0}')
 
         # Invalid (negative)
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(ValidationError):
             ItemSerializer.model_validate_json(b'{"name": "Widget", "quantity": -5}')
 
     def test_geographic_types_validation(self):
@@ -823,13 +823,13 @@ class TestValidatedTypesWithDjango:
         assert loc.longitude == -74.0060
 
         # Invalid latitude (> 90)
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(ValidationError):
             LocationSerializer.model_validate_json(
                 b'{"name": "Invalid", "latitude": 91.0, "longitude": 0}'
             )
 
         # Invalid longitude (> 180)
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(ValidationError):
             LocationSerializer.model_validate_json(
                 b'{"name": "Invalid", "latitude": 0, "longitude": 181.0}'
             )
@@ -839,7 +839,7 @@ class TestValidatedTypesWithDjango:
         UserMini = UserSerializer.subset("id", "username", "email")
 
         # Validation should still work (via JSON parsing)
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(ValidationError):
             UserMini.model_validate_json(b'{"id": 1, "username": "ab", "email": "invalid"}')
 
 
@@ -1550,7 +1550,7 @@ class TestComprehensiveSerializer:
 
     def test_model_validator_fails_on_invalid_discount(self):
         """Test model validator rejects invalid discount on zero price."""
-        with pytest.raises(msgspec.ValidationError, match="Cannot apply discount"):
+        with pytest.raises(ValidationError, match="Cannot apply discount"):
             ComprehensiveProductSerializer(
                 id=1,
                 name="Invalid Product",
@@ -1562,7 +1562,7 @@ class TestComprehensiveSerializer:
 
     def test_model_validator_fails_on_100_percent_discount(self):
         """Test model validator rejects 100% discount."""
-        with pytest.raises(msgspec.ValidationError, match="Discount cannot be 100%"):
+        with pytest.raises(ValidationError, match="Discount cannot be 100%"):
             ComprehensiveProductSerializer(
                 id=1,
                 name="Free Product",
@@ -2075,7 +2075,7 @@ class TestComprehensiveSerializer:
             "quantity": 1
         }'''
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(ValidationError):
             ComprehensiveProductSerializer.model_validate_json(json_data)
 
     # -------------------------------------------------------------------------
@@ -2176,7 +2176,7 @@ class TestComprehensiveSerializer:
             "manufacturer_email": "not-an-email"
         }'''
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(ValidationError):
             ComprehensiveProductSerializer.model_validate_json(json_data)
 
     def test_validated_type_url_valid(self):
@@ -2203,7 +2203,7 @@ class TestComprehensiveSerializer:
             "quantity": 0
         }'''
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(ValidationError):
             ComprehensiveProductSerializer.model_validate_json(json_data)
 
     # -------------------------------------------------------------------------

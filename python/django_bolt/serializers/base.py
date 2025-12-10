@@ -404,16 +404,18 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
     def __post_init__(self) -> None:
         """
         Run all field and model validators after struct initialization.
+        
+        This delegates to _validate_instance() to allow reuse by model_validate().
+        """
+        self._validate_instance()
 
-        Also fixes _FieldMarker defaults - msgspec stores the _FieldMarker object
-        as the default value, so we need to replace it with the actual default.
-
-        Validators are executed in order:
-        1. Fix _FieldMarker defaults (only if field() is used)
-        2. Field validators with mode='before'
-        3. Field validators with mode='after'
-        4. Model validators with mode='before'
-        5. Model validators with mode='after'
+    def _validate_instance(self) -> None:
+        """
+        Run validation logic (post-init or post-decode).
+        
+        1. Fix _FieldMarker defaults
+        2. Run field validators
+        3. Run model validators
         """
         cls = self.__class__
 
@@ -587,7 +589,11 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 if validated_value is not current_value:
                     _setattr(self, field_name, validated_value)
             except ValidationError as e:
-                collector.merge(e, prefix=field_name)
+                # Merge existing structured errors, or add detail if flat error
+                if e.errors:
+                    collector.merge(e, prefix=field_name)
+                elif e.detail:
+                    collector.add_error(field_name, e.detail)
             except (ValueError, TypeError) as e:
                 collector.add_error(field_name, str(e))
             except Exception as e:
@@ -679,7 +685,9 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             # author.email == 'john@example.com' (lowercased)
         """
         try:
-            return msgspec.convert(data, type=cls)
+            instance = msgspec.convert(data, type=cls)
+            instance._validate_instance()
+            return instance
         except MsgspecValidationError as e:
             # Wrap msgspec validation errors
             # Only simplistic wrapping here, as msgspec errors are flat strings
@@ -708,7 +716,9 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             # author.email == 'john@example.com' (lowercased)
         """
         try:
-            return msgspec.json.decode(json_data, type=cls)
+            instance = msgspec.json.decode(json_data, type=cls)
+            instance._validate_instance()
+            return instance
         except MsgspecValidationError as e:
             raise ValidationError(detail=str(e)) from e
 

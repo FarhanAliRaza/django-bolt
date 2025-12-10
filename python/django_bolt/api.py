@@ -40,6 +40,7 @@ from .decorators import ActionHandler
 from .dependencies import resolve_dependency
 from .error_handlers import handle_exception
 from .exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
+from django_bolt.serializers import ValidationError
 from .logging.middleware import LoggingMiddleware, create_logging_middleware
 from .middleware import CompressionConfig
 from .middleware.compiler import add_optimization_flags_to_metadata, compile_middleware_meta
@@ -1928,6 +1929,14 @@ class BoltAPI:
                 logging_middleware.log_response(request, status_code, duration)
 
             return response
+
+        except (msgspec.ValidationError, ValidationError) as ve:
+            # Handle validation errors gracefully
+            if logging_middleware and start_time is not None:
+                duration = time.time() - start_time
+                logging_middleware.log_response(request, 400, duration)
+
+            return 400, [("content-type", "application/json")], _json.encode({"detail": str(ve)})
 
         except HTTPException as he:
             # Log exception if logging enabled

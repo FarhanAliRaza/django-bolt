@@ -358,5 +358,214 @@ class TestCorsOriginSchemeRequired:
                    response.headers.get("Access-Control-Allow-Origin") != "https://evil.com"
 
 
+class TestCorsOnErrorResponses:
+    """
+    Test CORS headers on error responses (401, 403, 429).
+
+    BUG FIXED: Previously, error responses (401 Unauthorized, 403 Forbidden,
+    429 Too Many Requests) did not include CORS headers, causing browsers to
+    block JavaScript from reading the error message.
+    """
+
+    def test_401_unauthorized_has_cors_headers_with_global_cors(self):
+        """
+        Test that 401 Unauthorized response includes CORS headers.
+
+        This test would FAIL without the fix because:
+        - Before: 401 response had no CORS headers
+        - After:  401 response includes Access-Control-Allow-Origin
+
+        Without CORS headers, browsers block JS from reading the 401 error.
+        """
+        from django_bolt.auth import IsAuthenticated, JWTAuthentication
+
+        api = BoltAPI()
+
+        @api.get(
+            "/protected",
+            auth=[JWTAuthentication(secret="test-secret")],
+            guards=[IsAuthenticated()],
+        )
+        async def protected_endpoint():
+            return {"message": "protected"}
+
+        global_origins = ["https://example.com"]
+
+        with TestClient(api, use_http_layer=True, cors_allowed_origins=global_origins) as client:
+            # Request without auth token
+            response = client.get(
+                "/protected",
+                headers={"Origin": "https://example.com"},
+            )
+
+            # Should be 401
+            assert response.status_code == 401, \
+                f"Expected 401, got {response.status_code}"
+
+            # CRITICAL: Must have CORS headers so browser can read error
+            assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com", \
+                f"401 response missing CORS headers: {dict(response.headers)}"
+
+    def test_403_forbidden_has_cors_headers_with_global_cors(self):
+        """
+        Test that 403 Forbidden response includes CORS headers.
+
+        This test would FAIL without the fix because:
+        - Before: 403 response had no CORS headers
+        - After:  403 response includes Access-Control-Allow-Origin
+        """
+        import time
+
+        import jwt
+
+        from django_bolt.auth import IsAdminUser, JWTAuthentication
+
+        api = BoltAPI()
+
+        @api.get(
+            "/admin-only",
+            auth=[JWTAuthentication(secret="test-secret")],
+            guards=[IsAdminUser()],
+        )
+        async def admin_endpoint():
+            return {"message": "admin only"}
+
+        global_origins = ["https://example.com"]
+
+        # Create a valid token but NOT an admin
+        token = jwt.encode(
+            {
+                "sub": "regular-user",
+                "exp": int(time.time()) + 3600,
+                "is_superuser": False,
+            },
+            "test-secret",
+            algorithm="HS256",
+        )
+
+        with TestClient(api, use_http_layer=True, cors_allowed_origins=global_origins) as client:
+            response = client.get(
+                "/admin-only",
+                headers={
+                    "Origin": "https://example.com",
+                    "Authorization": f"Bearer {token}",
+                },
+            )
+
+            # Should be 403 (authenticated but not admin)
+            assert response.status_code == 403, \
+                f"Expected 403, got {response.status_code}"
+
+            # CRITICAL: Must have CORS headers so browser can read error
+            assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com", \
+                f"403 response missing CORS headers: {dict(response.headers)}"
+
+    def test_401_has_cors_with_route_level_cors(self):
+        """
+        Test that 401 response uses route-level CORS config when available.
+        """
+        from django_bolt.auth import IsAuthenticated, JWTAuthentication
+
+        api = BoltAPI()
+
+        @api.get(
+            "/protected-with-cors",
+            auth=[JWTAuthentication(secret="test-secret")],
+            guards=[IsAuthenticated()],
+        )
+        @cors(origins=["https://route-level.com"])
+        async def protected_with_cors():
+            return {"message": "protected"}
+
+        with TestClient(api, use_http_layer=True) as client:
+            response = client.get(
+                "/protected-with-cors",
+                headers={"Origin": "https://route-level.com"},
+            )
+
+            assert response.status_code == 401
+
+            # Should use route-level CORS config
+            assert response.headers.get("Access-Control-Allow-Origin") == "https://route-level.com", \
+                f"401 should use route-level CORS: {dict(response.headers)}"
+
+    def test_403_has_cors_with_route_level_cors(self):
+        """
+        Test that 403 response uses route-level CORS config when available.
+        """
+        import time
+
+        import jwt
+
+        from django_bolt.auth import IsAdminUser, JWTAuthentication
+
+        api = BoltAPI()
+
+        @api.get(
+            "/admin-with-cors",
+            auth=[JWTAuthentication(secret="test-secret")],
+            guards=[IsAdminUser()],
+        )
+        @cors(origins=["https://route-level.com"])
+        async def admin_with_cors():
+            return {"message": "admin"}
+
+        token = jwt.encode(
+            {
+                "sub": "regular-user",
+                "exp": int(time.time()) + 3600,
+                "is_superuser": False,
+            },
+            "test-secret",
+            algorithm="HS256",
+        )
+
+        with TestClient(api, use_http_layer=True) as client:
+            response = client.get(
+                "/admin-with-cors",
+                headers={
+                    "Origin": "https://route-level.com",
+                    "Authorization": f"Bearer {token}",
+                },
+            )
+
+            assert response.status_code == 403
+
+            # Should use route-level CORS config
+            assert response.headers.get("Access-Control-Allow-Origin") == "https://route-level.com", \
+                f"403 should use route-level CORS: {dict(response.headers)}"
+
+    def test_disallowed_origin_no_cors_on_401(self):
+        """
+        Test that 401 response does NOT include CORS headers for disallowed origin.
+        """
+        from django_bolt.auth import IsAuthenticated, JWTAuthentication
+
+        api = BoltAPI()
+
+        @api.get(
+            "/protected",
+            auth=[JWTAuthentication(secret="test-secret")],
+            guards=[IsAuthenticated()],
+        )
+        async def protected():
+            return {"message": "protected"}
+
+        global_origins = ["https://allowed.com"]
+
+        with TestClient(api, use_http_layer=True, cors_allowed_origins=global_origins) as client:
+            response = client.get(
+                "/protected",
+                headers={"Origin": "https://evil.com"},
+            )
+
+            assert response.status_code == 401
+
+            # Should NOT have CORS header for disallowed origin
+            cors_header = response.headers.get("Access-Control-Allow-Origin")
+            assert cors_header != "https://evil.com", \
+                f"Should not allow evil.com origin: {cors_header}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

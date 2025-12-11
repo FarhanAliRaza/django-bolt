@@ -17,7 +17,6 @@ import contextlib
 import contextvars
 import io
 import logging
-import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -678,78 +677,51 @@ class DjangoMiddlewareStack:
         7. Run Django built-in process_response hooks DIRECTLY (reverse order)
         8. Convert Django response to Bolt response ONCE
         """
-        # TIMING: Start total measurement
-        t_total_start = time.perf_counter()
-
         # 1. Single Bolt→Django conversion
-        t0 = time.perf_counter()
         django_request = _to_django_request(request)
-        t_convert_request = time.perf_counter() - t0
 
         # 2. Run Django built-in process_request hooks DIRECTLY (fast path - no blocking I/O)
-        # Uses pre-computed list (no hasattr check needed)
-        t0 = time.perf_counter()
         for middleware in self._django_process_request:
             response = middleware.process_request(django_request)
             if response is not None:
-                # Short-circuit: middleware returned a response
                 return _to_bolt_response(response)
-        t_django_process_request = time.perf_counter() - t0
 
         # 3. Run third-party process_request hooks via sync_to_async (safe for blocking I/O)
-        # Uses pre-computed list (no hasattr check needed)
-        t0 = time.perf_counter()
         for middleware in self._thirdparty_process_request:
             response = await sync_to_async(
                 middleware.process_request, thread_sensitive=True
             )(django_request)
             if response is not None:
-                # Short-circuit: middleware returned a response
                 return _to_bolt_response(response)
-        t_thirdparty_process_request = time.perf_counter() - t0
 
         # Sync Django request attributes to Bolt request
-        t0 = time.perf_counter()
         _sync_request_attributes(django_request, request)
-        t_sync_attrs = time.perf_counter() - t0
 
         # 4. Run process_view hooks (for CSRF validation, etc.)
-        # Use pre-created singletons (no allocation on hot path)
-
         # Pick the right singleton based on csrf_exempt state
-        t0 = time.perf_counter()
         csrf_exempt = (
             hasattr(request, 'state') and request.state
             and request.state.get("_csrf_exempt", False)
         )
         _csrf_callback = _csrf_callback_exempt if csrf_exempt else _csrf_callback_not_exempt
-        t_csrf_check = time.perf_counter() - t0
 
         # Run Django built-in process_view hooks (includes CsrfViewMiddleware)
-        # Uses pre-computed list (no hasattr check needed)
-        t0 = time.perf_counter()
         for middleware in self._django_process_view:
             response = middleware.process_view(
                 django_request, _csrf_callback, _EMPTY_TUPLE, _EMPTY_DICT
             )
             if response is not None:
-                # Middleware returned a response (e.g., CSRF validation failed)
                 return _to_bolt_response(response)
-        t_django_process_view = time.perf_counter() - t0
 
         # Run third-party process_view hooks via sync_to_async
-        # Uses pre-computed list (no hasattr check needed)
-        t0 = time.perf_counter()
         for middleware in self._thirdparty_process_view:
             response = await sync_to_async(
                 middleware.process_view, thread_sensitive=True
             )(django_request, _csrf_callback, _EMPTY_TUPLE, _EMPTY_DICT)
             if response is not None:
                 return _to_bolt_response(response)
-        t_thirdparty_process_view = time.perf_counter() - t0
 
         # 5. Execute handler (with or without __call__-only middleware chain)
-        t0 = time.perf_counter()
         if self._call_middleware_chain is not None:
             # SLOW PATH: Have __call__-only middleware - need sync_to_async
             ctx = {
@@ -768,53 +740,19 @@ class DjangoMiddlewareStack:
             # FAST PATH: No __call__-only middleware - direct await!
             bolt_response = await self.get_response(request)
             django_response = _to_django_response(bolt_response)
-        t_handler = time.perf_counter() - t0
 
         # 6. Run third-party process_response hooks via sync_to_async (reverse order)
-        # Uses pre-reversed list (no reversed() call, no hasattr check)
-        t0 = time.perf_counter()
         for middleware in self._thirdparty_process_response_reversed:
             django_response = await sync_to_async(
                 middleware.process_response, thread_sensitive=True
             )(django_request, django_response)
-        t_thirdparty_process_response = time.perf_counter() - t0
 
         # 7. Run Django built-in process_response hooks DIRECTLY (reverse order)
-        # Uses pre-reversed list (no reversed() call, no hasattr check)
-        t0 = time.perf_counter()
         for middleware in self._django_process_response_reversed:
             django_response = middleware.process_response(django_request, django_response)
-        t_django_process_response = time.perf_counter() - t0
 
         # 8. Single Django→Bolt conversion at the end
-        t0 = time.perf_counter()
-        result = _to_bolt_response(django_response)
-        t_convert_response = time.perf_counter() - t0
-
-        # TIMING: Calculate total
-        t_total = time.perf_counter() - t_total_start
-
-        # Log timing breakdown (in microseconds for readability)
-        logger.info(
-            "DjangoMiddlewareStack timing (μs): "
-            "total=%.1f | convert_req=%.1f | dj_proc_req=%.1f | 3p_proc_req=%.1f | "
-            "sync_attrs=%.1f | csrf_check=%.1f | dj_proc_view=%.1f | 3p_proc_view=%.1f | "
-            "handler=%.1f | 3p_proc_resp=%.1f | dj_proc_resp=%.1f | convert_resp=%.1f",
-            t_total * 1_000_000,
-            t_convert_request * 1_000_000,
-            t_django_process_request * 1_000_000,
-            t_thirdparty_process_request * 1_000_000,
-            t_sync_attrs * 1_000_000,
-            t_csrf_check * 1_000_000,
-            t_django_process_view * 1_000_000,
-            t_thirdparty_process_view * 1_000_000,
-            t_handler * 1_000_000,
-            t_thirdparty_process_response * 1_000_000,
-            t_django_process_response * 1_000_000,
-            t_convert_response * 1_000_000,
-        )
-
-        return result
+        return _to_bolt_response(django_response)
 
     def __repr__(self) -> str:
         names = [cls.__name__ for cls in self.middleware_classes]

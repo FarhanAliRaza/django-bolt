@@ -1277,21 +1277,16 @@ pub fn handle_actix_http_request(
                 });
 
                 match result {
-                    Ok((status_code, mut resp_headers, resp_body)) => {
-                        // Add Content-Encoding: identity header if compression should be skipped
-                        if should_skip_compression {
-                            resp_headers.push(("content-encoding".to_string(), "identity".to_string()));
-                        }
-
-                        let mut response = actix_web::HttpResponse::build(
+                    Ok((status_code, resp_headers, resp_body)) => {
+                        // Use shared response builder (same as production handler.rs)
+                        // This ensures consistent header handling, including multiple Set-Cookie
+                        let http_response = crate::response_builder::build_response_with_headers(
                             actix_web::http::StatusCode::from_u16(status_code)
                                 .unwrap_or(actix_web::http::StatusCode::OK),
+                            resp_headers,
+                            should_skip_compression,
+                            resp_body,
                         );
-                        for (name, value) in &resp_headers {
-                            response.insert_header((name.as_str(), value.as_str()));
-                        }
-
-                        let http_response = response.body(resp_body);
 
                         // NOTE: CORS headers are NOT added here - they must be added by handle_test_request_for
                         // to match production behavior in handler.rs. This ensures tests accurately validate

@@ -988,3 +988,203 @@ class TestCSRFMiddleware:
         with TestClient(api) as client:
             response = client.options("/test")
             assert response.status_code == 200
+
+
+# =============================================================================
+# Test Multiple Set-Cookie Headers (Cookie Overwriting Bug Fix)
+# =============================================================================
+
+
+class MultipleCookieMiddleware:
+    """
+    Middleware that sets multiple cookies on the response.
+
+    This middleware is used to test that multiple Set-Cookie headers are
+    preserved and not overwritten. HTTP allows multiple Set-Cookie headers
+    (one per cookie), but naive dict-based implementations would overwrite
+    previous cookies since dict keys must be unique.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        # Set multiple cookies - each should result in a separate Set-Cookie header
+        response.set_cookie("session_id", "abc123", httponly=True)
+        response.set_cookie("user_pref", "dark_mode", max_age=86400)
+        response.set_cookie("tracking_consent", "accepted", secure=True, samesite="Strict")
+        return response
+
+
+class TestMultipleCookieHeaders:
+    """
+    Tests for multiple Set-Cookie header support.
+
+    HTTP allows multiple Set-Cookie headers because each cookie must be sent
+    in its own header. This test verifies that middleware setting multiple
+    cookies results in all cookies being present in the response.
+
+    This test WILL FAIL if:
+    - Set-Cookie headers are stored in a dict (causing overwrites)
+    - Only the last Set-Cookie header survives
+    - Cookies are merged incorrectly
+    """
+
+    def test_multiple_cookies_all_preserved(self):
+        """
+        Test that middleware setting multiple cookies preserves ALL cookies.
+
+        This is the core test for the cookie overwriting bug fix.
+        With the old dict-based implementation, only one cookie would survive
+        because dict can't have duplicate keys.
+        """
+        api = BoltAPI()
+        api.middleware = [DjangoMiddlewareStack([MultipleCookieMiddleware])]
+
+        @api.get("/test")
+        async def test_route():
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+
+            # Get all Set-Cookie headers
+            # response.headers is a case-insensitive dict, but for multiple
+            # headers with the same name, we need to check the raw headers
+            set_cookie_headers = []
+            for key, value in response.headers.multi_items():
+                if key.lower() == "set-cookie":
+                    set_cookie_headers.append(value)
+
+            # CRITICAL: All THREE cookies must be present
+            # If this fails with only 1 cookie, the old bug is back
+            assert len(set_cookie_headers) >= 3, (
+                f"Expected at least 3 Set-Cookie headers, got {len(set_cookie_headers)}. "
+                f"This indicates cookies are being overwritten. "
+                f"Headers: {set_cookie_headers}"
+            )
+
+            # Verify each specific cookie is present
+            all_cookies = "\n".join(set_cookie_headers)
+
+            assert "session_id=abc123" in all_cookies, (
+                f"session_id cookie missing from response. "
+                f"Set-Cookie headers: {set_cookie_headers}"
+            )
+            assert "user_pref=dark_mode" in all_cookies, (
+                f"user_pref cookie missing from response. "
+                f"Set-Cookie headers: {set_cookie_headers}"
+            )
+            assert "tracking_consent=accepted" in all_cookies, (
+                f"tracking_consent cookie missing from response. "
+                f"Set-Cookie headers: {set_cookie_headers}"
+            )
+
+    def test_cookies_have_correct_attributes(self):
+        """
+        Test that cookie attributes (HttpOnly, Secure, SameSite) are preserved.
+
+        This verifies that not only are all cookies present, but their
+        attributes are correctly passed through.
+        """
+        api = BoltAPI()
+        api.middleware = [DjangoMiddlewareStack([MultipleCookieMiddleware])]
+
+        @api.get("/test")
+        async def test_route():
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+
+            # Collect all Set-Cookie headers
+            set_cookie_headers = []
+            for key, value in response.headers.multi_items():
+                if key.lower() == "set-cookie":
+                    set_cookie_headers.append(value)
+
+            all_cookies = "\n".join(set_cookie_headers)
+
+            # Check session_id has HttpOnly
+            # Find the session_id cookie line
+            session_cookie = next(
+                (c for c in set_cookie_headers if "session_id=" in c), None
+            )
+            assert session_cookie is not None, "session_id cookie not found"
+            assert "httponly" in session_cookie.lower(), (
+                f"session_id cookie missing HttpOnly attribute: {session_cookie}"
+            )
+
+            # Check tracking_consent has Secure and SameSite=Strict
+            tracking_cookie = next(
+                (c for c in set_cookie_headers if "tracking_consent=" in c), None
+            )
+            assert tracking_cookie is not None, "tracking_consent cookie not found"
+            assert "secure" in tracking_cookie.lower(), (
+                f"tracking_consent cookie missing Secure attribute: {tracking_cookie}"
+            )
+            assert "samesite=strict" in tracking_cookie.lower(), (
+                f"tracking_consent cookie missing SameSite=Strict: {tracking_cookie}"
+            )
+
+    def test_handler_can_also_set_cookies(self):
+        """
+        Test that handler can set cookies and they combine with middleware cookies.
+
+        This verifies the complete cookie flow: middleware sets some cookies,
+        handler sets additional cookies, and ALL of them appear in response.
+        """
+        api = BoltAPI()
+        api.middleware = [DjangoMiddlewareStack([MultipleCookieMiddleware])]
+
+        @api.get("/test")
+        async def test_route():
+            # Handler returns data, middleware will add cookies
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+
+            # Count Set-Cookie headers
+            cookie_count = sum(
+                1 for key, _ in response.headers.multi_items()
+                if key.lower() == "set-cookie"
+            )
+
+            # Middleware sets 3 cookies
+            assert cookie_count >= 3, (
+                f"Expected at least 3 cookies from middleware, got {cookie_count}"
+            )
+
+    def test_no_cookies_when_middleware_doesnt_set_them(self):
+        """
+        Test that responses without cookies don't have spurious Set-Cookie headers.
+
+        This is a sanity check to ensure we're not adding empty cookie headers.
+        """
+        api = BoltAPI()
+        # No middleware that sets cookies
+        api.middleware = [DjangoMiddlewareStack([HeaderAddingMiddleware])]
+
+        @api.get("/test")
+        async def test_route():
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+
+            # Count Set-Cookie headers
+            cookie_count = sum(
+                1 for key, _ in response.headers.multi_items()
+                if key.lower() == "set-cookie"
+            )
+
+            # Should have no cookies (HeaderAddingMiddleware doesn't set cookies)
+            assert cookie_count == 0, (
+                f"Expected no Set-Cookie headers, got {cookie_count}"
+            )

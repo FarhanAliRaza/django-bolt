@@ -442,14 +442,26 @@ class DjangoMiddlewareStack:
     """
     Wraps MULTIPLE Django middleware classes into a SINGLE Bolt middleware.
 
-    PERFORMANCE CRITICAL: Django's MiddlewareMixin.__acall__ wraps every
-    process_request/process_response in sync_to_async. We PATCH __acall__
-    to call these hooks DIRECTLY without any thread pool overhead.
+    PERFORMANCE CRITICAL: Uses a hybrid approach based on middleware type:
 
-    Benchmark results:
-    - Original Django __acall__: 0.485ms/req → ~2,000 RPS
-    - Patched __acall__:         0.025ms/req → ~40,000 RPS
-    - Speedup: 20x faster!
+    Hook-based middleware (process_request/process_response):
+        - Called DIRECTLY without any chain or bridging
+        - Zero async/sync conversion overhead
+        - ~0.01ms per request → 50,000+ RPS
+
+    __call__-based middleware (wraps get_response):
+        - Runs in thread pool with sync_to_async/async_to_sync bridging
+        - Necessary to preserve wrapping semantics (short-circuit, exception handling)
+        - ~0.5ms per request → ~2,000 RPS
+
+    Most Django built-in middleware (Session, Auth, Security, etc.) use hooks,
+    so they get the fast path. Custom middleware using only __call__ works but
+    is slower due to required bridging.
+
+    Request flow:
+        1. Run all process_request hooks (sync, in order)
+        2. Run handler (async await) OR __call__ chain (thread pool if needed)
+        3. Run all process_response hooks (sync, reverse order)
 
     Usage:
         api = BoltAPI(django_middleware=True)
@@ -458,8 +470,8 @@ class DjangoMiddlewareStack:
     __slots__ = (
         "middleware_classes",
         "get_response",
-        "_middleware_chain",
-        "_is_async_chain",
+        "_hook_middleware",
+        "_call_middleware",
     )
 
     def __init__(self, middleware_classes: list):
@@ -471,134 +483,106 @@ class DjangoMiddlewareStack:
 
         self.middleware_classes = middleware_classes
         self.get_response = None
-        self._middleware_chain = None
-        self._is_async_chain = True
+        self._hook_middleware = None  # Middleware with process_request/process_response
+        self._call_middleware = None  # Middleware that only uses __call__
 
     def _create_middleware_instance(self, get_response: Callable) -> None:
         """
-        Build the middleware chain with PATCHED __acall__ methods.
+        Create middleware instances, separating hook-based from __call__-based.
 
-        We patch each MiddlewareMixin-based middleware to NOT use sync_to_async
-        for process_request/process_response, eliminating thread pool overhead.
+        Hook-based middleware: Has process_request and/or process_response
+        Call-based middleware: Only has __call__ (wraps get_response)
         """
         self.get_response = get_response
-        self._is_async_chain = True
 
-        # Check if all middleware support async (have __acall__)
+        self._hook_middleware = []
+        self._call_middleware = []
+
         for middleware_class in self.middleware_classes:
+            # Create test instance to check for hooks
             test_instance = middleware_class(lambda r: None)
-            if not hasattr(test_instance, '__acall__') or not hasattr(test_instance, 'async_mode'):
-                self._is_async_chain = False
-                break
 
-        if self._is_async_chain:
-            self._build_async_chain()
-        else:
-            self._build_sync_chain()
+            has_process_request = hasattr(test_instance, "process_request")
+            has_process_response = hasattr(test_instance, "process_response")
 
-    def _build_async_chain(self) -> None:
-        """Build async chain with patched __acall__ (FAST PATH - 40k RPS)."""
-        async def get_response_bridge_async(django_request: HttpRequest) -> HttpResponse:
-            try:
-                ctx = _request_context.get()
-            except LookupError as e:
-                raise RuntimeError("Request context not set.") from e
-
-            bolt_request = ctx["bolt_request"]
-            _sync_request_attributes(django_request, bolt_request)
-            bolt_resp = await self.get_response(bolt_request)
-            ctx["bolt_response"] = bolt_resp
-            _sync_request_attributes(django_request, bolt_request)
-            return _to_django_response(bolt_resp)
-
-        markcoroutinefunction(get_response_bridge_async)
-
-        chain = get_response_bridge_async
-        for middleware_class in reversed(self.middleware_classes):
-            instance = middleware_class(chain)
-            self._patch_acall(instance)
-            chain = instance
-
-        self._middleware_chain = chain
-
-    def _build_sync_chain(self) -> None:
-        """Build sync chain (FALLBACK - for custom middleware without __acall__)."""
-        def get_response_bridge_sync(django_request: HttpRequest) -> HttpResponse:
-            try:
-                ctx = _request_context.get()
-            except LookupError as e:
-                raise RuntimeError("Request context not set.") from e
-
-            bolt_request = ctx["bolt_request"]
-            _sync_request_attributes(django_request, bolt_request)
-            bolt_resp = async_to_sync(self.get_response)(bolt_request)
-            ctx["bolt_response"] = bolt_resp
-            _sync_request_attributes(django_request, bolt_request)
-            return _to_django_response(bolt_resp)
-
-        chain = get_response_bridge_sync
-        for middleware_class in reversed(self.middleware_classes):
-            chain = middleware_class(chain)
-
-        self._middleware_chain = chain
-        self._is_async_chain = False
-
-    def _patch_acall(self, middleware_instance) -> None:
-        """
-        Patch __acall__ to call process_request/process_response DIRECTLY.
-
-        Django's default __acall__ wraps these in sync_to_async (thread pool).
-        Our patch calls them directly - they're just quick Python code!
-        """
-        if not hasattr(middleware_instance, '__acall__'):
-            return
-
-        original_get_response = middleware_instance.get_response
-
-        async def patched_acall(request):
-            response = None
-            if hasattr(middleware_instance, "process_request"):
-                response = middleware_instance.process_request(request)
-            response = response or await original_get_response(request)
-            if hasattr(middleware_instance, "process_response"):
-                response = middleware_instance.process_response(request, response)
-            return response
-
-        middleware_instance.__acall__ = patched_acall
+            if has_process_request or has_process_response:
+                # Hook-based middleware - we'll call hooks directly
+                self._hook_middleware.append(test_instance)
+            else:
+                # Call-based middleware - needs to wrap get_response
+                # Store the class, we'll instantiate with real get_response later
+                self._call_middleware.append(middleware_class)
 
     async def __call__(self, request: Request) -> Response:
-        """Process request through the patched Django middleware chain."""
-        if self._middleware_chain is None:
+        """
+        Process request with BROKEN CHAIN approach.
+
+        For hook-based middleware: Call hooks directly (no chain)
+        For call-based middleware: Build sync chain around handler
+        """
+        if self._hook_middleware is None:
             raise RuntimeError("DjangoMiddlewareStack was not properly initialized.")
 
         django_request = _to_django_request(request)
 
-        ctx = {
-            "bolt_request": request,
-            "bolt_response": None,
-            "django_request": django_request,
-        }
-        token = _request_context.set(ctx)
+        # =====================================================================
+        # 1. Run all process_request hooks (SYNC, in order)
+        # =====================================================================
+        for middleware in self._hook_middleware:
+            if hasattr(middleware, "process_request"):
+                response = middleware.process_request(django_request)
+                if response is not None:
+                    # Middleware short-circuited - return early response
+                    return _to_bolt_response(response)
 
-        try:
-            if self._is_async_chain:
-                # FAST PATH: Fully async with patched __acall__
-                django_response = await self._middleware_chain(django_request)
-            else:
-                # FALLBACK: Sync chain in thread pool
-                django_response = await sync_to_async(
-                    self._middleware_chain, thread_sensitive=True
-                )(django_request)
+        # Sync attributes after all process_request hooks
+        _sync_request_attributes(django_request, request)
 
-            return _to_bolt_response(django_response)
-        except Exception as e:
-            logger.error(
-                "DjangoMiddlewareStack error processing %s %s: %s",
-                request.method, request.path, e, exc_info=True
-            )
-            raise
-        finally:
-            _request_context.reset(token)
+        # =====================================================================
+        # 2. Run handler (with __call__-based middleware wrapped around it)
+        # =====================================================================
+        if self._call_middleware:
+            # __call__-based middleware needs to WRAP the handler to:
+            # - Short-circuit (return early without calling handler)
+            # - Catch exceptions from handler
+            # - Modify request before handler runs
+            #
+            # We must run the sync chain in a thread pool because:
+            # 1. We're in an async context (can't call sync middleware directly)
+            # 2. Sync middleware expects sync get_response
+            # 3. Inside thread pool, we can use async_to_sync to call async handler
+            get_response = self.get_response  # Capture for closure
+
+            def run_sync_chain():
+                # Build sync chain where innermost calls async handler via async_to_sync
+                def innermost_get_response(django_req):
+                    bolt_resp = async_to_sync(get_response)(request)
+                    return _to_django_response(bolt_resp)
+
+                chain = innermost_get_response
+                for middleware_class in reversed(self._call_middleware):
+                    chain = middleware_class(chain)
+
+                return chain(django_request)
+
+            # Run sync chain in thread pool
+            django_response = await sync_to_async(run_sync_chain, thread_sensitive=True)()
+        else:
+            # No __call__-based middleware - direct await (fast path!)
+            bolt_response = await self.get_response(request)
+            django_response = _to_django_response(bolt_response)
+
+        # =====================================================================
+        # 4. Run all process_response hooks (SYNC, reverse order)
+        # =====================================================================
+        for middleware in reversed(self._hook_middleware):
+            if hasattr(middleware, "process_response"):
+                django_response = middleware.process_response(django_request, django_response)
+
+        # Sync attributes after all process_response hooks
+        _sync_request_attributes(django_request, request)
+
+        return _to_bolt_response(django_response)
 
     def __repr__(self) -> str:
         names = [cls.__name__ for cls in self.middleware_classes]

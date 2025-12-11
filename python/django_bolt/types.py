@@ -561,10 +561,14 @@ class MiddlewareResponse(TypedDict, total=False):
     Type for middleware response objects.
 
     Used internally by middleware to return responses.
+
+    Note: set_cookies is a list to support multiple Set-Cookie headers.
+    HTTP allows multiple Set-Cookie headers, but dict can't have duplicate keys.
     """
     body: bytes
     status_code: int
     headers: dict[str, str]
+    set_cookies: list[str]
 
 
 __all__ = [

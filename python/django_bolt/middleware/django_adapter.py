@@ -432,10 +432,18 @@ class DjangoMiddleware:
         """Convert Django HttpResponse to MiddlewareResponse for chain compatibility."""
         headers = dict(django_response.items())
 
+        # Extract cookies into dedicated list (supports multiple Set-Cookie headers)
+        set_cookies = []
+        if hasattr(django_response, 'cookies') and django_response.cookies:
+            for cookie in django_response.cookies.values():
+                cookie_header = cookie.output(header='').strip()
+                set_cookies.append(cookie_header)
+
         return MiddlewareResponse(
             status_code=django_response.status_code,
             headers=headers,
             body=django_response.content,
+            set_cookies=set_cookies,
         )
 
     def __repr__(self) -> str:
@@ -994,27 +1002,24 @@ def _to_bolt_response(django_response: HttpResponse) -> MiddlewareResponse:
     """Convert Django HttpResponse to MiddlewareResponse for chain compatibility."""
     headers = dict(django_response.items())
 
-    # IMPORTANT: Extract cookies from django_response.cookies
+    # IMPORTANT: Extract cookies from django_response.cookies into dedicated list
     # Django's set_cookie() stores cookies in response.cookies (SimpleCookie),
-    # NOT in the regular headers. We need to convert them to Set-Cookie headers.
+    # NOT in the regular headers. HTTP allows multiple Set-Cookie headers,
+    # but dict can't have duplicate keys - so we use a separate list.
     # This is critical for CSRF cookie to be set by CsrfViewMiddleware.process_response
+    set_cookies = []
     if hasattr(django_response, 'cookies') and django_response.cookies:
         for cookie in django_response.cookies.values():
             # Each cookie's output() method returns the full Set-Cookie header value
-            # Format: "Set-Cookie: name=value; Path=/; ..."
+            # Format: "name=value; Path=/; ..."
             cookie_header = cookie.output(header='').strip()
-            # Add as Set-Cookie header (may have multiple)
-            if 'Set-Cookie' in headers:
-                # Multiple cookies - need to handle this specially
-                # For now, we'll use the last one (or we could make headers a list)
-                headers['Set-Cookie'] = cookie_header
-            else:
-                headers['Set-Cookie'] = cookie_header
+            set_cookies.append(cookie_header)
 
     return MiddlewareResponse(
         status_code=django_response.status_code,
         headers=headers,
         body=django_response.content,
+        set_cookies=set_cookies,
     )
 
 

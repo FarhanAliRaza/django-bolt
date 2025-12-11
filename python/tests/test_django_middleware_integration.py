@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import msgspec
 import pytest
+from django.contrib.auth.middleware import AuthenticationMiddleware
+from django.contrib.messages.middleware import MessageMiddleware
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.http import HttpResponse
 from django.middleware.common import CommonMiddleware
 
 from django_bolt import BoltAPI
 from django_bolt.middleware import DjangoMiddleware, DjangoMiddlewareStack, TimingMiddleware
+from django_bolt.middleware.django_adapter import _is_django_builtin_middleware
 from django_bolt.testing import TestClient
 
 
@@ -399,6 +402,269 @@ class TestMessagesFramework:
                 f"Expected 2 messages, got {captured['message_count']} - MessageMiddleware not working"
 
 
+# =============================================================================
+# Test Middleware Categorization (Django built-in vs Third-party vs __call__-only)
+# =============================================================================
+
+
+class HookBasedThirdPartyMiddleware:
+    """
+    Third-party middleware with process_request/process_response hooks.
+
+    This simulates a third-party middleware that might do blocking I/O in hooks.
+    Should be routed through sync_to_async for safety.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def process_request(self, request):
+        """Hook that runs before view - could do blocking I/O."""
+        request.thirdparty_hook_ran = True
+        return None  # Continue processing
+
+    def process_response(self, request, response):
+        """Hook that runs after view - could do blocking I/O."""
+        response["X-ThirdParty-Hook"] = "processed"
+        return response
+
+    def __call__(self, request):
+        # MiddlewareMixin pattern - hooks are called by __call__
+        response = self.process_request(request)
+        if response is not None:
+            return response
+        response = self.get_response(request)
+        return self.process_response(request, response)
+
+
+class CallOnlyMiddleware:
+    """
+    Middleware that only overrides __call__ (no hooks).
+
+    This is the slowest path - requires wrapping in sync_to_async chain.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        # Set attribute before
+        request.call_only_before = True
+        response = self.get_response(request)
+        # Add header after
+        response["X-Call-Only"] = "processed"
+        return response
+
+
+class HookShortCircuitMiddleware:
+    """Third-party middleware that short-circuits via process_request."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def process_request(self, request):
+        """Short-circuit if special header is present."""
+        if request.META.get("HTTP_X_SHORTCIRCUIT"):
+            return HttpResponse("Short-circuited by hook", status=418)
+        return None
+
+    def __call__(self, request):
+        response = self.process_request(request)
+        if response is not None:
+            return response
+        return self.get_response(request)
+
+
+@pytest.mark.django_db
+class TestMiddlewareCategorization:
+    """Tests for middleware categorization into fast/safe/slow paths."""
+
+    def test_django_builtin_uses_fast_path(self):
+        """
+        Test that Django built-in middleware uses fast path (direct calls).
+
+        Django's SessionMiddleware and AuthMiddleware have hooks but are
+        safe to call directly without sync_to_async.
+        """
+        # Verify classification
+        assert _is_django_builtin_middleware(SessionMiddleware) is True
+        assert _is_django_builtin_middleware(CommonMiddleware) is True
+
+        # Test through HTTP cycle
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+            'django.middleware.common.CommonMiddleware',
+        ])
+
+        @api.get("/test")
+        async def test_route(request):
+            return {"session_exists": request.state.get("session") is not None}
+
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+
+    def test_thirdparty_hook_middleware_uses_safe_path(self):
+        """
+        Test that third-party middleware with hooks uses safe path (sync_to_async).
+
+        Third-party middleware might do blocking I/O in hooks, so we wrap
+        them in sync_to_async(thread_sensitive=True) for safety.
+        """
+        # Verify classification - third-party should NOT be Django built-in
+        assert _is_django_builtin_middleware(HookBasedThirdPartyMiddleware) is False
+
+        # Test through HTTP cycle
+        api = BoltAPI()
+        api.middleware = [DjangoMiddlewareStack([HookBasedThirdPartyMiddleware])]
+
+        @api.get("/test")
+        async def test_route():
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+            # Verify the hook ran and added header
+            assert response.headers.get("X-ThirdParty-Hook") == "processed"
+
+    def test_call_only_middleware_uses_chain_path(self):
+        """
+        Test that __call__-only middleware uses chain path.
+
+        Middleware without hooks must be chained and run via sync_to_async.
+        """
+        api = BoltAPI()
+        api.middleware = [DjangoMiddlewareStack([CallOnlyMiddleware])]
+
+        @api.get("/test")
+        async def test_route():
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+            assert response.headers.get("X-Call-Only") == "processed"
+
+    def test_mixed_middleware_types(self):
+        """
+        Test mixing Django built-in, third-party hooks, and __call__-only.
+
+        All three types should work together correctly.
+        """
+        api = BoltAPI()
+        api.middleware = [DjangoMiddlewareStack([
+            SessionMiddleware,           # Django built-in (fast path)
+            HookBasedThirdPartyMiddleware,  # Third-party hooks (safe path)
+            CallOnlyMiddleware,          # __call__-only (chain path)
+        ])]
+
+        results = {}
+
+        @api.get("/test")
+        async def test_route(request):
+            results["session"] = request.state.get("session") is not None
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+            # All middleware should have run
+            assert results["session"] is True
+            assert response.headers.get("X-ThirdParty-Hook") == "processed"
+            assert response.headers.get("X-Call-Only") == "processed"
+
+    def test_thirdparty_hook_short_circuit(self):
+        """
+        Test that third-party middleware can short-circuit via process_request.
+
+        Even though third-party hooks go through sync_to_async, they should
+        still be able to return early responses.
+        """
+        api = BoltAPI()
+        api.middleware = [DjangoMiddlewareStack([HookShortCircuitMiddleware])]
+
+        handler_called = {"called": False}
+
+        @api.get("/test")
+        async def test_route():
+            handler_called["called"] = True
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            # Without header - should pass through
+            response = client.get("/test")
+            assert response.status_code == 200
+            assert handler_called["called"] is True
+
+            # Reset
+            handler_called["called"] = False
+
+            # With header - should short-circuit
+            response = client.get("/test", headers={"X-Shortcircuit": "yes"})
+            assert response.status_code == 418
+            assert b"Short-circuited by hook" in response.content
+            assert handler_called["called"] is False
+
+
+class TestMiddlewareCategorizationUnit:
+    """Unit tests for middleware categorization helper functions."""
+
+    def test_is_django_builtin_middleware_sessions(self):
+        """Test SessionMiddleware is recognized as Django built-in."""
+        assert _is_django_builtin_middleware(SessionMiddleware) is True
+
+    def test_is_django_builtin_middleware_common(self):
+        """Test CommonMiddleware is recognized as Django built-in."""
+        assert _is_django_builtin_middleware(CommonMiddleware) is True
+
+    def test_is_django_builtin_middleware_auth(self):
+        """Test AuthenticationMiddleware is recognized as Django built-in."""
+        assert _is_django_builtin_middleware(AuthenticationMiddleware) is True
+
+    def test_is_django_builtin_middleware_messages(self):
+        """Test MessageMiddleware is recognized as Django built-in."""
+        assert _is_django_builtin_middleware(MessageMiddleware) is True
+
+    def test_is_django_builtin_middleware_thirdparty(self):
+        """Test third-party middleware is NOT recognized as Django built-in."""
+        assert _is_django_builtin_middleware(HookBasedThirdPartyMiddleware) is False
+        assert _is_django_builtin_middleware(CallOnlyMiddleware) is False
+        assert _is_django_builtin_middleware(HeaderAddingMiddleware) is False
+
+    def test_stack_categorizes_middleware_correctly(self):
+        """Test DjangoMiddlewareStack correctly categorizes middleware."""
+        stack = DjangoMiddlewareStack([
+            SessionMiddleware,              # Django built-in with hooks
+            HookBasedThirdPartyMiddleware,  # Third-party with hooks
+            CallOnlyMiddleware,             # __call__-only
+        ])
+
+        # Trigger categorization by creating instances
+        def dummy(r):
+            pass
+        stack._create_middleware_instance(dummy)
+
+        # Verify categorization
+        assert len(stack._django_hook_middleware) == 1  # SessionMiddleware
+        assert len(stack._thirdparty_hook_middleware) == 1  # HookBasedThirdPartyMiddleware
+        assert stack._call_middleware_chain is not None  # CallOnlyMiddleware in chain
+
+    def test_stack_no_call_only_middleware(self):
+        """Test stack without __call__-only middleware has no chain."""
+        stack = DjangoMiddlewareStack([
+            SessionMiddleware,              # Django built-in with hooks
+            HookBasedThirdPartyMiddleware,  # Third-party with hooks
+        ])
+
+        def dummy(r):
+            pass
+        stack._create_middleware_instance(dummy)
+
+        # Verify no chain created (fast path)
+        assert stack._call_middleware_chain is None
+
+
 class TestRequestConversion:
     """Unit tests for request conversion - using real middleware through HTTP cycle."""
 
@@ -469,3 +735,256 @@ class TestRequestConversion:
             response = client.post("/test", json={"name": "test", "value": 42})
             assert response.status_code == 200
             assert response.json() == {"received_name": "test", "received_value": 42}
+
+
+# =============================================================================
+# Test Django Security Features (login_required, PermissionDenied)
+# =============================================================================
+
+
+@pytest.mark.django_db
+class TestLoginRequiredBehavior:
+    """Tests for Django's login_required decorator behavior."""
+
+    def test_login_required_redirects_anonymous_user(self):
+        """
+        Test that @login_required redirects unauthenticated users.
+
+        When an anonymous user tries to access a protected view,
+        Django should redirect to LOGIN_URL (default: /accounts/login/).
+        """
+        from django.contrib.auth.decorators import login_required
+
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+            'django.contrib.auth.middleware.AuthenticationMiddleware',
+        ])
+
+        handler_called = {"called": False}
+
+        @api.get("/protected")
+        @login_required
+        async def protected_route(request):
+            handler_called["called"] = True
+            return {"status": "secret data"}
+
+        with TestClient(api, raise_server_exceptions=False) as client:
+            response = client.get("/protected")
+            # Should redirect to login page (302) or we get redirected (200 to login form)
+            # TestClient follows redirects by default, so we check the handler wasn't called
+            assert handler_called["called"] is False
+
+    def test_request_has_django_methods(self):
+        """
+        Test that Bolt request has Django-compatible methods.
+
+        These methods are needed for Django decorators like @login_required
+        to work correctly.
+        """
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+            'django.contrib.auth.middleware.AuthenticationMiddleware',
+        ])
+
+        captured = {"get_full_path": None, "build_absolute_uri": None}
+
+        @api.get("/test")
+        async def test_route(request):
+            captured["get_full_path"] = request.get_full_path()
+            captured["build_absolute_uri"] = request.build_absolute_uri()
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test?page=1&limit=10")
+            assert response.status_code == 200
+            # Verify Django-compatible methods exist and work
+            assert "page=" in captured["get_full_path"]
+            assert "limit=" in captured["get_full_path"]
+            assert captured["build_absolute_uri"].startswith("http")
+
+
+@pytest.mark.django_db
+class TestPermissionDenied:
+    """Tests for Django PermissionDenied exception handling."""
+
+    def test_permission_denied_returns_403(self):
+        """
+        Test that raising PermissionDenied returns 403 response.
+
+        When a view raises PermissionDenied, Django should return
+        a 403 Forbidden response.
+        """
+        from django.core.exceptions import PermissionDenied
+
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+            'django.contrib.auth.middleware.AuthenticationMiddleware',
+        ])
+
+        @api.get("/admin-only")
+        async def admin_only_route(request):
+            # Anonymous users are not authenticated
+            if not request.user.is_authenticated:
+                raise PermissionDenied("Authentication required")
+            return {"status": "admin data"}
+
+        with TestClient(api, raise_server_exceptions=False) as client:
+            response = client.get("/admin-only")
+            assert response.status_code == 403
+
+    def test_authenticated_user_check(self):
+        """
+        Test checking user.is_authenticated in handler.
+
+        This verifies Django's AuthenticationMiddleware sets request.user
+        to AnonymousUser for unauthenticated requests.
+        """
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+            'django.contrib.auth.middleware.AuthenticationMiddleware',
+        ])
+
+        user_info = {"is_authenticated": None, "is_anonymous": None}
+
+        @api.get("/check-user")
+        async def check_user_route(request):
+            user_info["is_authenticated"] = request.user.is_authenticated
+            user_info["is_anonymous"] = request.user.is_anonymous
+            return {"authenticated": request.user.is_authenticated}
+
+        with TestClient(api) as client:
+            response = client.get("/check-user")
+            assert response.status_code == 200
+            # Anonymous user should not be authenticated
+            assert user_info["is_authenticated"] is False
+            assert user_info["is_anonymous"] is True
+
+
+# =============================================================================
+# Test CSRF Middleware (process_view support)
+# =============================================================================
+
+
+@pytest.mark.django_db
+class TestCSRFMiddleware:
+    """Tests for Django's CSRF middleware integration.
+
+    CSRF middleware uses process_view (not process_request) to check tokens.
+    This verifies the process_view hook is properly called.
+    """
+
+    def test_csrf_get_request_allowed(self):
+        """
+        Test that GET requests work without CSRF token.
+
+        CSRF protection only applies to "unsafe" methods (POST, PUT, DELETE, etc.).
+        GET requests should always be allowed through.
+        """
+        from django.middleware.csrf import CsrfViewMiddleware
+
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+            'django.middleware.csrf.CsrfViewMiddleware',
+        ])
+
+        @api.get("/test")
+        async def test_route():
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+            assert response.json() == {"status": "ok"}
+
+    def test_csrf_post_without_token_rejected(self):
+        """
+        Test that POST requests without CSRF token are rejected.
+
+        When CsrfViewMiddleware is enabled and a POST request doesn't include
+        a valid CSRF token, it should return 403 Forbidden.
+        """
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+            'django.middleware.csrf.CsrfViewMiddleware',
+        ])
+
+        handler_called = {"called": False}
+
+        @api.post("/submit")
+        async def submit_route():
+            handler_called["called"] = True
+            return {"status": "submitted"}
+
+        with TestClient(api, raise_server_exceptions=False) as client:
+            response = client.post("/submit", json={"data": "test"})
+            # Without CSRF token, should be rejected
+            assert response.status_code == 403
+            assert handler_called["called"] is False
+
+    def test_csrf_exempt_endpoint_allowed(self):
+        """
+        Test that @csrf_exempt decorated endpoints allow POST without token.
+
+        Django's @csrf_exempt decorator should bypass CSRF validation.
+        The csrf_exempt attribute is detected at route registration time
+        and passed via request.state["_csrf_exempt"] to the middleware.
+
+        Note: Django's @csrf_exempt wraps the function to expect a `request`
+        parameter (Django view signature), so the handler must accept it.
+        """
+        from django.views.decorators.csrf import csrf_exempt
+
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+            'django.middleware.csrf.CsrfViewMiddleware',
+        ])
+
+        handler_called = {"called": False}
+
+        @api.post("/api/webhook")
+        @csrf_exempt
+        async def webhook_route(request):
+            # Django's @csrf_exempt wrapper passes request as first arg
+            handler_called["called"] = True
+            return {"status": "received"}
+
+        with TestClient(api) as client:
+            response = client.post("/api/webhook", json={"event": "test"})
+            # csrf_exempt should allow through without token
+            assert response.status_code == 200
+            assert handler_called["called"] is True
+            assert response.json() == {"status": "received"}
+
+    def test_csrf_head_request_allowed(self):
+        """
+        Test that HEAD requests work without CSRF token (safe method).
+        """
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+            'django.middleware.csrf.CsrfViewMiddleware',
+        ])
+
+        @api.head("/test")
+        async def test_route():
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.head("/test")
+            assert response.status_code == 200
+
+    def test_csrf_options_request_allowed(self):
+        """
+        Test that OPTIONS requests work without CSRF token (safe method).
+        """
+        api = BoltAPI(django_middleware=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+            'django.middleware.csrf.CsrfViewMiddleware',
+        ])
+
+        @api.options("/test")
+        async def test_route():
+            return {"methods": ["GET", "POST"]}
+
+        with TestClient(api) as client:
+            response = client.options("/test")
+            assert response.status_code == 200

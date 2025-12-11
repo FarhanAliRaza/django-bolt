@@ -149,6 +149,66 @@ impl PyRequest {
         }
     }
 
+    /// Get the full path with query string (Django-compatible).
+    ///
+    /// Example:
+    ///     /users?page=2&limit=10
+    ///
+    /// This matches Django's HttpRequest.get_full_path() method.
+    fn get_full_path(&self) -> String {
+        if self.query_params.is_empty() {
+            self.path.clone()
+        } else {
+            let query_string: String = self
+                .query_params
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("&");
+            format!("{}?{}", self.path, query_string)
+        }
+    }
+
+    /// Build absolute URI (Django-compatible).
+    ///
+    /// Example:
+    ///     http://example.com/users?page=2
+    ///
+    /// This matches Django's HttpRequest.build_absolute_uri() method.
+    /// Uses Host header to determine the scheme and host.
+    #[pyo3(signature = (location=None))]
+    fn build_absolute_uri(&self, location: Option<&str>) -> String {
+        // Get host from headers (or use default)
+        let host = self
+            .headers
+            .get("host")
+            .map(|s| s.as_str())
+            .unwrap_or("localhost");
+
+        // Determine scheme (check for X-Forwarded-Proto or default to http)
+        let scheme = self
+            .headers
+            .get("x-forwarded-proto")
+            .map(|s| s.as_str())
+            .unwrap_or("http");
+
+        // If location is provided, use it; otherwise use current path
+        let path = location.unwrap_or_else(|| &self.path);
+
+        // Build full URL
+        if self.query_params.is_empty() || location.is_some() {
+            format!("{}://{}{}", scheme, host, path)
+        } else {
+            let query_string: String = self
+                .query_params
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("&");
+            format!("{}://{}{}?{}", scheme, host, path, query_string)
+        }
+    }
+
     #[pyo3(signature = (key, /, default=None))]
     fn get<'py>(&self, py: Python<'py>, key: &str, default: Option<Py<PyAny>>) -> Py<PyAny> {
         match key {

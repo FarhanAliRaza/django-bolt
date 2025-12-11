@@ -4,6 +4,12 @@ from __future__ import annotations
 import mimetypes
 from typing import TYPE_CHECKING, Any
 
+import msgspec
+from asgiref.sync import sync_to_async
+from django.db.models import QuerySet
+from django.http import HttpResponse as DjangoHttpResponse
+from django.http import HttpResponseRedirect as DjangoHttpResponseRedirect
+
 from . import _json
 from .binding import coerce_to_response_type, coerce_to_response_type_async
 from .responses import HTML, JSON, File, FileResponse, PlainText, Redirect, StreamingResponse
@@ -87,9 +93,23 @@ async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTupl
         return serialize_file_streaming_response(result)
     elif isinstance(result, ResponseClass):
         return await serialize_generic_response(result, response_tp, meta)
-    else:
-        # Fallback to msgspec encoding
+    elif isinstance(result, msgspec.Struct):
+        # Handle msgspec.Struct instances (e.g., PaginatedResponse)
         return await serialize_json_data(result, response_tp, meta)
+    elif isinstance(result, QuerySet):
+        # Handle Django QuerySets - convert to list for JSON serialization
+        # Use sync_to_async since QuerySet iteration is sync-only
+        result_list = await sync_to_async(list, thread_sensitive=True)(result)
+        return await serialize_json_data(result_list, response_tp, meta)
+    elif isinstance(result, DjangoHttpResponse):
+        # Handle Django HttpResponse types (e.g., from @login_required decorator)
+        return serialize_django_response(result)
+    else:
+        # Unknown type - raise clear error instead of failing in JSON serialization
+        raise TypeError(
+            f"Handler returned unsupported type {type(result).__name__!r}. "
+            f"Return dict, list, or a Bolt response type (JSON, PlainText, HTML, Redirect, etc.)"
+        )
 
 
 def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple:
@@ -167,9 +187,21 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
         else:
             data_bytes = result.to_bytes()
         return int(result.status_code), headers, data_bytes
-    else:
-        # Fallback to msgspec encoding
+    elif isinstance(result, msgspec.Struct):
+        # Handle msgspec.Struct instances (e.g., PaginatedResponse)
         return serialize_json_data_sync(result, response_tp, meta)
+    elif isinstance(result, QuerySet):
+        # Handle Django QuerySets - convert to list for JSON serialization
+        return serialize_json_data_sync(list(result), response_tp, meta)
+    elif isinstance(result, DjangoHttpResponse):
+        # Handle Django HttpResponse types (e.g., from @login_required decorator)
+        return serialize_django_response(result)
+    else:
+        # Unknown type - raise clear error instead of failing in JSON serialization
+        raise TypeError(
+            f"Handler returned unsupported type {type(result).__name__!r}. "
+            f"Return dict, list, or a Bolt response type (JSON, PlainText, HTML, Redirect, etc.)"
+        )
 
 
 async def serialize_generic_response(result: ResponseClass, response_tp: Any | None, meta: HandlerMetadata | None = None) -> ResponseTuple:
@@ -266,6 +298,26 @@ def serialize_redirect_response(result: Redirect) -> ResponseTuple:
     if result.headers:
         headers.extend([(k.lower(), v) for k, v in result.headers.items()])
     return int(result.status_code), headers, b""
+
+
+def serialize_django_response(result: DjangoHttpResponse) -> ResponseTuple:
+    """Serialize Django HttpResponse types (e.g., from @login_required decorator).
+
+    Only called in fallback path - no overhead for normal Bolt responses.
+    """
+    # Handle redirects specially (HttpResponseRedirect, HttpResponsePermanentRedirect)
+    if isinstance(result, DjangoHttpResponseRedirect):
+        headers = [("location", result.url)]
+        # Copy other headers from Django response
+        for key, value in result.items():
+            if key.lower() != "location":
+                headers.append((key.lower(), value))
+        return result.status_code, headers, b""
+
+    # Generic Django HttpResponse - extract content and headers
+    headers = [(key.lower(), value) for key, value in result.items()]
+    content = result.content if isinstance(result.content, bytes) else result.content.encode()
+    return result.status_code, headers, content
 
 
 def serialize_file_response(result: File) -> ResponseTuple:

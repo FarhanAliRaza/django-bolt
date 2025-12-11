@@ -24,9 +24,13 @@ logger = logging.getLogger(__name__)
 # Django import - may fail if Django not configured
 try:
     from django.conf import settings as django_settings
+    from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
+    from django.http import HttpResponse as DjangoHttpResponse
     from django.views.debug import ExceptionReporter
 except ImportError:
     django_settings = None
+    DjangoPermissionDenied = None
+    DjangoHttpResponse = None
     ExceptionReporter = None
 
 
@@ -59,6 +63,53 @@ def format_error_response(
         response_headers.extend(headers.items())
 
     return status_code, response_headers, body_bytes
+
+
+def serialize_django_response(response: Any) -> tuple[int, list[tuple[str, str]], bytes]:
+    """Convert Django HttpResponse to response tuple.
+
+    This is called by middleware adapter when Django middleware returns an
+    HttpResponse (e.g., redirects from @login_required, CSRF failures, etc.).
+
+    Args:
+        response: Django HttpResponse instance
+
+    Returns:
+        Tuple of (status_code, headers, body)
+    """
+    status_code = response.status_code
+
+    # Extract headers from Django response
+    headers: list[tuple[str, str]] = []
+    for header, value in response.items():
+        headers.append((header.lower(), value))
+
+    # Get response content
+    if hasattr(response, "content"):
+        body = response.content
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+    else:
+        body = b""
+
+    return status_code, headers, body
+
+
+def is_django_response(obj: Any) -> bool:
+    """Check if object is a Django HttpResponse.
+
+    This avoids importing Django in hot paths - only checks when we suspect
+    we have a Django response.
+
+    Args:
+        obj: Object to check
+
+    Returns:
+        True if obj is a Django HttpResponse
+    """
+    if DjangoHttpResponse is None:
+        return False
+    return isinstance(obj, DjangoHttpResponse)
 
 
 def http_exception_handler(exc: HTTPException) -> tuple[int, list[tuple[str, str]], bytes]:
@@ -321,6 +372,12 @@ def handle_exception(
         )
     elif isinstance(exc, PermissionError):
         # PermissionError from FileResponse path validation - return 403
+        return format_error_response(
+            status_code=403,
+            detail=str(exc) or "Permission denied",
+        )
+    elif DjangoPermissionDenied is not None and isinstance(exc, DjangoPermissionDenied):
+        # Django's PermissionDenied exception - return 403
         return format_error_response(
             status_code=403,
             detail=str(exc) or "Permission denied",

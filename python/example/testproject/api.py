@@ -9,6 +9,7 @@ from django.contrib.auth import aauthenticate, get_user_model
 from msgspec import Meta
 from users.api import UserMini
 from users.models import User
+from django.contrib import messages  # noqa: PLC0415
 
 from django_bolt import (
     BoltAPI,
@@ -156,7 +157,7 @@ middleware_api = BoltAPI(
     ],
 )
 
-
+from django.contrib.auth.decorators import login_required
 @middleware_api.get("/demo")
 async def middleware_demo(request: Request):
     """
@@ -171,8 +172,37 @@ async def middleware_demo(request: Request):
     Test with:
         curl http://localhost:8000/middleware/demo
     """
-    from django.contrib import messages  # noqa: PLC0415
 
+    # Add messages using Django's messages framework
+    messages.info(request, "This is an info message")
+    # Access Django user
+    # user = await request.auser()
+
+    # Render template that displays messages
+    return render(request, "messages_demo.html", {
+        "title": "Middleware & Messages Demo",
+        # "user": user,
+        "request_id": request.state.get("request_id"),
+        "tenant_id": request.state.get("tenant_id"),
+    })
+from django.views.decorators.csrf import csrf_exempt
+@middleware_api.post("/demo")
+# @csrf_exempt
+async def middleware_demo(request: Request, test: Annotated[str, Form("test")]):
+    """
+    Demonstrates Django middleware + messages framework with Django-Bolt.
+
+    This endpoint shows:
+    1. Django middleware (SessionMiddleware, AuthenticationMiddleware, MessageMiddleware)
+    2. Custom RequestIdMiddleware (adds X-Request-ID header)
+    3. Custom TenantMiddleware (adds X-Tenant-ID header)
+    4. Django messages framework ({% for message in messages %} in templates)
+
+    Test with:
+        curl http://localhost:8000/middleware/demo
+    """
+    from django.contrib import messages  # noqa: PLC0415
+    print(test)
     # Add messages using Django's messages framework
     messages.info(request, "This is an info message")
     messages.success(request, "Operation completed successfully!")
@@ -180,16 +210,15 @@ async def middleware_demo(request: Request):
     messages.error(request, "This is an error message")
 
     # Access Django user
-    user = await request.auser()
+    # user = await request.auser()
 
     # Render template that displays messages
     return render(request, "messages_demo.html", {
         "title": "Middleware & Messages Demo",
-        "user": user,
+        # "user": user,
         "request_id": request.state.get("request_id"),
         "tenant_id": request.state.get("tenant_id"),
     })
-
 
 # Mount the middleware API as a sub-application (FastAPI-style)
 # This preserves the middleware_api's own middleware configuration

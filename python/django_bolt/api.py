@@ -282,6 +282,8 @@ class BoltAPI:
         self.middleware = []
 
         # Load Django middleware if configured
+        # Store flag for optimization bypass (Django middleware needs cookies/headers)
+        self._has_django_middleware = bool(django_middleware)
         if django_middleware:
             self.middleware.extend(load_django_middleware(django_middleware))
 
@@ -901,6 +903,10 @@ class BoltAPI:
             # Store sync/async metadata
             meta["is_async"] = is_async
 
+            # Detect csrf_exempt for Django CSRF middleware support
+            # Django's @csrf_exempt decorator sets handler.csrf_exempt = True
+            meta["csrf_exempt"] = getattr(fn, 'csrf_exempt', False)
+
             # Static ORM analysis: Detect blocking operations at registration time
             handler_analysis = analyze_handler(fn)
             meta["is_blocking"] = handler_analysis.is_blocking
@@ -958,6 +964,12 @@ class BoltAPI:
             # Add optimization flags to middleware metadata
             # These are parsed by Rust's RouteMetadata::from_python() to skip unused parsing
             middleware_meta = add_optimization_flags_to_metadata(middleware_meta, meta)
+
+            # Django middleware requires cookies and headers regardless of handler params
+            # CSRF middleware needs cookies, session middleware needs cookies/headers
+            if self._has_django_middleware:
+                middleware_meta['needs_cookies'] = True
+                middleware_meta['needs_headers'] = True
 
             if middleware_meta:
                 self._handler_middleware[handler_id] = middleware_meta
@@ -1787,6 +1799,10 @@ class BoltAPI:
 
             api._middleware_chain = chain
             api._middleware_chain_built = True
+
+        # Store csrf_exempt in request.state for CSRF middleware to check
+        # This is set at registration time from handler's csrf_exempt attribute
+        request.state["_csrf_exempt"] = meta.get("csrf_exempt", False)
 
         # Set the handler context for this request
         ctx = {'handler': handler, 'meta': meta}

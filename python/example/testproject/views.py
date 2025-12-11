@@ -5,7 +5,7 @@ from test_data import JSON_1K
 
 
 def index(request):
-    return JsonResponse(JSON_1K, safe=False)
+    return JsonResponse({}, safe=False)
 
 def sse(request):
     """Server-Sent Events endpoint that sends timestamp data every second"""

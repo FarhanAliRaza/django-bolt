@@ -55,6 +55,10 @@ ruff: lint
 lint-lib:
 	uv run ruff check python/django_bolt
 
+lint-lib-fix:
+	uv run ruff check python/django_bolt --fix
+
+
 # Fix ruff errors automatically
 ruff-fix:
 	uv run ruff check . --fix

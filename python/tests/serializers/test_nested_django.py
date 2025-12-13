@@ -13,12 +13,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-import msgspec
 import pytest
-from msgspec import Meta
-from msgspec import ValidationError as MsgspecValidationError
+import msgspec
+from msgspec import Meta, ValidationError as MsgspecValidationError
 
-from django_bolt.serializers import Nested, Serializer, field_validator
+from django_bolt.serializers import Nested, Serializer, field_validator, ValidationError
 from tests.test_models import Author, BlogPost, Comment, Tag
 
 
@@ -160,14 +159,14 @@ class TestSingleNestedForeignKey:
         """Test that passing just an ID raises a validation error."""
 
         # Passing just an ID should now raise an error
-        with pytest.raises(MsgspecValidationError) as exc_info:
-            BlogPostSerializer(
-                id=1,
-                title="New Post",
-                content="Content",
-                author=123,  # Just ID - not allowed
-                tags=[],
-            )
+        with pytest.raises(ValidationError) as exc_info:
+            BlogPostSerializer.model_validate({
+                "id": 1,
+                "title": "New Post",
+                "content": "Content",
+                "author": 123,  # Just ID - not allowed
+                "tags": [],
+            })
 
         # Error message should be helpful
         assert "author" in str(exc_info.value).lower()
@@ -269,32 +268,32 @@ class TestNestedManyToMany:
         """Test that passing tag IDs raises validation error."""
 
         # Passing tag IDs should now raise an error
-        with pytest.raises(MsgspecValidationError):
-            BlogPostSerializer(
-                id=1,
-                title="Post",
-                content="Content",
-                author={"id": 1, "name": "Test", "email": "test@example.com", "bio": ""},
-                tags=[1, 2, 3],  # IDs not allowed - need full objects
-            )
+        with pytest.raises(ValidationError):
+            BlogPostSerializer.model_validate({
+                "id": 1,
+                "title": "Post",
+                "content": "Content",
+                "author": {"id": 1, "name": "Test", "email": "test@example.com", "bio": ""},
+                "tags": [1, 2, 3],  # IDs not allowed - need full objects
+            })
 
     @pytest.mark.django_db
     def test_create_with_mixed_tags(self):
         """Test that mixing tag IDs and dicts raises validation error."""
 
         # Mixed IDs and dicts should now raise an error
-        with pytest.raises(MsgspecValidationError):
-            BlogPostSerializer(
-                id=1,
-                title="Post",
-                content="Content",
-                author={"id": 1, "name": "Test", "email": "test@example.com", "bio": ""},
-                tags=[
+        with pytest.raises(ValidationError):
+            BlogPostSerializer.model_validate({
+                "id": 1,
+                "title": "Post",
+                "content": "Content",
+                "author": {"id": 1, "name": "Test", "email": "test@example.com", "bio": ""},
+                "tags": [
                     1,  # ID - not allowed
                     {"id": 2, "name": "django"},  # Dict
                     3,  # ID - not allowed
                 ],
-            )
+            })
 
 
 class TestNestedWithinNested:
@@ -507,14 +506,14 @@ class TestValidationErrors:
         """Test that string ID is rejected (strict type validation)."""
 
         # String IDs should be rejected - only int or AuthorSerializer allowed
-        with pytest.raises(MsgspecValidationError) as exc_info:
-            BlogPostSerializer(
-                id=1,
-                title="Post",
-                content="Content",
-                author="123",  # String - should be rejected
-                tags=[],
-            )
+        with pytest.raises(ValidationError) as exc_info:
+            BlogPostSerializer.model_validate({
+                "id": 1,
+                "title": "Post",
+                "content": "Content",
+                "author": "123",  # String - should be rejected
+                "tags": [],
+            })
 
         # Verify the error is about the author field
         error_msg = str(exc_info.value)
@@ -524,14 +523,14 @@ class TestValidationErrors:
         """Test that non-list in many field raises validation error."""
 
         # Passing a string for a list field should raise ValidationError
-        with pytest.raises(MsgspecValidationError) as exc_info:
-            BlogPostSerializer(
-                id=1,
-                title="Post",
-                content="Content",
-                author={"id": 1, "name": "Test", "email": "test@example.com"},
-                tags="not_a_list",  # Should be list - will fail validation
-            )
+        with pytest.raises(ValidationError) as exc_info:
+            BlogPostSerializer.model_validate({
+                "id": 1,
+                "title": "Post",
+                "content": "Content",
+                "author": {"id": 1, "name": "Test", "email": "test@example.com"},
+                "tags": "not_a_list",  # Should be list - will fail validation
+            })
 
         # Verify the error is about the tags field
         error_msg = str(exc_info.value)
@@ -541,14 +540,14 @@ class TestValidationErrors:
         """Test that nested validation works in deeply nested structures."""
 
         # Create a serializer with invalid nested comment (missing required email field)
-        with pytest.raises(MsgspecValidationError) as exc_info:
-            BlogPostDetailedSerializer(
-                id=1,
-                title="Post",
-                content="Content",
-                author={"id": 1, "name": "Test", "email": "test@example.com"},
-                tags=[],
-                comments=[
+        with pytest.raises(ValidationError) as exc_info:
+            BlogPostDetailedSerializer.model_validate({
+                "id": 1,
+                "title": "Post",
+                "content": "Content",
+                "author": {"id": 1, "name": "Test", "email": "test@example.com"},
+                "tags": [],
+                "comments": [
                     {
                         "id": 1,
                         "text": "Comment",
@@ -556,7 +555,7 @@ class TestValidationErrors:
                         # Missing email field but it's required
                     }
                 ],
-            )
+            })
 
         # Verify the error mentions the missing email field
         error_msg = str(exc_info.value)
@@ -832,7 +831,7 @@ class TestEdgeCases:
         assert isinstance(serializer2.author, AuthorSerializer)
 
         # Test with plain ID - should fail
-        with pytest.raises(MsgspecValidationError):
+        with pytest.raises(ValidationError):
             CommentSerializer(
                 id=1,
                 text="Comment",

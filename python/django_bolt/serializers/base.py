@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import inspect
 import logging
 from collections.abc import Iterable
@@ -19,10 +21,24 @@ from .decorators import (
     collect_field_validators,
     collect_model_validators,
 )
+from .errors import ErrorCollector, ValidationError
 from .fields import FieldConfig, _FieldMarker
 from .nested import get_nested_config, validate_nested_field
+from .validators import Validator
 
 logger = logging.getLogger(__name__)
+
+_SKIP_VALIDATION = contextvars.ContextVar("skip_validation", default=False)
+
+
+@contextlib.contextmanager
+def suppress_validation():
+    """Context manager to suppress validation during serializer instantiation."""
+    token = _SKIP_VALIDATION.set(True)
+    try:
+        yield
+    finally:
+        _SKIP_VALIDATION.reset(token)
 
 if TYPE_CHECKING:
     from django.db.models import Model
@@ -168,6 +184,8 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         cls.__field_validators__ = collect_field_validators(cls)
         cls.__model_validators__ = collect_model_validators(cls)
         cls.__computed_fields__ = collect_computed_fields(cls)
+        # Collect Meta configuration (read_only, write_only, etc.)
+        cls._collect_meta_config()
 
         # Pre-compute validators as tuple for faster iteration (no dict overhead)
         cls.__field_validators_tuple__ = tuple(
@@ -175,11 +193,9 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             for field_name, validators in cls.__field_validators__.items()
         )
 
-        # Collect configuration from Meta class (read_only, write_only, field_sets)
-        # Note: _FieldMarker processing is deferred to _lazy_collect_field_configs
-        cls._collect_meta_config()
-
         # Cache type hints and field metadata (expensive - do once!)
+        # This MUST run after collecting @field_validator methods but before
+        # setting validation flags, as it may add Annotated validators to __field_validators__
         cls._cache_type_metadata()
 
         # Set fast-path flags to control which validation runs
@@ -213,6 +229,76 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             and not any(cfg.exclude for cfg in cls.__field_configs__.values())
         )
 
+        # Create decoder type lazily (will be cached on first use)
+        cls.__decoder_type__: type[msgspec.Struct] | None = None
+
+    @classmethod
+    def get_decoder_type(cls) -> type[msgspec.Struct]:
+        """
+        Get a clean msgspec.Struct type for decoder creation.
+
+        This creates a defstruct with only the data fields (no ClassVar attributes),
+        which avoids the ClassVar NameError when msgspec tries to create a decoder.
+
+        The type is cached per class on first call.
+
+        Returns:
+            A msgspec.Struct subclass suitable for decoder creation
+        """
+        if cls.__decoder_type__ is not None:
+            return cls.__decoder_type__
+
+        # Build field definitions for defstruct
+        # Format: (name, type) or (name, type, default) or (name, type, msgspec.field(...))
+        fields = []
+        hints = cls.__cached_type_hints__
+        defaults = getattr(cls, "__struct_defaults__", ())
+        struct_fields = getattr(cls, "__struct_fields__", ())
+
+        # Build field -> default mapping (defaults are aligned from end)
+        num_fields = len(struct_fields)
+        num_defaults = len(defaults)
+        default_map: dict[str, Any] = {}
+        for i, default_val in enumerate(defaults):
+            field_idx = num_fields - num_defaults + i
+            if 0 <= field_idx < num_fields:
+                default_map[struct_fields[field_idx]] = default_val
+
+        for field_name in struct_fields:
+            field_type = hints.get(field_name, Any)
+
+            # Check if we have a default for this field
+            if field_name in default_map:
+                default_val = default_map[field_name]
+                # Check if it's a _FieldMarker - extract actual default
+                if isinstance(default_val, _FieldMarker):
+                    config = default_val.config
+                    if config.has_default():
+                        fields.append((field_name, field_type, config.get_default()))
+                    elif config.default_factory is not None:
+                        fields.append((field_name, field_type, msgspec.field(default_factory=config.default_factory)))
+                    else:
+                        # No actual default, field is required
+                        fields.append((field_name, field_type))
+                else:
+                    # Regular default value
+                    fields.append((field_name, field_type, default_val))
+            else:
+                # No default - required field
+                fields.append((field_name, field_type))
+
+        # Create the defstruct
+        decoder_type = msgspec.defstruct(
+            f"{cls.__name__}__Decoder",
+            fields,
+            kw_only=True,
+            module=cls.__module__,
+        )
+
+        # Cache it
+        cls.__decoder_type__ = decoder_type
+        return decoder_type
+
     @classmethod
     def _collect_meta_config(cls) -> None:
         """
@@ -237,6 +323,18 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
 
             # Store field_sets on class for use() method
             cls.__field_sets__ = meta_field_sets
+
+        # Also check Meta class (DRF compatibility)
+        # ModelSerializer uses Meta, so we need to support it here
+        drf_meta = getattr(cls, "Meta", None)
+        if drf_meta:
+            meta_read_only = getattr(drf_meta, "read_only", set())
+            meta_write_only = getattr(drf_meta, "write_only", set())
+            # For ModelSerializer, fields/exclude are handled by metaclass but we might want them here?
+            # base.py doesn't use them except for validation/dump.
+
+            read_only.update(meta_read_only or set())
+            write_only.update(meta_write_only or set())
 
         # Initialize with Meta values (will be updated by _lazy_collect_field_configs)
         cls.__field_configs__ = {}
@@ -300,16 +398,29 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         # Cache the type hints
         cls.__cached_type_hints__ = hints
 
-        # Pre-compute nested field configurations
+        # Pre-compute nested field configurations and collect Annotated validators
         nested_fields = {}
         literal_fields = {}
         has_serializer_fields = False  # Track if any field is a Serializer (for dump optimization)
+
+        # Track if we found new validators in Annotated types
+        new_validators_found = False
 
         for field_name, field_type in hints.items():
             # Check if field has NestedConfig metadata
             nested_config = get_nested_config(field_type)
             if nested_config is not None:
                 nested_fields[field_name] = nested_config
+
+            # Check if field accepts Validator instances in Annotated metadata
+            if hasattr(field_type, "__metadata__"):
+                for meta in field_type.__metadata__:
+                    if isinstance(meta, Validator):
+                        # Add to __field_validators__
+                        if field_name not in cls.__field_validators__:
+                            cls.__field_validators__[field_name] = []
+                        cls.__field_validators__[field_name].append(meta)
+                        new_validators_found = True
 
             # Check if field is a Literal type (for Django choices validation)
             origin = get_origin(field_type)
@@ -333,6 +444,13 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         cls.__nested_fields__ = nested_fields
         cls.__literal_fields__ = literal_fields
         cls.__has_serializer_fields__ = has_serializer_fields
+
+        # If we found Annotated validators, regenerate the tuple
+        if new_validators_found:
+            cls.__field_validators_tuple__ = tuple(
+                (field_name, tuple(validators))
+                for field_name, validators in cls.__field_validators__.items()
+            )
 
     @classmethod
     def _cache_default_values_map(cls) -> None:
@@ -358,15 +476,17 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         """
         Run all field and model validators after struct initialization.
 
-        Also fixes _FieldMarker defaults - msgspec stores the _FieldMarker object
-        as the default value, so we need to replace it with the actual default.
+        This delegates to _validate_instance() to allow reuse by model_validate().
+        """
+        self._validate_instance()
 
-        Validators are executed in order:
-        1. Fix _FieldMarker defaults (only if field() is used)
-        2. Field validators with mode='before'
-        3. Field validators with mode='after'
-        4. Model validators with mode='before'
-        5. Model validators with mode='after'
+    def _validate_instance(self) -> None:
+        """
+        Run validation logic (post-init or post-decode).
+
+        1. Fix _FieldMarker defaults
+        2. Run field validators
+        3. Run model validators
         """
         cls = self.__class__
 
@@ -380,9 +500,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         if cls.__has_field_markers__:
             self._fix_field_marker_defaults_impl()
 
-        # Fast path: skip validation if there are no validators
-        # This avoids function call overhead when there's nothing to validate
-        if cls.__skip_validation__:
+        if cls.__skip_validation__ or _SKIP_VALIDATION.get():
             return
 
         # Run field validators
@@ -471,52 +589,66 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         cls.__field_configs_collected__ = True
 
     def _run_field_validators(self) -> None:
-        """Execute all field validators in order."""
+        """Execute all field validators in order, collecting errors."""
+        collector = ErrorCollector()
+
         # First, validate nested/literal fields if any exist
         if self.__has_nested_or_literal__:
-            self._validate_nested_and_literal_fields()
+            self._validate_nested_and_literal_fields(collector)
 
         # Then run custom field validators if any exist
         if self.__has_field_validators__:
-            # Cache lookups at method level (class reference is from __post_init__)
+            # Cache lookups at method level
             _class = self.__class__
             _setattr = msgspec_structs.force_setattr
             _getattr = getattr
 
-            # Use pre-computed tuple for faster iteration (no dict.items() overhead)
+            # Use pre-computed tuple for faster iteration
             for field_name, validators in _class.__field_validators_tuple__:
                 try:
                     # Get current value once
                     current_value = _getattr(self, field_name)
 
                     # Run all validators for this field
-                    # Note: validators MUST return the value (not None for pass-through)
                     for validator in validators:
-                        result = validator(_class, current_value)
-                        # If validator returns None, keep the original value
-                        # This allows validators to validate without transforming
+                        # Check validator type to determine calling convention
+                        if isinstance(validator, Validator):
+                             # Annotated validators: call(value)
+                             result = validator(current_value)
+                        else:
+                             # @field_validator methods: call(cls, value)
+                             result = validator(_class, current_value)
+
+                        # If validator returns a value, update the field
                         if result is not None:
                             current_value = result
+                            # Update the field immediately so subsequent validators see new value
+                            _setattr(self, field_name, current_value)
 
-                    # Update the field once with the final value
-                    _setattr(self, field_name, current_value)
+                except ValidationError as e:
+                    # Merge structured validation errors
+                    collector.merge(e, prefix=field_name)
+                except ValueError as e:
+                    # Convert simple ValueErrors to field errors
+                    collector.add_error(field_name, str(e))
+                except Exception as e:
+                    # Capture other exceptions
+                    collector.add_error(field_name, str(e))
 
-                except (ValueError, TypeError) as e:
-                    # Convert to ValidationError with field context
-                    raise MsgspecValidationError(f"{field_name}: {e}") from e
+        # Raise any collected errors
+        collector.raise_if_errors()
 
-    def _validate_nested_and_literal_fields(self) -> None:
+    def _validate_nested_and_literal_fields(self, collector: ErrorCollector) -> None:
         """
-        Validate nested serializer fields and Literal (choice) fields using cached metadata.
+        Validate nested serializer fields and Literal (choice) fields.
 
-        This method handles two types of validation:
-        1. Nested fields: Fields with Nested() annotation that contain serializer instances
-        2. Literal fields: Fields with Literal[] type hints that restrict values to specific choices
+        Args:
+            collector: ErrorCollector to add errors to
         """
-        # Cache force_setattr for nested field validation (optimization #2)
+        # Cache force_setattr for nested field validation
         _setattr = msgspec_structs.force_setattr
 
-        # Validate nested fields (no hasattr needed - msgspec struct fields always exist)
+        # Validate nested fields
         for field_name, nested_config in self.__nested_fields__.items():
             try:
                 current_value = getattr(self, field_name)
@@ -527,27 +659,37 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 # Update the field if validation changed it
                 if validated_value is not current_value:
                     _setattr(self, field_name, validated_value)
+            except ValidationError as e:
+                # Merge existing structured errors, or add detail if flat error
+                if e.errors:
+                    collector.merge(e, prefix=field_name)
+                elif e.detail:
+                    collector.add_error(field_name, e.detail)
             except (ValueError, TypeError) as e:
-                raise MsgspecValidationError(str(e)) from e
-            except Exception:
-                raise
+                collector.add_error(field_name, str(e))
+            except Exception as e:
+                collector.add_error(field_name, str(e))
 
-        # Validate literal (choice) fields (now with O(1) frozenset lookup - optimization #3)
+        # Validate literal (choice) fields
         for field_name, allowed_values in self.__literal_fields__.items():
             try:
                 current_value = getattr(self, field_name)
                 if current_value not in allowed_values:
-                    raise ValueError(
-                        f"{field_name}: invalid value {current_value!r}. "
-                        f"Expected one of: {', '.join(repr(v) for v in allowed_values)}"
+                    # Create a nice message for choices
+                    choices_str = ", ".join(repr(v) for v in sorted(allowed_values, key=str))
+                    collector.add_error(
+                        field_name,
+                        f"Must be one of: {choices_str}",
+                        code="choices",
+                        params={"allowed_values": list(allowed_values)}
                     )
-            except (ValueError, TypeError) as e:
-                raise MsgspecValidationError(str(e)) from e
-            except Exception:
-                raise
+            except Exception as e:
+                collector.add_error(field_name, str(e))
 
     def _run_model_validators(self) -> None:
         """Execute all model validators in order."""
+        collector = ErrorCollector()
+
         for validator in self.__model_validators__:
             try:
                 # Model validators should either modify self or return None
@@ -556,10 +698,16 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 if result is not None and result is not self:
                     # This shouldn't happen with proper usage, but handle it gracefully
                     pass
-            except (ValueError, TypeError) as e:
-                raise MsgspecValidationError(str(e)) from e
-            except Exception:
-                raise
+            except ValidationError as e:
+                collector.merge(e)
+            except ValueError as e:
+                # Model validators usually raise ValueError for general errors
+                # passing "__root__" or "non_field_errors" as field name
+                collector.add_error("non_field_errors", str(e))
+            except Exception as e:
+                collector.add_error("non_field_errors", str(e))
+
+        collector.raise_if_errors()
 
     def validate(self: T) -> T:
         """
@@ -607,7 +755,14 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             # author.name == 'John' (stripped)
             # author.email == 'john@example.com' (lowercased)
         """
-        return msgspec.convert(data, type=cls)
+        try:
+            instance = msgspec.convert(data, type=cls)
+            instance._validate_instance()
+            return instance
+        except MsgspecValidationError as e:
+            # Wrap msgspec validation errors
+            # Only simplistic wrapping here, as msgspec errors are flat strings
+            raise ValidationError(detail=str(e)) from e
 
     @classmethod
     def model_validate_json(cls: type[T], json_data: str | bytes) -> T:
@@ -631,7 +786,12 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             # author.name == 'John' (stripped)
             # author.email == 'john@example.com' (lowercased)
         """
-        return msgspec.json.decode(json_data, type=cls)
+        try:
+            instance = msgspec.json.decode(json_data, type=cls)
+            instance._validate_instance()
+            return instance
+        except MsgspecValidationError as e:
+            raise ValidationError(detail=str(e)) from e
 
     @classmethod
     def from_model(
@@ -733,7 +893,9 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     # Regular field
                     data[field_name] = value
 
-        return cls(**data)
+        # Create instance bypassing validation (data is from trusted DB source)
+        with suppress_validation():
+            return cls(**data)
 
     def to_dict(self, *, exclude_unset: bool = False) -> dict[str, Any]:
         """

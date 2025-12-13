@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from msgspec import ValidationError
-
-from django_bolt.serializers import Serializer, field_validator, model_validator
+from django_bolt.serializers import Serializer, ValidationError, field_validator, model_validator
 
 
 class TestSerializerBasics:

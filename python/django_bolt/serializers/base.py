@@ -229,6 +229,76 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             and not any(cfg.exclude for cfg in cls.__field_configs__.values())
         )
 
+        # Create decoder type lazily (will be cached on first use)
+        cls.__decoder_type__: type[msgspec.Struct] | None = None
+
+    @classmethod
+    def get_decoder_type(cls) -> type[msgspec.Struct]:
+        """
+        Get a clean msgspec.Struct type for decoder creation.
+
+        This creates a defstruct with only the data fields (no ClassVar attributes),
+        which avoids the ClassVar NameError when msgspec tries to create a decoder.
+
+        The type is cached per class on first call.
+
+        Returns:
+            A msgspec.Struct subclass suitable for decoder creation
+        """
+        if cls.__decoder_type__ is not None:
+            return cls.__decoder_type__
+
+        # Build field definitions for defstruct
+        # Format: (name, type) or (name, type, default) or (name, type, msgspec.field(...))
+        fields = []
+        hints = cls.__cached_type_hints__
+        defaults = getattr(cls, "__struct_defaults__", ())
+        struct_fields = getattr(cls, "__struct_fields__", ())
+
+        # Build field -> default mapping (defaults are aligned from end)
+        num_fields = len(struct_fields)
+        num_defaults = len(defaults)
+        default_map: dict[str, Any] = {}
+        for i, default_val in enumerate(defaults):
+            field_idx = num_fields - num_defaults + i
+            if 0 <= field_idx < num_fields:
+                default_map[struct_fields[field_idx]] = default_val
+
+        for field_name in struct_fields:
+            field_type = hints.get(field_name, Any)
+
+            # Check if we have a default for this field
+            if field_name in default_map:
+                default_val = default_map[field_name]
+                # Check if it's a _FieldMarker - extract actual default
+                if isinstance(default_val, _FieldMarker):
+                    config = default_val.config
+                    if config.has_default():
+                        fields.append((field_name, field_type, config.get_default()))
+                    elif config.default_factory is not None:
+                        fields.append((field_name, field_type, msgspec.field(default_factory=config.default_factory)))
+                    else:
+                        # No actual default, field is required
+                        fields.append((field_name, field_type))
+                else:
+                    # Regular default value
+                    fields.append((field_name, field_type, default_val))
+            else:
+                # No default - required field
+                fields.append((field_name, field_type))
+
+        # Create the defstruct
+        decoder_type = msgspec.defstruct(
+            f"{cls.__name__}__Decoder",
+            fields,
+            kw_only=True,
+            module=cls.__module__,
+        )
+
+        # Cache it
+        cls.__decoder_type__ = decoder_type
+        return decoder_type
+
     @classmethod
     def _collect_meta_config(cls) -> None:
         """

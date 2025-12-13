@@ -38,9 +38,19 @@ _DECODER_CACHE: dict[Any, msgspec.json.Decoder] = {}
 
 
 def get_msgspec_decoder(type_: Any) -> msgspec.json.Decoder:
-    """Get or create a cached msgspec decoder for a type."""
+    """Get or create a cached msgspec decoder for a type.
+
+    For Serializer types (which have get_decoder_type()), we use a clean defstruct
+    to avoid ClassVar resolution issues with msgspec.
+    """
     if type_ not in _DECODER_CACHE:
-        _DECODER_CACHE[type_] = msgspec.json.Decoder(type_)
+        # Check if this is a Serializer with get_decoder_type()
+        if hasattr(type_, 'get_decoder_type') and callable(getattr(type_, 'get_decoder_type', None)):
+            # Use the clean decoder type (defstruct without ClassVar)
+            decoder_type = type_.get_decoder_type()
+            _DECODER_CACHE[type_] = msgspec.json.Decoder(decoder_type)
+        else:
+            _DECODER_CACHE[type_] = msgspec.json.Decoder(type_)
     return _DECODER_CACHE[type_]
 
 
@@ -230,23 +240,49 @@ def create_body_extractor(name: str, annotation: Any) -> Callable:
 
     Uses cached msgspec decoder for maximum performance.
     Converts msgspec.DecodeError (JSON parsing errors) to RequestValidationError for proper 422 responses.
+
+    For Serializer types, decodes to a clean defstruct then converts to Serializer
+    instance to trigger validation.
     """
     if is_msgspec_struct(annotation):
         decoder = get_msgspec_decoder(annotation)
-        def extract(body_bytes: bytes) -> Any:
-            try:
-                return decoder.decode(body_bytes)
-            except msgspec.ValidationError:
-                # Re-raise ValidationError as-is (field validation errors handled by error_handlers.py)
-                # IMPORTANT: Must catch ValidationError BEFORE DecodeError since ValidationError subclasses DecodeError
-                raise
-            except msgspec.DecodeError as e:
-                # JSON parsing error (malformed JSON) - return 422 with error details including line/column
-                error_detail = parse_msgspec_decode_error(e, body_bytes)
-                raise RequestValidationError(
-                    errors=[error_detail],
-                    body=body_bytes,
-                ) from e
+
+        # Check if this is a Serializer that uses get_decoder_type()
+        # If so, we need to convert the decoded struct back to Serializer
+        is_serializer = hasattr(annotation, 'get_decoder_type') and callable(getattr(annotation, 'get_decoder_type', None))
+
+        if is_serializer:
+            # For Serializers: decode to defstruct, then convert to Serializer instance
+            def extract(body_bytes: bytes) -> Any:
+                try:
+                    # Decode to the clean defstruct type
+                    decoded = decoder.decode(body_bytes)
+                    # Convert to dict and create Serializer instance (triggers validation)
+                    data = msgspec.structs.asdict(decoded)
+                    return annotation(**data)
+                except msgspec.ValidationError:
+                    # Re-raise ValidationError as-is (field validation errors handled by error_handlers.py)
+                    raise
+                except msgspec.DecodeError as e:
+                    # JSON parsing error (malformed JSON) - return 422 with error details
+                    error_detail = parse_msgspec_decode_error(e, body_bytes)
+                    raise RequestValidationError(
+                        errors=[error_detail],
+                        body=body_bytes,
+                    ) from e
+        else:
+            # For regular msgspec.Struct: decode directly
+            def extract(body_bytes: bytes) -> Any:
+                try:
+                    return decoder.decode(body_bytes)
+                except msgspec.ValidationError:
+                    raise
+                except msgspec.DecodeError as e:
+                    error_detail = parse_msgspec_decode_error(e, body_bytes)
+                    raise RequestValidationError(
+                        errors=[error_detail],
+                        body=body_bytes,
+                    ) from e
     else:
         # Fallback to generic msgspec decode
         def extract(body_bytes: bytes) -> Any:

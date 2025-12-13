@@ -288,7 +288,7 @@ def middleware(*args, **kwargs):
     return decorator
 
 
-def rate_limit(rps: int = 100, burst: int = None, key: str = "ip"):
+def rate_limit(rps: int = 100, burst: int | None = None, key: str = "ip"):
     """
     Rate limiting decorator (Rust-accelerated).
 

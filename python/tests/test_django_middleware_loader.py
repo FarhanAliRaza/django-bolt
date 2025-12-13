@@ -7,7 +7,6 @@ to ensure middleware runs and affects request/response behavior.
 from __future__ import annotations
 
 import pytest
-from django.http import HttpResponse
 
 from django_bolt import BoltAPI
 from django_bolt.middleware import DjangoMiddlewareStack, TimingMiddleware

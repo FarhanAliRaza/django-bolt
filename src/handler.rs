@@ -171,6 +171,17 @@ pub async fn handle_request(
         .map(|m| m.needs_headers)
         .unwrap_or(true);
 
+    // Extract Origin header early for CORS on error responses
+    let request_origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+
+    // Helper closure to add CORS headers to error responses using global config
+    // This ensures browsers can read error messages from cross-origin requests
+    let add_cors_to_error = |response: &mut HttpResponse| {
+        if let Some(ref global_cors) = state.global_cors_config {
+            add_cors_headers_rust(response, request_origin, global_cors, &state);
+        }
+    };
+
     // Extract headers early for middleware processing - pre-allocate with typical size
     // Headers are ALWAYS needed in Rust for middleware (auth, rate limiting, CORS)
     // Use FastHeaders for optimized insertion of common headers (authorization, content-type, etc.)
@@ -185,13 +196,17 @@ pub async fn handle_request(
         // Check header count limit
         header_count += 1;
         if header_count > MAX_HEADERS {
-            return responses::error_400_too_many_headers();
+            let mut response = responses::error_400_too_many_headers();
+            add_cors_to_error(&mut response);
+            return response;
         }
 
         if let Ok(v) = value.to_str() {
             // SECURITY: Validate header value size
             if v.len() > max_header_size {
-                return responses::error_400_header_too_large(max_header_size);
+                let mut response = responses::error_400_header_too_large(max_header_size);
+                add_cors_to_error(&mut response);
+                return response;
             }
 
             // FastHeaders uses perfect hash for common headers (authorization, content-type, etc.)
@@ -216,7 +231,7 @@ pub async fn handle_request(
     // Process rate limiting (Rust-native, no GIL)
     if let Some(ref route_meta) = route_metadata {
         if let Some(ref rate_config) = route_meta.rate_limit_config {
-            if let Some(response) = middleware::rate_limit::check_rate_limit(
+            if let Some(mut response) = middleware::rate_limit::check_rate_limit(
                 handler_id,
                 &headers,
                 peer_addr.as_deref(),
@@ -224,6 +239,12 @@ pub async fn handle_request(
                 &method,
                 &path,
             ) {
+                // Add CORS headers to 429 rate limit response (use route CORS, fall back to global)
+                if let Some(ref cors_cfg) = route_meta.cors_config {
+                    add_cors_headers_rust(&mut response, request_origin, cors_cfg, &state);
+                } else {
+                    add_cors_to_error(&mut response);
+                }
                 return response;
             }
         }
@@ -234,10 +255,24 @@ pub async fn handle_request(
         match validate_auth_and_guards(&headers, &route_meta.auth_backends, &route_meta.guards) {
             AuthGuardResult::Allow(ctx) => ctx,
             AuthGuardResult::Unauthorized => {
-                return responses::error_401();
+                let mut response = responses::error_401();
+                // Add CORS headers to 401 response (use route CORS, fall back to global)
+                if let Some(ref cors_cfg) = route_meta.cors_config {
+                    add_cors_headers_rust(&mut response, request_origin, cors_cfg, &state);
+                } else {
+                    add_cors_to_error(&mut response);
+                }
+                return response;
             }
             AuthGuardResult::Forbidden => {
-                return responses::error_403();
+                let mut response = responses::error_403();
+                // Add CORS headers to 403 response (use route CORS, fall back to global)
+                if let Some(ref cors_cfg) = route_meta.cors_config {
+                    add_cors_headers_rust(&mut response, request_origin, cors_cfg, &state);
+                } else {
+                    add_cors_to_error(&mut response);
+                }
+                return response;
             }
         }
     } else {
@@ -700,7 +735,19 @@ pub async fn handle_request(
                                 headers,
                                 skip_compression,
                             );
-                            return builder.body(Vec::<u8>::new());
+                            let mut response = builder.body(Vec::<u8>::new());
+
+                            // Add CORS headers if configured (NO GIL - uses Rust-native config)
+                            if let Some(ref route_meta) = route_metadata {
+                                if let Some(ref cors_cfg) = route_meta.cors_config {
+                                    let origin =
+                                        req.headers().get("origin").and_then(|v| v.to_str().ok());
+                                    let _ =
+                                        add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
+                                }
+                            }
+
+                            return response;
                         }
 
                         // Use optimized SSE response builder (batches all SSE headers)
@@ -711,7 +758,19 @@ pub async fn handle_request(
                             skip_compression,
                         );
                         let stream = create_sse_stream(final_content_obj, is_async_generator);
-                        return builder.streaming(stream);
+                        let mut response = builder.streaming(stream);
+
+                        // Add CORS headers if configured (NO GIL - uses Rust-native config)
+                        if let Some(ref route_meta) = route_metadata {
+                            if let Some(ref cors_cfg) = route_meta.cors_config {
+                                let origin =
+                                    req.headers().get("origin").and_then(|v| v.to_str().ok());
+                                let _ =
+                                    add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
+                            }
+                        }
+
+                        return response;
                     } else {
                         // Non-SSE streaming responses
                         let mut builder = HttpResponse::build(status);

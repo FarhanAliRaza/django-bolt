@@ -123,7 +123,8 @@ where
 
                 if should_compress {
                     // Add Vary header to indicate content varies by Accept-Encoding
-                    response.headers_mut().insert(
+                    // Use append (not insert) to preserve existing Vary headers like CORS's Vary: Origin
+                    response.headers_mut().append(
                         VARY,
                         actix_web::http::header::HeaderValue::from_static("accept-encoding"),
                     );

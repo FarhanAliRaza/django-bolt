@@ -334,6 +334,8 @@ fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Co
     // Parse origins and build origin set for O(1) lookups
     if let Some(origins_py) = dict.get("origins") {
         if let Ok(origins) = origins_py.extract::<Vec<String>>(py) {
+            // Detect wildcard origin
+            config.allow_all_origins = origins.iter().any(|o| o == "*");
             config.origin_set = origins.iter().cloned().collect();
             config.origins = origins;
         }

@@ -53,7 +53,7 @@ class Token:
     Example:
         >>> token = Token(
         ...     sub="user123",
-        ...     exp=datetime.now(timezone.utc) + timedelta(hours=1),
+        ...     exp=datetime.now(UTC) + timedelta(hours=1),
         ...     is_staff=True,
         ...     permissions=["users.view", "users.edit"]
         ... )

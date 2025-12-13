@@ -21,10 +21,12 @@ pub fn build_response_with_headers(
     // Actix doesn't expose header map directly, but the builder is efficient
 
     // Add all custom headers in one pass
+    // Use append_header to support multiple headers with the same name
+    // (e.g., multiple Set-Cookie headers). insert_header would replace.
     for (k, v) in headers {
         if let Ok(name) = HeaderName::try_from(k) {
             if let Ok(val) = HeaderValue::try_from(v) {
-                builder.insert_header((name, val));
+                builder.append_header((name, val));
             }
         }
     }
@@ -48,8 +50,9 @@ pub fn build_sse_response(
     let mut builder = HttpResponse::build(status);
 
     // Add custom headers first
+    // Use append_header to support multiple headers with the same name
     for (k, v) in custom_headers {
-        builder.insert_header((k, v));
+        builder.append_header((k, v));
     }
 
     // Batch SSE headers (avoid 5 separate mutations)

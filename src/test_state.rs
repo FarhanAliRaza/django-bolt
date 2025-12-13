@@ -38,7 +38,7 @@ pub struct TestApp {
     pub router: Router,
     pub websocket_router: WebSocketRouter, // WebSocket routes for testing
     pub middleware_metadata: AHashMap<usize, Py<PyAny>>, // raw Python metadata for compatibility
-    pub route_metadata: AHashMap<usize, RouteMetadata>,  // parsed Rust metadata
+    pub route_metadata: AHashMap<usize, RouteMetadata>, // parsed Rust metadata
     pub dispatch: Py<PyAny>,
     pub event_loop: Option<Py<PyAny>>, // store loop; create TaskLocals per call
     pub global_cors_config: Option<CorsConfig>, // global CORS config for testing (same as production)
@@ -107,30 +107,34 @@ fn parse_cors_config_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<CorsConfig>
     let methods: Vec<String> = dict
         .get_item("methods")?
         .map(|v| v.extract().unwrap_or_default())
-        .unwrap_or_else(|| vec![
-            "GET".to_string(),
-            "POST".to_string(),
-            "PUT".to_string(),
-            "PATCH".to_string(),
-            "DELETE".to_string(),
-            "OPTIONS".to_string(),
-        ]);
+        .unwrap_or_else(|| {
+            vec![
+                "GET".to_string(),
+                "POST".to_string(),
+                "PUT".to_string(),
+                "PATCH".to_string(),
+                "DELETE".to_string(),
+                "OPTIONS".to_string(),
+            ]
+        });
 
     // Extract headers with defaults
     let headers: Vec<String> = dict
         .get_item("headers")?
         .map(|v| v.extract().unwrap_or_default())
-        .unwrap_or_else(|| vec![
-            "accept".to_string(),
-            "accept-encoding".to_string(),
-            "authorization".to_string(),
-            "content-type".to_string(),
-            "dnt".to_string(),
-            "origin".to_string(),
-            "user-agent".to_string(),
-            "x-csrftoken".to_string(),
-            "x-requested-with".to_string(),
-        ]);
+        .unwrap_or_else(|| {
+            vec![
+                "accept".to_string(),
+                "accept-encoding".to_string(),
+                "authorization".to_string(),
+                "content-type".to_string(),
+                "dnt".to_string(),
+                "origin".to_string(),
+                "user-agent".to_string(),
+                "x-csrftoken".to_string(),
+                "x-requested-with".to_string(),
+            ]
+        });
 
     // Extract expose_headers
     let expose_headers: Vec<String> = dict
@@ -162,7 +166,7 @@ fn parse_cors_config_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<CorsConfig>
 
     Ok(CorsConfig {
         origins,
-        origin_regexes: vec![],  // TODO: support regex in tests if needed
+        origin_regexes: vec![], // TODO: support regex in tests if needed
         compiled_origin_regexes: vec![],
         origin_set,
         allow_all_origins,
@@ -215,16 +219,15 @@ pub fn register_test_websocket_routes(
     };
     let mut app = entry.write();
     for (path, handler_id, handler, injector) in routes {
-        app.websocket_router.register(&path, handler_id, handler, injector)?;
+        app.websocket_router
+            .register(&path, handler_id, handler, injector)?;
     }
     Ok(())
 }
 
 /// Find a WebSocket route for the given path in a test app
 #[allow(dead_code)] // Reserved for future WebSocket testing utilities
-pub fn find_test_websocket_route(
-    app_id: u64,
-) -> Option<Arc<RwLock<TestApp>>> {
+pub fn find_test_websocket_route(app_id: u64) -> Option<Arc<RwLock<TestApp>>> {
     registry().get(&app_id).map(|entry| entry.clone())
 }
 
@@ -271,7 +274,10 @@ pub fn handle_test_websocket(
             } else {
                 // O(1) HashSet lookup
                 cors_config.origin_set.contains(origin_value)
-                    || cors_config.compiled_origin_regexes.iter().any(|re| re.is_match(origin_value))
+                    || cors_config
+                        .compiled_origin_regexes
+                        .iter()
+                        .any(|re| re.is_match(origin_value))
             }
         } else {
             // SECURITY: No CORS configured = deny all cross-origin requests (fail-secure)
@@ -279,9 +285,10 @@ pub fn handle_test_websocket(
         };
 
         if !origin_allowed {
-            return Err(pyo3::exceptions::PyPermissionError::new_err(
-                format!("Origin not allowed: {}. Configure CORS_ALLOWED_ORIGINS in Django settings.", origin_value)
-            ));
+            return Err(pyo3::exceptions::PyPermissionError::new_err(format!(
+                "Origin not allowed: {}. Configure CORS_ALLOWED_ORIGINS in Django settings.",
+                origin_value
+            )));
         }
     }
     // No origin header = same-origin request, allowed
@@ -319,7 +326,7 @@ pub fn handle_test_websocket(
                 &path,
             ) {
                 return Err(pyo3::exceptions::PyPermissionError::new_err(
-                    "Rate limit exceeded"
+                    "Rate limit exceeded",
                 ));
             }
         }
@@ -364,10 +371,7 @@ pub fn handle_test_websocket(
     scope_dict.set_item("path", &path)?;
 
     // Query string as bytes
-    let qs_bytes = query_string
-        .as_ref()
-        .map(|s| s.as_bytes())
-        .unwrap_or(b"");
+    let qs_bytes = query_string.as_ref().map(|s| s.as_bytes()).unwrap_or(b"");
     scope_dict.set_item("query_string", pyo3::types::PyBytes::new(py, qs_bytes))?;
 
     // Headers as dict (lowercase keys)
@@ -512,9 +516,12 @@ pub fn handle_test_request_for(
     let route_meta_opt: Option<RouteMetadata>;
     let middleware_present: bool;
     let event_loop_obj_opt: Option<Py<PyAny>>;
+    let global_cors_config: Option<CorsConfig>;
     {
         let app = entry.read();
         dispatch = app.dispatch.clone_ref(py);
+        // Capture global CORS config for error responses (same as production handler.rs)
+        global_cors_config = app.global_cors_config.clone();
 
         // Route matching
         if let Some(route_match) = app.router.find(&method, &path) {
@@ -541,14 +548,42 @@ pub fn handle_test_request_for(
                 }
             }
 
-            return Ok((
-                404,
-                vec![(
-                    "content-type".to_string(),
-                    "text/plain; charset=utf-8".to_string(),
-                )],
-                b"Not Found".to_vec(),
-            ));
+            // 404 response - add CORS headers if global CORS is configured (same as handler.rs)
+            let mut resp_headers = vec![(
+                "content-type".to_string(),
+                "text/plain; charset=utf-8".to_string(),
+            )];
+
+            // Get request origin for CORS
+            let request_origin = headers
+                .iter()
+                .find(|(k, _)| k.to_lowercase() == "origin")
+                .map(|(_, v)| v.as_str());
+
+            // Add CORS headers using shared function from cors.rs (same as production)
+            if let Some(ref cors_cfg) = global_cors_config {
+                let mut temp_resp = HttpResponse::NotFound().finish();
+                let origin_allowed = add_cors_response_headers(
+                    &mut temp_resp,
+                    request_origin,
+                    &cors_cfg.origins,
+                    cors_cfg.credentials,
+                    &cors_cfg.expose_headers,
+                );
+                if origin_allowed {
+                    // Extract CORS headers from temp response to tuple format
+                    for (name, value) in temp_resp.headers().iter() {
+                        let name_str = name.as_str();
+                        if name_str.starts_with("access-control") || name_str == "vary" {
+                            if let Ok(val_str) = value.to_str() {
+                                resp_headers.push((name_str.to_string(), val_str.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+
+            return Ok((404, resp_headers, b"Not Found".to_vec()));
         }
 
         // Snapshot metadata and loop
@@ -600,22 +635,101 @@ pub fn handle_test_request_for(
             match evaluate_guards(&route_meta.guards, auth_ctx.as_ref()) {
                 GuardResult::Allow => {}
                 GuardResult::Unauthorized => {
+                    // Start with basic error headers
+                    let mut resp_headers =
+                        vec![("content-type".to_string(), "application/json".to_string())];
+
+                    // Get request origin for CORS
+                    let request_origin = header_map.get("origin").map(|s| s.as_str());
+
+                    // Get effective CORS config (route-level first, then global) - same as handler.rs
+                    let cors_cfg = route_meta
+                        .cors_config
+                        .as_ref()
+                        .or(global_cors_config.as_ref());
+
+                    // Add CORS headers using shared function from cors.rs (same as production)
+                    if let Some(cfg) = cors_cfg {
+                        // Create temp response to add CORS headers via shared function
+                        let mut temp_resp = HttpResponse::Unauthorized().finish();
+                        let origin_allowed = add_cors_response_headers(
+                            &mut temp_resp,
+                            request_origin,
+                            &cfg.origins,
+                            cfg.credentials,
+                            &cfg.expose_headers,
+                        );
+                        if origin_allowed {
+                            // Extract CORS headers from temp response to tuple format
+                            for (name, value) in temp_resp.headers().iter() {
+                                let name_str = name.as_str();
+                                if name_str.starts_with("access-control") || name_str == "vary" {
+                                    if let Ok(val_str) = value.to_str() {
+                                        resp_headers
+                                            .push((name_str.to_string(), val_str.to_string()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     return Ok((
                         401,
-                        vec![("content-type".to_string(), "application/json".to_string())],
+                        resp_headers,
                         br#"{"detail":"Authentication required"}"#.to_vec(),
                     ));
                 }
                 GuardResult::Forbidden => {
+                    // Start with basic error headers
+                    let mut resp_headers =
+                        vec![("content-type".to_string(), "application/json".to_string())];
+
+                    // Get request origin for CORS
+                    let request_origin = header_map.get("origin").map(|s| s.as_str());
+
+                    // Get effective CORS config (route-level first, then global) - same as handler.rs
+                    let cors_cfg = route_meta
+                        .cors_config
+                        .as_ref()
+                        .or(global_cors_config.as_ref());
+
+                    // Add CORS headers using shared function from cors.rs (same as production)
+                    if let Some(cfg) = cors_cfg {
+                        // Create temp response to add CORS headers via shared function
+                        let mut temp_resp = HttpResponse::Forbidden().finish();
+                        let origin_allowed = add_cors_response_headers(
+                            &mut temp_resp,
+                            request_origin,
+                            &cfg.origins,
+                            cfg.credentials,
+                            &cfg.expose_headers,
+                        );
+                        if origin_allowed {
+                            // Extract CORS headers from temp response to tuple format
+                            for (name, value) in temp_resp.headers().iter() {
+                                let name_str = name.as_str();
+                                if name_str.starts_with("access-control") || name_str == "vary" {
+                                    if let Ok(val_str) = value.to_str() {
+                                        resp_headers
+                                            .push((name_str.to_string(), val_str.to_string()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     return Ok((
                         403,
-                        vec![("content-type".to_string(), "application/json".to_string())],
+                        resp_headers,
                         br#"{"detail":"Permission denied"}"#.to_vec(),
                     ));
                 }
             }
         }
     }
+
+    // Capture request origin for CORS on success responses (before header_map is moved into PyRequest)
+    let request_origin_for_cors = header_map.get("origin").map(|s| s.to_string());
 
     // Parse cookies
     let mut cookies: AHashMap<String, String> = AHashMap::with_capacity(8);
@@ -693,7 +807,9 @@ pub fn handle_test_request_for(
     test_debug!("[test_state] obtained coroutine");
 
     test_debug!("[test_state] running coroutine with run_until_complete");
-    let result_obj = loop_obj.call_method1("run_until_complete", (coroutine,))?.unbind();
+    let result_obj = loop_obj
+        .call_method1("run_until_complete", (coroutine,))?
+        .unbind();
 
     // Debug: check what type we got back
     let type_name = result_obj
@@ -712,10 +828,51 @@ pub fn handle_test_request_for(
     );
     if let Ok((status_code, resp_headers, body_bytes)) = tuple_result {
         // Filter out special headers
-        let headers: Vec<(String, String)> = resp_headers
+        let mut headers: Vec<(String, String)> = resp_headers
             .into_iter()
             .filter(|(k, _)| !k.eq_ignore_ascii_case("x-bolt-file-path"))
             .collect();
+
+        // Add CORS headers for successful responses (same as handler.rs lines 502-508)
+        // Get effective CORS config: route-level first, then global fallback
+        // Also check if CORS is skipped via @skip_middleware("cors")
+        let skip_cors = route_meta_opt
+            .as_ref()
+            .map(|m| m.skip.contains("cors"))
+            .unwrap_or(false);
+
+        if !skip_cors {
+            let cors_cfg = route_meta_opt
+                .as_ref()
+                .and_then(|m| m.cors_config.as_ref())
+                .or(global_cors_config.as_ref());
+
+            if let Some(cfg) = cors_cfg {
+                // Use request_origin_for_cors captured earlier (before header_map was moved)
+                let request_origin = request_origin_for_cors.as_deref();
+
+                // Use shared CORS function (same as production)
+                let mut temp_resp = HttpResponse::Ok().finish();
+                let origin_allowed = add_cors_response_headers(
+                    &mut temp_resp,
+                    request_origin,
+                    &cfg.origins,
+                    cfg.credentials,
+                    &cfg.expose_headers,
+                );
+                if origin_allowed {
+                    // Extract CORS headers from temp response to tuple format
+                    for (name, value) in temp_resp.headers().iter() {
+                        let name_str = name.as_str();
+                        if name_str.starts_with("access-control") || name_str == "vary" {
+                            if let Ok(val_str) = value.to_str() {
+                                headers.push((name_str.to_string(), val_str.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // HEAD requests must have empty body per RFC 7231
         let response_body = if method == "HEAD" {
@@ -1043,7 +1200,8 @@ pub fn handle_actix_http_request(
                         &cors_cfg.origins
                     };
 
-                    let is_wildcard = cors_cfg.allow_all_origins || effective_origins.iter().any(|o| o == "*");
+                    let is_wildcard =
+                        cors_cfg.allow_all_origins || effective_origins.iter().any(|o| o == "*");
 
                     // Wildcard + credentials is invalid per CORS spec
                     if is_wildcard && cors_cfg.credentials {
@@ -1055,7 +1213,12 @@ pub fn handle_actix_http_request(
                             response.insert_header((ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
                             // Use shared helper for preflight headers
                             let mut resp = response.finish();
-                            add_preflight_headers_simple(&mut resp, &cors_cfg.methods, &cors_cfg.headers, cors_cfg.max_age as u64);
+                            add_preflight_headers_simple(
+                                &mut resp,
+                                &cors_cfg.methods,
+                                &cors_cfg.headers,
+                                cors_cfg.max_age as u64,
+                            );
                             return Ok(resp);
                         }
                         // No origin header, reject
@@ -1067,7 +1230,12 @@ pub fn handle_actix_http_request(
                         let mut response = HttpResponse::NoContent();
                         response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, "*"));
                         let mut resp = response.finish();
-                        add_preflight_headers_simple(&mut resp, &cors_cfg.methods, &cors_cfg.headers, cors_cfg.max_age as u64);
+                        add_preflight_headers_simple(
+                            &mut resp,
+                            &cors_cfg.methods,
+                            &cors_cfg.headers,
+                            cors_cfg.max_age as u64,
+                        );
                         return Ok(resp);
                     }
 
@@ -1100,7 +1268,12 @@ pub fn handle_actix_http_request(
                     }
 
                     let mut resp = response.finish();
-                    add_preflight_headers_simple(&mut resp, &cors_cfg.methods, &cors_cfg.headers, cors_cfg.max_age as u64);
+                    add_preflight_headers_simple(
+                        &mut resp,
+                        &cors_cfg.methods,
+                        &cors_cfg.headers,
+                        cors_cfg.max_age as u64,
+                    );
                     return Ok(resp);
                 }
 
@@ -1139,47 +1312,20 @@ pub fn handle_actix_http_request(
                 });
 
                 match result {
-                    Ok((status_code, mut resp_headers, resp_body)) => {
-                        // Add Content-Encoding: identity header if compression should be skipped
-                        if should_skip_compression {
-                            resp_headers.push(("content-encoding".to_string(), "identity".to_string()));
-                        }
-
-                        let mut response = actix_web::HttpResponse::build(
+                    Ok((status_code, resp_headers, resp_body)) => {
+                        // Use shared response builder (same as production handler.rs)
+                        // This ensures consistent header handling, including multiple Set-Cookie
+                        let http_response = crate::response_builder::build_response_with_headers(
                             actix_web::http::StatusCode::from_u16(status_code)
                                 .unwrap_or(actix_web::http::StatusCode::OK),
+                            resp_headers,
+                            should_skip_compression,
+                            resp_body,
                         );
-                        for (name, value) in &resp_headers {
-                            response.insert_header((name.as_str(), value.as_str()));
-                        }
 
-                        let mut http_response = response.body(resp_body);
-
-                        // Add CORS headers to response if not skipped
-                        if !should_skip_cors {
-                            // Get effective CORS config: route-level, then global
-                            let effective_config = cors_config.as_ref().or(global_cors_config.as_ref());
-
-                            if let Some(cors_cfg) = effective_config {
-                                // Get effective values
-                                let effective_origins = if !cors_cfg.origins.is_empty() {
-                                    &cors_cfg.origins
-                                } else if let Some(ref global) = global_cors_config {
-                                    &global.origins
-                                } else {
-                                    &cors_cfg.origins
-                                };
-
-                                // Use shared helper function
-                                add_cors_response_headers(
-                                    &mut http_response,
-                                    request_origin.as_deref(),
-                                    effective_origins,
-                                    cors_cfg.credentials,
-                                    &cors_cfg.expose_headers,
-                                );
-                            }
-                        }
+                        // NOTE: CORS headers are NOT added here - they must be added by handle_test_request_for
+                        // to match production behavior in handler.rs. This ensures tests accurately validate
+                        // that CORS headers are added at error return points in the request handling code.
 
                         Ok::<_, actix_web::Error>(http_response)
                     }

@@ -530,5 +530,10 @@ class TestCorsEdgeCases:
             assert "Access-Control-Allow-Origin" not in response.headers
 
 
+# NOTE: SSE CORS tests are in test_sse_cors_integration.py which tests production handler.rs
+# TestClient uses test_state.rs for streaming, not production code, so SSE CORS tests
+# must use integration tests that start a real server.
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

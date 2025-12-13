@@ -4,10 +4,10 @@ build-backend = "maturin"
 
 [project]
 name = "django-bolt"
-version = "0.3.13"
+version = "0.4.2"
 description = "High-performance API framework for Django with Rust-powered endpoints delivering 60k+ RPS"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [
     { name = "Farhan", email = "farhanalirazaazeemi@gmail.com" }
@@ -18,8 +18,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     # "Programming Language :: Python :: 3.14", coming when msgspec has 3.14 support
@@ -71,7 +69,7 @@ dev = [
     "pydantic>=2",
     "pyyaml>=5.2",
     "maturin>=1.9.6",
-    "django==5.2",
+    "django==6.0",
     "ruff>=0.8",
     "ty>=0.0.1a7",
 ]

@@ -36,10 +36,10 @@ pub fn add_cors_headers_rust(
                     .headers_mut()
                     .insert(ACCESS_CONTROL_ALLOW_ORIGIN, val);
             }
-            // Add Vary: Origin when reflecting origin
+            // Add Vary: Origin when reflecting origin (append, don't replace)
             response
                 .headers_mut()
-                .insert(VARY, HeaderValue::from_static("Origin"));
+                .append(VARY, HeaderValue::from_static("Origin"));
 
             response.headers_mut().insert(
                 ACCESS_CONTROL_ALLOW_CREDENTIALS,
@@ -118,10 +118,10 @@ pub fn add_cors_headers_rust(
             .insert(ACCESS_CONTROL_ALLOW_ORIGIN, val);
     }
 
-    // Always add Vary: Origin when reflecting origin
+    // Always add Vary: Origin when reflecting origin (append, don't replace)
     response
         .headers_mut()
-        .insert(VARY, HeaderValue::from_static("Origin"));
+        .append(VARY, HeaderValue::from_static("Origin"));
 
     // Add credentials header if enabled
     if cors_config.credentials {
@@ -194,7 +194,7 @@ pub fn add_cors_response_headers(
             }
             response
                 .headers_mut()
-                .insert(VARY, HeaderValue::from_static("Origin"));
+                .append(VARY, HeaderValue::from_static("Origin"));
             response.headers_mut().insert(
                 ACCESS_CONTROL_ALLOW_CREDENTIALS,
                 HeaderValue::from_static("true"),
@@ -245,7 +245,7 @@ pub fn add_cors_response_headers(
     }
     response
         .headers_mut()
-        .insert(VARY, HeaderValue::from_static("Origin"));
+        .append(VARY, HeaderValue::from_static("Origin"));
 
     if credentials {
         response.headers_mut().insert(

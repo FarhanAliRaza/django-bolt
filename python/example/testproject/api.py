@@ -541,6 +541,107 @@ async def read_users_async() -> list[UserMini]:
     return users
 
 
+# ============================================================================
+# Serializer Examples - Tests for ClassVar Fix
+# These examples verify that Serializer works correctly as request body types
+# ============================================================================
+
+class CreateUserSerializer(Serializer):
+    """Serializer used as request body - tests ClassVar fix."""
+    username: str
+    email: str
+    age: int = 18
+
+    @field_validator("username")
+    def validate_username(cls, value: str) -> str:
+        if len(value) < 3:
+            raise ValueError("Username must be at least 3 characters")
+        return value.lower()
+
+    @field_validator("email")
+    def validate_email(cls, value: str) -> str:
+        if "@" not in value:
+            raise ValueError("Invalid email format")
+        return value.lower()
+
+
+class UserResponseSerializer(Serializer):
+    """Serializer used as response model."""
+    id: int
+    username: str
+    email: str
+    is_active: bool = True
+
+
+class AddressSerializer(Serializer):
+    """Nested serializer for address data."""
+    street: str
+    city: str
+    country: str = "USA"
+
+
+class UserWithAddressSerializer(Serializer):
+    """Serializer with nested serializer - tests complex types."""
+    username: str
+    email: str
+    address: AddressSerializer
+
+
+@api.post("/serializer-test/create-user", response_model=UserResponseSerializer)
+async def create_user_with_serializer(user: CreateUserSerializer):
+    """
+    POST endpoint using Serializer as request body.
+    Tests: ClassVar fix, field validators, request body parsing.
+    """
+    return UserResponseSerializer(
+        id=1,
+        username=user.username,
+        email=user.email,
+        is_active=True,
+    )
+
+
+@api.post("/serializer-test/nested")
+async def create_user_with_address(data: UserWithAddressSerializer):
+    """
+    POST endpoint with nested Serializer.
+    Tests: Nested serializer decoding, complex type handling.
+    """
+    return {
+        "username": data.username,
+        "email": data.email,
+        "address": {
+            "street": data.address.street,
+            "city": data.address.city,
+            "country": data.address.country,
+        }
+    }
+
+
+@api.post("/serializer-test/validate")
+async def test_validation(user: CreateUserSerializer):
+    """
+    POST endpoint that triggers validation.
+    Tests: Field validators run during body extraction.
+    """
+    return {
+        "username": user.username,  # Should be lowercase
+        "email": user.email,         # Should be lowercase
+        "age": user.age,
+    }
+
+
+@api.get("/serializer-test/response", response_model=list[UserMiniSerializer])
+def get_users_with_serializer_response():
+    """
+    GET endpoint with Serializer as response_model.
+    Tests: Serializer used in list[] response type.
+    """
+    return [
+        {"id": 1, "username": "alice"},
+        {"id": 2, "username": "bob"},
+    ]
+
 
 @api.get("/items/{item_id}")
 async def read_item(item_id: int, q: str | None = None):

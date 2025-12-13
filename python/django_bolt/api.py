@@ -22,6 +22,8 @@ except ImportError:
 # Import local modules
 from django.utils.functional import SimpleLazyObject
 
+from django_bolt.serializers import ValidationError
+
 from . import _json
 from .admin.routes import AdminRouteRegistrar
 from .admin.static_routes import StaticRouteRegistrar
@@ -39,8 +41,12 @@ from .concurrency import sync_to_thread
 from .decorators import ActionHandler
 from .dependencies import resolve_dependency
 from .error_handlers import handle_exception
-from .exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
-from django_bolt.serializers import ValidationError
+from .exceptions import (
+    HTTPException,
+    RequestValidationError,
+    parse_msgspec_decode_error,
+    parse_msgspec_validation_error,
+)
 from .logging.middleware import LoggingMiddleware, create_logging_middleware
 from .middleware import CompressionConfig
 from .middleware.compiler import add_optimization_flags_to_metadata, compile_middleware_meta
@@ -1931,12 +1937,14 @@ class BoltAPI:
             return response
 
         except (msgspec.ValidationError, ValidationError) as ve:
-            # Handle validation errors gracefully
+            # Handle validation errors gracefully (422 Unprocessable Entity)
+            # Return FastAPI-style error format with loc, msg, type
             if logging_middleware and start_time is not None:
                 duration = time.time() - start_time
-                logging_middleware.log_response(request, 400, duration)
+                logging_middleware.log_response(request, 422, duration)
 
-            return 400, [("content-type", "application/json")], _json.encode({"detail": str(ve)})
+            error_list = parse_msgspec_validation_error(ve)
+            return 422, [("content-type", "application/json")], _json.encode({"detail": error_list})
 
         except HTTPException as he:
             # Log exception if logging enabled

@@ -80,9 +80,11 @@ def test_request_body_validation_error(api):
         assert response.status_code == 422  # Validation error returns 422
         data = response.json()
         assert "detail" in data
-        # Detail is a list of error objects with 'loc', 'msg', 'type' fields
+        # FastAPI-style error format: detail is a list of error objects
         errors = data["detail"]
         assert isinstance(errors, list)
+        assert len(errors) > 0
+        # Check that the error mentions the missing field
         assert any("email" in str(err.get("loc", [])) or "email" in err.get("msg", "") for err in errors)
 
         # Invalid type

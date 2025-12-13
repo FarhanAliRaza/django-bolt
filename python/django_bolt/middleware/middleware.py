@@ -48,7 +48,6 @@ GetResponse = Callable[["Request"], Awaitable["Response"]]
 MiddlewareType = Union[
     "MiddlewareProtocol",
     type["BaseMiddleware"],
-    "DjangoMiddlewareAdapter",
 ]
 
 

@@ -211,7 +211,7 @@ def _validate_many_nested(
 
     result = []
     collector = ErrorCollector()
-    
+
     for idx, item in enumerate(value):
         # Handle dict values (convert to Serializer)
         if isinstance(item, dict):
@@ -232,7 +232,7 @@ def _validate_many_nested(
                 f"Expected {serializer_class.__name__} object or dict, "
                 f"got {type(item).__name__}."
             )
-            
+
     collector.raise_if_errors(detail=f"Validation failed for {field_name}")
 
     return result

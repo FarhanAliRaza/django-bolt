@@ -59,6 +59,12 @@ lint-lib:
 ruff-fix:
 	uv run ruff check . --fix
 
+lint-lib-fix:
+	uv run ruff check python/django_bolt --fix
+
+lint-lib-fix-unsafe:
+	uv run ruff check python/django_bolt --unsafe-fixes --fix
+
 # Format code with ruff
 format:
 	uv run ruff format .

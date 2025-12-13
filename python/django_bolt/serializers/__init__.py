@@ -6,30 +6,11 @@ from msgspec import Meta
 
 from .base import Serializer, SerializerView
 from .decorators import computed_field, field_validator, model_validator
+from .errors import FieldError, ValidationError
 from .fields import FieldConfig, field
 from .helpers import create_serializer, create_serializer_set
-from .nested import Nested
 from .model_serializer import ModelSerializer
-from .errors import ValidationError, FieldError
-from .validators import (
-    validator,
-    Validator,
-    MinLengthValidator,
-    MaxLengthValidator,
-    LengthValidator,
-    RegexValidator,
-    MinValueValidator,
-    MaxValueValidator,
-    RangeValidator,
-    ChoicesValidator,
-    UniqueValidator,
-    ExistsValidator,
-    EmailValidator,
-    URLValidator,
-    SlugValidator,
-    UUIDValidator,
-    PhoneValidator,
-)
+from .nested import Nested
 
 # Re-export common types for convenience
 from .types import (
@@ -88,6 +69,25 @@ from .types import (
     Timezone,
     # Auth
     Username,
+)
+from .validators import (
+    ChoicesValidator,
+    EmailValidator,
+    ExistsValidator,
+    LengthValidator,
+    MaxLengthValidator,
+    MaxValueValidator,
+    MinLengthValidator,
+    MinValueValidator,
+    PhoneValidator,
+    RangeValidator,
+    RegexValidator,
+    SlugValidator,
+    UniqueValidator,
+    URLValidator,
+    UUIDValidator,
+    Validator,
+    validator,
 )
 
 __all__ = [

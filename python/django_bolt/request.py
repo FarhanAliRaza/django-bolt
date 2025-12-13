@@ -5,11 +5,9 @@ Defines the interface for request objects. At runtime, handlers receive
 PyRequest from Rust (src/request.rs). This Protocol provides type hints
 and IDE autocomplete.
 """
-from collections.abc import Iterator
 from typing import (
     Any,
     Protocol,
-    TypeVar,
     runtime_checkable,
 )
 
@@ -85,5 +83,5 @@ class Request(Protocol):
 
 __all__ = [
     "Request",
-   
+
 ]

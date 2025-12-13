@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import inspect
 import logging
 from collections.abc import Iterable
@@ -12,10 +14,22 @@ from django.db.models import Model as DjangoModel
 from msgspec import ValidationError as MsgspecValidationError
 from msgspec import structs as msgspec_structs
 from msgspec._core import StructMeta
-import contextlib
-import contextvars
+
+from .decorators import (
+    ComputedFieldConfig,
+    collect_computed_fields,
+    collect_field_validators,
+    collect_model_validators,
+)
+from .errors import ErrorCollector, ValidationError
+from .fields import FieldConfig, _FieldMarker
+from .nested import get_nested_config, validate_nested_field
+from .validators import Validator
+
+logger = logging.getLogger(__name__)
 
 _SKIP_VALIDATION = contextvars.ContextVar("skip_validation", default=False)
+
 
 @contextlib.contextmanager
 def suppress_validation():
@@ -25,19 +39,6 @@ def suppress_validation():
         yield
     finally:
         _SKIP_VALIDATION.reset(token)
-
-from .decorators import (
-    ComputedFieldConfig,
-    collect_computed_fields,
-    collect_field_validators,
-    collect_model_validators,
-)
-from .errors import ErrorCollector, ValidationError
-from .validators import Validator
-from .fields import FieldConfig, _FieldMarker
-from .nested import get_nested_config, validate_nested_field
-
-logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from django.db.models import Model
@@ -261,7 +262,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             meta_write_only = getattr(drf_meta, "write_only", set())
             # For ModelSerializer, fields/exclude are handled by metaclass but we might want them here?
             # base.py doesn't use them except for validation/dump.
-            
+
             read_only.update(meta_read_only or set())
             write_only.update(meta_write_only or set())
 
@@ -331,7 +332,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         nested_fields = {}
         literal_fields = {}
         has_serializer_fields = False  # Track if any field is a Serializer (for dump optimization)
-        
+
         # Track if we found new validators in Annotated types
         new_validators_found = False
 
@@ -350,7 +351,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                             cls.__field_validators__[field_name] = []
                         cls.__field_validators__[field_name].append(meta)
                         new_validators_found = True
-                        
+
             # Check if field is a Literal type (for Django choices validation)
             origin = get_origin(field_type)
             if origin is Literal:
@@ -373,7 +374,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         cls.__nested_fields__ = nested_fields
         cls.__literal_fields__ = literal_fields
         cls.__has_serializer_fields__ = has_serializer_fields
-        
+
         # If we found Annotated validators, regenerate the tuple
         if new_validators_found:
             cls.__field_validators_tuple__ = tuple(
@@ -404,7 +405,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
     def __post_init__(self) -> None:
         """
         Run all field and model validators after struct initialization.
-        
+
         This delegates to _validate_instance() to allow reuse by model_validate().
         """
         self._validate_instance()
@@ -412,7 +413,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
     def _validate_instance(self) -> None:
         """
         Run validation logic (post-init or post-decode).
-        
+
         1. Fix _FieldMarker defaults
         2. Run field validators
         3. Run model validators
@@ -520,7 +521,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
     def _run_field_validators(self) -> None:
         """Execute all field validators in order, collecting errors."""
         collector = ErrorCollector()
-        
+
         # First, validate nested/literal fields if any exist
         if self.__has_nested_or_literal__:
             self._validate_nested_and_literal_fields(collector)
@@ -547,7 +548,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                         else:
                              # @field_validator methods: call(cls, value)
                              result = validator(_class, current_value)
-                             
+
                         # If validator returns a value, update the field
                         if result is not None:
                             current_value = result
@@ -563,14 +564,14 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 except Exception as e:
                     # Capture other exceptions
                     collector.add_error(field_name, str(e))
-        
+
         # Raise any collected errors
         collector.raise_if_errors()
 
     def _validate_nested_and_literal_fields(self, collector: ErrorCollector) -> None:
         """
         Validate nested serializer fields and Literal (choice) fields.
-        
+
         Args:
             collector: ErrorCollector to add errors to
         """
@@ -607,8 +608,8 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     # Create a nice message for choices
                     choices_str = ", ".join(repr(v) for v in sorted(allowed_values, key=str))
                     collector.add_error(
-                        field_name, 
-                        f"Must be one of: {choices_str}", 
+                        field_name,
+                        f"Must be one of: {choices_str}",
                         code="choices",
                         params={"allowed_values": list(allowed_values)}
                     )
@@ -618,7 +619,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
     def _run_model_validators(self) -> None:
         """Execute all model validators in order."""
         collector = ErrorCollector()
-        
+
         for validator in self.__model_validators__:
             try:
                 # Model validators should either modify self or return None
@@ -635,7 +636,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 collector.add_error("non_field_errors", str(e))
             except Exception as e:
                 collector.add_error("non_field_errors", str(e))
-        
+
         collector.raise_if_errors()
 
     def validate(self: T) -> T:

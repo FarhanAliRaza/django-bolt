@@ -735,7 +735,19 @@ pub async fn handle_request(
                                 headers,
                                 skip_compression,
                             );
-                            return builder.body(Vec::<u8>::new());
+                            let mut response = builder.body(Vec::<u8>::new());
+
+                            // Add CORS headers if configured (NO GIL - uses Rust-native config)
+                            if let Some(ref route_meta) = route_metadata {
+                                if let Some(ref cors_cfg) = route_meta.cors_config {
+                                    let origin =
+                                        req.headers().get("origin").and_then(|v| v.to_str().ok());
+                                    let _ =
+                                        add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
+                                }
+                            }
+
+                            return response;
                         }
 
                         // Use optimized SSE response builder (batches all SSE headers)
@@ -746,7 +758,19 @@ pub async fn handle_request(
                             skip_compression,
                         );
                         let stream = create_sse_stream(final_content_obj, is_async_generator);
-                        return builder.streaming(stream);
+                        let mut response = builder.streaming(stream);
+
+                        // Add CORS headers if configured (NO GIL - uses Rust-native config)
+                        if let Some(ref route_meta) = route_metadata {
+                            if let Some(ref cors_cfg) = route_meta.cors_config {
+                                let origin =
+                                    req.headers().get("origin").and_then(|v| v.to_str().ok());
+                                let _ =
+                                    add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
+                            }
+                        }
+
+                        return response;
                     } else {
                         // Non-SSE streaming responses
                         let mut builder = HttpResponse::build(status);

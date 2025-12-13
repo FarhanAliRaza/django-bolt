@@ -1,22 +1,10 @@
-
-import msgspec
-
-from core.models import Blog
+from core.author_api import api as author_api
 from django_bolt import BoltAPI
 
-api = BoltAPI(prefix="/blogs") #slash is required
+api = BoltAPI(prefix="/blogs")
 
-
-
-class BlogSerializer(msgspec.Struct):
-
-    name : str
-    description: str
-    status: str
-
-@api.get("/")
-async def get_blogs() -> list[BlogSerializer]:
-    return Blog.objects.filter(status="published")
+# Mount author API (includes /authors and /blogs endpoints)
+api.mount("/ms", author_api)
 
 
 

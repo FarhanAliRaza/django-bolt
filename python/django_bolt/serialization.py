@@ -21,11 +21,19 @@ if TYPE_CHECKING:
 ResponseTuple = tuple[int, list[tuple[str, str]], bytes]
 
 
+
+
 def _convert_serializers(result: Any) -> Any:
     """
-    Convert Serializer instances to dicts using dump().
+    Convert Serializer instances to dicts using dump(), or pass through for direct encoding.
 
-    This ensures write_only fields are excluded and computed_field values are included.
+    When __dump_fast_path__ is True (no computed fields, no write_only fields), we return
+    the Serializer instance directly and let msgspec.json.encode() handle it natively.
+    This is significantly faster than converting to dict first.
+
+    When __dump_fast_path__ is False, we call dump() to handle computed fields,
+    write_only exclusion, and other special cases.
+
     Uses a unique marker (__is_bolt_serializer__) to identify Serializers, avoiding
     false positives from duck typing with random objects that happen to have dump().
 
@@ -33,17 +41,26 @@ def _convert_serializers(result: Any) -> Any:
         result: The handler result to potentially convert
 
     Returns:
-        Converted result (dict/list if Serializer, original otherwise)
+        Original Serializer (fast path), dict (slow path), or original result
     """
     # Check for Serializer instance using unique marker (not duck typing)
     # __is_bolt_serializer__ is defined on the Serializer base class
-    if getattr(result.__class__, "__is_bolt_serializer__", False) and hasattr(result, "dump"):
+    if getattr(result.__class__, "__is_bolt_serializer__", False):
+        # FAST PATH: Let msgspec encode the Struct directly (no dict conversion)
+        # This is ~2x faster than going through dump() -> dict -> encode
+        if getattr(result.__class__, "__dump_fast_path__", False):
+            return result
+        # SLOW PATH: Need dump() for computed fields, write_only, etc.
         return result.dump()
 
     # Handle list of Serializers
     if isinstance(result, list) and len(result) > 0:
         first = result[0]
-        if getattr(first.__class__, "__is_bolt_serializer__", False) and hasattr(first, "dump"):
+        if getattr(first.__class__, "__is_bolt_serializer__", False):
+            # FAST PATH: Return list as-is, msgspec will encode Structs directly
+            if getattr(first.__class__, "__dump_fast_path__", False):
+                return result
+            # SLOW PATH: Convert each to dict
             return [item.dump() for item in result]
 
     return result

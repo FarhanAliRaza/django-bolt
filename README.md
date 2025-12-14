@@ -37,7 +37,7 @@ class UserSchema(msgspec.Struct):
 
 
 @api.get("/users/{user_id}")
-async def get_user(user_id: int) -> UserSchema: # 🎉 Reponse is type validated
+async def get_user(user_id: int) -> UserSchema: # 🎉 Response is type validated
     user = await User.objects.aget(id=user_id) # 🤯 Yes and Django orm works without any setup
     return {"id": user.id, "username": user.username} # or you could just return the queryset
 

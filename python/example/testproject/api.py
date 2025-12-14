@@ -140,7 +140,6 @@ class Item(msgspec.Struct):
     is_offer: bool | None = None
 
 
-# ============================================================================
 # Middleware Demo - Separate API with Django + Custom Middleware
 # ============================================================================
 

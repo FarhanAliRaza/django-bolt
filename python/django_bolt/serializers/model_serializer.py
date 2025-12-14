@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeVar, get_origin
 
 from django.db import models
 
@@ -14,6 +14,31 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+
+def _is_classvar_annotation(annotation: Any) -> bool:
+    """
+    Check if an annotation is a ClassVar type.
+
+    Handles both resolved ClassVar types and string annotations.
+    This is used to filter out ClassVar fields when copying annotations
+    from base classes in the metaclass.
+    """
+    # Handle string annotations (from __future__ annotations)
+    if isinstance(annotation, str):
+        return annotation.startswith("ClassVar[") or annotation == "ClassVar"
+
+    # Handle resolved ClassVar types
+    try:
+        origin = get_origin(annotation)
+        if origin is ClassVar:
+            return True
+    except Exception:
+        # get_origin() may fail on malformed or non-standard annotations
+        # Treat such annotations as non-ClassVar to be safe
+        return False
+
+    return False
 
 T = TypeVar("T", bound="ModelSerializer")
 
@@ -92,10 +117,15 @@ class ModelSerializerMeta(_SerializerMeta):
         existing_annotations = namespace.get("__annotations__", {})
 
         # Check base classes for annotations
+        # IMPORTANT: Filter out ClassVar annotations to avoid msgspec decoder issues
         for base in bases:
             if hasattr(base, "__annotations__"):
                 for key, value in base.__annotations__.items():
                     if key not in existing_annotations:
+                        # Skip ClassVar annotations - they cause "NameError: name 'ClassVar' is not defined"
+                        # when msgspec tries to create a decoder and evaluates forward references
+                        if _is_classvar_annotation(value):
+                            continue
                         existing_annotations[key] = value
 
         # Build new annotations from model fields
@@ -127,30 +157,141 @@ class ModelSerializerMeta(_SerializerMeta):
         namespace["_django_model"] = model
         namespace["__model_fields_config__"] = frozenset(fields_to_include)
 
+        # Pre-compute FK/M2M mappings for from_model fast path
+        # IMPORTANT: Only map to _id when depth=0 (no nested serialization)
+        # When depth > 0, FK/M2M fields are handled via __nested_fields__
+        fk_id_mapping: dict[str, str] = {}
+        m2m_fields: set[str] = set()
+        regular_fields: list[str] = []
+
+        for field_name in fields_to_include:
+            if field_name not in model_fields:
+                continue
+            field = model_fields[field_name]
+
+            # Check if it's a ForeignKey/OneToOne - map to _id attribute
+            if isinstance(field, (models.ForeignKey, models.OneToOneField)):
+                # Only map to _id if not nested (depth=0)
+                if depth == 0:
+                    fk_id_mapping[field_name] = f"{field_name}_id"
+                else:
+                    # depth > 0: handled by nested serializer in __nested_fields__
+                    regular_fields.append(field_name)
+            elif isinstance(field, models.ManyToManyField):
+                # Only use _id extraction for depth=0
+                # depth > 0: handled by nested serializer in __nested_fields__
+                if depth == 0:
+                    m2m_fields.add(field_name)
+                else:
+                    regular_fields.append(field_name)
+            else:
+                regular_fields.append(field_name)
+
+        namespace["__fk_id_mapping__"] = fk_id_mapping
+        namespace["__m2m_fields__"] = frozenset(m2m_fields)
+        namespace["__regular_fields__"] = tuple(regular_fields)
+
+        # Generate optimized _from_model_generated method if no nested fields and no M2M
+        # This avoids dict creation and loops at runtime
+        if depth == 0 and not m2m_fields:
+            generated_method = _generate_from_model_code(
+                name, fk_id_mapping, regular_fields, fields_to_include
+            )
+            if generated_method is not None:
+                namespace["_from_model_generated"] = generated_method
+
         # Alias Meta to Config so base Serializer picks up configuration
         namespace["Config"] = meta
 
         return super().__new__(mcs, name, bases, namespace, **kwargs)
 
 
+def _generate_from_model_code(
+    class_name: str,
+    fk_id_mapping: dict[str, str],
+    regular_fields: list[str],
+    all_fields: set[str],
+) -> classmethod | None:
+    """
+    Generate optimized from_model code at class definition time.
+
+    This generates a classmethod that directly accesses model attributes
+    by name, avoiding dict creation, loops, and membership checks.
+
+    Returns None if code generation fails or is not beneficial.
+    """
+    try:
+        # Build the argument list for cls()
+        args = []
+        for field_name in all_fields:
+            if field_name in fk_id_mapping:
+                # FK field - use _id suffix for direct access
+                id_attr = fk_id_mapping[field_name]
+                args.append(f"{field_name}=instance.{id_attr}")
+            else:
+                # Regular field - direct access
+                args.append(f"{field_name}=instance.{field_name}")
+
+        args_str = ", ".join(args)
+
+        # Generate the function code
+        code = f"""
+def _from_model_generated(cls, instance):
+    return cls({args_str})
+"""
+        # Compile and extract the function
+        local_ns: dict[str, Any] = {}
+        exec(code, {}, local_ns)  # noqa: S102
+
+        # Return as classmethod
+        return classmethod(local_ns["_from_model_generated"])
+    except Exception:
+        # If code generation fails for any reason, return None
+        # The fallback _from_model_fast will be used instead
+        return None
+
+
 def _get_model_fields(model: type[models.Model]) -> dict[str, models.Field]:
-    """Get all fields from a Django model, including related fields."""
+    """Get all fields from a Django model, including related fields.
+
+    This includes:
+    - Regular fields (CharField, IntegerField, etc.)
+    - ForeignKey and OneToOneField (concrete relations)
+    - ManyToManyField (forward direction only)
+
+    This excludes:
+    - Reverse relations (reverse ForeignKey, reverse OneToOne, reverse M2M)
+    """
     fields = {}
 
     for field in model._meta.get_fields():
-        # Skip reverse relations unless explicitly handled
-        if field.is_relation and not field.concrete:
+        # Include non-relational fields
+        if not field.is_relation:
+            fields[field.name] = field
             continue
 
-        # Use field.name for concrete fields, attname for FK fields
-        field_name = field.name
-        fields[field_name] = field
+        # Include concrete relations (ForeignKey, OneToOneField)
+        if field.concrete:
+            fields[field.name] = field
+            continue
+
+        # Include forward ManyToManyField (not reverse M2M)
+        # For M2M, concrete=False but we want to include the defining side
+        if isinstance(field, models.ManyToManyField):
+            fields[field.name] = field
+            continue
+
+        # Skip reverse relations (one_to_many, reverse M2M)
 
     return fields
 
 
 def _field_has_default(field: models.Field) -> bool:
     """Check if a Django field has a default value or is optional."""
+    # ManyToManyField is always optional (empty list by default)
+    if isinstance(field, models.ManyToManyField):
+        return True
+
     # Fields with explicit defaults
     if field.has_default():
         return True
@@ -172,6 +313,14 @@ def _get_field_default(field: models.Field, read_only_fields: set[str], write_on
     # Check if read_only or write_only in extra_kwargs
     is_read_only = field.name in read_only_fields or extra_kwargs.get("read_only", False)
     is_write_only = field.name in write_only_fields or extra_kwargs.get("write_only", False)
+
+    # ManyToManyField defaults to empty list
+    if isinstance(field, models.ManyToManyField):
+        return _FieldMarker(FieldConfig(
+            read_only=is_read_only,
+            write_only=is_write_only,
+            default_factory=list,
+        ))
 
     # For AutoFields, use field() with read_only
     if isinstance(field, (models.AutoField, models.BigAutoField)):
@@ -292,7 +441,7 @@ def _create_nested_serializer(
     write_only_fields: set[str],
 ) -> type[Serializer]:
     """Create a nested serializer for a related model."""
-    # Get model fields
+    # Get model fields (already filters out reverse relations)
     model_fields = _get_model_fields(model)
 
     # Build annotations
@@ -300,10 +449,6 @@ def _create_nested_serializer(
     namespace: dict[str, Any] = {}
 
     for field_name, field in model_fields.items():
-        # Skip reverse relations
-        if field.is_relation and not field.concrete:
-            continue
-
         field_type = _generate_field_type(field, depth, set(), set(), {})
         if field_type is not None:
             annotations[field_name] = field_type

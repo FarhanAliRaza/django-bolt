@@ -1,5 +1,7 @@
 use actix_http::KeepAlive;
-use actix_web::{self as aw, middleware::NormalizePath, web, App, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{
+    self as aw, middleware::NormalizePath, web, App, HttpRequest, HttpResponse, HttpServer,
+};
 use ahash::AHashMap;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -7,12 +9,17 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
-use crate::middleware::compression::CompressionMiddleware;
 use crate::handler::handle_request;
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
+use crate::middleware::compression::CompressionMiddleware;
 use crate::router::Router;
-use crate::state::{AppState, GLOBAL_ROUTER, GLOBAL_WEBSOCKET_ROUTER, ROUTE_METADATA, ROUTE_METADATA_TEMP, TASK_LOCALS};
-use crate::websocket::{WebSocketRouter, handle_websocket_upgrade_with_handler, is_websocket_upgrade};
+use crate::state::{
+    AppState, GLOBAL_ROUTER, GLOBAL_WEBSOCKET_ROUTER, ROUTE_METADATA, ROUTE_METADATA_TEMP,
+    TASK_LOCALS,
+};
+use crate::websocket::{
+    handle_websocket_upgrade_with_handler, is_websocket_upgrade, WebSocketRouter,
+};
 
 #[pyfunction]
 pub fn register_routes(
@@ -38,9 +45,9 @@ pub fn register_websocket_routes(
     for (path, handler_id, handler, injector) in routes {
         router.register(&path, handler_id, handler.into(), injector)?;
     }
-    GLOBAL_WEBSOCKET_ROUTER
-        .set(Arc::new(router))
-        .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("WebSocket router already initialized"))?;
+    GLOBAL_WEBSOCKET_ROUTER.set(Arc::new(router)).map_err(|_| {
+        pyo3::exceptions::PyRuntimeError::new_err("WebSocket router already initialized")
+    })?;
     Ok(())
 }
 
@@ -129,7 +136,7 @@ pub fn start_server_async(
     });
 
     // Get configuration from Django settings ONCE at startup (not per-request)
-    let (debug, max_header_size, cors_config_data) = Python::attach(|py| {
+    let (debug, max_header_size, max_payload_size, cors_config_data) = Python::attach(|py| {
         let debug = (|| -> PyResult<bool> {
             let django_conf = py.import("django.conf")?;
             let settings = django_conf.getattr("settings")?;
@@ -143,6 +150,13 @@ pub fn start_server_async(
             settings.getattr("BOLT_MAX_HEADER_SIZE")?.extract::<usize>()
         })()
         .unwrap_or(8192); // Default 8KB
+
+        let max_payload_size = (|| -> PyResult<usize> {
+            let django_conf = py.import("django.conf")?;
+            let settings = django_conf.getattr("settings")?;
+            settings.getattr("BOLT_MAX_UPLOAD_SIZE")?.extract::<usize>()
+        })()
+        .unwrap_or(1 * 1024 * 1024); // Default 1MB
 
         // Read django-cors-headers compatible CORS settings
         let cors_data = (|| -> PyResult<(Vec<String>, Vec<String>, bool, bool, Option<Vec<String>>, Option<Vec<String>>, Option<Vec<String>>, Option<u32>)> {
@@ -184,7 +198,7 @@ pub fn start_server_async(
             Ok((origins, origin_regexes, allow_all, credentials, methods, headers, expose_headers, max_age))
         })().unwrap_or_else(|_| (vec![], vec![], false, false, None, None, None, None));
 
-        (debug, max_header_size, cors_data)
+        (debug, max_header_size, max_payload_size, cors_data)
     });
 
     // Unpack CORS configuration data
@@ -343,6 +357,7 @@ pub fn start_server_async(
                     let server = HttpServer::new(move || {
                         let mut app = App::new()
                             .app_data(web::Data::new(app_state.clone()))
+                            .app_data(web::PayloadConfig::new(max_payload_size)) // Configure max request body size from BOLT_MAX_UPLOAD_SIZE
                             .wrap(NormalizePath::trim()) // Strip trailing slashes before routing
                             .wrap(CompressionMiddleware::new()); // Respects Content-Encoding: identity from skip_compression
 
@@ -490,7 +505,8 @@ pub async fn websocket_upgrade_handler(
                 path_params,
                 state.get_ref().clone(),
                 injector,
-            ).await;
+            )
+            .await;
         }
     }
 
@@ -514,7 +530,8 @@ impl actix::Actor for WebSocketNotFoundActor {
     }
 }
 
-impl actix::StreamHandler<Result<actix_web_actors::ws::Message, actix_web_actors::ws::ProtocolError>>
+impl
+    actix::StreamHandler<Result<actix_web_actors::ws::Message, actix_web_actors::ws::ProtocolError>>
     for WebSocketNotFoundActor
 {
     fn handle(

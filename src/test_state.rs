@@ -1338,6 +1338,7 @@ pub fn handle_actix_http_request(
         // Create Actix test service with middleware
         let app = test::init_service(
             App::new()
+                .app_data(web::PayloadConfig::new(1 * 1024 * 1024)) // 1MB max payload (matches BOLT_MAX_UPLOAD_SIZE default)
                 .wrap(crate::middleware::compression::CompressionMiddleware::new())
                 // CORS handled in handler closure (preflight + response headers)
                 // Rate limiting handled in handler closure (per-route state)

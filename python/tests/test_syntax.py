@@ -583,6 +583,89 @@ def test_form_and_file(client):
     assert response.status_code == 200 and data["count"] == 2 and set(data["names"]) == {"a.txt", "b.txt"}
 
 
+def test_large_file_upload_rejected_by_default(api):
+    """Test that large file uploads (6MB) are rejected with default 1MB limit."""
+    import django_bolt.request_parsing as request_parsing
+
+    # Clear cache to ensure default 1MB limit is used
+    original_cache = request_parsing._MAX_UPLOAD_SIZE
+    request_parsing._MAX_UPLOAD_SIZE = None
+
+    try:
+        with TestClient(api, use_http_layer=False) as test_client:
+            # Create a 2MB file content (exceeds default 1MB limit)
+            large_content = b"x" * (2 * 1024 * 1024)  # 2MB
+
+            response = test_client.post(
+                "/upload",
+                files=[("file", ("large.bin", large_content, "application/octet-stream"))]
+            )
+
+            # Should fail with 413 because file exceeds default 1MB limit
+            assert response.status_code == 413, f"Expected 413, got {response.status_code}: {response.text}"
+    finally:
+        request_parsing._MAX_UPLOAD_SIZE = original_cache
+
+
+def test_large_file_upload_with_increased_limit(api):
+    """Test that large file uploads (6MB) work when BOLT_MAX_UPLOAD_SIZE is set to 10MB."""
+    from django.conf import settings
+    import django_bolt.request_parsing as request_parsing
+
+    # Set max upload size to 10MB (default is 1MB which would reject 6MB files)
+    original_value = getattr(settings, 'BOLT_MAX_UPLOAD_SIZE', None)
+    original_cache = request_parsing._MAX_UPLOAD_SIZE
+    settings.BOLT_MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
+    request_parsing._MAX_UPLOAD_SIZE = None  # Clear cache to pick up new setting
+
+    try:
+        # Use use_http_layer=False to bypass Actix PayloadConfig (which is set at app init time)
+        # This tests the Python multipart parsing limit which reads from Django settings dynamically
+        with TestClient(api, use_http_layer=False) as test_client:
+            # Create a 6MB file content
+            large_content = b"x" * (6 * 1024 * 1024)  # 6MB
+
+            response = test_client.post(
+                "/upload",
+                files=[("file", ("large.bin", large_content, "application/octet-stream"))]
+            )
+
+            # Should succeed since BOLT_MAX_UPLOAD_SIZE is set to 10MB
+            assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+            data = response.json()
+            assert data["count"] == 1
+            assert data["names"] == ["large.bin"]
+    finally:
+        # Restore original values
+        request_parsing._MAX_UPLOAD_SIZE = original_cache
+        if original_value is None:
+            if hasattr(settings, 'BOLT_MAX_UPLOAD_SIZE'):
+                delattr(settings, 'BOLT_MAX_UPLOAD_SIZE')
+        else:
+            settings.BOLT_MAX_UPLOAD_SIZE = original_value
+
+
+def test_error_responses_have_cors_headers(api):
+    """Test that error responses (404, etc.) include CORS headers.
+
+    Note: Actix-level errors (like PayloadConfig 413) happen before the handler runs
+    and don't include CORS headers. The fix is to set BOLT_MAX_UPLOAD_SIZE high enough
+    that requests pass through to Python, where errors include CORS headers.
+    """
+    # Use HTTP layer with CORS enabled
+    with TestClient(api, use_http_layer=True, cors_allowed_origins=["*"]) as test_client:
+        response = test_client.post(
+            "/nonexistent",
+            content=b"x" * 1000,
+            headers={"Origin": "http://example.com", "Content-Type": "application/json"}
+        )
+
+        # 404 errors should have CORS headers
+        assert response.status_code == 404, f"Expected 404, got {response.status_code}"
+        assert "access-control-allow-origin" in response.headers, \
+            f"Missing CORS header on 404. Headers: {dict(response.headers)}"
+
+
 def test_head_method(client):
     """Test HEAD method works correctly"""
     response = client.head("/m")

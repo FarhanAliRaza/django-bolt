@@ -22,9 +22,9 @@ def get_max_upload_size() -> int:
     global _MAX_UPLOAD_SIZE
     if _MAX_UPLOAD_SIZE is None:
         try:
-            _MAX_UPLOAD_SIZE = getattr(django_settings, 'BOLT_MAX_UPLOAD_SIZE', 10 * 1024 * 1024) if django_settings else 10 * 1024 * 1024  # 10MB default
+            _MAX_UPLOAD_SIZE = getattr(django_settings, 'BOLT_MAX_UPLOAD_SIZE', 1 * 1024 * 1024) if django_settings else 1 * 1024 * 1024  # 1MB default
         except (ImportError, AttributeError):
-            _MAX_UPLOAD_SIZE = 10 * 1024 * 1024
+            _MAX_UPLOAD_SIZE = 1 * 1024 * 1024
     return _MAX_UPLOAD_SIZE
 
 
@@ -82,7 +82,11 @@ def parse_multipart_data(request: dict[str, Any], content_type: str) -> tuple[di
 
     # SECURITY: Check body size before parsing
     if len(body_bytes) > max_size:
-        raise ValueError(f"Upload size {len(body_bytes)} exceeds maximum {max_size} bytes")
+        from django_bolt.exceptions import HTTPException
+        raise HTTPException(
+            status_code=413,
+            detail=f"Upload size {len(body_bytes)} exceeds maximum {max_size} bytes"
+        )
 
     # Create a file-like object from bytes
     body_file = BytesIO(body_bytes)
@@ -94,7 +98,7 @@ def parse_multipart_data(request: dict[str, Any], content_type: str) -> tuple[di
             boundary=boundary.encode() if isinstance(boundary, str) else boundary,
             content_length=len(body_bytes),
             memory_limit=max_size,
-            disk_limit=0,  # Don't allow disk spooling for security
+            disk_limit=max_size,  # Allow disk spooling up to max upload size
             part_limit=100  # Limit number of parts
         )
 
@@ -107,6 +111,8 @@ def parse_multipart_data(request: dict[str, Any], content_type: str) -> tuple[di
             # Check if it's a file or form field
             if part.filename:
                 # It's a file upload
+                # Seek to beginning in case file was spooled to disk (position may be at end)
+                part.file.seek(0)
                 content = part.file.read()
                 file_info = {
                     "filename": part.filename,

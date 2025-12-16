@@ -211,15 +211,28 @@ def create_file_extractor(
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
 
+    # Check if the annotation expects a list (e.g., list[dict], list[bytes])
+    # This handles both single file and multiple file uploads correctly
+    origin = getattr(annotation, "__origin__", None)
+    expects_list = origin is list
+
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
         def extract(files_map: dict[str, Any]) -> Any:
-            return files_map.get(key, default_value)
+            value = files_map.get(key, default_value)
+            # Wrap single file in list if annotation expects list
+            if expects_list and value is not None and not isinstance(value, list):
+                return [value]
+            return value
     else:
         def extract(files_map: dict[str, Any]) -> Any:
             if key not in files_map:
                 raise HTTPException(status_code=400, detail=f"Missing required file: {key}")
-            return files_map[key]
+            value = files_map[key]
+            # Wrap single file in list if annotation expects list
+            if expects_list and not isinstance(value, list):
+                return [value]
+            return value
 
     return extract
 

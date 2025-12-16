@@ -11,7 +11,6 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
 use crate::error;
-use crate::headers::FastHeaders;
 use crate::middleware;
 use crate::middleware::auth::populate_auth_context;
 use crate::request::PyRequest;
@@ -29,28 +28,24 @@ pub async fn handle_request(
     body: web::Bytes,
     state: web::Data<Arc<AppState>>,
 ) -> HttpResponse {
-    let method = req.method().as_str().to_string();
-    let path = req.path().to_string();
-
-    // Clone path and method for error handling
-    let path_clone = path.clone();
-    let method_clone = method.clone();
+    // Keep as &str - no allocation, only clone on error paths
+    let method = req.method().as_str();
+    let path = req.path();
 
     let router = GLOBAL_ROUTER.get().expect("Router not initialized");
 
     // Find the route for the requested method and path
     // RouteMatch enum allows us to skip path param processing for static routes
-    let (route_handler, path_params, handler_id, is_static_route_from_router) = {
-        if let Some(route_match) = router.find(&method, &path) {
-            let is_static = route_match.is_static();
+    let (route_handler, path_params, handler_id) = {
+        if let Some(route_match) = router.find(method, path) {
             let handler_id = route_match.handler_id();
             let handler = Python::attach(|py| route_match.route().handler.clone_ref(py));
             let path_params = route_match.path_params(); // No allocation for static routes
-            (handler, path_params, handler_id, is_static)
+            (handler, path_params, handler_id)
         } else {
             // No explicit handler found - check for automatic OPTIONS
             if method == "OPTIONS" {
-                let available_methods = router.find_all_methods(&path);
+                let available_methods = router.find_all_methods(path);
                 if !available_methods.is_empty() {
                     let allow_header = available_methods.join(", ");
                     // CORS headers will be added by CorsMiddleware
@@ -118,8 +113,7 @@ pub async fn handle_request(
 
     // Extract headers early for middleware processing - pre-allocate with typical size
     // Headers are ALWAYS needed in Rust for middleware (auth, rate limiting, CORS)
-    // Use FastHeaders for optimized insertion of common headers (authorization, content-type, etc.)
-    let mut fast_headers = FastHeaders::with_capacity(16);
+    let mut headers: AHashMap<String, String> = AHashMap::with_capacity(16);
 
     // SECURITY: Use limits from AppState (configured once at startup)
     const MAX_HEADERS: usize = 100;
@@ -141,15 +135,9 @@ pub async fn handle_request(
                 return responses::error_400_header_too_large(max_header_size);
             }
 
-            // FastHeaders uses perfect hash for common headers (authorization, content-type, etc.)
-            // This avoids HashMap overhead for the most frequent headers
-            fast_headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
+            headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
         }
     }
-
-    // Convert to AHashMap for middleware compatibility
-    // This is done once after parsing - the benefit is in the fast insertion above
-    let headers = fast_headers.into_hashmap();
 
     // Get peer address for rate limiting fallback
     let peer_addr = req.peer_addr().map(|addr| addr.ip().to_string());
@@ -207,10 +195,6 @@ pub async fn handle_request(
         AHashMap::new()
     };
 
-    // For static routes, path_params is already an empty AHashMap from RouteMatch::Static
-    // No additional processing needed - the router already optimized this
-    // is_static_route_from_router is derived from RouteMatch at lookup time
-    let _ = is_static_route_from_router; // Acknowledge the flag (used for future optimizations)
 
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
@@ -241,8 +225,8 @@ pub async fn handle_request(
         };
 
         let request = PyRequest {
-            method,
-            path,
+            method: method.to_string(),  // Convert to owned String for Python
+            path: path.to_string(),      // Convert to owned String for Python
             body: body.to_vec(),
             path_params, // For static routes, this is already empty from RouteMatch::Static
             query_params,
@@ -272,8 +256,8 @@ pub async fn handle_request(
                     error::handle_python_exception(
                         py,
                         exc_value,
-                        &path_clone,
-                        &method_clone,
+                        path,
+                        method,
                         state.debug,
                     )
                 } else {
@@ -735,8 +719,8 @@ pub async fn handle_request(
                     error::handle_python_exception(
                         py,
                         exc_value,
-                        &path_clone,
-                        &method_clone,
+                        path,
+                        method,
                         state.debug,
                     )
                 } else {

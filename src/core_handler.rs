@@ -15,15 +15,12 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyTuple};
 
 use crate::error;
-use crate::handler::build_file_response;
 use crate::metadata::{CorsConfig, RouteMetadata};
 use crate::middleware;
 use crate::middleware::auth::populate_auth_context;
 use crate::request::PyRequest;
-use crate::response_builder;
 use crate::responses;
-use crate::router::{parse_query_string, RouteMatch, Router};
-use crate::streaming::{create_python_stream, create_sse_stream};
+use crate::router::Router;
 use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
 
 /// Input data for request handling (extracted from HttpRequest or test parameters)

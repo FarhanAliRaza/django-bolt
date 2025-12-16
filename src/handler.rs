@@ -17,7 +17,7 @@ use crate::request::PyRequest;
 use crate::response_builder;
 use crate::responses;
 use crate::router::parse_query_string;
-use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
+use crate::state::{AppState, TASK_LOCALS};
 use crate::streaming::{create_python_stream, create_sse_stream};
 use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
 
@@ -171,7 +171,16 @@ pub async fn handle_request(
     let method = req.method().as_str();
     let path = req.path();
 
-    let router = GLOBAL_ROUTER.get().expect("Router not initialized");
+    // Use AppState methods to get router/metadata (supports both production and test modes)
+    let router = match state.get_router() {
+        Some(r) => r,
+        None => {
+            // Router not initialized - this should never happen in production
+            return HttpResponse::InternalServerError()
+                .content_type("application/json")
+                .body(r#"{"detail":"Router not initialized"}"#);
+        }
+    };
 
     // Find the route for the requested method and path
     // RouteMatch enum allows us to skip path param processing for static routes
@@ -212,12 +221,10 @@ pub async fn handle_request(
         }
     };
 
-    // Get parsed route metadata (Rust-native) - clone to release DashMap lock immediately
-    // This trade-off: small clone cost < lock contention across concurrent requests
+    // Get parsed route metadata (Rust-native)
+    // Uses AppState methods to support both production (global) and test (injected) modes
     // NOTE: Fetch metadata EARLY so we can use optimization flags to skip unnecessary parsing
-    let route_metadata = ROUTE_METADATA
-        .get()
-        .and_then(|meta_map| meta_map.get(&handler_id).cloned());
+    let route_metadata = state.get_route_metadata(handler_id);
 
     // Optimization: Only parse query string if handler needs it
     // This saves ~0.5-1ms per request for handlers that don't use query params

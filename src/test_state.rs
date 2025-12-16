@@ -8,7 +8,7 @@ use pyo3::types::PyDict;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::cors::{apply_cors_preflight, apply_cors_preflight_to_vec, apply_cors_to_vec};
+use crate::cors::apply_cors_to_vec;
 use crate::handler::headers_vec_to_map;
 use crate::metadata::{CorsConfig, RouteMetadata};
 use crate::middleware;
@@ -21,9 +21,6 @@ use crate::websocket::WebSocketRouter;
 
 // Actix testing imports
 use actix_web::dev::Service;
-use actix_web::http::header::{
-    ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN, VARY,
-};
 use actix_web::{test, web, App, HttpResponse};
 use bytes::Bytes;
 
@@ -37,11 +34,14 @@ macro_rules! test_debug {
 }
 
 /// Test-only application state stored per instance (identified by app_id)
+///
+/// Uses Arc for router/route_metadata to allow sharing with production handler tests
+/// without requiring Clone on Router (which would be expensive due to Py<PyAny>)
 pub struct TestApp {
-    pub router: Router,
+    pub router: Arc<Router>,
     pub websocket_router: WebSocketRouter, // WebSocket routes for testing
     pub middleware_metadata: AHashMap<usize, Py<PyAny>>, // raw Python metadata for compatibility
-    pub route_metadata: AHashMap<usize, RouteMetadata>, // parsed Rust metadata
+    pub route_metadata: Arc<AHashMap<usize, RouteMetadata>>, // parsed Rust metadata
     pub dispatch: Py<PyAny>,
     pub event_loop: Option<Py<PyAny>>, // store loop; create TaskLocals per call
     pub global_cors_config: Option<CorsConfig>, // global CORS config for testing (same as production)
@@ -70,10 +70,10 @@ pub fn create_test_app(
     };
 
     let app = TestApp {
-        router: Router::new(),
+        router: Arc::new(Router::new()),
         websocket_router: WebSocketRouter::new(),
         middleware_metadata: AHashMap::new(),
-        route_metadata: AHashMap::new(),
+        route_metadata: Arc::new(AHashMap::new()),
         dispatch: dispatch.clone_ref(py),
         event_loop: None,
         global_cors_config,
@@ -205,8 +205,12 @@ pub fn register_test_routes(
         return Err(pyo3::exceptions::PyKeyError::new_err("Invalid test app id"));
     };
     let mut app = entry.write();
+    // Get mutable access to router - only works when this is the only Arc reference
+    let router = Arc::get_mut(&mut app.router).ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err("Cannot register routes while router is in use")
+    })?;
     for (method, path, handler_id, handler) in routes {
-        app.router.register(&method, &path, handler_id, handler)?;
+        router.register(&method, &path, handler_id, handler)?;
     }
     Ok(())
 }
@@ -449,7 +453,8 @@ pub fn register_test_middleware_metadata(
         if let Ok(py_dict) = meta.bind(py).cast::<PyDict>() {
             match RouteMetadata::from_python(py_dict, py) {
                 Ok(parsed) => {
-                    app.route_metadata.insert(handler_id, parsed);
+                    // Use Arc::make_mut to get mutable access
+                    Arc::make_mut(&mut app.route_metadata).insert(handler_id, parsed);
                 }
                 Err(e) => {
                     test_debug!(
@@ -1237,6 +1242,117 @@ pub fn handle_actix_http_request(
             .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
 
+        let resp_body = test::read_body(response).await.to_vec();
+
+        Ok((status, resp_headers, resp_body))
+    })
+}
+
+// =============================================================================
+// PRODUCTION HANDLER TEST - Uses exact same code path as production
+// =============================================================================
+
+/// Test function that uses the PRODUCTION handler with injected state.
+///
+/// This is the recommended way to test: it uses the exact same middleware stack
+/// and handler code as production, ensuring tests accurately validate production behavior.
+///
+/// The only difference from production is that router/metadata are injected via AppState
+/// instead of using global state.
+#[pyfunction]
+pub fn handle_request_production(
+    py: Python<'_>,
+    app_id: u64,
+    method: String,
+    path: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+    query_string: Option<String>,
+) -> PyResult<(u16, Vec<(String, String)>, Vec<u8>)> {
+    use crate::handler::handle_request;
+    use crate::middleware::compression::CompressionMiddleware;
+    use crate::middleware::cors::CorsMiddleware;
+    use crate::state::AppState;
+
+    // Get TestApp state
+    let entry = registry()
+        .get(&app_id)
+        .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err(format!("Test app {} not found", app_id)))?;
+
+    // Build AppState with injected router/metadata from TestApp
+    let app_state = {
+        let app = entry.read();
+        Arc::new(AppState {
+            dispatch: app.dispatch.clone_ref(py),
+            debug: true,
+            max_header_size: 8192,
+            global_cors_config: app.global_cors_config.clone(),
+            cors_origin_regexes: Vec::new(),
+            global_compression_config: None,
+            // INJECT test router and metadata - clone the Arc, not the inner value
+            router: Some(Arc::clone(&app.router)),
+            route_metadata: Some(Arc::clone(&app.route_metadata)),
+        })
+    };
+    drop(entry);
+
+    // Run in tokio runtime
+    pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+        // Create test service with PRODUCTION middleware stack
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(app_state))
+                .app_data(web::PayloadConfig::new(1 * 1024 * 1024)) // 1MB max
+                .wrap(CompressionMiddleware::new())
+                .wrap(CorsMiddleware::new())
+                // Use PRODUCTION handler - same exact code path!
+                .default_service(web::route().to(handle_request)),
+        )
+        .await;
+
+        // Build URI
+        let uri = if let Some(qs) = query_string {
+            format!("{}?{}", path, qs)
+        } else {
+            path
+        };
+
+        // Create test request
+        let mut req = test::TestRequest::with_uri(&uri);
+        req = match method.to_uppercase().as_str() {
+            "GET" => req.method(actix_web::http::Method::GET),
+            "POST" => req.method(actix_web::http::Method::POST),
+            "PUT" => req.method(actix_web::http::Method::PUT),
+            "PATCH" => req.method(actix_web::http::Method::PATCH),
+            "DELETE" => req.method(actix_web::http::Method::DELETE),
+            "OPTIONS" => req.method(actix_web::http::Method::OPTIONS),
+            "HEAD" => req.method(actix_web::http::Method::HEAD),
+            _ => req.method(actix_web::http::Method::GET),
+        };
+
+        // Set headers
+        for (name, value) in headers {
+            req = req.insert_header((name, value));
+        }
+
+        // Set body
+        if !body.is_empty() {
+            req = req.set_payload(Bytes::from(body));
+        }
+
+        // Call service
+        let request = req.to_request();
+        let response = app.call(request).await.map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Service call failed: {}", e))
+        })?;
+
+        // Extract response
+        let status = response.status().as_u16();
+        let resp_headers: Vec<(String, String)> = response
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
         let resp_body = test::read_body(response).await.to_vec();
 
         Ok((status, resp_headers, resp_body))

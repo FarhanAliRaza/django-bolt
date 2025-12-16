@@ -765,6 +765,17 @@ async def consume_agen(agen):
     Ok(collected_body)
 }
 
+/// Handle test request through Actix test service with full middleware stack.
+///
+/// This function routes requests through:
+/// 1. Actix test service (same as production)
+/// 2. CorsMiddleware (same as production)
+/// 3. CompressionMiddleware (same as production)
+/// 4. Core handler using shared core_handler.rs logic
+///
+/// The only difference from production is the async execution model:
+/// - Production uses into_future_with_locals (requires running asyncio loop)
+/// - Tests use run_until_complete (synchronous execution)
 #[pyfunction]
 pub fn handle_actix_http_request(
     py: Python<'_>,
@@ -779,7 +790,7 @@ pub fn handle_actix_http_request(
     use crate::middleware::cors::CorsMiddleware;
     use crate::state::AppState;
 
-    // Build AppState from TestApp (this enables CorsMiddleware to use test state)
+    // Build AppState from TestApp with injected router/metadata
     let app_state = {
         let entry = registry()
             .get(&app_id)
@@ -792,103 +803,70 @@ pub fn handle_actix_http_request(
             global_cors_config: app.global_cors_config.clone(),
             cors_origin_regexes: Vec::new(),
             global_compression_config: None,
-            // Inject test router and metadata - CorsMiddleware will use these
+            // Inject test router and metadata - handler will use these via state.get_router()
             router: Some(Arc::clone(&app.router)),
             route_metadata: Some(Arc::clone(&app.route_metadata)),
         })
     };
 
-    // We need to run this in a tokio runtime since actix test functions are async
+    // Clone data needed for the async handler
+    let app_state_for_handler = Arc::clone(&app_state);
+
+    // Create a tokio runtime for the Actix test
     let runtime = tokio::runtime::Runtime::new().map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to create runtime: {}", e))
     })?;
 
     runtime.block_on(async {
-        // Create handler that uses per-instance router via handle_test_request_for
-        // CORS is now handled by CorsMiddleware (which uses AppState)
-        let handler = move |req: actix_web::HttpRequest, body: web::Bytes| {
+        // Handler that uses SAME core logic as production handler.rs
+        // Uses process_request_pre_dispatch + process_handler_result from core_handler.rs
+        let handler = move |req: actix_web::HttpRequest, body_bytes: web::Bytes| {
+            let state = app_state_for_handler.clone();
             async move {
-                // Extract request info
                 let method = req.method().as_str().to_uppercase();
                 let path = req.path().to_string();
-                let query_string = req.query_string();
-                let query = if query_string.is_empty() {
-                    None
-                } else {
-                    Some(query_string.to_string())
-                };
+                let query_string = req.uri().query().map(|q| q.to_string());
+                let body_vec = body_bytes.to_vec();
 
-                // Extract headers
+                // Extract headers as Vec for the test handler
                 let headers: Vec<(String, String)> = req
                     .headers()
                     .iter()
                     .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
                     .collect();
 
-                let body_bytes = body.to_vec();
-
-                // Get route metadata for rate limiting and compression skip
-                let (rate_limit_config, handler_id_opt, should_skip_compression) = Python::attach(
-                    |_py| -> (Option<crate::metadata::RateLimitConfig>, Option<usize>, bool) {
-                        let Some(entry) = registry().get(&app_id) else {
-                            return (None, None, false);
-                        };
-                        let app = entry.read();
-
-                        // Find the route to get handler_id
-                        if let Some(route_match) = app.router.find(&method, &path) {
-                            let handler_id = route_match.handler_id();
-                            if let Some(route_meta) = app.route_metadata.get(&handler_id) {
-                                let skip_compression = route_meta.skip.contains("compression");
-                                let rate_cfg = route_meta.rate_limit_config.clone();
-                                return (rate_cfg, Some(handler_id), skip_compression);
-                            }
-                        }
-                        (None, None, false)
-                    },
-                );
-
-                // Check rate limiting
-                if let (Some(handler_id), Some(rate_cfg)) =
-                    (handler_id_opt, rate_limit_config.as_ref())
-                {
-                    let header_map: ahash::AHashMap<String, String> = headers
-                        .iter()
-                        .map(|(k, v)| (k.to_lowercase(), v.clone()))
-                        .collect();
-                    if let Some(response) = crate::middleware::rate_limit::check_rate_limit(
-                        handler_id,
-                        &header_map,
-                        None,
-                        rate_cfg,
-                        &method,
-                        &path,
-                    ) {
-                        return Ok(response);
-                    }
-                }
-
-                // Call handle_test_request_for which does all the routing/auth/guards
+                // Get app_id from registry to call handle_test_request_for
+                // This uses the shared core_handler logic (process_request_pre_dispatch etc.)
                 let result = Python::attach(|py| {
-                    handle_test_request_for(
-                        py,
-                        app_id,
-                        method.clone(),
-                        path.clone(),
-                        headers.clone(),
-                        body_bytes,
-                        query,
-                    )
+                    // Find app_id by matching state dispatch
+                    for entry in registry().iter() {
+                        let app = entry.read();
+                        // Use dispatch pointer comparison
+                        if std::ptr::eq(
+                            app.dispatch.as_ptr(),
+                            state.dispatch.as_ptr(),
+                        ) {
+                            return handle_test_request_for(
+                                py,
+                                *entry.key(),
+                                method.clone(),
+                                path.clone(),
+                                headers.clone(),
+                                body_vec.clone(),
+                                query_string.clone(),
+                            );
+                        }
+                    }
+                    Err(pyo3::exceptions::PyRuntimeError::new_err("App not found in registry"))
                 });
 
                 match result {
                     Ok((status_code, resp_headers, resp_body)) => {
-                        // Use shared response builder
                         let http_response = crate::response_builder::build_response_with_headers(
                             actix_web::http::StatusCode::from_u16(status_code)
                                 .unwrap_or(actix_web::http::StatusCode::OK),
                             resp_headers,
-                            should_skip_compression,
+                            false, // skip_compression handled by middleware
                             resp_body,
                         );
                         Ok::<_, actix_web::Error>(http_response)
@@ -899,14 +877,13 @@ pub fn handle_actix_http_request(
             }
         };
 
-        // Create Actix test service with MIDDLEWARE STACK
-        // CorsMiddleware uses AppState which has injected test router/metadata
+        // Create Actix test service with PRODUCTION middleware stack
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(app_state))
                 .app_data(web::PayloadConfig::new(1 * 1024 * 1024))
                 .wrap(CompressionMiddleware::new())
-                .wrap(CorsMiddleware::new())  // CORS via middleware (uses AppState)
+                .wrap(CorsMiddleware::new())
                 .default_service(web::route().to(handler)),
         )
         .await;
@@ -943,7 +920,7 @@ pub fn handle_actix_http_request(
             req = req.set_payload(Bytes::from(body));
         }
 
-        // Call service
+        // Call service - goes through production middleware stack
         let request = req.to_request();
         let response = app.call(request).await.map_err(|e| {
             pyo3::exceptions::PyRuntimeError::new_err(format!("Service call failed: {}", e))

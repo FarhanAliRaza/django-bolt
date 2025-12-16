@@ -1,10 +1,11 @@
-//! Shared CORS handling functions used by both production middleware and test_state.rs
+//! Unified CORS handling - Single implementation for production and tests
 //!
-//! This module provides the core CORS functionality:
-//! - `add_cors_headers_with_config` - Add CORS headers using CorsConfig (for middleware)
-//! - `add_preflight_headers_with_config` - Add preflight headers using CorsConfig (for middleware)
-//! - `add_cors_response_headers` - Simple version for test_state.rs
-//! - `add_preflight_headers_simple` - Simple version for test_state.rs
+//! This module provides the SINGLE source of truth for all CORS functionality:
+//! - `apply_cors_headers` - Add CORS headers to HeaderMap (used by middleware and tests)
+//! - `apply_cors_preflight` - Add preflight headers (used by middleware and tests)
+//!
+//! Both production middleware and test handlers use these functions, ensuring
+//! identical CORS behavior in tests and production.
 
 use actix_web::http::header::{
     HeaderMap, HeaderValue, ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
@@ -12,18 +13,36 @@ use actix_web::http::header::{
     ACCESS_CONTROL_MAX_AGE, VARY,
 };
 use actix_web::HttpResponse;
+use regex::Regex;
 
 use crate::metadata::CorsConfig;
 use crate::state::AppState;
 
-/// Add CORS headers to a HeaderMap using CorsConfig (supports regex patterns)
-/// This is the core function used by CorsMiddleware
-/// Returns true if CORS headers were added (origin was allowed), false otherwise
-pub fn add_cors_headers_with_config(
+// =============================================================================
+// UNIFIED CORS IMPLEMENTATION - Single source of truth
+// =============================================================================
+
+/// Apply CORS headers to a HeaderMap - UNIFIED implementation for production and tests
+///
+/// This is the SINGLE function for CORS header handling. Both production middleware
+/// and test handlers must use this function to ensure identical behavior.
+///
+/// # Parameters
+/// - `headers`: HeaderMap to add CORS headers to
+/// - `request_origin`: The Origin header from the request (None for same-origin)
+/// - `cors_config`: The CORS configuration (route-level or global)
+/// - `global_origin_set`: Optional global origin set for fallback (from AppState or TestApp)
+/// - `global_regexes`: Optional global regex patterns for fallback
+///
+/// # Returns
+/// true if CORS headers were added (origin was allowed), false otherwise
+#[inline]
+pub fn apply_cors_headers(
     headers: &mut HeaderMap,
     request_origin: Option<&str>,
     cors_config: &CorsConfig,
-    state: &AppState,
+    global_origin_set: Option<&ahash::AHashSet<String>>,
+    global_regexes: Option<&[Regex]>,
 ) -> bool {
     // Check if CORS_ALLOW_ALL_ORIGINS is True with credentials (invalid per spec)
     if cors_config.allow_all_origins && cors_config.credentials {
@@ -67,8 +86,8 @@ pub fn add_cors_headers_with_config(
     // Use route-level origin_set first (O(1) lookup), then fall back to global
     let origin_set = if !cors_config.origin_set.is_empty() {
         &cors_config.origin_set
-    } else if let Some(ref global_config) = state.global_cors_config {
-        &global_config.origin_set
+    } else if let Some(global_set) = global_origin_set {
+        global_set
     } else {
         return false;
     };
@@ -82,12 +101,10 @@ pub fn add_cors_headers_with_config(
             .compiled_origin_regexes
             .iter()
             .any(|re| re.is_match(req_origin))
+    } else if let Some(regexes) = global_regexes {
+        !regexes.is_empty() && regexes.iter().any(|re| re.is_match(req_origin))
     } else {
-        !state.cors_origin_regexes.is_empty()
-            && state
-                .cors_origin_regexes
-                .iter()
-                .any(|re| re.is_match(req_origin))
+        false
     };
 
     if !exact_match && !regex_match {
@@ -114,9 +131,11 @@ pub fn add_cors_headers_with_config(
     true
 }
 
-/// Add CORS preflight headers to a HeaderMap using CorsConfig
-/// This is the core function used by CorsMiddleware for OPTIONS requests
-pub fn add_preflight_headers_with_config(headers: &mut HeaderMap, cors_config: &CorsConfig) {
+/// Apply CORS preflight headers - UNIFIED implementation
+///
+/// This is the SINGLE function for CORS preflight handling.
+#[inline]
+pub fn apply_cors_preflight(headers: &mut HeaderMap, cors_config: &CorsConfig) {
     if let Some(ref cached_val) = cors_config.methods_header {
         headers.insert(ACCESS_CONTROL_ALLOW_METHODS, cached_val.clone());
     }
@@ -144,8 +163,92 @@ pub fn add_preflight_headers_with_config(headers: &mut HeaderMap, cors_config: &
     }
 }
 
-/// Add CORS headers for simple responses (not preflight)
-/// Used by test_state.rs - works with simple vectors instead of CorsConfig
+/// Apply CORS headers to a Vec<(String, String)> - for test handlers returning tuples
+///
+/// This is a convenience wrapper that converts between HeaderMap and Vec formats,
+/// while using the unified apply_cors_headers implementation internally.
+#[inline]
+pub fn apply_cors_to_vec(
+    resp_headers: &mut Vec<(String, String)>,
+    request_origin: Option<&str>,
+    cors_config: &CorsConfig,
+    global_origin_set: Option<&ahash::AHashSet<String>>,
+    global_regexes: Option<&[Regex]>,
+) -> bool {
+    let mut header_map = HeaderMap::new();
+
+    let allowed = apply_cors_headers(
+        &mut header_map,
+        request_origin,
+        cors_config,
+        global_origin_set,
+        global_regexes,
+    );
+
+    if allowed {
+        for (name, value) in header_map.iter() {
+            let name_str = name.as_str();
+            if name_str.starts_with("access-control") || name_str == "vary" {
+                if let Ok(val_str) = value.to_str() {
+                    resp_headers.push((name_str.to_string(), val_str.to_string()));
+                }
+            }
+        }
+    }
+
+    allowed
+}
+
+/// Apply CORS preflight headers to a Vec<(String, String)> - for test handlers
+#[inline]
+pub fn apply_cors_preflight_to_vec(
+    resp_headers: &mut Vec<(String, String)>,
+    cors_config: &CorsConfig,
+) {
+    let mut header_map = HeaderMap::new();
+    apply_cors_preflight(&mut header_map, cors_config);
+
+    for (name, value) in header_map.iter() {
+        if let Ok(val_str) = value.to_str() {
+            resp_headers.push((name.as_str().to_string(), val_str.to_string()));
+        }
+    }
+}
+
+// =============================================================================
+// LEGACY COMPATIBILITY - Will be removed after full migration
+// =============================================================================
+
+/// DEPRECATED: Use apply_cors_headers instead
+/// This wrapper provides backwards compatibility with AppState-based calls
+pub fn add_cors_headers_with_config(
+    headers: &mut HeaderMap,
+    request_origin: Option<&str>,
+    cors_config: &CorsConfig,
+    state: &AppState,
+) -> bool {
+    apply_cors_headers(
+        headers,
+        request_origin,
+        cors_config,
+        state.global_cors_config.as_ref().map(|c| &c.origin_set),
+        if state.cors_origin_regexes.is_empty() {
+            None
+        } else {
+            Some(state.cors_origin_regexes.as_slice())
+        },
+    )
+}
+
+/// DEPRECATED: Use apply_cors_preflight instead
+/// Wrapper for backwards compatibility with middleware
+#[inline]
+pub fn add_preflight_headers_with_config(headers: &mut HeaderMap, cors_config: &CorsConfig) {
+    apply_cors_preflight(headers, cors_config);
+}
+
+/// DEPRECATED: Use apply_cors_to_vec or apply_cors_headers instead
+/// Legacy function - kept for compatibility during migration
 pub fn add_cors_response_headers(
     response: &mut HttpResponse,
     request_origin: Option<&str>,
@@ -153,121 +256,65 @@ pub fn add_cors_response_headers(
     credentials: bool,
     expose_headers: &[String],
 ) -> bool {
+    // Build a temporary CorsConfig to use the unified function
     let is_wildcard = origins.iter().any(|o| o == "*");
+    let origin_set: ahash::AHashSet<String> = origins.iter().cloned().collect();
 
-    // Wildcard + credentials is invalid per CORS spec
-    if is_wildcard && credentials {
-        // Reflect origin instead of using wildcard
-        if let Some(req_origin) = request_origin {
-            if let Ok(val) = HeaderValue::from_str(req_origin) {
-                response
-                    .headers_mut()
-                    .insert(ACCESS_CONTROL_ALLOW_ORIGIN, val);
-            }
-            response
-                .headers_mut()
-                .append(VARY, HeaderValue::from_static("Origin"));
-            response.headers_mut().insert(
-                ACCESS_CONTROL_ALLOW_CREDENTIALS,
-                HeaderValue::from_static("true"),
-            );
-
-            if !expose_headers.is_empty() {
-                if let Ok(val) = HeaderValue::from_str(&expose_headers.join(", ")) {
-                    response
-                        .headers_mut()
-                        .insert(ACCESS_CONTROL_EXPOSE_HEADERS, val);
-                }
-            }
-            return true;
-        }
-        return false;
-    }
-
-    // Handle wildcard without credentials
-    if is_wildcard {
-        response
-            .headers_mut()
-            .insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
-        if !expose_headers.is_empty() {
-            if let Ok(val) = HeaderValue::from_str(&expose_headers.join(", ")) {
-                response
-                    .headers_mut()
-                    .insert(ACCESS_CONTROL_EXPOSE_HEADERS, val);
-            }
-        }
-        return true;
-    }
-
-    // Check if origin is in allowed list
-    let req_origin = match request_origin {
-        Some(o) => o,
-        None => return false,
+    let cors_config = CorsConfig {
+        origins: origins.to_vec(),
+        origin_regexes: vec![],
+        compiled_origin_regexes: vec![],
+        origin_set,
+        allow_all_origins: is_wildcard,
+        credentials,
+        methods: vec![],
+        headers: vec![],
+        expose_headers: expose_headers.to_vec(),
+        max_age: 3600,
+        methods_str: String::new(),
+        headers_str: String::new(),
+        expose_headers_str: expose_headers.join(", "),
+        max_age_str: "3600".to_string(),
+        methods_header: None,
+        headers_header: None,
+        expose_headers_header: if expose_headers.is_empty() {
+            None
+        } else {
+            HeaderValue::from_str(&expose_headers.join(", ")).ok()
+        },
+        max_age_header: None,
     };
 
-    if !origins.iter().any(|o| o == req_origin) {
-        return false; // Origin not allowed
-    }
-
-    // Add headers
-    if let Ok(val) = HeaderValue::from_str(req_origin) {
-        response
-            .headers_mut()
-            .insert(ACCESS_CONTROL_ALLOW_ORIGIN, val);
-    }
-    response
-        .headers_mut()
-        .append(VARY, HeaderValue::from_static("Origin"));
-
-    if credentials {
-        response.headers_mut().insert(
-            ACCESS_CONTROL_ALLOW_CREDENTIALS,
-            HeaderValue::from_static("true"),
-        );
-    }
-
-    if !expose_headers.is_empty() {
-        if let Ok(val) = HeaderValue::from_str(&expose_headers.join(", ")) {
-            response
-                .headers_mut()
-                .insert(ACCESS_CONTROL_EXPOSE_HEADERS, val);
-        }
-    }
-
-    true
+    apply_cors_headers(response.headers_mut(), request_origin, &cors_config, None, None)
 }
 
-/// Build preflight response headers using simple vectors
-/// Used by test_state.rs - works with simple vectors instead of CorsConfig
+/// DEPRECATED: Use apply_cors_preflight_to_vec instead
 pub fn add_preflight_headers_simple(
     response: &mut HttpResponse,
     methods: &[String],
-    headers: &[String],
+    headers_list: &[String],
     max_age: u64,
 ) {
-    if !methods.is_empty() {
-        if let Ok(val) = HeaderValue::from_str(&methods.join(", ")) {
-            response
-                .headers_mut()
-                .insert(ACCESS_CONTROL_ALLOW_METHODS, val);
-        }
-    }
+    let cors_config = CorsConfig {
+        origins: vec![],
+        origin_regexes: vec![],
+        compiled_origin_regexes: vec![],
+        origin_set: ahash::AHashSet::new(),
+        allow_all_origins: false,
+        credentials: false,
+        methods: methods.to_vec(),
+        headers: headers_list.to_vec(),
+        expose_headers: vec![],
+        max_age: max_age as u32,
+        methods_str: methods.join(", "),
+        headers_str: headers_list.join(", "),
+        expose_headers_str: String::new(),
+        max_age_str: max_age.to_string(),
+        methods_header: HeaderValue::from_str(&methods.join(", ")).ok(),
+        headers_header: HeaderValue::from_str(&headers_list.join(", ")).ok(),
+        expose_headers_header: None,
+        max_age_header: HeaderValue::from_str(&max_age.to_string()).ok(),
+    };
 
-    if !headers.is_empty() {
-        if let Ok(val) = HeaderValue::from_str(&headers.join(", ")) {
-            response
-                .headers_mut()
-                .insert(ACCESS_CONTROL_ALLOW_HEADERS, val);
-        }
-    }
-
-    if let Ok(val) = HeaderValue::from_str(&max_age.to_string()) {
-        response.headers_mut().insert(ACCESS_CONTROL_MAX_AGE, val);
-    }
-
-    // Add Vary headers for preflight requests
-    response.headers_mut().insert(
-        VARY,
-        HeaderValue::from_static("Access-Control-Request-Method, Access-Control-Request-Headers"),
-    );
+    apply_cors_preflight(response.headers_mut(), &cors_config);
 }

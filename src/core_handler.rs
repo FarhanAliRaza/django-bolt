@@ -14,7 +14,6 @@ use ahash::AHashMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyTuple};
 
-use crate::cors::add_cors_response_headers;
 use crate::error;
 use crate::handler::build_file_response;
 use crate::metadata::{CorsConfig, RouteMetadata};
@@ -210,32 +209,14 @@ pub fn build_403_response(
     CoreHandlerResult::Simple(403, headers, br#"{"detail":"Permission denied"}"#.to_vec())
 }
 
-/// Add CORS headers to a Vec (shared between production and tests)
+/// Add CORS headers to a Vec - uses unified implementation from cors.rs
 pub fn add_cors_headers_to_vec(
     resp_headers: &mut Vec<(String, String)>,
     request_origin: Option<&str>,
     cors_cfg: &CorsConfig,
 ) {
-    // Create a temporary HttpResponse to use the shared CORS function
-    let mut temp_resp = HttpResponse::Ok().finish();
-    let origin_allowed = add_cors_response_headers(
-        &mut temp_resp,
-        request_origin,
-        &cors_cfg.origins,
-        cors_cfg.credentials,
-        &cors_cfg.expose_headers,
-    );
-
-    if origin_allowed {
-        for (name, value) in temp_resp.headers().iter() {
-            let name_str = name.as_str();
-            if name_str.starts_with("access-control") || name_str == "vary" {
-                if let Ok(val_str) = value.to_str() {
-                    resp_headers.push((name_str.to_string(), val_str.to_string()));
-                }
-            }
-        }
-    }
+    // Use the unified CORS function from cors.rs
+    crate::cors::apply_cors_to_vec(resp_headers, request_origin, cors_cfg, None, None);
 }
 
 /// Check rate limiting using the shared rate limit infrastructure

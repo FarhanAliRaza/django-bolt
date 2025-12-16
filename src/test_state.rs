@@ -8,8 +8,7 @@ use pyo3::types::PyDict;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::core_handler;
-use crate::cors::{add_cors_response_headers, add_preflight_headers_simple};
+use crate::cors::{apply_cors_preflight, apply_cors_preflight_to_vec, apply_cors_to_vec};
 use crate::handler::headers_vec_to_map;
 use crate::metadata::{CorsConfig, RouteMetadata};
 use crate::middleware;
@@ -492,15 +491,21 @@ pub fn ensure_test_runtime(py: Python<'_>, app_id: u64) -> PyResult<()> {
 }
 
 /// Helper to add CORS headers to a Vec (for test responses that return tuples)
-/// Uses the shared implementation from core_handler
+/// Uses the unified CORS implementation from cors.rs
 fn add_cors_headers_to_vec(
     resp_headers: &mut Vec<(String, String)>,
     header_map: &AHashMap<String, String>,
     cors_cfg: Option<&CorsConfig>,
+    global_cors_cfg: Option<&CorsConfig>,
 ) {
     if let Some(cfg) = cors_cfg {
         let request_origin = header_map.get("origin").map(|s| s.as_str());
-        core_handler::add_cors_headers_to_vec(resp_headers, request_origin, cfg);
+        // Use global origin_set and regexes for fallback (same as production middleware)
+        let global_origin_set = global_cors_cfg.map(|g| &g.origin_set);
+        let global_regexes = global_cors_cfg
+            .filter(|g| !g.compiled_origin_regexes.is_empty())
+            .map(|g| g.compiled_origin_regexes.as_slice());
+        apply_cors_to_vec(resp_headers, request_origin, cfg, global_origin_set, global_regexes);
     }
 }
 
@@ -568,7 +573,7 @@ pub fn handle_test_request_for(
             // 404 response - add CORS headers if global CORS is configured (same as handler.rs)
             let mut resp_headers = vec![("content-type".to_string(), "text/plain; charset=utf-8".to_string())];
             let temp_header_map = headers_vec_to_map(&headers);
-            add_cors_headers_to_vec(&mut resp_headers, &temp_header_map, global_cors_config.as_ref());
+            add_cors_headers_to_vec(&mut resp_headers, &temp_header_map, global_cors_config.as_ref(), global_cors_config.as_ref());
             return Ok((404, resp_headers, b"Not Found".to_vec()));
         }
 
@@ -613,11 +618,8 @@ pub fn handle_test_request_for(
                     .iter()
                     .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
                     .collect();
-                add_cors_headers_to_vec(
-                    &mut resp_headers,
-                    &header_map,
-                    route_meta.cors_config.as_ref().or(global_cors_config.as_ref()),
-                );
+                let effective_cors = route_meta.cors_config.as_ref().or(global_cors_config.as_ref());
+                add_cors_headers_to_vec(&mut resp_headers, &header_map, effective_cors, global_cors_config.as_ref());
                 return Ok((status, resp_headers, crate::responses::get_rate_limit_body(1)));
             }
         }
@@ -629,12 +631,14 @@ pub fn handle_test_request_for(
             AuthGuardResult::Allow(ctx) => ctx,
             AuthGuardResult::Unauthorized => {
                 let mut resp_headers = vec![("content-type".to_string(), "application/json".to_string())];
-                add_cors_headers_to_vec(&mut resp_headers, &header_map, route_meta.cors_config.as_ref().or(global_cors_config.as_ref()));
+                let effective_cors = route_meta.cors_config.as_ref().or(global_cors_config.as_ref());
+                add_cors_headers_to_vec(&mut resp_headers, &header_map, effective_cors, global_cors_config.as_ref());
                 return Ok((401, resp_headers, br#"{"detail":"Authentication required"}"#.to_vec()));
             }
             AuthGuardResult::Forbidden => {
                 let mut resp_headers = vec![("content-type".to_string(), "application/json".to_string())];
-                add_cors_headers_to_vec(&mut resp_headers, &header_map, route_meta.cors_config.as_ref().or(global_cors_config.as_ref()));
+                let effective_cors = route_meta.cors_config.as_ref().or(global_cors_config.as_ref());
+                add_cors_headers_to_vec(&mut resp_headers, &header_map, effective_cors, global_cors_config.as_ref());
                 return Ok((403, resp_headers, br#"{"detail":"Permission denied"}"#.to_vec()));
             }
         }
@@ -735,7 +739,7 @@ pub fn handle_test_request_for(
             .filter(|(k, _)| !k.eq_ignore_ascii_case("x-bolt-file-path"))
             .collect();
 
-        // Add CORS headers for successful responses (same as handler.rs lines 502-508)
+        // Add CORS headers for successful responses (same as production middleware)
         // Get effective CORS config: route-level first, then global fallback
         // Also check if CORS is skipped via @skip_middleware("cors")
         let skip_cors = route_meta_opt
@@ -750,29 +754,14 @@ pub fn handle_test_request_for(
                 .or(global_cors_config.as_ref());
 
             if let Some(cfg) = cors_cfg {
-                // Use request_origin_for_cors captured earlier (before header_map was moved)
+                // Use unified CORS function (same as production middleware)
                 let request_origin = request_origin_for_cors.as_deref();
-
-                // Use shared CORS function (same as production)
-                let mut temp_resp = HttpResponse::Ok().finish();
-                let origin_allowed = add_cors_response_headers(
-                    &mut temp_resp,
-                    request_origin,
-                    &cfg.origins,
-                    cfg.credentials,
-                    &cfg.expose_headers,
-                );
-                if origin_allowed {
-                    // Extract CORS headers from temp response to tuple format
-                    for (name, value) in temp_resp.headers().iter() {
-                        let name_str = name.as_str();
-                        if name_str.starts_with("access-control") || name_str == "vary" {
-                            if let Ok(val_str) = value.to_str() {
-                                headers.push((name_str.to_string(), val_str.to_string()));
-                            }
-                        }
-                    }
-                }
+                let global_origin_set = global_cors_config.as_ref().map(|g| &g.origin_set);
+                let global_regexes = global_cors_config
+                    .as_ref()
+                    .filter(|g| !g.compiled_origin_regexes.is_empty())
+                    .map(|g| g.compiled_origin_regexes.as_slice());
+                apply_cors_to_vec(&mut headers, request_origin, cfg, global_origin_set, global_regexes);
             }
         }
 
@@ -1081,7 +1070,7 @@ pub fn handle_actix_http_request(
                     },
                 );
 
-                // Handle CORS preflight - MUST validate origin per RFC 6454
+                // Handle CORS preflight - Uses unified CORS implementation
                 if is_preflight && !should_skip_cors {
                     // Get effective CORS config: route-level, then global
                     let effective_config = cors_config.as_ref().or(global_cors_config.as_ref());
@@ -1093,90 +1082,43 @@ pub fn handle_actix_http_request(
                             .body("CORS not configured"));
                     };
 
-                    // Get effective origins (route-level or global)
-                    let effective_origins = if !cors_cfg.origins.is_empty() {
-                        &cors_cfg.origins
-                    } else if let Some(ref global) = global_cors_config {
-                        &global.origins
-                    } else {
-                        &cors_cfg.origins
-                    };
+                    // Use unified CORS implementation - same as production middleware
+                    use crate::cors::{apply_cors_headers, apply_cors_preflight};
+                    use actix_web::http::header::HeaderMap;
 
-                    let is_wildcard =
-                        cors_cfg.allow_all_origins || effective_origins.iter().any(|o| o == "*");
+                    let mut header_map = HeaderMap::new();
+                    let global_origin_set = global_cors_config.as_ref().map(|g| &g.origin_set);
+                    let global_regexes = global_cors_config
+                        .as_ref()
+                        .filter(|g| !g.compiled_origin_regexes.is_empty())
+                        .map(|g| g.compiled_origin_regexes.as_slice());
 
-                    // Wildcard + credentials is invalid per CORS spec
-                    if is_wildcard && cors_cfg.credentials {
-                        // Reflect origin instead of using wildcard
-                        if let Some(req_origin) = request_origin.as_deref() {
-                            let mut response = HttpResponse::NoContent();
-                            response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, req_origin));
-                            response.insert_header((VARY, "Origin"));
-                            response.insert_header((ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
-                            // Use shared helper for preflight headers
-                            let mut resp = response.finish();
-                            add_preflight_headers_simple(
-                                &mut resp,
-                                &cors_cfg.methods,
-                                &cors_cfg.headers,
-                                cors_cfg.max_age as u64,
-                            );
-                            return Ok(resp);
-                        }
-                        // No origin header, reject
-                        return Ok(HttpResponse::Forbidden().finish());
-                    }
+                    let origin_allowed = apply_cors_headers(
+                        &mut header_map,
+                        request_origin.as_deref(),
+                        cors_cfg,
+                        global_origin_set,
+                        global_regexes,
+                    );
 
-                    // Handle wildcard without credentials
-                    if is_wildcard {
-                        let mut response = HttpResponse::NoContent();
-                        response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, "*"));
-                        let mut resp = response.finish();
-                        add_preflight_headers_simple(
-                            &mut resp,
-                            &cors_cfg.methods,
-                            &cors_cfg.headers,
-                            cors_cfg.max_age as u64,
-                        );
-                        return Ok(resp);
-                    }
-
-                    // CRITICAL: Validate origin from request header
-                    let req_origin = match request_origin.as_deref() {
-                        Some(o) => o,
-                        None => {
-                            // No origin header, reject preflight
-                            return Ok(HttpResponse::Forbidden()
-                                .content_type("text/plain; charset=utf-8")
-                                .body("Missing Origin header"));
-                        }
-                    };
-
-                    // Check if request origin is in allowed origins list
-                    if !effective_origins.iter().any(|o| o == req_origin) {
-                        // CRITICAL: Origin not allowed, reject preflight
+                    if !origin_allowed {
+                        // Origin not allowed - reject preflight
                         return Ok(HttpResponse::Forbidden()
                             .content_type("text/plain; charset=utf-8")
                             .body("Origin not allowed"));
                     }
 
-                    // Origin validated - add preflight headers
+                    // Add preflight headers using unified function
+                    apply_cors_preflight(&mut header_map, cors_cfg);
+
+                    // Build response with all headers
                     let mut response = HttpResponse::NoContent();
-                    response.insert_header((ACCESS_CONTROL_ALLOW_ORIGIN, req_origin));
-                    response.insert_header((VARY, "Origin"));
-
-                    if cors_cfg.credentials {
-                        response.insert_header((ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
+                    for (name, value) in header_map.iter() {
+                        if let Ok(val_str) = value.to_str() {
+                            response.insert_header((name.as_str(), val_str));
+                        }
                     }
-
-                    let mut resp = response.finish();
-                    add_preflight_headers_simple(
-                        &mut resp,
-                        &cors_cfg.methods,
-                        &cors_cfg.headers,
-                        cors_cfg.max_age as u64,
-                    );
-                    return Ok(resp);
+                    return Ok(response.finish());
                 }
 
                 // Check rate limiting

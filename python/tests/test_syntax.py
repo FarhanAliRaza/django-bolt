@@ -681,9 +681,12 @@ def test_head_with_params(client):
 
 
 def test_options_method_automatic(client):
-    """Test automatic OPTIONS handling - returns Allow header with available methods"""
+    """Test automatic OPTIONS handling - returns Allow header with available methods.
+
+    Note: Returns 204 No Content with empty body (same as production server).
+    """
     response = client.options("/m")
-    assert response.status_code == 200
+    assert response.status_code == 204  # No Content (production behavior)
     # Check Allow header is present and contains the methods
     assert "allow" in response.headers or "Allow" in response.headers
     allow_header = response.headers.get("allow") or response.headers.get("Allow")
@@ -694,9 +697,8 @@ def test_options_method_automatic(client):
     assert "PATCH" in methods
     assert "DELETE" in methods
     assert "HEAD" in methods
-    assert "OPTIONS" in methods  # Always included for automatic OPTIONS
-    # Body should be empty JSON object
-    assert response.json() == {}
+    # Body should be empty for 204 No Content (production behavior)
+    assert response.content == b""
 
 
 def test_options_on_nonexistent_route(client):

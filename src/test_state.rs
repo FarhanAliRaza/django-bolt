@@ -8,20 +8,22 @@ use pyo3::types::PyDict;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::core_handler::{
+    build_py_request, get_effective_cors_config, needs_cookies, needs_headers,
+    process_handler_result, process_request_pre_dispatch, CoreHandlerResult,
+    PreDispatchResult, RequestDependencies, RequestInput,
+};
 use crate::cors::apply_cors_to_vec;
 use crate::handler::headers_vec_to_map;
 use crate::metadata::{CorsConfig, RouteMetadata};
-use crate::middleware;
 use crate::middleware::auth::{authenticate, populate_auth_context};
 use crate::permissions::{evaluate_guards, GuardResult};
-use crate::request::PyRequest;
-use crate::router::{parse_query_string, Router};
-use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
+use crate::router::Router;
 use crate::websocket::WebSocketRouter;
 
 // Actix testing imports
 use actix_web::dev::Service;
-use actix_web::{test, web, App, HttpResponse};
+use actix_web::{test, web, App};
 use bytes::Bytes;
 
 // Macro for conditional debug output - only enabled with DJANGO_BOLT_TEST_DEBUG env var
@@ -514,6 +516,9 @@ fn add_cors_headers_to_vec(
     }
 }
 
+/// Handle test request using the SAME core logic as production handler.
+/// This function uses the shared process_request_pre_dispatch from core_handler.rs
+/// to ensure test and production code paths are identical.
 #[pyfunction]
 pub fn handle_test_request_for(
     py: Python<'_>,
@@ -528,7 +533,6 @@ pub fn handle_test_request_for(
         .get(&app_id)
         .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Invalid test app id"))?;
 
-    // Snapshot needed fields under a read lock and perform route match
     test_debug!(
         "[test_state] start app_id={} method={} path={} headers={} body_len={} query={:?}",
         app_id,
@@ -538,171 +542,98 @@ pub fn handle_test_request_for(
         body.len(),
         query_string
     );
-    let dispatch: Py<PyAny>;
-    let (route, path_params, handler_id): (Py<PyAny>, AHashMap<String, String>, usize);
-    let route_meta_opt: Option<RouteMetadata>;
-    let middleware_present: bool;
-    let event_loop_obj_opt: Option<Py<PyAny>>;
-    let global_cors_config: Option<CorsConfig>;
-    {
-        let app = entry.read();
-        dispatch = app.dispatch.clone_ref(py);
-        // Capture global CORS config for error responses (same as production handler.rs)
-        global_cors_config = app.global_cors_config.clone();
-
-        // Route matching
-        if let Some(route_match) = app.router.find(&method, &path) {
-            // Get handler_id first (borrows), then handler (borrows), then path_params (moves)
-            handler_id = route_match.handler_id();
-            route = route_match.route().handler.clone_ref(py);
-            path_params = route_match.path_params(); // Consumes route_match
-        } else {
-            // Automatic OPTIONS handling: if no explicit OPTIONS handler exists,
-            // check if other methods are registered for this path and return Allow header
-            if method == "OPTIONS" {
-                let available_methods = app.router.find_all_methods(&path);
-                if !available_methods.is_empty() {
-                    // Return 200 OK with Allow header listing available methods
-                    let allow_header = available_methods.join(", ");
-                    return Ok((
-                        200,
-                        vec![
-                            ("content-type".to_string(), "application/json".to_string()),
-                            ("allow".to_string(), allow_header),
-                        ],
-                        b"{}".to_vec(),
-                    ));
-                }
-            }
-
-            // 404 response - add CORS headers if global CORS is configured (same as handler.rs)
-            let mut resp_headers = vec![("content-type".to_string(), "text/plain; charset=utf-8".to_string())];
-            let temp_header_map = headers_vec_to_map(&headers);
-            add_cors_headers_to_vec(&mut resp_headers, &temp_header_map, global_cors_config.as_ref(), global_cors_config.as_ref());
-            return Ok((404, resp_headers, b"Not Found".to_vec()));
-        }
-
-        // Snapshot metadata and loop
-        route_meta_opt = app.route_metadata.get(&handler_id).cloned();
-        middleware_present = app.middleware_metadata.get(&handler_id).is_some();
-        event_loop_obj_opt = app.event_loop.as_ref().map(|ev| ev.clone_ref(py));
-    }
-    test_debug!(
-        "[test_state] matched handler_id={} path_params={:?} middleware_present={}",
-        handler_id,
-        path_params,
-        middleware_present
-    );
-
-    // Parse query string
-    let query_params = if let Some(q) = query_string {
-        parse_query_string(&q)
-    } else {
-        AHashMap::new()
-    };
 
     // Convert headers to map (lowercase keys) using shared function
     let header_map = headers_vec_to_map(&headers);
 
-    // Process rate limiting (same as production handler.rs)
-    // This was missing in test_state.rs - now uses shared implementation
-    if let Some(ref route_meta) = route_meta_opt {
-        if let Some(ref rate_config) = route_meta.rate_limit_config {
-            if let Some(response) = middleware::rate_limit::check_rate_limit(
-                handler_id,
-                &header_map,
-                None, // peer_addr not available in sync testing
-                rate_config,
-                &method,
-                &path,
-            ) {
-                // Rate limited - return 429 with CORS headers
-                let status = response.status().as_u16();
-                let mut resp_headers: Vec<(String, String)> = response
-                    .headers()
-                    .iter()
-                    .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
-                    .collect();
-                let effective_cors = route_meta.cors_config.as_ref().or(global_cors_config.as_ref());
-                add_cors_headers_to_vec(&mut resp_headers, &header_map, effective_cors, global_cors_config.as_ref());
-                return Ok((status, resp_headers, crate::responses::get_rate_limit_body(1)));
-            }
-        }
-    }
-
-    // Authentication and guards using shared validation logic
-    let auth_ctx = if let Some(route_meta) = route_meta_opt.as_ref() {
-        match validate_auth_and_guards(&header_map, &route_meta.auth_backends, &route_meta.guards) {
-            AuthGuardResult::Allow(ctx) => ctx,
-            AuthGuardResult::Unauthorized => {
-                let mut resp_headers = vec![("content-type".to_string(), "application/json".to_string())];
-                let effective_cors = route_meta.cors_config.as_ref().or(global_cors_config.as_ref());
-                add_cors_headers_to_vec(&mut resp_headers, &header_map, effective_cors, global_cors_config.as_ref());
-                return Ok((401, resp_headers, br#"{"detail":"Authentication required"}"#.to_vec()));
-            }
-            AuthGuardResult::Forbidden => {
-                let mut resp_headers = vec![("content-type".to_string(), "application/json".to_string())];
-                let effective_cors = route_meta.cors_config.as_ref().or(global_cors_config.as_ref());
-                add_cors_headers_to_vec(&mut resp_headers, &header_map, effective_cors, global_cors_config.as_ref());
-                return Ok((403, resp_headers, br#"{"detail":"Permission denied"}"#.to_vec()));
-            }
-        }
-    } else {
-        None
-    };
-
-    // Capture request origin for CORS on success responses (before header_map is moved into PyRequest)
-    let request_origin_for_cors = header_map.get("origin").map(|s| s.to_string());
-
-    // Parse cookies using shared function
-    let cookies = parse_cookies_inline(header_map.get("cookie").map(|s| s.as_str()));
-
-    // Create context dict only if auth context is present
-    let context = if let Some(ref auth) = auth_ctx {
-        let ctx_dict = PyDict::new(py);
-        let ctx_py = ctx_dict.unbind();
-        populate_auth_context(&ctx_py, auth, py);
-        Some(ctx_py)
-    } else {
-        None
-    };
-    test_debug!(
-        "[test_state] request context built auth_present={} headers_len={} cookies_len={}",
-        auth_ctx.is_some(),
-        header_map.len(),
-        cookies.len()
-    );
-
-    // Create PyRequest
-    let request = PyRequest {
+    // Build RequestInput (same structure used by production handler)
+    let input = RequestInput {
         method: method.clone(),
         path: path.clone(),
-        body,
+        headers: header_map.clone(),
+        body: body.clone(),
+        query_string: query_string.clone(),
+        peer_addr: None, // Not available in sync testing
+    };
+
+    // Build RequestDependencies from TestApp
+    let (dispatch, router_ref, route_metadata_ref, global_cors_config, event_loop_obj_opt) = {
+        let app = entry.read();
+        (
+            app.dispatch.clone_ref(py),
+            Arc::clone(&app.router),
+            Arc::clone(&app.route_metadata),
+            app.global_cors_config.clone(),
+            app.event_loop.as_ref().map(|ev| ev.clone_ref(py)),
+        )
+    };
+
+    // Create route_metadata lookup function (same pattern as production)
+    let route_metadata_lookup = |handler_id: usize| -> Option<RouteMetadata> {
+        route_metadata_ref.get(&handler_id).cloned()
+    };
+
+    let deps = RequestDependencies {
+        router: &router_ref,
+        route_metadata: &route_metadata_lookup,
+        global_cors_config: global_cors_config.as_ref(),
+        dispatch: &dispatch,
+        debug: true,
+    };
+
+    // Use SHARED core logic for pre-dispatch (route matching, auth, rate limiting, etc.)
+    let pre_result = process_request_pre_dispatch(&input, &deps);
+
+    // Handle pre-dispatch result
+    let (handler, handler_id, path_params, query_params, auth_ctx, route_metadata, skip_compression, skip_cors, is_head_request) = match pre_result {
+        PreDispatchResult::Error(result) => {
+            // Convert CoreHandlerResult to tuple
+            return Ok(result.to_tuple());
+        }
+        PreDispatchResult::Ready {
+            handler,
+            handler_id,
+            path_params,
+            query_params,
+            auth_ctx,
+            route_metadata,
+            skip_compression,
+            skip_cors,
+            is_head_request,
+        } => (handler, handler_id, path_params, query_params, auth_ctx, route_metadata, skip_compression, skip_cors, is_head_request),
+    };
+
+    test_debug!(
+        "[test_state] matched handler_id={} path_params={:?}",
+        handler_id,
+        path_params
+    );
+
+    // Build PyRequest using shared function from core_handler
+    let request_obj = build_py_request(
+        py,
+        &input,
         path_params,
         query_params,
-        headers: header_map,
-        cookies,
-        context,
-        user: None,
-        state: PyDict::new(py).unbind(), // Empty state dict for middleware and dynamic attributes
-    };
-    let request_obj = Py::new(py, request)?;
+        auth_ctx.as_ref(),
+        needs_headers(route_metadata.as_ref()),
+        needs_cookies(route_metadata.as_ref()),
+        &header_map,
+    )?;
 
-    // Get or create event loop upfront (needed for all handlers and streaming responses)
+    // Get or create event loop (test-specific async execution)
     let asyncio = py.import("asyncio")?;
     let loop_obj = if let Some(ev_obj) = event_loop_obj_opt {
         test_debug!("[test_state] using stored event loop");
         ev_obj.into_bound(py)
     } else {
         test_debug!("[test_state] getting current event loop");
-        // Try to get current loop, or create new one
         match asyncio.call_method0("get_event_loop") {
             Ok(l) => l,
             Err(_) => {
                 test_debug!("[test_state] creating new event loop");
                 let l = asyncio.call_method0("new_event_loop")?;
                 asyncio.call_method1("set_event_loop", (&l,))?;
-                // Store it for reuse
                 if let Some(entry2) = registry().get(&app_id) {
                     entry2.write().event_loop = Some(l.clone().unbind());
                 }
@@ -711,186 +642,92 @@ pub fn handle_test_request_for(
         }
     };
 
-    // All handlers (sync and async) go through async dispatch
-    // Sync handlers are executed in thread pool via sync_to_thread() in Python layer
+    // Call dispatch (test uses run_until_complete instead of into_future_with_locals)
     test_debug!("[test_state] calling dispatch");
-    let coroutine = dispatch.call1(py, (route, request_obj, handler_id))?;
-    test_debug!("[test_state] obtained coroutine");
-
+    let coroutine = dispatch.call1(py, (handler, request_obj, handler_id))?;
     test_debug!("[test_state] running coroutine with run_until_complete");
     let result_obj = loop_obj
         .call_method1("run_until_complete", (coroutine,))?
         .unbind();
 
-    // Debug: check what type we got back
-    let type_name = result_obj
-        .bind(py)
-        .get_type()
-        .name()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|_| "unknown".to_string());
-    test_debug!("[test_state] result type: {}", type_name);
+    // Get effective CORS config for response processing
+    let effective_cors = get_effective_cors_config(route_metadata.as_ref(), global_cors_config.as_ref());
+    let request_origin = header_map.get("origin").map(|s| s.as_str());
 
-    // Extract response (tuple fast-path)
-    let tuple_result: Result<(u16, Vec<(String, String)>, Vec<u8>), _> = result_obj.extract(py);
-    test_debug!(
-        "[test_state] tuple extraction succeeded: {}",
-        tuple_result.is_ok()
+    // Process handler result using SHARED core logic
+    let core_result = process_handler_result(
+        py,
+        result_obj.clone_ref(py),
+        skip_compression,
+        skip_cors,
+        is_head_request,
+        request_origin,
+        effective_cors,
+        true, // debug
     );
-    if let Ok((status_code, resp_headers, body_bytes)) = tuple_result {
-        // Filter out special headers
-        let mut headers: Vec<(String, String)> = resp_headers
-            .into_iter()
-            .filter(|(k, _)| !k.eq_ignore_ascii_case("x-bolt-file-path"))
-            .collect();
 
-        // Add CORS headers for successful responses (same as production middleware)
-        // Get effective CORS config: route-level first, then global fallback
-        // Also check if CORS is skipped via @skip_middleware("cors")
-        let skip_cors = route_meta_opt
-            .as_ref()
-            .map(|m| m.skip.contains("cors"))
-            .unwrap_or(false);
-
-        if !skip_cors {
-            let cors_cfg = route_meta_opt
-                .as_ref()
-                .and_then(|m| m.cors_config.as_ref())
-                .or(global_cors_config.as_ref());
-
-            if let Some(cfg) = cors_cfg {
-                // Use unified CORS function (same as production middleware)
-                let request_origin = request_origin_for_cors.as_deref();
-                let global_origin_set = global_cors_config.as_ref().map(|g| &g.origin_set);
-                let global_regexes = global_cors_config
-                    .as_ref()
-                    .filter(|g| !g.compiled_origin_regexes.is_empty())
-                    .map(|g| g.compiled_origin_regexes.as_slice());
-                apply_cors_to_vec(&mut headers, request_origin, cfg, global_origin_set, global_regexes);
+    // Handle the core result
+    match core_result {
+        CoreHandlerResult::Simple(status, headers, body) => {
+            test_debug!(
+                "[test_state] returning simple response status={} headers_len={} body_len={}",
+                status,
+                headers.len(),
+                body.len()
+            );
+            Ok((status, headers, body))
+        }
+        CoreHandlerResult::File { path: file_path, status, headers, .. } => {
+            // For tests, read file synchronously
+            test_debug!("[test_state] file response: {}", file_path);
+            match std::fs::read(&file_path) {
+                Ok(content) => Ok((status.as_u16(), headers, content)),
+                Err(_) => Ok((404, vec![("content-type".to_string(), "text/plain".to_string())], b"File not found".to_vec())),
             }
         }
-
-        // HEAD requests must have empty body per RFC 7231
-        let response_body = if method == "HEAD" {
-            Vec::new()
-        } else {
-            body_bytes
-        };
-
-        test_debug!(
-            "[test_state] returning tuple status={} headers_len={} body_len={}",
-            status_code,
-            headers.len(),
-            response_body.len()
-        );
-        return Ok((status_code, headers, response_body));
+        CoreHandlerResult::Streaming { status, headers, content, is_async_generator, .. } => {
+            // Collect streaming content for tests
+            test_debug!("[test_state] streaming response");
+            let collected_body = collect_streaming_content(py, &content, is_async_generator, &loop_obj)?;
+            let response_body = if is_head_request { Vec::new() } else { collected_body };
+            Ok((status.as_u16(), headers, response_body))
+        }
+        CoreHandlerResult::Error(resp) => {
+            let status = resp.status().as_u16();
+            let headers: Vec<(String, String)> = resp
+                .headers()
+                .iter()
+                .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+                .collect();
+            Ok((status, headers, Vec::new()))
+        }
     }
+}
 
-    // Streaming: collect best-effort
-    let is_streaming = (|| -> PyResult<bool> {
-        let obj = result_obj.bind(py);
-        let m = py.import("django_bolt.responses")?;
-        let cls = m.getattr("StreamingResponse")?;
-        obj.is_instance(&cls)
-    })()
-    .unwrap_or(false);
+/// Helper to collect streaming content for tests
+fn collect_streaming_content(
+    py: Python<'_>,
+    content: &Py<PyAny>,
+    is_async_generator: bool,
+    loop_obj: &Bound<PyAny>,
+) -> PyResult<Vec<u8>> {
+    use pyo3::ffi::c_str;
 
-    test_debug!("[test_state] is_streaming: {}", is_streaming);
+    let content_obj = content.bind(py);
+    let mut collected_body = Vec::new();
 
-    if is_streaming {
-        test_debug!("[test_state] handling streaming response");
-        let obj = result_obj.bind(py);
-        let status_code: u16 = obj
-            .getattr("status_code")
-            .and_then(|v| v.extract())
-            .unwrap_or(200);
-        test_debug!("[test_state] extracted status_code: {}", status_code);
+    // If content is callable (generator function), call it to get the generator
+    let content_obj = if content_obj.is_callable() {
+        test_debug!("[test_state] content is callable, calling it...");
+        content_obj.call0()?
+    } else {
+        content_obj.clone()
+    };
 
-        let mut resp_headers: Vec<(String, String)> = Vec::new();
-        test_debug!("[test_state] extracting headers...");
-        if let Ok(hobj) = obj.getattr("headers") {
-            let header_type = hobj
-                .get_type()
-                .name()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|_| "unknown".to_string());
-            test_debug!("[test_state] got headers object, type: {}", header_type);
-            if let Ok(hdict) = hobj.cast::<PyDict>() {
-                test_debug!("[test_state] headers is a dict");
-                for (k, v) in hdict {
-                    if let (Ok(ks), Ok(vs)) = (k.extract::<String>(), v.extract::<String>()) {
-                        resp_headers.push((ks, vs));
-                    }
-                }
-            } else if hobj.hasattr("items").unwrap_or(false) {
-                // Try as dict-like with items() method
-                test_debug!("[test_state] headers has items() method");
-                if let Ok(items_method) = hobj.call_method0("items") {
-                    if let Ok(items_iter) = items_method.try_iter() {
-                        for item in items_iter {
-                            if let Ok(pair) = item {
-                                if let Ok(tuple) = pair.extract::<(String, String)>() {
-                                    resp_headers.push(tuple);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Add media_type as content-type if provided
-        let is_sse = if let Ok(media_type) = obj
-            .getattr("media_type")
-            .and_then(|v| v.extract::<String>())
-        {
-            let is_event_stream = media_type.contains("event-stream");
-            if !resp_headers
-                .iter()
-                .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
-            {
-                resp_headers.push(("content-type".to_string(), media_type));
-            }
-            is_event_stream
-        } else {
-            false
-        };
-
-        // Add SSE-friendly headers if this is an SSE response
-        if is_sse {
-            if !resp_headers
-                .iter()
-                .any(|(k, _)| k.eq_ignore_ascii_case("x-accel-buffering"))
-            {
-                resp_headers.push(("x-accel-buffering".to_string(), "no".to_string()));
-            }
-            if !resp_headers
-                .iter()
-                .any(|(k, _)| k.eq_ignore_ascii_case("cache-control"))
-            {
-                resp_headers.push(("cache-control".to_string(), "no-cache".to_string()));
-            }
-        }
-
-        // Collect streaming content best-effort
-        let mut content_obj = obj.getattr("content")?;
-        // If content is callable (generator function), call it to get the generator
-        if content_obj.is_callable() {
-            test_debug!("[test_state] content is callable, calling it...");
-            content_obj = content_obj.call0()?;
-        }
-        let mut collected_body = Vec::new();
-        let has_aiter = content_obj.hasattr("__aiter__").unwrap_or(false);
-        if has_aiter {
-            // For async generators, we need to consume them with the event loop
-            // Create a list from the async generator
-            let list_from_agen =
-                |agen: &Bound<PyAny>, loop_obj: &Bound<PyAny>| -> PyResult<Vec<Vec<u8>>> {
-                    let loop_ref = loop_obj.clone();
-
-                    // Use asyncio.run_until_complete to consume the async generator
-                    let py_code = c_str!(
-                        r#"
+    if is_async_generator || content_obj.hasattr("__aiter__").unwrap_or(false) {
+        // Consume async generator
+        let py_code = c_str!(
+            r#"
 async def consume_agen(agen):
     chunks = []
     async for chunk in agen:
@@ -904,53 +741,28 @@ async def consume_agen(agen):
             chunks.append(bytes(chunk))
     return chunks
 "#
-                    );
-                    let locals = pyo3::types::PyDict::new(py);
-                    py.run(py_code, None, Some(&locals))?;
-                    let consume_fn = locals.get_item("consume_agen")?.unwrap();
-                    let coro = consume_fn.call1((agen,))?;
-                    let result = loop_ref.call_method1("run_until_complete", (coro,))?;
-                    result.extract()
-                };
-
-            match list_from_agen(&content_obj, &loop_obj) {
-                Ok(chunks) => {
-                    for chunk in chunks {
-                        collected_body.extend_from_slice(&chunk);
-                    }
-                }
-                Err(e) => {
-                    test_debug!(
-                        "[test_state] warning: failed to consume async generator: {}",
-                        e
-                    );
-                    collected_body = b"[error consuming async streaming content]".to_vec();
-                }
-            }
-        } else if let Ok(iter) = content_obj.try_iter() {
-            for item in iter {
-                if let Ok(chunk) = item {
-                    if let Ok(bytes_vec) = chunk.extract::<Vec<u8>>() {
-                        collected_body.extend_from_slice(&bytes_vec);
-                    } else if let Ok(s) = chunk.extract::<String>() {
-                        collected_body.extend_from_slice(s.as_bytes());
-                    }
+        );
+        let locals = pyo3::types::PyDict::new(py);
+        py.run(py_code, None, Some(&locals))?;
+        let consume_fn = locals.get_item("consume_agen")?.unwrap();
+        let coro = consume_fn.call1((&content_obj,))?;
+        let chunks: Vec<Vec<u8>> = loop_obj.call_method1("run_until_complete", (coro,))?.extract()?;
+        for chunk in chunks {
+            collected_body.extend_from_slice(&chunk);
+        }
+    } else if let Ok(iter) = content_obj.try_iter() {
+        for item in iter {
+            if let Ok(chunk) = item {
+                if let Ok(bytes_vec) = chunk.extract::<Vec<u8>>() {
+                    collected_body.extend_from_slice(&bytes_vec);
+                } else if let Ok(s) = chunk.extract::<String>() {
+                    collected_body.extend_from_slice(s.as_bytes());
                 }
             }
         }
-
-        // HEAD requests must have empty body per RFC 7231
-        let response_body = if method == "HEAD" {
-            Vec::new()
-        } else {
-            collected_body
-        };
-        return Ok((status_code, resp_headers, response_body));
     }
 
-    Err(pyo3::exceptions::PyTypeError::new_err(
-        "Handler returned unsupported response type (expected tuple or StreamingResponse)",
-    ))
+    Ok(collected_body)
 }
 
 #[pyfunction]

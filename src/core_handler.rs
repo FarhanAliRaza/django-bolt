@@ -552,6 +552,23 @@ fn process_non_tuple_response(
         headers.push(("content-type".to_string(), media_type.clone()));
     }
 
+    // Add SSE-specific headers if this is an SSE response
+    let is_sse = media_type == "text/event-stream";
+    if is_sse {
+        if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("x-accel-buffering")) {
+            headers.push(("x-accel-buffering".to_string(), "no".to_string()));
+        }
+        if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("cache-control")) {
+            headers.push(("cache-control".to_string(), "no-cache, no-store, must-revalidate".to_string()));
+        }
+        if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("pragma")) {
+            headers.push(("pragma".to_string(), "no-cache".to_string()));
+        }
+        if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("expires")) {
+            headers.push(("expires".to_string(), "0".to_string()));
+        }
+    }
+
     let content_obj: Py<PyAny> = match obj.getattr("content") {
         Ok(c) => c.unbind(),
         Err(_) => {
@@ -627,6 +644,118 @@ pub fn needs_headers(route_metadata: Option<&RouteMetadata>) -> bool {
 /// Check if handler needs cookies
 pub fn needs_cookies(route_metadata: Option<&RouteMetadata>) -> bool {
     route_metadata.map(|m| m.needs_cookies).unwrap_or(true)
+}
+
+/// Result of pre-dispatch processing
+/// Either returns an error response (auth failed, rate limited, etc.)
+/// or the info needed to dispatch the Python handler
+pub enum PreDispatchResult {
+    /// Error response - don't call handler
+    Error(CoreHandlerResult),
+    /// Ready to dispatch - contains all info needed for Python handler
+    Ready {
+        handler: Py<PyAny>,
+        handler_id: usize,
+        path_params: AHashMap<String, String>,
+        query_params: AHashMap<String, String>,
+        auth_ctx: Option<crate::middleware::auth::AuthContext>,
+        route_metadata: Option<RouteMetadata>,
+        skip_compression: bool,
+        skip_cors: bool,
+        is_head_request: bool,
+    },
+}
+
+/// Process a request up to the point of calling the Python handler.
+/// This is the shared logic used by BOTH production and test handlers.
+///
+/// Returns either an error response or the info needed to dispatch the handler.
+pub fn process_request_pre_dispatch(
+    input: &RequestInput,
+    deps: &RequestDependencies<'_>,
+) -> PreDispatchResult {
+    let method = &input.method;
+    let path = &input.path;
+
+    // Find route
+    let matched = match find_route(deps.router, method, path) {
+        Some(m) => m,
+        None => {
+            // Handle automatic OPTIONS
+            if method == "OPTIONS" {
+                if let Some(result) = handle_automatic_options(deps.router, path, deps.global_cors_config) {
+                    return PreDispatchResult::Error(result);
+                }
+            }
+
+            // 404 response
+            let request_origin = input.headers.get("origin").map(|s| s.as_str());
+            return PreDispatchResult::Error(build_404_response(request_origin, deps.global_cors_config));
+        }
+    };
+
+    let handler = matched.handler;
+    let handler_id = matched.handler_id;
+    let path_params = matched.path_params;
+
+    // Get route metadata
+    let route_metadata = (deps.route_metadata)(handler_id);
+
+    // Compute flags
+    let skip_cors = should_skip_cors(route_metadata.as_ref());
+    let skip_compression = should_skip_compression(route_metadata.as_ref());
+    let is_head_request = method == "HEAD";
+
+    // Get effective CORS config for error responses
+    let effective_cors = get_effective_cors_config(route_metadata.as_ref(), deps.global_cors_config);
+    let request_origin = input.headers.get("origin").map(|s| s.as_str());
+
+    // Check rate limiting
+    if let Some(ref route_meta) = route_metadata {
+        if let Some(result) = check_rate_limit(
+            handler_id,
+            &input.headers,
+            input.peer_addr.as_deref(),
+            route_meta,
+            method,
+            path,
+        ) {
+            return PreDispatchResult::Error(result);
+        }
+    }
+
+    // Validate auth and guards
+    let auth_ctx = if let Some(ref route_meta) = route_metadata {
+        match validate_request_auth(&input.headers, route_meta, request_origin, effective_cors) {
+            Ok(ctx) => ctx,
+            Err(result) => return PreDispatchResult::Error(result),
+        }
+    } else {
+        None
+    };
+
+    // Parse query params (only if needed)
+    let query_params = if needs_query_params(route_metadata.as_ref()) {
+        if let Some(ref q) = input.query_string {
+            crate::router::parse_query_string(q)
+        } else {
+            AHashMap::new()
+        }
+    } else {
+        AHashMap::new()
+    };
+
+    PreDispatchResult::Ready {
+        handler,
+        handler_id,
+        path_params,
+        query_params,
+        auth_ctx,
+        route_metadata,
+        skip_compression,
+        skip_cors,
+        is_head_request,
+    }
 }
 
 #[cfg(test)]

@@ -29,9 +29,9 @@ class BoltTestTransport(httpx.BaseTransport):
     Args:
         app_id: Test app instance ID
         raise_server_exceptions: If True, raise exceptions from handlers
-        use_http_layer: If True, route through Actix HTTP layer (enables testing of
-                        middleware like CORS, rate limiting, compression). If False (default),
-                        use fast direct dispatch for unit tests.
+        use_http_layer: If True, route through production handler with full middleware stack
+                        (CorsMiddleware, CompressionMiddleware - same as production server).
+                        If False, use fast direct dispatch for unit tests without middleware.
     """
 
     def __init__(self, app_id: int, raise_server_exceptions: bool = True, use_http_layer: bool = False):
@@ -68,7 +68,7 @@ class BoltTestTransport(httpx.BaseTransport):
         try:
             # Choose handler based on mode
             if self.use_http_layer:
-                # Route through Actix HTTP layer (for middleware testing)
+                # Route through Actix HTTP layer with middleware (CORS, compression)
                 status_code, resp_headers, resp_body = _core.handle_actix_http_request(
                     app_id=self.app_id,
                     method=method,
@@ -78,7 +78,7 @@ class BoltTestTransport(httpx.BaseTransport):
                     query_string=query_string,
                 )
             else:
-                # Fast direct dispatch (for unit tests)
+                # Fast direct dispatch (for unit tests - no middleware)
                 status_code, resp_headers, resp_body = _core.handle_test_request_for(
                     app_id=self.app_id,
                     method=method,
@@ -209,8 +209,9 @@ class TestClient(httpx.Client):
             api: BoltAPI instance to test
             base_url: Base URL for requests
             raise_server_exceptions: If True, raise exceptions from handlers
-            use_http_layer: If True, route through Actix HTTP layer (enables testing
-                           CORS, rate limiting, compression). Default False for fast tests.
+            use_http_layer: If True (default), route through production handler with full
+                           middleware stack (CorsMiddleware, CompressionMiddleware).
+                           If False, use fast direct dispatch without middleware.
             cors_allowed_origins: Global CORS allowed origins for testing.
                                   If None and read_django_settings=True, reads from Django settings.
             read_django_settings: If True, read CORS settings from Django settings

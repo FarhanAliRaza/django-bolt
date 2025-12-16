@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::cors::{add_cors_headers_with_config, add_preflight_headers_with_config};
 use crate::metadata::CorsConfig;
-use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA};
+use crate::state::AppState;
 
 /// CORS middleware factory
 pub struct CorsMiddleware;
@@ -71,6 +71,8 @@ where
     forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
+        use actix_web::http::header::ACCESS_CONTROL_REQUEST_METHOD;
+
         // Extract Origin header - no allocation if missing (common case for same-origin)
         let origin = req
             .headers()
@@ -95,10 +97,54 @@ where
         let method = req.method().clone();
         let path = req.path().to_string();
 
+        // Check if this is a preflight request (OPTIONS with Access-Control-Request-Method)
+        let is_preflight = method == Method::OPTIONS
+            && req.headers().contains_key(ACCESS_CONTROL_REQUEST_METHOD);
+
         // Get app state for CORS config
         let app_state = req
             .app_data::<actix_web::web::Data<Arc<AppState>>>()
             .cloned();
+
+        // Handle preflight requests - add CORS headers and ensure proper status
+        if is_preflight {
+            let fut = self.service.call(req);
+            return Box::pin(async move {
+                let mut res = fut.await?;
+
+                let state = match app_state {
+                    Some(s) => s,
+                    None => return Ok(res),
+                };
+                let state_ref = state.get_ref();
+
+                // Find CORS config for preflight
+                let cors_config = find_cors_config(&Method::OPTIONS, &path, state_ref);
+
+                match cors_config {
+                    Some(CorsConfigResult::Route(ref cors_cfg))
+                    | Some(CorsConfigResult::Global(ref cors_cfg)) => {
+                        // Add CORS headers to response
+                        let origin_allowed = add_cors_headers_with_config(
+                            res.headers_mut(),
+                            origin.as_deref(),
+                            cors_cfg,
+                            state_ref,
+                        );
+
+                        if origin_allowed {
+                            add_preflight_headers_with_config(res.headers_mut(), cors_cfg);
+                            // Override status to 204 for successful preflight
+                            *res.response_mut().status_mut() =
+                                actix_web::http::StatusCode::NO_CONTENT;
+                        }
+
+                        Ok(res)
+                    }
+                    Some(CorsConfigResult::Skipped) | None => Ok(res),
+                }
+            });
+        }
 
         let fut = self.service.call(req);
 
@@ -122,7 +168,8 @@ where
 
             // Apply CORS headers
             match cors_config {
-                Some(CorsConfigRef::Route(cors_cfg)) => {
+                Some(CorsConfigResult::Route(ref cors_cfg))
+                | Some(CorsConfigResult::Global(ref cors_cfg)) => {
                     let origin_allowed = add_cors_headers_with_config(
                         res.headers_mut(),
                         origin.as_deref(),
@@ -133,18 +180,7 @@ where
                         add_preflight_headers_with_config(res.headers_mut(), cors_cfg);
                     }
                 }
-                Some(CorsConfigRef::Global(cors_cfg)) => {
-                    let origin_allowed = add_cors_headers_with_config(
-                        res.headers_mut(),
-                        origin.as_deref(),
-                        cors_cfg,
-                        state_ref,
-                    );
-                    if method == Method::OPTIONS && origin_allowed {
-                        add_preflight_headers_with_config(res.headers_mut(), cors_cfg);
-                    }
-                }
-                Some(CorsConfigRef::Skipped) | None => {
+                Some(CorsConfigResult::Skipped) | None => {
                     // No CORS headers needed
                 }
             }
@@ -154,23 +190,20 @@ where
     }
 }
 
-/// Reference to CORS config - avoids cloning
-enum CorsConfigRef<'a> {
-    Route(&'a CorsConfig),
-    Global(&'a CorsConfig),
+/// CORS config result - owns the config to support both global and injected state
+enum CorsConfigResult {
+    Route(CorsConfig),
+    Global(CorsConfig),
     Skipped,
 }
 
 /// Find CORS config for a request
 /// Returns route-level config if present, otherwise global config
+/// Works with both production (global state) and tests (injected state)
 #[inline]
-fn find_cors_config<'a>(
-    method: &Method,
-    path: &str,
-    state: &'a AppState,
-) -> Option<CorsConfigRef<'a>> {
-    // Check router exists
-    GLOBAL_ROUTER.get()?;
+fn find_cors_config(method: &Method, path: &str, state: &AppState) -> Option<CorsConfigResult> {
+    // Check router exists (uses injected state or falls back to global)
+    state.get_router()?;
 
     // For OPTIONS, try multiple methods to find route config
     let methods_to_try: &[&str] = if method == &Method::OPTIONS {
@@ -189,36 +222,37 @@ fn find_cors_config<'a>(
     }
 
     // Fall back to global CORS
-    state.global_cors_config.as_ref().map(CorsConfigRef::Global)
+    state
+        .global_cors_config
+        .clone()
+        .map(CorsConfigResult::Global)
 }
 
 #[inline]
-fn find_cors_for_method<'a>(
-    method: &str,
-    path: &str,
-    state: &'a AppState,
-) -> Option<CorsConfigRef<'a>> {
-    let router = GLOBAL_ROUTER.get()?;
+fn find_cors_for_method(method: &str, path: &str, state: &AppState) -> Option<CorsConfigResult> {
+    // Use state.get_router() - works with both injected (test) and global (production) state
+    let router = state.get_router()?;
 
     if let Some(route_match) = router.find(method, path) {
         let handler_id = route_match.handler_id();
 
-        // Use get() instead of get().cloned() - returns a Ref that we can borrow from
-        if let Some(meta_map) = ROUTE_METADATA.get() {
-            if let Some(meta) = meta_map.get(&handler_id) {
-                // Check if CORS is skipped
-                if meta.skip.contains("cors") {
-                    return Some(CorsConfigRef::Skipped);
-                }
+        // Use state.get_route_metadata() - works with both injected and global state
+        if let Some(meta) = state.get_route_metadata(handler_id) {
+            // Check if CORS is skipped
+            if meta.skip.contains("cors") {
+                return Some(CorsConfigResult::Skipped);
+            }
 
-                // Return route-level CORS if present
-                if let Some(ref cors_cfg) = meta.cors_config {
-                    return Some(CorsConfigRef::Route(cors_cfg));
-                }
+            // Return route-level CORS if present
+            if let Some(cors_cfg) = meta.cors_config {
+                return Some(CorsConfigResult::Route(cors_cfg));
             }
         }
     }
 
     // Fall back to global CORS
-    state.global_cors_config.as_ref().map(CorsConfigRef::Global)
+    state
+        .global_cors_config
+        .clone()
+        .map(CorsConfigResult::Global)
 }

@@ -955,7 +955,7 @@ async def consume_agen(agen):
 
 #[pyfunction]
 pub fn handle_actix_http_request(
-    _py: Python<'_>,
+    py: Python<'_>,
     app_id: u64,
     method: String,
     path: String,
@@ -963,20 +963,37 @@ pub fn handle_actix_http_request(
     body: Vec<u8>,
     query_string: Option<String>,
 ) -> PyResult<(u16, Vec<(String, String)>, Vec<u8>)> {
+    use crate::middleware::compression::CompressionMiddleware;
+    use crate::middleware::cors::CorsMiddleware;
+    use crate::state::AppState;
+
+    // Build AppState from TestApp (this enables CorsMiddleware to use test state)
+    let app_state = {
+        let entry = registry()
+            .get(&app_id)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err(format!("Test app {} not found", app_id)))?;
+        let app = entry.read();
+        Arc::new(AppState {
+            dispatch: app.dispatch.clone_ref(py),
+            debug: true,
+            max_header_size: 8192,
+            global_cors_config: app.global_cors_config.clone(),
+            cors_origin_regexes: Vec::new(),
+            global_compression_config: None,
+            // Inject test router and metadata - CorsMiddleware will use these
+            router: Some(Arc::clone(&app.router)),
+            route_metadata: Some(Arc::clone(&app.route_metadata)),
+        })
+    };
+
     // We need to run this in a tokio runtime since actix test functions are async
     let runtime = tokio::runtime::Runtime::new().map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to create runtime: {}", e))
     })?;
 
     runtime.block_on(async {
-        // Verify test app exists
-        let reg = registry();
-        let entry = reg.get(&app_id).ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("Test app {} not found", app_id))
-        })?;
-        drop(entry);
-
-        // Create custom handler that uses per-instance router via handle_test_request_for
+        // Create handler that uses per-instance router via handle_test_request_for
+        // CORS is now handled by CorsMiddleware (which uses AppState)
         let handler = move |req: actix_web::HttpRequest, body: web::Bytes| {
             async move {
                 // Extract request info
@@ -998,139 +1015,31 @@ pub fn handle_actix_http_request(
 
                 let body_bytes = body.to_vec();
 
-                // Get request origin for CORS
-                let request_origin = req
-                    .headers()
-                    .get("origin")
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string());
-
-                // Check if this is a CORS preflight (OPTIONS request)
-                let is_preflight = method == "OPTIONS"
-                    && request_origin.is_some()
-                    && req.headers().contains_key("access-control-request-method");
-
-                // Get middleware config from route metadata and global CORS config
-                let (
-                    cors_config,
-                    rate_limit_config,
-                    handler_id_opt,
-                    should_skip_cors,
-                    should_skip_compression,
-                    global_cors_config,
-                ) = Python::attach(
-                    |_py| -> (
-                        Option<crate::metadata::CorsConfig>,
-                        Option<crate::metadata::RateLimitConfig>,
-                        Option<usize>,
-                        bool,
-                        bool,
-                        Option<crate::metadata::CorsConfig>,
-                    ) {
+                // Get route metadata for rate limiting and compression skip
+                let (rate_limit_config, handler_id_opt, should_skip_compression) = Python::attach(
+                    |_py| -> (Option<crate::metadata::RateLimitConfig>, Option<usize>, bool) {
                         let Some(entry) = registry().get(&app_id) else {
-                            return (None, None, None, false, false, None);
+                            return (None, None, false);
                         };
                         let app = entry.read();
 
-                        // Capture global CORS config (same structure as production)
-                        let global_cors = app.global_cors_config.clone();
-
-                        // For preflight, we need to check the actual route method, not OPTIONS
-                        let lookup_method = if is_preflight {
-                            // Get the requested method from Access-Control-Request-Method header
-                            req.headers()
-                                .get("access-control-request-method")
-                                .and_then(|v| v.to_str().ok())
-                                .map(|s| s.to_uppercase())
-                                .unwrap_or_else(|| method.clone())
-                        } else {
-                            method.clone()
-                        };
-
                         // Find the route to get handler_id
-                        if let Some(route_match) = app.router.find(&lookup_method, &path) {
+                        if let Some(route_match) = app.router.find(&method, &path) {
                             let handler_id = route_match.handler_id();
-                            // Get route metadata
                             if let Some(route_meta) = app.route_metadata.get(&handler_id) {
-                                // Check if CORS is skipped
-                                let skip_cors = route_meta.skip.contains("cors");
-                                // Check if compression is skipped
                                 let skip_compression = route_meta.skip.contains("compression");
-
-                                // Use parsed Rust configs directly
-                                let cors_cfg = route_meta.cors_config.clone();
                                 let rate_cfg = route_meta.rate_limit_config.clone();
-
-                                return (
-                                    cors_cfg,
-                                    rate_cfg,
-                                    Some(handler_id),
-                                    skip_cors,
-                                    skip_compression,
-                                    global_cors,
-                                );
+                                return (rate_cfg, Some(handler_id), skip_compression);
                             }
                         }
-                        (None, None, None, false, false, global_cors)
+                        (None, None, false)
                     },
                 );
-
-                // Handle CORS preflight - Uses unified CORS implementation
-                if is_preflight && !should_skip_cors {
-                    // Get effective CORS config: route-level, then global
-                    let effective_config = cors_config.as_ref().or(global_cors_config.as_ref());
-
-                    let Some(cors_cfg) = effective_config else {
-                        // No CORS configured - reject preflight
-                        return Ok(HttpResponse::Forbidden()
-                            .content_type("text/plain; charset=utf-8")
-                            .body("CORS not configured"));
-                    };
-
-                    // Use unified CORS implementation - same as production middleware
-                    use crate::cors::{apply_cors_headers, apply_cors_preflight};
-                    use actix_web::http::header::HeaderMap;
-
-                    let mut header_map = HeaderMap::new();
-                    let global_origin_set = global_cors_config.as_ref().map(|g| &g.origin_set);
-                    let global_regexes = global_cors_config
-                        .as_ref()
-                        .filter(|g| !g.compiled_origin_regexes.is_empty())
-                        .map(|g| g.compiled_origin_regexes.as_slice());
-
-                    let origin_allowed = apply_cors_headers(
-                        &mut header_map,
-                        request_origin.as_deref(),
-                        cors_cfg,
-                        global_origin_set,
-                        global_regexes,
-                    );
-
-                    if !origin_allowed {
-                        // Origin not allowed - reject preflight
-                        return Ok(HttpResponse::Forbidden()
-                            .content_type("text/plain; charset=utf-8")
-                            .body("Origin not allowed"));
-                    }
-
-                    // Add preflight headers using unified function
-                    apply_cors_preflight(&mut header_map, cors_cfg);
-
-                    // Build response with all headers
-                    let mut response = HttpResponse::NoContent();
-                    for (name, value) in header_map.iter() {
-                        if let Ok(val_str) = value.to_str() {
-                            response.insert_header((name.as_str(), val_str));
-                        }
-                    }
-                    return Ok(response.finish());
-                }
 
                 // Check rate limiting
                 if let (Some(handler_id), Some(rate_cfg)) =
                     (handler_id_opt, rate_limit_config.as_ref())
                 {
-                    // Convert headers to AHashMap
                     let header_map: ahash::AHashMap<String, String> = headers
                         .iter()
                         .map(|(k, v)| (k.to_lowercase(), v.clone()))
@@ -1162,8 +1071,7 @@ pub fn handle_actix_http_request(
 
                 match result {
                     Ok((status_code, resp_headers, resp_body)) => {
-                        // Use shared response builder (same as production handler.rs)
-                        // This ensures consistent header handling, including multiple Set-Cookie
+                        // Use shared response builder
                         let http_response = crate::response_builder::build_response_with_headers(
                             actix_web::http::StatusCode::from_u16(status_code)
                                 .unwrap_or(actix_web::http::StatusCode::OK),
@@ -1171,11 +1079,6 @@ pub fn handle_actix_http_request(
                             should_skip_compression,
                             resp_body,
                         );
-
-                        // NOTE: CORS headers are NOT added here - they must be added by handle_test_request_for
-                        // to match production behavior in handler.rs. This ensures tests accurately validate
-                        // that CORS headers are added at error return points in the request handling code.
-
                         Ok::<_, actix_web::Error>(http_response)
                     }
                     Err(e) => Ok(actix_web::HttpResponse::InternalServerError()
@@ -1184,13 +1087,14 @@ pub fn handle_actix_http_request(
             }
         };
 
-        // Create Actix test service with middleware
+        // Create Actix test service with MIDDLEWARE STACK
+        // CorsMiddleware uses AppState which has injected test router/metadata
         let app = test::init_service(
             App::new()
-                .app_data(web::PayloadConfig::new(1 * 1024 * 1024)) // 1MB max payload (matches BOLT_MAX_UPLOAD_SIZE default)
-                .wrap(crate::middleware::compression::CompressionMiddleware::new())
-                // CORS handled in handler closure (preflight + response headers)
-                // Rate limiting handled in handler closure (per-route state)
+                .app_data(web::Data::new(app_state))
+                .app_data(web::PayloadConfig::new(1 * 1024 * 1024))
+                .wrap(CompressionMiddleware::new())
+                .wrap(CorsMiddleware::new())  // CORS via middleware (uses AppState)
                 .default_service(web::route().to(handler)),
         )
         .await;
@@ -1272,7 +1176,17 @@ pub fn handle_request_production(
     use crate::handler::handle_request;
     use crate::middleware::compression::CompressionMiddleware;
     use crate::middleware::cors::CorsMiddleware;
-    use crate::state::AppState;
+    use crate::state::{AppState, TASK_LOCALS};
+
+    // Ensure TASK_LOCALS is initialized (same as server startup)
+    // This is needed because production handler.rs uses TASK_LOCALS for async dispatch
+    if TASK_LOCALS.get().is_none() {
+        let asyncio = py.import("asyncio")?;
+        let ev = asyncio.call_method0("new_event_loop")?;
+        asyncio.call_method1("set_event_loop", (&ev,))?;
+        let locals = pyo3_async_runtimes::TaskLocals::new(ev.clone()).copy_context(py)?;
+        let _ = TASK_LOCALS.set(locals);
+    }
 
     // Get TestApp state
     let entry = registry()

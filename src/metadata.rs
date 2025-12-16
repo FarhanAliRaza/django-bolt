@@ -213,6 +213,23 @@ pub struct RouteMetadata {
     pub is_static_route: bool,
 }
 
+impl Default for RouteMetadata {
+    fn default() -> Self {
+        RouteMetadata {
+            auth_backends: Vec::new(),
+            guards: Vec::new(),
+            skip: HashSet::new(),
+            cors_config: None,
+            rate_limit_config: None,
+            needs_query: true,
+            needs_headers: true,
+            needs_cookies: true,
+            needs_path_params: true,
+            is_static_route: false,
+        }
+    }
+}
+
 impl RouteMetadata {
     /// Parse Python metadata dict into strongly-typed Rust metadata
     pub fn from_python(py_meta: &Bound<'_, PyDict>, py: Python) -> PyResult<Self> {

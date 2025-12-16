@@ -8,9 +8,11 @@ use pyo3::types::PyDict;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::core_handler;
 use crate::cors::{add_cors_response_headers, add_preflight_headers_simple};
 use crate::handler::headers_vec_to_map;
 use crate::metadata::{CorsConfig, RouteMetadata};
+use crate::middleware;
 use crate::middleware::auth::{authenticate, populate_auth_context};
 use crate::permissions::{evaluate_guards, GuardResult};
 use crate::request::PyRequest;
@@ -490,6 +492,7 @@ pub fn ensure_test_runtime(py: Python<'_>, app_id: u64) -> PyResult<()> {
 }
 
 /// Helper to add CORS headers to a Vec (for test responses that return tuples)
+/// Uses the shared implementation from core_handler
 fn add_cors_headers_to_vec(
     resp_headers: &mut Vec<(String, String)>,
     header_map: &AHashMap<String, String>,
@@ -497,24 +500,7 @@ fn add_cors_headers_to_vec(
 ) {
     if let Some(cfg) = cors_cfg {
         let request_origin = header_map.get("origin").map(|s| s.as_str());
-        let mut temp_resp = HttpResponse::Ok().finish();
-        let origin_allowed = add_cors_response_headers(
-            &mut temp_resp,
-            request_origin,
-            &cfg.origins,
-            cfg.credentials,
-            &cfg.expose_headers,
-        );
-        if origin_allowed {
-            for (name, value) in temp_resp.headers().iter() {
-                let name_str = name.as_str();
-                if name_str.starts_with("access-control") || name_str == "vary" {
-                    if let Ok(val_str) = value.to_str() {
-                        resp_headers.push((name_str.to_string(), val_str.to_string()));
-                    }
-                }
-            }
-        }
+        core_handler::add_cors_headers_to_vec(resp_headers, request_origin, cfg);
     }
 }
 
@@ -607,6 +593,35 @@ pub fn handle_test_request_for(
 
     // Convert headers to map (lowercase keys) using shared function
     let header_map = headers_vec_to_map(&headers);
+
+    // Process rate limiting (same as production handler.rs)
+    // This was missing in test_state.rs - now uses shared implementation
+    if let Some(ref route_meta) = route_meta_opt {
+        if let Some(ref rate_config) = route_meta.rate_limit_config {
+            if let Some(response) = middleware::rate_limit::check_rate_limit(
+                handler_id,
+                &header_map,
+                None, // peer_addr not available in sync testing
+                rate_config,
+                &method,
+                &path,
+            ) {
+                // Rate limited - return 429 with CORS headers
+                let status = response.status().as_u16();
+                let mut resp_headers: Vec<(String, String)> = response
+                    .headers()
+                    .iter()
+                    .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+                    .collect();
+                add_cors_headers_to_vec(
+                    &mut resp_headers,
+                    &header_map,
+                    route_meta.cors_config.as_ref().or(global_cors_config.as_ref()),
+                );
+                return Ok((status, resp_headers, crate::responses::get_rate_limit_body(1)));
+            }
+        }
+    }
 
     // Authentication and guards using shared validation logic
     let auth_ctx = if let Some(route_meta) = route_meta_opt.as_ref() {

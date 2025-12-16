@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 
+mod core_handler;
 mod cors;
 mod error;
 mod handler;

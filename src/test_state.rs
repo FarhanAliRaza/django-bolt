@@ -945,13 +945,20 @@ pub fn handle_actix_http_request(
 // PRODUCTION HANDLER TEST - Uses exact same code path as production
 // =============================================================================
 
+// Static flag to track event loop thread initialization (like production server)
+static TEST_EVENT_LOOP_INIT: std::sync::Once = std::sync::Once::new();
+static TOKIO_RUNTIME_INIT: std::sync::Once = std::sync::Once::new();
+
 /// Test function that uses the PRODUCTION handler with injected state.
 ///
 /// This is the recommended way to test: it uses the exact same middleware stack
 /// and handler code as production, ensuring tests accurately validate production behavior.
 ///
-/// The only difference from production is that router/metadata are injected via AppState
-/// instead of using global state.
+/// Key differences from `handle_test_request_for`:
+/// - Uses native async with `into_future_with_locals` (same as production)
+/// - Event loop runs in background thread (same as production)
+/// - Full Actix middleware stack (CORS, compression)
+/// - Router/metadata injected via AppState instead of global state
 #[pyfunction]
 pub fn handle_request_production(
     py: Python<'_>,
@@ -967,15 +974,49 @@ pub fn handle_request_production(
     use crate::middleware::cors::CorsMiddleware;
     use crate::state::{AppState, TASK_LOCALS};
 
-    // Ensure TASK_LOCALS is initialized (same as server startup)
-    // This is needed because production handler.rs uses TASK_LOCALS for async dispatch
-    if TASK_LOCALS.get().is_none() {
-        let asyncio = py.import("asyncio")?;
-        let ev = asyncio.call_method0("new_event_loop")?;
-        asyncio.call_method1("set_event_loop", (&ev,))?;
-        let locals = pyo3_async_runtimes::TaskLocals::new(ev.clone()).copy_context(py)?;
-        let _ = TASK_LOCALS.set(locals);
-    }
+    // Initialize tokio runtime ONCE (like production server.rs)
+    // This must be done before any async operations
+    TOKIO_RUNTIME_INIT.call_once(|| {
+        let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
+        runtime_builder.max_blocking_threads(512);
+        pyo3_async_runtimes::tokio::init(runtime_builder);
+    });
+
+    // Initialize TASK_LOCALS with a RUNNING event loop (like production server.rs)
+    // Production starts `run_forever()` in a background thread - we do the same
+    TEST_EVENT_LOOP_INIT.call_once(|| {
+        Python::attach(|py| {
+            // Try uvloop first, fall back to asyncio (like production)
+            let ev = match py.import("uvloop") {
+                Ok(uvloop) => uvloop.call_method0("new_event_loop").expect("new uvloop"),
+                Err(_) => {
+                    let asyncio = py.import("asyncio").expect("import asyncio");
+                    asyncio.call_method0("new_event_loop").expect("new event loop")
+                }
+            };
+
+            // Create TaskLocals and set TASK_LOCALS (like production server.rs:126-127)
+            let locals = pyo3_async_runtimes::TaskLocals::new(ev.clone())
+                .copy_context(py)
+                .expect("copy context");
+            let _ = TASK_LOCALS.set(locals);
+
+            // Move event loop to background thread and run forever (like production server.rs:130-137)
+            let loop_obj: Py<PyAny> = ev.unbind().into();
+            std::thread::spawn(move || {
+                Python::attach(|py| {
+                    let asyncio = py.import("asyncio").expect("import asyncio");
+                    let ev = loop_obj.bind(py);
+                    let _ = asyncio.call_method1("set_event_loop", (ev.as_any(),));
+                    // This blocks forever, processing async tasks (like production)
+                    let _ = ev.call_method0("run_forever");
+                });
+            });
+
+            // Give the event loop thread time to start
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        });
+    });
 
     // Get TestApp state
     let entry = registry()
@@ -999,7 +1040,7 @@ pub fn handle_request_production(
     };
     drop(entry);
 
-    // Run in tokio runtime
+    // Run test request in tokio runtime (production handler uses into_future_with_locals internally)
     pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
         // Create test service with PRODUCTION middleware stack
         let app = test::init_service(
@@ -1009,6 +1050,8 @@ pub fn handle_request_production(
                 .wrap(CompressionMiddleware::new())
                 .wrap(CorsMiddleware::new())
                 // Use PRODUCTION handler - same exact code path!
+                // This handler uses into_future_with_locals which schedules work
+                // on the event loop running in the background thread
                 .default_service(web::route().to(handle_request)),
         )
         .await;

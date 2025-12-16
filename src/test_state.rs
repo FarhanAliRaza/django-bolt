@@ -9,11 +9,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::cors::{add_cors_response_headers, add_preflight_headers_simple};
+use crate::handler::headers_vec_to_map;
 use crate::metadata::{CorsConfig, RouteMetadata};
 use crate::middleware::auth::{authenticate, populate_auth_context};
 use crate::permissions::{evaluate_guards, GuardResult};
 use crate::request::PyRequest;
 use crate::router::{parse_query_string, Router};
+use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
 use crate::websocket::WebSocketRouter;
 
 // Actix testing imports
@@ -487,6 +489,35 @@ pub fn ensure_test_runtime(py: Python<'_>, app_id: u64) -> PyResult<()> {
     Ok(())
 }
 
+/// Helper to add CORS headers to a Vec (for test responses that return tuples)
+fn add_cors_headers_to_vec(
+    resp_headers: &mut Vec<(String, String)>,
+    header_map: &AHashMap<String, String>,
+    cors_cfg: Option<&CorsConfig>,
+) {
+    if let Some(cfg) = cors_cfg {
+        let request_origin = header_map.get("origin").map(|s| s.as_str());
+        let mut temp_resp = HttpResponse::Ok().finish();
+        let origin_allowed = add_cors_response_headers(
+            &mut temp_resp,
+            request_origin,
+            &cfg.origins,
+            cfg.credentials,
+            &cfg.expose_headers,
+        );
+        if origin_allowed {
+            for (name, value) in temp_resp.headers().iter() {
+                let name_str = name.as_str();
+                if name_str.starts_with("access-control") || name_str == "vary" {
+                    if let Ok(val_str) = value.to_str() {
+                        resp_headers.push((name_str.to_string(), val_str.to_string()));
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[pyfunction]
 pub fn handle_test_request_for(
     py: Python<'_>,
@@ -549,40 +580,9 @@ pub fn handle_test_request_for(
             }
 
             // 404 response - add CORS headers if global CORS is configured (same as handler.rs)
-            let mut resp_headers = vec![(
-                "content-type".to_string(),
-                "text/plain; charset=utf-8".to_string(),
-            )];
-
-            // Get request origin for CORS
-            let request_origin = headers
-                .iter()
-                .find(|(k, _)| k.to_lowercase() == "origin")
-                .map(|(_, v)| v.as_str());
-
-            // Add CORS headers using shared function from cors.rs (same as production)
-            if let Some(ref cors_cfg) = global_cors_config {
-                let mut temp_resp = HttpResponse::NotFound().finish();
-                let origin_allowed = add_cors_response_headers(
-                    &mut temp_resp,
-                    request_origin,
-                    &cors_cfg.origins,
-                    cors_cfg.credentials,
-                    &cors_cfg.expose_headers,
-                );
-                if origin_allowed {
-                    // Extract CORS headers from temp response to tuple format
-                    for (name, value) in temp_resp.headers().iter() {
-                        let name_str = name.as_str();
-                        if name_str.starts_with("access-control") || name_str == "vary" {
-                            if let Ok(val_str) = value.to_str() {
-                                resp_headers.push((name_str.to_string(), val_str.to_string()));
-                            }
-                        }
-                    }
-                }
-            }
-
+            let mut resp_headers = vec![("content-type".to_string(), "text/plain; charset=utf-8".to_string())];
+            let temp_header_map = headers_vec_to_map(&headers);
+            add_cors_headers_to_vec(&mut resp_headers, &temp_header_map, global_cors_config.as_ref());
             return Ok((404, resp_headers, b"Not Found".to_vec()));
         }
 
@@ -605,146 +605,33 @@ pub fn handle_test_request_for(
         AHashMap::new()
     };
 
-    // Convert headers to map (lowercase keys)
-    let mut header_map: AHashMap<String, String> = AHashMap::with_capacity(headers.len());
-    for (name, value) in headers.iter() {
-        let lower = name.to_ascii_lowercase();
-        header_map.insert(lower.clone(), value.clone());
-        if lower.contains('-') {
-            let underscore_key = lower.replace('-', "_");
-            header_map
-                .entry(underscore_key)
-                .or_insert_with(|| value.clone());
-        }
-    }
+    // Convert headers to map (lowercase keys) using shared function
+    let header_map = headers_vec_to_map(&headers);
 
-    // Authentication (synchronous part)
+    // Authentication and guards using shared validation logic
     let auth_ctx = if let Some(route_meta) = route_meta_opt.as_ref() {
-        if !route_meta.auth_backends.is_empty() {
-            authenticate(&header_map, &route_meta.auth_backends)
-        } else {
-            None
+        match validate_auth_and_guards(&header_map, &route_meta.auth_backends, &route_meta.guards) {
+            AuthGuardResult::Allow(ctx) => ctx,
+            AuthGuardResult::Unauthorized => {
+                let mut resp_headers = vec![("content-type".to_string(), "application/json".to_string())];
+                add_cors_headers_to_vec(&mut resp_headers, &header_map, route_meta.cors_config.as_ref().or(global_cors_config.as_ref()));
+                return Ok((401, resp_headers, br#"{"detail":"Authentication required"}"#.to_vec()));
+            }
+            AuthGuardResult::Forbidden => {
+                let mut resp_headers = vec![("content-type".to_string(), "application/json".to_string())];
+                add_cors_headers_to_vec(&mut resp_headers, &header_map, route_meta.cors_config.as_ref().or(global_cors_config.as_ref()));
+                return Ok((403, resp_headers, br#"{"detail":"Permission denied"}"#.to_vec()));
+            }
         }
     } else {
         None
     };
 
-    // Guards evaluation
-    if let Some(route_meta) = route_meta_opt.as_ref() {
-        if !route_meta.guards.is_empty() {
-            match evaluate_guards(&route_meta.guards, auth_ctx.as_ref()) {
-                GuardResult::Allow => {}
-                GuardResult::Unauthorized => {
-                    // Start with basic error headers
-                    let mut resp_headers =
-                        vec![("content-type".to_string(), "application/json".to_string())];
-
-                    // Get request origin for CORS
-                    let request_origin = header_map.get("origin").map(|s| s.as_str());
-
-                    // Get effective CORS config (route-level first, then global) - same as handler.rs
-                    let cors_cfg = route_meta
-                        .cors_config
-                        .as_ref()
-                        .or(global_cors_config.as_ref());
-
-                    // Add CORS headers using shared function from cors.rs (same as production)
-                    if let Some(cfg) = cors_cfg {
-                        // Create temp response to add CORS headers via shared function
-                        let mut temp_resp = HttpResponse::Unauthorized().finish();
-                        let origin_allowed = add_cors_response_headers(
-                            &mut temp_resp,
-                            request_origin,
-                            &cfg.origins,
-                            cfg.credentials,
-                            &cfg.expose_headers,
-                        );
-                        if origin_allowed {
-                            // Extract CORS headers from temp response to tuple format
-                            for (name, value) in temp_resp.headers().iter() {
-                                let name_str = name.as_str();
-                                if name_str.starts_with("access-control") || name_str == "vary" {
-                                    if let Ok(val_str) = value.to_str() {
-                                        resp_headers
-                                            .push((name_str.to_string(), val_str.to_string()));
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    return Ok((
-                        401,
-                        resp_headers,
-                        br#"{"detail":"Authentication required"}"#.to_vec(),
-                    ));
-                }
-                GuardResult::Forbidden => {
-                    // Start with basic error headers
-                    let mut resp_headers =
-                        vec![("content-type".to_string(), "application/json".to_string())];
-
-                    // Get request origin for CORS
-                    let request_origin = header_map.get("origin").map(|s| s.as_str());
-
-                    // Get effective CORS config (route-level first, then global) - same as handler.rs
-                    let cors_cfg = route_meta
-                        .cors_config
-                        .as_ref()
-                        .or(global_cors_config.as_ref());
-
-                    // Add CORS headers using shared function from cors.rs (same as production)
-                    if let Some(cfg) = cors_cfg {
-                        // Create temp response to add CORS headers via shared function
-                        let mut temp_resp = HttpResponse::Forbidden().finish();
-                        let origin_allowed = add_cors_response_headers(
-                            &mut temp_resp,
-                            request_origin,
-                            &cfg.origins,
-                            cfg.credentials,
-                            &cfg.expose_headers,
-                        );
-                        if origin_allowed {
-                            // Extract CORS headers from temp response to tuple format
-                            for (name, value) in temp_resp.headers().iter() {
-                                let name_str = name.as_str();
-                                if name_str.starts_with("access-control") || name_str == "vary" {
-                                    if let Ok(val_str) = value.to_str() {
-                                        resp_headers
-                                            .push((name_str.to_string(), val_str.to_string()));
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    return Ok((
-                        403,
-                        resp_headers,
-                        br#"{"detail":"Permission denied"}"#.to_vec(),
-                    ));
-                }
-            }
-        }
-    }
-
     // Capture request origin for CORS on success responses (before header_map is moved into PyRequest)
     let request_origin_for_cors = header_map.get("origin").map(|s| s.to_string());
 
-    // Parse cookies
-    let mut cookies: AHashMap<String, String> = AHashMap::with_capacity(8);
-    if let Some(raw_cookie) = header_map.get("cookie") {
-        for pair in raw_cookie.split(';') {
-            let part = pair.trim();
-            if let Some(eq) = part.find('=') {
-                let (k, v) = part.split_at(eq);
-                let v2 = &v[1..];
-                if !k.is_empty() {
-                    cookies.insert(k.to_string(), v2.to_string());
-                }
-            }
-        }
-    }
+    // Parse cookies using shared function
+    let cookies = parse_cookies_inline(header_map.get("cookie").map(|s| s.as_str()));
 
     // Create context dict only if auth context is present
     let context = if let Some(ref auth) = auth_ctx {

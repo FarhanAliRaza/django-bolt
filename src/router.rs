@@ -31,6 +31,7 @@ impl<'a> RouteMatch<'a> {
 
     /// Check if this is a static route (no path params)
     #[inline]
+    #[allow(dead_code)]
     pub fn is_static(&self) -> bool {
         matches!(self, RouteMatch::Static(_))
     }

@@ -3,7 +3,6 @@ use pyo3::prelude::*;
 mod cors;
 mod error;
 mod handler;
-mod headers;
 mod json;
 mod metadata;
 mod middleware;

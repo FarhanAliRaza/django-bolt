@@ -23,6 +23,145 @@ use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuar
 
 // Reuse the global Python asyncio event loop created at server startup (TASK_LOCALS)
 
+/// Build an HTTP response for a file path.
+/// Handles both small files (loaded into memory) and large files (streamed).
+pub async fn build_file_response(
+    file_path: &str,
+    status: StatusCode,
+    headers: Vec<(String, String)>,
+    skip_compression: bool,
+    is_head_request: bool,
+) -> HttpResponse {
+    match File::open(file_path).await {
+        Ok(mut file) => {
+            // Get file size
+            let file_size = match file.metadata().await {
+                Ok(metadata) => metadata.len(),
+                Err(e) => {
+                    return HttpResponse::InternalServerError()
+                        .content_type("text/plain; charset=utf-8")
+                        .body(format!("Failed to read file metadata: {}", e));
+                }
+            };
+
+            // For small files (<10MB), read into memory for better performance
+            if file_size < 10 * 1024 * 1024 {
+                let mut buffer = Vec::with_capacity(file_size as usize);
+                match file.read_to_end(&mut buffer).await {
+                    Ok(_) => {
+                        let mut builder = HttpResponse::build(status);
+                        for (k, v) in headers {
+                            if let Ok(name) = HeaderName::try_from(k) {
+                                if let Ok(val) = HeaderValue::try_from(v) {
+                                    builder.append_header((name, val));
+                                }
+                            }
+                        }
+                        if skip_compression {
+                            builder.append_header(("content-encoding", "identity"));
+                        }
+                        let body = if is_head_request { Vec::new() } else { buffer };
+                        builder.body(body)
+                    }
+                    Err(e) => HttpResponse::InternalServerError()
+                        .content_type("text/plain; charset=utf-8")
+                        .body(format!("Failed to read file: {}", e)),
+                }
+            } else {
+                // For large files, use streaming
+                let mut builder = HttpResponse::build(status);
+                for (k, v) in headers {
+                    if let Ok(name) = HeaderName::try_from(k) {
+                        if let Ok(val) = HeaderValue::try_from(v) {
+                            builder.append_header((name, val));
+                        }
+                    }
+                }
+                if skip_compression {
+                    builder.append_header(("content-encoding", "identity"));
+                }
+                if is_head_request {
+                    return builder.body(Vec::<u8>::new());
+                }
+                let stream = stream::unfold(file, |mut file| async move {
+                    let mut buffer = vec![0u8; 64 * 1024];
+                    match file.read(&mut buffer).await {
+                        Ok(0) => None,
+                        Ok(n) => {
+                            buffer.truncate(n);
+                            Some((Ok::<_, std::io::Error>(Bytes::from(buffer)), file))
+                        }
+                        Err(e) => Some((Err(e), file)),
+                    }
+                });
+                builder.streaming(stream)
+            }
+        }
+        Err(e) => match e.kind() {
+            ErrorKind::NotFound => HttpResponse::NotFound()
+                .content_type("text/plain; charset=utf-8")
+                .body("File not found"),
+            ErrorKind::PermissionDenied => HttpResponse::Forbidden()
+                .content_type("text/plain; charset=utf-8")
+                .body("Permission denied"),
+            _ => HttpResponse::InternalServerError()
+                .content_type("text/plain; charset=utf-8")
+                .body(format!("File error: {}", e)),
+        },
+    }
+}
+
+/// Handle Python errors and convert to HTTP response
+pub fn handle_python_error(py: Python<'_>, err: PyErr, path: &str, method: &str, debug: bool) -> HttpResponse {
+    err.restore(py);
+    if let Some(exc) = PyErr::take(py) {
+        let exc_value = exc.value(py);
+        error::handle_python_exception(py, exc_value, path, method, debug)
+    } else {
+        error::build_error_response(py, 500, "Handler execution error".to_string(), vec![], None, debug)
+    }
+}
+
+/// Extract headers from request with validation
+pub fn extract_headers(
+    req: &HttpRequest,
+    max_header_size: usize,
+) -> Result<AHashMap<String, String>, HttpResponse> {
+    const MAX_HEADERS: usize = 100;
+    let mut headers: AHashMap<String, String> = AHashMap::with_capacity(16);
+    let mut header_count = 0;
+
+    for (name, value) in req.headers().iter() {
+        header_count += 1;
+        if header_count > MAX_HEADERS {
+            return Err(responses::error_400_too_many_headers());
+        }
+        if let Ok(v) = value.to_str() {
+            if v.len() > max_header_size {
+                return Err(responses::error_400_header_too_large(max_header_size));
+            }
+            headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
+        }
+    }
+    Ok(headers)
+}
+
+/// Convert header Vec to AHashMap (for test usage)
+/// Also adds underscore variants for hyphenated headers (e.g., content-type -> content_type)
+#[inline]
+pub fn headers_vec_to_map(headers: &[(String, String)]) -> AHashMap<String, String> {
+    let mut header_map: AHashMap<String, String> = AHashMap::with_capacity(headers.len());
+    for (name, value) in headers.iter() {
+        let lower = name.to_ascii_lowercase();
+        header_map.insert(lower.clone(), value.clone());
+        if lower.contains('-') {
+            let underscore_key = lower.replace('-', "_");
+            header_map.entry(underscore_key).or_insert_with(|| value.clone());
+        }
+    }
+    header_map
+}
+
 pub async fn handle_request(
     req: HttpRequest,
     body: web::Bytes,
@@ -111,33 +250,11 @@ pub async fn handle_request(
         .map(|m| m.skip.contains("cors"))
         .unwrap_or(false);
 
-    // Extract headers early for middleware processing - pre-allocate with typical size
-    // Headers are ALWAYS needed in Rust for middleware (auth, rate limiting, CORS)
-    let mut headers: AHashMap<String, String> = AHashMap::with_capacity(16);
-
-    // SECURITY: Use limits from AppState (configured once at startup)
-    const MAX_HEADERS: usize = 100;
-    let max_header_size = state.max_header_size;
-    let mut header_count = 0;
-
-    for (name, value) in req.headers().iter() {
-        // Check header count limit
-        header_count += 1;
-        if header_count > MAX_HEADERS {
-            // CORS headers will be added by CorsMiddleware
-            return responses::error_400_too_many_headers();
-        }
-
-        if let Ok(v) = value.to_str() {
-            // SECURITY: Validate header value size
-            if v.len() > max_header_size {
-                // CORS headers will be added by CorsMiddleware
-                return responses::error_400_header_too_large(max_header_size);
-            }
-
-            headers.insert(name.as_str().to_ascii_lowercase(), v.to_string());
-        }
-    }
+    // Extract and validate headers
+    let headers = match extract_headers(&req, state.max_header_size) {
+        Ok(h) => h,
+        Err(response) => return response,
+    };
 
     // Get peer address for rate limiting fallback
     let peer_addr = req.peer_addr().map(|addr| addr.ip().to_string());
@@ -249,28 +366,7 @@ pub async fn handle_request(
     }) {
         Ok(f) => f,
         Err(e) => {
-            return Python::attach(|py| {
-                e.restore(py);
-                if let Some(exc) = PyErr::take(py) {
-                    let exc_value = exc.value(py);
-                    error::handle_python_exception(
-                        py,
-                        exc_value,
-                        path,
-                        method,
-                        state.debug,
-                    )
-                } else {
-                    error::build_error_response(
-                        py,
-                        500,
-                        "Handler error: failed to create coroutine".to_string(),
-                        vec![],
-                        None,
-                        state.debug,
-                    )
-                }
-            });
+            return Python::attach(|py| handle_python_error(py, e, path, method, state.debug));
         }
     };
 
@@ -313,110 +409,8 @@ pub async fn handle_request(
                         headers.push((k, v));
                     }
                 }
-                if let Some(path) = file_path {
-                    // Use direct tokio file I/O instead of NamedFile
-                    // NamedFile::into_response() does expensive synchronous work (MIME detection, ETag, etc.)
-                    // Python already provides content-type, so we skip all that overhead
-                    return match File::open(&path).await {
-                        Ok(mut file) => {
-                            // Get file size
-                            let file_size = match file.metadata().await {
-                                Ok(metadata) => metadata.len(),
-                                Err(e) => {
-                                    return HttpResponse::InternalServerError()
-                                        .content_type("text/plain; charset=utf-8")
-                                        .body(format!("Failed to read file metadata: {}", e));
-                                }
-                            };
-
-                            // For small files (<10MB), read into memory for better performance
-                            // This avoids chunked encoding and allows proper Content-Length header
-                            let file_bytes = if file_size < 10 * 1024 * 1024 {
-                                let mut buffer = Vec::with_capacity(file_size as usize);
-                                match file.read_to_end(&mut buffer).await {
-                                    Ok(_) => buffer,
-                                    Err(e) => {
-                                        return HttpResponse::InternalServerError()
-                                            .content_type("text/plain; charset=utf-8")
-                                            .body(format!("Failed to read file: {}", e));
-                                    }
-                                }
-                            } else {
-                                // For large files, use streaming (or empty body for HEAD)
-                                let mut builder = HttpResponse::build(status);
-                                for (k, v) in headers {
-                                    if let Ok(name) = HeaderName::try_from(k) {
-                                        if let Ok(val) = HeaderValue::try_from(v) {
-                                            builder.append_header((name, val));
-                                        }
-                                    }
-                                }
-                                if skip_compression {
-                                    builder.append_header(("content-encoding", "identity"));
-                                }
-
-                                // HEAD requests must have empty body per RFC 7231
-                                if is_head_request {
-                                    return builder.body(Vec::<u8>::new());
-                                }
-
-                                // Create streaming response with 64KB chunks
-                                let stream = stream::unfold(file, |mut file| async move {
-                                    let mut buffer = vec![0u8; 64 * 1024];
-                                    match file.read(&mut buffer).await {
-                                        Ok(0) => None, // EOF
-                                        Ok(n) => {
-                                            buffer.truncate(n);
-                                            Some((
-                                                Ok::<_, std::io::Error>(Bytes::from(buffer)),
-                                                file,
-                                            ))
-                                        }
-                                        Err(e) => Some((Err(e), file)),
-                                    }
-                                });
-                                return builder.streaming(stream);
-                            };
-
-                            // Build response with file bytes (small file path)
-                            let mut builder = HttpResponse::build(status);
-
-                            // Apply headers from Python (already includes content-type)
-                            for (k, v) in headers {
-                                if let Ok(name) = HeaderName::try_from(k) {
-                                    if let Ok(val) = HeaderValue::try_from(v) {
-                                        builder.append_header((name, val));
-                                    }
-                                }
-                            }
-
-                            if skip_compression {
-                                builder.append_header(("content-encoding", "identity"));
-                            }
-
-                            // HEAD requests must have empty body per RFC 7231
-                            let response_body = if is_head_request {
-                                Vec::new()
-                            } else {
-                                file_bytes
-                            };
-                            builder.body(response_body)
-                        }
-                        Err(e) => {
-                            // Return appropriate HTTP status based on error kind
-                            match e.kind() {
-                                ErrorKind::NotFound => HttpResponse::NotFound()
-                                    .content_type("text/plain; charset=utf-8")
-                                    .body("File not found"),
-                                ErrorKind::PermissionDenied => HttpResponse::Forbidden()
-                                    .content_type("text/plain; charset=utf-8")
-                                    .body("Permission denied"),
-                                _ => HttpResponse::InternalServerError()
-                                    .content_type("text/plain; charset=utf-8")
-                                    .body(format!("File error: {}", e)),
-                            }
-                        }
-                    };
+                if let Some(fpath) = file_path {
+                    return build_file_response(&fpath, status, headers, skip_compression, is_head_request).await;
                 } else {
                     // Non-file response path: body already copied within GIL scope above
                     // Use optimized response builder
@@ -458,88 +452,8 @@ pub async fn handle_request(
                             headers.push((k, v));
                         }
                     }
-                    if let Some(path) = file_path {
-                        return match File::open(&path).await {
-                            Ok(mut file) => {
-                                let file_size = match file.metadata().await {
-                                    Ok(metadata) => metadata.len(),
-                                    Err(e) => {
-                                        return HttpResponse::InternalServerError()
-                                            .content_type("text/plain; charset=utf-8")
-                                            .body(format!("Failed to read file metadata: {}", e));
-                                    }
-                                };
-                                let file_bytes = if file_size < 10 * 1024 * 1024 {
-                                    let mut buffer = Vec::with_capacity(file_size as usize);
-                                    match file.read_to_end(&mut buffer).await {
-                                        Ok(_) => buffer,
-                                        Err(e) => {
-                                            return HttpResponse::InternalServerError()
-                                                .content_type("text/plain; charset=utf-8")
-                                                .body(format!("Failed to read file: {}", e));
-                                        }
-                                    }
-                                } else {
-                                    let mut builder = HttpResponse::build(status);
-                                    for (k, v) in headers {
-                                        if let Ok(name) = HeaderName::try_from(k) {
-                                            if let Ok(val) = HeaderValue::try_from(v) {
-                                                builder.append_header((name, val));
-                                            }
-                                        }
-                                    }
-                                    if skip_compression {
-                                        builder.append_header(("content-encoding", "identity"));
-                                    }
-                                    if is_head_request {
-                                        return builder.body(Vec::<u8>::new());
-                                    }
-                                    let stream = stream::unfold(file, |mut file| async move {
-                                        let mut buffer = vec![0u8; 64 * 1024];
-                                        match file.read(&mut buffer).await {
-                                            Ok(0) => None,
-                                            Ok(n) => {
-                                                buffer.truncate(n);
-                                                Some((
-                                                    Ok::<_, std::io::Error>(Bytes::from(buffer)),
-                                                    file,
-                                                ))
-                                            }
-                                            Err(e) => Some((Err(e), file)),
-                                        }
-                                    });
-                                    return builder.streaming(stream);
-                                };
-                                let mut builder = HttpResponse::build(status);
-                                for (k, v) in headers {
-                                    if let Ok(name) = HeaderName::try_from(k) {
-                                        if let Ok(val) = HeaderValue::try_from(v) {
-                                            builder.append_header((name, val));
-                                        }
-                                    }
-                                }
-                                if skip_compression {
-                                    builder.append_header(("content-encoding", "identity"));
-                                }
-                                let response_body = if is_head_request {
-                                    Vec::new()
-                                } else {
-                                    file_bytes
-                                };
-                                builder.body(response_body)
-                            }
-                            Err(e) => match e.kind() {
-                                ErrorKind::NotFound => HttpResponse::NotFound()
-                                    .content_type("text/plain; charset=utf-8")
-                                    .body("File not found"),
-                                ErrorKind::PermissionDenied => HttpResponse::Forbidden()
-                                    .content_type("text/plain; charset=utf-8")
-                                    .body("Permission denied"),
-                                _ => HttpResponse::InternalServerError()
-                                    .content_type("text/plain; charset=utf-8")
-                                    .body(format!("File error: {}", e)),
-                            },
-                        };
+                    if let Some(fpath) = file_path {
+                        return build_file_response(&fpath, status, headers, skip_compression, is_head_request).await;
                     } else {
                         let mut builder = HttpResponse::build(status);
                         for (k, v) in headers {
@@ -710,30 +624,7 @@ pub async fn handle_request(
             }
         }
         Err(e) => {
-            // Use new error handler for Python exceptions during handler execution
-            return Python::attach(|py| {
-                // Convert PyErr to exception instance
-                e.restore(py);
-                if let Some(exc) = PyErr::take(py) {
-                    let exc_value = exc.value(py);
-                    error::handle_python_exception(
-                        py,
-                        exc_value,
-                        path,
-                        method,
-                        state.debug,
-                    )
-                } else {
-                    error::build_error_response(
-                        py,
-                        500,
-                        "Handler execution error".to_string(),
-                        vec![],
-                        None,
-                        state.debug,
-                    )
-                }
-            });
+            return Python::attach(|py| handle_python_error(py, e, path, method, state.debug));
         }
     }
 }

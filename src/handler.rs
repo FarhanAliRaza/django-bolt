@@ -10,7 +10,6 @@ use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
-use crate::cors::{add_cors_headers_rust, add_cors_preflight_headers};
 use crate::error;
 use crate::headers::FastHeaders;
 use crate::middleware;
@@ -54,58 +53,11 @@ pub async fn handle_request(
                 let available_methods = router.find_all_methods(&path);
                 if !available_methods.is_empty() {
                     let allow_header = available_methods.join(", ");
-                    let mut response = HttpResponse::NoContent()
+                    // CORS headers will be added by CorsMiddleware
+                    return HttpResponse::NoContent()
                         .insert_header(("Allow", allow_header))
                         .insert_header(("Content-Type", "application/json"))
                         .finish();
-
-                    // Try to find ANY route at this path to get CORS metadata
-                    // Check methods in order: GET, POST, PUT, PATCH, DELETE
-                    let methods_to_try = ["GET", "POST", "PUT", "PATCH", "DELETE"];
-                    let mut found_cors = false;
-
-                    for try_method in methods_to_try {
-                        if let Some(route_match) = router.find(try_method, &path) {
-                            let handler_id = route_match.handler_id();
-                            let route_meta = ROUTE_METADATA
-                                .get()
-                                .and_then(|meta_map| meta_map.get(&handler_id).cloned());
-
-                            if let Some(ref meta) = route_meta {
-                                if let Some(ref cors_cfg) = meta.cors_config {
-                                    let origin =
-                                        req.headers().get("origin").and_then(|v| v.to_str().ok());
-
-                                    let origin_allowed = add_cors_headers_rust(
-                                        &mut response,
-                                        origin,
-                                        cors_cfg,
-                                        &state,
-                                    );
-
-                                    if origin_allowed {
-                                        add_cors_preflight_headers(&mut response, cors_cfg);
-                                    }
-                                    found_cors = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    // If no route-level CORS found, use global CORS config
-                    if !found_cors {
-                        if let Some(ref global_cors) = state.global_cors_config {
-                            let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-                            let origin_allowed =
-                                add_cors_headers_rust(&mut response, origin, global_cors, &state);
-                            if origin_allowed {
-                                add_cors_preflight_headers(&mut response, global_cors);
-                            }
-                        }
-                    }
-
-                    return response;
                 }
             }
 
@@ -113,29 +65,16 @@ pub async fn handle_request(
             // IMPORTANT: Preflight MUST return 2xx status for browser to proceed with actual request
             // Browsers reject preflight responses with non-2xx status codes (like 404)
             if method == "OPTIONS" {
-                if let Some(ref global_cors) = state.global_cors_config {
-                    let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-                    let mut response = HttpResponse::NoContent().finish();
-                    let origin_allowed =
-                        add_cors_headers_rust(&mut response, origin, global_cors, &state);
-                    if origin_allowed {
-                        add_cors_preflight_headers(&mut response, global_cors);
-                    }
-                    return response;
+                // Check if global CORS is configured
+                if state.global_cors_config.is_some() {
+                    // CORS headers will be added by CorsMiddleware
+                    return HttpResponse::NoContent().finish();
                 }
             }
 
-            // Route not found - return 404 with CORS headers if global CORS is configured
-            // This ensures browsers can read the 404 error message
-            let mut response = responses::error_404();
-
-            // Add CORS headers using global config for 404 responses
-            if let Some(ref global_cors) = state.global_cors_config {
-                let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-                add_cors_headers_rust(&mut response, origin, global_cors, &state);
-            }
-
-            return response;
+            // Route not found - return 404
+            // CORS headers will be added by CorsMiddleware if configured
+            return responses::error_404();
         }
     };
 
@@ -171,16 +110,11 @@ pub async fn handle_request(
         .map(|m| m.needs_headers)
         .unwrap_or(true);
 
-    // Extract Origin header early for CORS on error responses
-    let request_origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-
-    // Helper closure to add CORS headers to error responses using global config
-    // This ensures browsers can read error messages from cross-origin requests
-    let add_cors_to_error = |response: &mut HttpResponse| {
-        if let Some(ref global_cors) = state.global_cors_config {
-            add_cors_headers_rust(response, request_origin, global_cors, &state);
-        }
-    };
+    // Compute skip_cors flag for CorsMiddleware
+    let skip_cors = route_metadata
+        .as_ref()
+        .map(|m| m.skip.contains("cors"))
+        .unwrap_or(false);
 
     // Extract headers early for middleware processing - pre-allocate with typical size
     // Headers are ALWAYS needed in Rust for middleware (auth, rate limiting, CORS)
@@ -196,17 +130,15 @@ pub async fn handle_request(
         // Check header count limit
         header_count += 1;
         if header_count > MAX_HEADERS {
-            let mut response = responses::error_400_too_many_headers();
-            add_cors_to_error(&mut response);
-            return response;
+            // CORS headers will be added by CorsMiddleware
+            return responses::error_400_too_many_headers();
         }
 
         if let Ok(v) = value.to_str() {
             // SECURITY: Validate header value size
             if v.len() > max_header_size {
-                let mut response = responses::error_400_header_too_large(max_header_size);
-                add_cors_to_error(&mut response);
-                return response;
+                // CORS headers will be added by CorsMiddleware
+                return responses::error_400_header_too_large(max_header_size);
             }
 
             // FastHeaders uses perfect hash for common headers (authorization, content-type, etc.)
@@ -231,7 +163,7 @@ pub async fn handle_request(
     // Process rate limiting (Rust-native, no GIL)
     if let Some(ref route_meta) = route_metadata {
         if let Some(ref rate_config) = route_meta.rate_limit_config {
-            if let Some(mut response) = middleware::rate_limit::check_rate_limit(
+            if let Some(response) = middleware::rate_limit::check_rate_limit(
                 handler_id,
                 &headers,
                 peer_addr.as_deref(),
@@ -239,12 +171,7 @@ pub async fn handle_request(
                 &method,
                 &path,
             ) {
-                // Add CORS headers to 429 rate limit response (use route CORS, fall back to global)
-                if let Some(ref cors_cfg) = route_meta.cors_config {
-                    add_cors_headers_rust(&mut response, request_origin, cors_cfg, &state);
-                } else {
-                    add_cors_to_error(&mut response);
-                }
+                // CORS headers will be added by CorsMiddleware
                 return response;
             }
         }
@@ -255,24 +182,12 @@ pub async fn handle_request(
         match validate_auth_and_guards(&headers, &route_meta.auth_backends, &route_meta.guards) {
             AuthGuardResult::Allow(ctx) => ctx,
             AuthGuardResult::Unauthorized => {
-                let mut response = responses::error_401();
-                // Add CORS headers to 401 response (use route CORS, fall back to global)
-                if let Some(ref cors_cfg) = route_meta.cors_config {
-                    add_cors_headers_rust(&mut response, request_origin, cors_cfg, &state);
-                } else {
-                    add_cors_to_error(&mut response);
-                }
-                return response;
+                // CORS headers will be added by CorsMiddleware
+                return responses::error_401();
             }
             AuthGuardResult::Forbidden => {
-                let mut response = responses::error_403();
-                // Add CORS headers to 403 response (use route CORS, fall back to global)
-                if let Some(ref cors_cfg) = route_meta.cors_config {
-                    add_cors_headers_rust(&mut response, request_origin, cors_cfg, &state);
-                } else {
-                    add_cors_to_error(&mut response);
-                }
-                return response;
+                // CORS headers will be added by CorsMiddleware
+                return responses::error_403();
             }
         }
     } else {
@@ -534,14 +449,14 @@ pub async fn handle_request(
                         response_body,
                     );
 
-                    // Add CORS headers if configured (NO GIL - uses Rust-native config)
-                    if let Some(ref route_meta) = route_metadata {
-                        if let Some(ref cors_cfg) = route_meta.cors_config {
-                            let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-                            let _ = add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
-                        }
+                    // Set skip-cors marker if @skip_middleware("cors") is used
+                    if skip_cors {
+                        response
+                            .headers_mut()
+                            .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
                     }
 
+                    // CORS headers will be added by CorsMiddleware
                     return response;
                 }
             } else {
@@ -649,21 +564,17 @@ pub async fn handle_request(
                         if skip_compression {
                             builder.append_header(("Content-Encoding", "identity"));
                         }
+                        // Set skip-cors marker if @skip_middleware("cors") is used
+                        if skip_cors {
+                            builder.append_header(("x-bolt-skip-cors", "true"));
+                        }
                         let response_body = if is_head_request {
                             Vec::new()
                         } else {
                             body_bytes
                         };
-                        let mut response = builder.body(response_body);
-                        if let Some(ref route_meta) = route_metadata {
-                            if let Some(ref cors_cfg) = route_meta.cors_config {
-                                let origin =
-                                    req.headers().get("origin").and_then(|v| v.to_str().ok());
-                                let _ =
-                                    add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
-                            }
-                        }
-                        return response;
+                        // CORS headers will be added by CorsMiddleware
+                        return builder.body(response_body);
                     }
                 }
                 let streaming = Python::attach(|py| {
@@ -737,16 +648,14 @@ pub async fn handle_request(
                             );
                             let mut response = builder.body(Vec::<u8>::new());
 
-                            // Add CORS headers if configured (NO GIL - uses Rust-native config)
-                            if let Some(ref route_meta) = route_metadata {
-                                if let Some(ref cors_cfg) = route_meta.cors_config {
-                                    let origin =
-                                        req.headers().get("origin").and_then(|v| v.to_str().ok());
-                                    let _ =
-                                        add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
-                                }
+                            // Set skip-cors marker if @skip_middleware("cors") is used
+                            if skip_cors {
+                                response
+                                    .headers_mut()
+                                    .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
                             }
 
+                            // CORS headers will be added by CorsMiddleware
                             return response;
                         }
 
@@ -760,16 +669,14 @@ pub async fn handle_request(
                         let stream = create_sse_stream(final_content_obj, is_async_generator);
                         let mut response = builder.streaming(stream);
 
-                        // Add CORS headers if configured (NO GIL - uses Rust-native config)
-                        if let Some(ref route_meta) = route_metadata {
-                            if let Some(ref cors_cfg) = route_meta.cors_config {
-                                let origin =
-                                    req.headers().get("origin").and_then(|v| v.to_str().ok());
-                                let _ =
-                                    add_cors_headers_rust(&mut response, origin, cors_cfg, &state);
-                            }
+                        // Set skip-cors marker if @skip_middleware("cors") is used
+                        if skip_cors {
+                            response
+                                .headers_mut()
+                                .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
                         }
 
+                        // CORS headers will be added by CorsMiddleware
                         return response;
                     } else {
                         // Non-SSE streaming responses
@@ -783,6 +690,11 @@ pub async fn handle_request(
                             if skip_compression {
                                 builder.append_header(("Content-Encoding", "identity"));
                             }
+                            // Set skip-cors marker if @skip_middleware("cors") is used
+                            if skip_cors {
+                                builder.append_header(("x-bolt-skip-cors", "true"));
+                            }
+                            // CORS headers will be added by CorsMiddleware
                             return builder.body(Vec::<u8>::new());
                         }
 
@@ -791,7 +703,12 @@ pub async fn handle_request(
                         if skip_compression {
                             builder.append_header(("Content-Encoding", "identity"));
                         }
+                        // Set skip-cors marker if @skip_middleware("cors") is used
+                        if skip_cors {
+                            builder.append_header(("x-bolt-skip-cors", "true"));
+                        }
                         let stream = create_python_stream(final_content, is_async_generator);
+                        // CORS headers will be added by CorsMiddleware
                         return builder.streaming(stream);
                     }
                 } else {

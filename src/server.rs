@@ -12,6 +12,7 @@ use std::sync::Arc;
 use crate::handler::handle_request;
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
 use crate::middleware::compression::CompressionMiddleware;
+use crate::middleware::cors::CorsMiddleware;
 use crate::router::Router;
 use crate::state::{
     AppState, GLOBAL_ROUTER, GLOBAL_WEBSOCKET_ROUTER, ROUTE_METADATA, ROUTE_METADATA_TEMP,
@@ -359,6 +360,7 @@ pub fn start_server_async(
                             .app_data(web::Data::new(app_state.clone()))
                             .app_data(web::PayloadConfig::new(max_payload_size)) // Configure max request body size from BOLT_MAX_UPLOAD_SIZE
                             .wrap(NormalizePath::trim()) // Strip trailing slashes before routing
+                            .wrap(CorsMiddleware::new()) // Add CORS headers to all responses
                             .wrap(CompressionMiddleware::new()); // Respects Content-Encoding: identity from skip_compression
 
                         // Register WebSocket routes BEFORE the catch-all handler

@@ -1,12 +1,14 @@
 """Test clients for django-bolt using per-instance test state.
 
-This version uses the test_state.rs infrastructure which provides:
+This version uses async-native Rust testing infrastructure which provides:
 - Per-instance routers (no global state conflicts)
-- Per-instance event loops (proper async handling)
+- Native async execution using Actix test utilities
+- Production code path testing (same middleware, CORS, compression)
 - Streaming response support via stream=True parameter
 """
 from __future__ import annotations
 
+import asyncio
 import builtins
 import contextlib
 from collections.abc import Iterator
@@ -24,23 +26,22 @@ except ImportError:
 
 
 class BoltTestTransport(httpx.BaseTransport):
-    """HTTP transport that routes requests through django-bolt's per-instance test handler.
+    """HTTP transport that routes requests through django-bolt's test handler.
+
+    Uses Actix's native test infrastructure which runs synchronously
+    with an internal tokio runtime for proper request handling.
 
     Args:
         app_id: Test app instance ID
         raise_server_exceptions: If True, raise exceptions from handlers
-        use_http_layer: If True, route through Actix HTTP layer (enables testing of
-                        middleware like CORS, rate limiting, compression). If False (default),
-                        use fast direct dispatch for unit tests.
     """
 
-    def __init__(self, app_id: int, raise_server_exceptions: bool = True, use_http_layer: bool = False):
+    def __init__(self, app_id: int, raise_server_exceptions: bool = True):
         self.app_id = app_id
         self.raise_server_exceptions = raise_server_exceptions
-        self.use_http_layer = use_http_layer
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
-        """Handle a request by routing it through Rust."""
+        """Handle a request by routing it through Rust's Actix test infrastructure."""
         # Parse URL
         url = request.url
         path = url.path
@@ -50,43 +51,100 @@ class BoltTestTransport(httpx.BaseTransport):
         headers = [(k.decode('utf-8'), v.decode('utf-8')) for k, v in request.headers.raw]
 
         # Get body
-        # Check if content has been read already
         if hasattr(request, "_content"):
             body_bytes = request.content
         else:
-            # For streaming/multipart requests, need to read the content first
             try:
-                # Try to read the request stream
                 body_bytes = request.stream.read() if hasattr(request.stream, 'read') else b''.join(request.stream)
             except Exception:
-                # Last resort: try to get content directly
                 body_bytes = request.content if hasattr(request, "_content") else b''
 
-        # Get method
         method = request.method
 
         try:
-            # Choose handler based on mode
-            if self.use_http_layer:
-                # Route through Actix HTTP layer (for middleware testing)
-                status_code, resp_headers, resp_body = _core.handle_actix_http_request(
+            # Call the synchronous Rust test_request function
+            # It creates its own tokio runtime internally for Actix test utilities
+            status_code, resp_headers, resp_body = _core.test_request(
+                app_id=self.app_id,
+                method=method,
+                path=path,
+                headers=headers,
+                body=body_bytes,
+                query_string=query_string,
+            )
+
+            # Build httpx Response
+            return Response(
+                status_code=status_code,
+                headers=resp_headers,
+                content=resp_body,
+                request=request,
+            )
+
+        except Exception as e:
+            if self.raise_server_exceptions:
+                raise
+            # Return 500 error
+            return Response(
+                status_code=500,
+                headers=[('content-type', 'text/plain')],
+                content=f"Test client error: {e}".encode(),
+                request=request,
+            )
+
+
+class AsyncBoltTestTransport(httpx.AsyncBaseTransport):
+    """Async HTTP transport that routes requests through django-bolt's test handler.
+
+    Uses Actix's native test infrastructure. The underlying Rust function is
+    synchronous (it creates its own tokio runtime), so we run it in a thread
+    executor to avoid blocking the async event loop.
+
+    Args:
+        app_id: Test app instance ID
+        raise_server_exceptions: If True, raise exceptions from handlers
+    """
+
+    def __init__(self, app_id: int, raise_server_exceptions: bool = True):
+        self.app_id = app_id
+        self.raise_server_exceptions = raise_server_exceptions
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        """Handle a request asynchronously through Rust's test infrastructure."""
+        # Parse URL
+        url = request.url
+        path = url.path
+        query_string = url.query.decode('utf-8') if url.query else None
+
+        # Extract headers
+        headers = [(k.decode('utf-8'), v.decode('utf-8')) for k, v in request.headers.raw]
+
+        # Get body
+        if hasattr(request, "_content"):
+            body_bytes = request.content
+        else:
+            try:
+                body_bytes = await request.aread()
+            except Exception:
+                body_bytes = b''
+
+        method = request.method
+
+        try:
+            # Run the synchronous Rust function in a thread executor
+            # to avoid blocking the async event loop
+            loop = asyncio.get_running_loop()
+            status_code, resp_headers, resp_body = await loop.run_in_executor(
+                None,  # Use default executor
+                lambda: _core.test_request(
                     app_id=self.app_id,
                     method=method,
                     path=path,
                     headers=headers,
                     body=body_bytes,
                     query_string=query_string,
-                )
-            else:
-                # Fast direct dispatch (for unit tests)
-                status_code, resp_headers, resp_body = _core.handle_test_request_for(
-                    app_id=self.app_id,
-                    method=method,
-                    path=path,
-                    headers=headers,
-                    body=body_bytes,
-                    query_string=query_string,
-                )
+                ),
+            )
 
             # Build httpx Response
             return Response(
@@ -109,12 +167,12 @@ class BoltTestTransport(httpx.BaseTransport):
 
 
 class TestClient(httpx.Client):
-    """Synchronous test client for django-bolt using per-instance test state.
+    """Synchronous test client for django-bolt using async-native Rust testing.
 
     This client:
     - Creates an isolated test app instance (no global state conflicts)
-    - Manages its own event loop for async handlers
-    - Routes through full Rust pipeline (auth, middleware, compression)
+    - Routes through Actix test utilities (same as production)
+    - Full middleware stack (CORS, rate limiting, compression)
     - Can run multiple tests in parallel without conflicts
 
     Usage:
@@ -198,9 +256,9 @@ class TestClient(httpx.Client):
         api: BoltAPI,
         base_url: str = "http://testserver.local",
         raise_server_exceptions: bool = True,
-        use_http_layer: bool = True,
         cors_allowed_origins: list[str] | None = None,
         read_django_settings: bool = True,
+        use_http_layer: bool = True,  # Ignored - kept for backward compatibility
         **kwargs: Any,
     ):
         """Initialize test client.
@@ -209,14 +267,16 @@ class TestClient(httpx.Client):
             api: BoltAPI instance to test
             base_url: Base URL for requests
             raise_server_exceptions: If True, raise exceptions from handlers
-            use_http_layer: If True, route through Actix HTTP layer (enables testing
-                           CORS, rate limiting, compression). Default False for fast tests.
             cors_allowed_origins: Global CORS allowed origins for testing.
                                   If None and read_django_settings=True, reads from Django settings.
             read_django_settings: If True, read CORS settings from Django settings
                                  when cors_allowed_origins is None. Default True.
+            use_http_layer: Ignored - all requests go through HTTP layer (Actix test utilities).
             **kwargs: Additional arguments passed to httpx.Client
         """
+        # use_http_layer is ignored - we always use the HTTP layer now
+        _ = use_http_layer
+
         # Build CORS config dict for Rust
         cors_config = None
 
@@ -258,12 +318,9 @@ class TestClient(httpx.Client):
         # Register authentication backends for user resolution (lazy loading in request.user)
         api._register_auth_backends()
 
-        # Ensure runtime is ready
-        _core.ensure_test_runtime(self.app_id)
-
         super().__init__(
             base_url=base_url,
-            transport=BoltTestTransport(self.app_id, raise_server_exceptions, use_http_layer),
+            transport=BoltTestTransport(self.app_id, raise_server_exceptions),
             follow_redirects=True,
             **kwargs,
         )
@@ -396,3 +453,102 @@ class TestClient(httpx.Client):
         # Yield any remaining data in buffer
         if buffer:
             yield buffer if isinstance(buffer, str) else buffer.decode("utf-8")
+
+
+class AsyncTestClient(httpx.AsyncClient):
+    """Async test client for django-bolt using async-native Rust testing.
+
+    This client:
+    - Creates an isolated test app instance (no global state conflicts)
+    - Routes through Actix test utilities (same as production)
+    - Full middleware stack (CORS, rate limiting, compression)
+    - Native async/await support
+
+    Usage:
+        api = BoltAPI()
+
+        @api.get("/hello")
+        async def hello():
+            return {"message": "world"}
+
+        async with AsyncTestClient(api) as client:
+            response = await client.get("/hello")
+            assert response.status_code == 200
+            assert response.json() == {"message": "world"}
+    """
+
+    __test__ = False  # Tell pytest this is not a test class
+
+    def __init__(
+        self,
+        api: BoltAPI,
+        base_url: str = "http://testserver.local",
+        raise_server_exceptions: bool = True,
+        cors_allowed_origins: list[str] | None = None,
+        read_django_settings: bool = True,
+        **kwargs: Any,
+    ):
+        """Initialize async test client.
+
+        Args:
+            api: BoltAPI instance to test
+            base_url: Base URL for requests
+            raise_server_exceptions: If True, raise exceptions from handlers
+            cors_allowed_origins: Global CORS allowed origins for testing.
+            read_django_settings: If True, read CORS settings from Django settings.
+            **kwargs: Additional arguments passed to httpx.AsyncClient
+        """
+        # Build CORS config dict for Rust
+        cors_config = None
+
+        if cors_allowed_origins is not None:
+            cors_config = {'origins': cors_allowed_origins}
+        elif read_django_settings:
+            cors_config = TestClient._read_cors_settings_from_django()
+
+        # Create test app instance
+        self.app_id = _core.create_test_app(api._dispatch, False, cors_config)
+
+        # Register routes
+        rust_routes = [
+            (method, path, handler_id, handler)
+            for method, path, handler_id, handler in api._routes
+        ]
+        _core.register_test_routes(self.app_id, rust_routes)
+
+        # Register WebSocket routes
+        ws_routes = []
+        for path, handler_id, handler in api._websocket_routes:
+            meta = api._handler_meta.get(handler, {})
+            injector = meta.get("injector")
+            ws_routes.append((path, handler_id, handler, injector))
+        if ws_routes:
+            _core.register_test_websocket_routes(self.app_id, ws_routes)
+
+        # Register middleware metadata
+        if api._handler_middleware:
+            middleware_data = [
+                (handler_id, meta)
+                for handler_id, meta in api._handler_middleware.items()
+            ]
+            _core.register_test_middleware_metadata(self.app_id, middleware_data)
+
+        api._register_auth_backends()
+
+        super().__init__(
+            base_url=base_url,
+            transport=AsyncBoltTestTransport(self.app_id, raise_server_exceptions),
+            follow_redirects=True,
+            **kwargs,
+        )
+        self.api = api
+
+    async def __aenter__(self):
+        """Enter async context manager."""
+        return await super().__aenter__()
+
+    async def __aexit__(self, *args):
+        """Exit async context manager and cleanup test app."""
+        with contextlib.suppress(builtins.BaseException):
+            _core.destroy_test_app(self.app_id)
+        return await super().__aexit__(*args)

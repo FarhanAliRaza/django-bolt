@@ -24,11 +24,12 @@ Usage:
         response = await ws.receive_text()
         assert response == "Echo: hello"
 """
-from django_bolt.testing.client import TestClient
+from django_bolt.testing.client import AsyncTestClient, TestClient
 from django_bolt.testing.websocket import ConnectionClosed, WebSocketTestClient
 
 __all__ = [
     "TestClient",
+    "AsyncTestClient",
     "WebSocketTestClient",
     "ConnectionClosed",
 ]

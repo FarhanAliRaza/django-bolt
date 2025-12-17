@@ -3,15 +3,12 @@
 //! This module provides the core CORS functionality:
 //! - `add_cors_headers_with_config` - Add CORS headers using CorsConfig (for middleware)
 //! - `add_preflight_headers_with_config` - Add preflight headers using CorsConfig (for middleware)
-//! - `add_cors_response_headers` - Simple version for test_state.rs
-//! - `add_preflight_headers_simple` - Simple version for test_state.rs
 
 use actix_web::http::header::{
     HeaderMap, HeaderValue, ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
     ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
     ACCESS_CONTROL_MAX_AGE, VARY,
 };
-use actix_web::HttpResponse;
 
 use crate::metadata::CorsConfig;
 use crate::state::AppState;
@@ -142,132 +139,4 @@ pub fn add_preflight_headers_with_config(headers: &mut HeaderMap, cors_config: &
             HeaderValue::from_static("Access-Control-Request-Method, Access-Control-Request-Headers"),
         );
     }
-}
-
-/// Add CORS headers for simple responses (not preflight)
-/// Used by test_state.rs - works with simple vectors instead of CorsConfig
-pub fn add_cors_response_headers(
-    response: &mut HttpResponse,
-    request_origin: Option<&str>,
-    origins: &[String],
-    credentials: bool,
-    expose_headers: &[String],
-) -> bool {
-    let is_wildcard = origins.iter().any(|o| o == "*");
-
-    // Wildcard + credentials is invalid per CORS spec
-    if is_wildcard && credentials {
-        // Reflect origin instead of using wildcard
-        if let Some(req_origin) = request_origin {
-            if let Ok(val) = HeaderValue::from_str(req_origin) {
-                response
-                    .headers_mut()
-                    .insert(ACCESS_CONTROL_ALLOW_ORIGIN, val);
-            }
-            response
-                .headers_mut()
-                .append(VARY, HeaderValue::from_static("Origin"));
-            response.headers_mut().insert(
-                ACCESS_CONTROL_ALLOW_CREDENTIALS,
-                HeaderValue::from_static("true"),
-            );
-
-            if !expose_headers.is_empty() {
-                if let Ok(val) = HeaderValue::from_str(&expose_headers.join(", ")) {
-                    response
-                        .headers_mut()
-                        .insert(ACCESS_CONTROL_EXPOSE_HEADERS, val);
-                }
-            }
-            return true;
-        }
-        return false;
-    }
-
-    // Handle wildcard without credentials
-    if is_wildcard {
-        response
-            .headers_mut()
-            .insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
-        if !expose_headers.is_empty() {
-            if let Ok(val) = HeaderValue::from_str(&expose_headers.join(", ")) {
-                response
-                    .headers_mut()
-                    .insert(ACCESS_CONTROL_EXPOSE_HEADERS, val);
-            }
-        }
-        return true;
-    }
-
-    // Check if origin is in allowed list
-    let req_origin = match request_origin {
-        Some(o) => o,
-        None => return false,
-    };
-
-    if !origins.iter().any(|o| o == req_origin) {
-        return false; // Origin not allowed
-    }
-
-    // Add headers
-    if let Ok(val) = HeaderValue::from_str(req_origin) {
-        response
-            .headers_mut()
-            .insert(ACCESS_CONTROL_ALLOW_ORIGIN, val);
-    }
-    response
-        .headers_mut()
-        .append(VARY, HeaderValue::from_static("Origin"));
-
-    if credentials {
-        response.headers_mut().insert(
-            ACCESS_CONTROL_ALLOW_CREDENTIALS,
-            HeaderValue::from_static("true"),
-        );
-    }
-
-    if !expose_headers.is_empty() {
-        if let Ok(val) = HeaderValue::from_str(&expose_headers.join(", ")) {
-            response
-                .headers_mut()
-                .insert(ACCESS_CONTROL_EXPOSE_HEADERS, val);
-        }
-    }
-
-    true
-}
-
-/// Build preflight response headers using simple vectors
-/// Used by test_state.rs - works with simple vectors instead of CorsConfig
-pub fn add_preflight_headers_simple(
-    response: &mut HttpResponse,
-    methods: &[String],
-    headers: &[String],
-    max_age: u64,
-) {
-    if !methods.is_empty() {
-        if let Ok(val) = HeaderValue::from_str(&methods.join(", ")) {
-            response
-                .headers_mut()
-                .insert(ACCESS_CONTROL_ALLOW_METHODS, val);
-        }
-    }
-
-    if !headers.is_empty() {
-        if let Ok(val) = HeaderValue::from_str(&headers.join(", ")) {
-            response
-                .headers_mut()
-                .insert(ACCESS_CONTROL_ALLOW_HEADERS, val);
-        }
-    }
-
-    if let Ok(val) = HeaderValue::from_str(&max_age.to_string()) {
-        response.headers_mut().insert(ACCESS_CONTROL_MAX_AGE, val);
-    }
-
-    // Add Vary headers for preflight requests
-    response.headers_mut().insert(
-        VARY,
-        HeaderValue::from_static("Access-Control-Request-Method, Access-Control-Request-Headers"),
-    );
 }

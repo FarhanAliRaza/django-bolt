@@ -146,22 +146,6 @@ pub fn extract_headers(
     Ok(headers)
 }
 
-/// Convert header Vec to AHashMap (for test usage)
-/// Also adds underscore variants for hyphenated headers (e.g., content-type -> content_type)
-#[inline]
-pub fn headers_vec_to_map(headers: &[(String, String)]) -> AHashMap<String, String> {
-    let mut header_map: AHashMap<String, String> = AHashMap::with_capacity(headers.len());
-    for (name, value) in headers.iter() {
-        let lower = name.to_ascii_lowercase();
-        header_map.insert(lower.clone(), value.clone());
-        if lower.contains('-') {
-            let underscore_key = lower.replace('-', "_");
-            header_map.entry(underscore_key).or_insert_with(|| value.clone());
-        }
-    }
-    header_map
-}
-
 pub async fn handle_request(
     req: HttpRequest,
     body: web::Bytes,

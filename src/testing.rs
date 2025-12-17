@@ -40,7 +40,6 @@ fn ensure_task_locals_initialized() {
 
     // Only initialize once
     ASYNC_RUNTIME_INITIALIZED.call_once(|| {
-
         // Initialize pyo3_async_runtimes tokio runtime (like production server)
         let runtime_builder = tokio::runtime::Builder::new_multi_thread();
         pyo3_async_runtimes::tokio::init(runtime_builder);
@@ -52,14 +51,14 @@ fn ensure_task_locals_initialized() {
         let loop_obj_opt: Option<Py<PyAny>> = Python::attach(|py| {
             let asyncio = match py.import("asyncio") {
                 Ok(m) => m,
-                Err(e) => {
+                Err(_) => {
                     return None;
                 }
             };
 
             let event_loop = match asyncio.call_method0("new_event_loop") {
                 Ok(ev) => ev,
-                Err(e) => {
+                Err(_) => {
                     return None;
                 }
             };
@@ -70,9 +69,7 @@ fn ensure_task_locals_initialized() {
                     let _ = TASK_LOCALS.set(locals);
                     Some(event_loop.unbind())
                 }
-                Err(e) => {
-                    None
-                }
+                Err(_) => None,
             }
         });
 
@@ -82,7 +79,7 @@ fn ensure_task_locals_initialized() {
                 Python::attach(|py| {
                     let asyncio = match py.import("asyncio") {
                         Ok(m) => m,
-                        Err(e) => {
+                        Err(_) => {
                             let _ = tx.send(());
                             return;
                         }
@@ -365,7 +362,6 @@ pub fn test_request(
     body: Vec<u8>,
     query_string: Option<String>,
 ) -> PyResult<(u16, Vec<(String, String)>, Vec<u8>)> {
-
     // Ensure TASK_LOCALS is initialized for SSE/streaming support
     ensure_task_locals_initialized();
 
@@ -615,8 +611,8 @@ async fn handle_test_request_internal(
 
     let is_head_request = method == "HEAD";
 
-    // Execute handler using asyncio.run() for simplicity
-    // Note: For streaming responses, we'll collect them synchronously
+    // Execute handler using run_coroutine_threadsafe to submit to background event loop
+    // This reuses the global event loop instead of creating one per request via asyncio.run()
     let result_obj = match Python::attach(|py| -> PyResult<Py<PyAny>> {
         let dispatch = state.dispatch.clone_ref(py);
         let handler = route_handler.clone_ref(py);
@@ -650,12 +646,22 @@ async fn handle_test_request_internal(
         };
         let request_obj = Py::new(py, request)?;
 
+        // Get the event loop from TASK_LOCALS (initialized by ensure_task_locals_initialized)
+        let locals = TASK_LOCALS.get().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Asyncio loop not initialized")
+        })?;
+        let event_loop = locals.event_loop(py);
+
         // Call dispatch to get a coroutine
         let coroutine = dispatch.call1(py, (handler, request_obj, handler_id))?;
 
-        // Run the coroutine synchronously using asyncio.run()
+        // Submit coroutine to background event loop using run_coroutine_threadsafe
+        // This returns a concurrent.futures.Future that we can wait on
         let asyncio = py.import("asyncio")?;
-        let result = asyncio.call_method1("run", (coroutine,))?;
+        let future = asyncio.call_method1("run_coroutine_threadsafe", (coroutine, event_loop))?;
+
+        // Wait for the result (releases GIL while waiting)
+        let result = future.call_method0("result")?;
         Ok(result.unbind())
     }) {
         Ok(r) => r,
@@ -664,7 +670,7 @@ async fn handle_test_request_internal(
         }
     };
 
-    // Process the result (no need to await since we already ran it synchronously)
+    // Process the result
     match Ok::<_, PyErr>(result_obj) {
         Ok(result_obj) => {
             // Fast-path: tuple extraction
@@ -734,9 +740,9 @@ async fn handle_test_request_internal(
             }
 
             // Fallback: streaming response handling
-            if let Ok((status_code, resp_headers, body_bytes)) = Python::attach(|py| {
-                result_obj.extract::<(u16, Vec<(String, String)>, Vec<u8>)>(py)
-            }) {
+            if let Ok((status_code, resp_headers, body_bytes)) =
+                Python::attach(|py| result_obj.extract::<(u16, Vec<(String, String)>, Vec<u8>)>(py))
+            {
                 let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
                 let mut headers: Vec<(String, String)> = Vec::with_capacity(resp_headers.len());
 
@@ -849,7 +855,8 @@ async fn handle_test_request_internal(
 
                         // Create a coroutine that collects all items
                         let locals = PyDict::new(py);
-                        let code = pyo3::ffi::c_str!(r#"
+                        let code = pyo3::ffi::c_str!(
+                            r#"
 async def _collect_async_gen(gen):
     result = []
     async for item in gen:
@@ -864,7 +871,8 @@ async def _collect_async_gen(gen):
         else:
             result.append(str(item).encode('utf-8'))
     return b''.join(result)
-"#);
+"#
+                        );
                         if py.run(code, None, Some(&locals)).is_ok() {
                             if let Ok(Some(collect_fn)) = locals.get_item("_collect_async_gen") {
                                 if let Ok(coro) = collect_fn.call1((content,)) {
@@ -896,16 +904,14 @@ async def _collect_async_gen(gen):
 
                 if media_type == "text/event-stream" {
                     if is_head_request {
-                        let mut builder = response_builder::build_sse_response(
-                            status,
-                            headers,
-                            skip_compression,
-                        );
+                        let mut builder =
+                            response_builder::build_sse_response(status, headers, skip_compression);
                         let mut response = builder.body(Vec::<u8>::new());
                         if skip_cors {
-                            response
-                                .headers_mut()
-                                .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
+                            response.headers_mut().insert(
+                                "x-bolt-skip-cors".parse().unwrap(),
+                                "true".parse().unwrap(),
+                            );
                         }
                         return response;
                     }

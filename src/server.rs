@@ -324,6 +324,8 @@ pub fn start_server_async(
         global_cors_config,
         cors_origin_regexes,
         global_compression_config: global_compression_config.clone(),
+        router: None,         // Production uses GLOBAL_ROUTER
+        route_metadata: None, // Production uses ROUTE_METADATA
     });
 
     py.detach(|| {

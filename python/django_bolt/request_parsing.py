@@ -7,6 +7,8 @@ from urllib.parse import parse_qs
 
 import multipart
 
+from django_bolt.exceptions import HTTPException
+
 # Django import - may fail if Django not configured
 try:
     from django.conf import settings as django_settings
@@ -82,7 +84,6 @@ def parse_multipart_data(request: dict[str, Any], content_type: str) -> tuple[di
 
     # SECURITY: Check body size before parsing
     if len(body_bytes) > max_size:
-        from django_bolt.exceptions import HTTPException
         raise HTTPException(
             status_code=413,
             detail=f"Upload size {len(body_bytes)} exceeds maximum {max_size} bytes"

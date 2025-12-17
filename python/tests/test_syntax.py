@@ -683,7 +683,8 @@ def test_head_with_params(client):
 def test_options_method_automatic(client):
     """Test automatic OPTIONS handling - returns Allow header with available methods"""
     response = client.options("/m")
-    assert response.status_code == 200
+    # 204 No Content is the standard response for OPTIONS preflight
+    assert response.status_code == 204
     # Check Allow header is present and contains the methods
     assert "allow" in response.headers or "Allow" in response.headers
     allow_header = response.headers.get("allow") or response.headers.get("Allow")
@@ -695,8 +696,7 @@ def test_options_method_automatic(client):
     assert "DELETE" in methods
     assert "HEAD" in methods
     assert "OPTIONS" in methods  # Always included for automatic OPTIONS
-    # Body should be empty JSON object
-    assert response.json() == {}
+    # 204 has no body content
 
 
 def test_options_on_nonexistent_route(client):

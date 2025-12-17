@@ -965,9 +965,10 @@ class BoltAPI:
             # These are parsed by Rust's RouteMetadata::from_python() to skip unused parsing
             middleware_meta = add_optimization_flags_to_metadata(middleware_meta, meta)
 
-            # Django middleware requires cookies and headers regardless of handler params
-            # CSRF middleware needs cookies, session middleware needs cookies/headers
-            if self._has_django_middleware:
+            # Python middleware requires cookies and headers regardless of handler params
+            # Django middleware needs cookies/headers (CSRF, session, auth, etc.)
+            # Custom middleware may also inspect headers for routing, auth, etc.
+            if self._has_django_middleware or self.middleware:
                 middleware_meta['needs_cookies'] = True
                 middleware_meta['needs_headers'] = True
 

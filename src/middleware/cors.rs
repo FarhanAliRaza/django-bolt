@@ -169,8 +169,12 @@ fn find_cors_config<'a>(
     path: &str,
     state: &'a AppState,
 ) -> Option<CorsConfigRef<'a>> {
-    // Check router exists
-    GLOBAL_ROUTER.get()?;
+    // Check router exists - use AppState router (tests) or global router (production)
+    let has_router = state.router.is_some() || GLOBAL_ROUTER.get().is_some();
+    if !has_router {
+        // No router available - fall back to global CORS config only
+        return state.global_cors_config.as_ref().map(CorsConfigRef::Global);
+    }
 
     // For OPTIONS, try multiple methods to find route config
     let methods_to_try: &[&str] = if method == &Method::OPTIONS {
@@ -198,23 +202,32 @@ fn find_cors_for_method<'a>(
     path: &str,
     state: &'a AppState,
 ) -> Option<CorsConfigRef<'a>> {
-    let router = GLOBAL_ROUTER.get()?;
+    // Try AppState router first (tests), then global router (production)
+    let route_match = if let Some(ref router) = state.router {
+        router.find(method, path)
+    } else {
+        GLOBAL_ROUTER.get().and_then(|router| router.find(method, path))
+    };
 
-    if let Some(route_match) = router.find(method, path) {
+    if let Some(route_match) = route_match {
         let handler_id = route_match.handler_id();
 
-        // Use get() instead of get().cloned() - returns a Ref that we can borrow from
-        if let Some(meta_map) = ROUTE_METADATA.get() {
-            if let Some(meta) = meta_map.get(&handler_id) {
-                // Check if CORS is skipped
-                if meta.skip.contains("cors") {
-                    return Some(CorsConfigRef::Skipped);
-                }
+        // Try AppState metadata first (tests), then global metadata (production)
+        let meta = if let Some(ref meta_map) = state.route_metadata {
+            meta_map.get(&handler_id)
+        } else {
+            ROUTE_METADATA.get().and_then(|meta_map| meta_map.get(&handler_id))
+        };
 
-                // Return route-level CORS if present
-                if let Some(ref cors_cfg) = meta.cors_config {
-                    return Some(CorsConfigRef::Route(cors_cfg));
-                }
+        if let Some(meta) = meta {
+            // Check if CORS is skipped
+            if meta.skip.contains("cors") {
+                return Some(CorsConfigRef::Skipped);
+            }
+
+            // Return route-level CORS if present
+            if let Some(ref cors_cfg) = meta.cors_config {
+                return Some(CorsConfigRef::Route(cors_cfg));
             }
         }
     }

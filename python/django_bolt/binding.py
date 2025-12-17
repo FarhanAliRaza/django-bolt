@@ -133,7 +133,9 @@ def create_header_extractor(
     alias: str | None = None
 ) -> Callable:
     """Create a pre-compiled extractor for HTTP headers."""
-    key = (alias or name).lower()
+    # Convert underscores to hyphens for HTTP header lookup
+    # e.g., x_custom -> x-custom, content_type -> content-type
+    key = (alias or name).lower().replace("_", "-")
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
     def converter(v):
         return convert_primitive(str(v), annotation)

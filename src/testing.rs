@@ -27,8 +27,82 @@ use crate::metadata::{CorsConfig, RouteMetadata};
 use crate::middleware::compression::CompressionMiddleware;
 use crate::middleware::cors::CorsMiddleware;
 use crate::router::Router;
-use crate::state::AppState;
+use crate::state::{AppState, TASK_LOCALS};
 use crate::websocket::WebSocketRouter;
+
+/// One-time initialization flag for async runtime
+static ASYNC_RUNTIME_INITIALIZED: std::sync::Once = std::sync::Once::new();
+
+/// Initialize TASK_LOCALS for test environment if not already set.
+/// This is required for SSE/streaming responses that use async generators.
+fn ensure_task_locals_initialized() {
+    use std::sync::mpsc;
+
+    // Only initialize once
+    ASYNC_RUNTIME_INITIALIZED.call_once(|| {
+
+        // Initialize pyo3_async_runtimes tokio runtime (like production server)
+        let runtime_builder = tokio::runtime::Builder::new_multi_thread();
+        pyo3_async_runtimes::tokio::init(runtime_builder);
+
+        // Channel to signal when event loop is ready
+        let (tx, rx) = mpsc::channel();
+
+        // Create event loop and start it in background thread
+        let loop_obj_opt: Option<Py<PyAny>> = Python::attach(|py| {
+            let asyncio = match py.import("asyncio") {
+                Ok(m) => m,
+                Err(e) => {
+                    return None;
+                }
+            };
+
+            let event_loop = match asyncio.call_method0("new_event_loop") {
+                Ok(ev) => ev,
+                Err(e) => {
+                    return None;
+                }
+            };
+
+            // Create TaskLocals with the event loop
+            match pyo3_async_runtimes::TaskLocals::new(event_loop.clone()).copy_context(py) {
+                Ok(locals) => {
+                    let _ = TASK_LOCALS.set(locals);
+                    Some(event_loop.unbind())
+                }
+                Err(e) => {
+                    None
+                }
+            }
+        });
+
+        // GIL is now released - spawn background thread to run event loop
+        if let Some(loop_obj) = loop_obj_opt {
+            std::thread::spawn(move || {
+                Python::attach(|py| {
+                    let asyncio = match py.import("asyncio") {
+                        Ok(m) => m,
+                        Err(e) => {
+                            let _ = tx.send(());
+                            return;
+                        }
+                    };
+                    let ev = loop_obj.bind(py);
+                    let _ = asyncio.call_method1("set_event_loop", (ev.as_any(),));
+
+                    // Signal that we're about to run forever
+                    let _ = tx.send(());
+                    let _ = ev.call_method0("run_forever");
+                });
+            });
+
+            // Wait for the background thread to signal it's ready
+            let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+            // Give it a tiny bit more time to actually enter run_forever
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    });
+}
 
 /// Test application state stored per instance
 pub struct TestAppState {
@@ -38,6 +112,7 @@ pub struct TestAppState {
     pub dispatch: Py<PyAny>,
     pub global_cors_config: Option<CorsConfig>,
     pub debug: bool,
+    pub max_payload_size: usize,
 }
 
 /// Registry for test app instances
@@ -158,6 +233,15 @@ pub fn create_test_app(
         None
     };
 
+    // Read max payload size from Django settings (same as production server)
+    // Default to 10MB for tests to handle large file uploads
+    let max_payload_size: usize = (|| -> PyResult<usize> {
+        let django_conf = py.import("django.conf")?;
+        let settings = django_conf.getattr("settings")?;
+        settings.getattr("BOLT_MAX_UPLOAD_SIZE")?.extract::<usize>()
+    })()
+    .unwrap_or(10 * 1024 * 1024); // Default to 10MB for tests
+
     let app = TestAppState {
         router: Arc::new(Router::new()),
         websocket_router: Arc::new(WebSocketRouter::new()),
@@ -165,6 +249,7 @@ pub fn create_test_app(
         dispatch: dispatch.clone_ref(py),
         global_cors_config,
         debug,
+        max_payload_size,
     };
 
     let id = TEST_ID_GEN.fetch_add(1, Ordering::Relaxed);
@@ -280,6 +365,10 @@ pub fn test_request(
     body: Vec<u8>,
     query_string: Option<String>,
 ) -> PyResult<(u16, Vec<(String, String)>, Vec<u8>)> {
+
+    // Ensure TASK_LOCALS is initialized for SSE/streaming support
+    ensure_task_locals_initialized();
+
     // Get test app state
     let entry = registry()
         .get(&app_id)
@@ -288,18 +377,13 @@ pub fn test_request(
     let app_state = entry.clone();
     drop(entry); // Release DashMap lock
 
-    // Create a new tokio runtime for this test request
-    // Actix test utilities are !Send, so we need a single-threaded runtime
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to create runtime: {}", e))
-        })?;
+    // Use the global runtime (initialized by pyo3_async_runtimes::tokio::init())
+    // This ensures handler execution and streaming use the same runtime context
+    let runtime_handle = pyo3_async_runtimes::tokio::get_runtime();
 
-    runtime.block_on(async {
+    runtime_handle.block_on(async {
         // Read test app state
-        let (router, route_metadata, dispatch, global_cors_config, debug) = {
+        let (router, route_metadata, dispatch, global_cors_config, debug, max_payload_size) = {
             let state = app_state.read();
             (
                 state.router.clone(),
@@ -307,10 +391,12 @@ pub fn test_request(
                 Python::attach(|py| state.dispatch.clone_ref(py)),
                 state.global_cors_config.clone(),
                 state.debug,
+                state.max_payload_size,
             )
         };
 
         // Build AppState matching production
+        // Include router and route_metadata so CorsMiddleware can find route-level CORS config
         let app_state_arc = Arc::new(AppState {
             dispatch,
             debug,
@@ -318,6 +404,8 @@ pub fn test_request(
             global_cors_config: global_cors_config.clone(),
             cors_origin_regexes: vec![],
             global_compression_config: None,
+            router: Some(router.clone()),
+            route_metadata: Some(route_metadata.clone()),
         });
 
         // Clone the Arc values for the handler closure
@@ -336,7 +424,7 @@ pub fn test_request(
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(app_state_arc.clone()))
-                .app_data(web::PayloadConfig::new(1 * 1024 * 1024))
+                .app_data(web::PayloadConfig::new(max_payload_size))
                 .wrap(NormalizePath::trim())
                 .wrap(CorsMiddleware::new())
                 .wrap(CompressionMiddleware::new())
@@ -413,7 +501,6 @@ async fn handle_test_request_internal(
     use crate::response_builder;
     use crate::responses;
     use crate::router::parse_query_string;
-    use crate::streaming::{create_python_stream, create_sse_stream};
     use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
     use actix_web::http::StatusCode;
     use pyo3::types::{PyBytes, PyTuple};
@@ -528,8 +615,8 @@ async fn handle_test_request_internal(
 
     let is_head_request = method == "HEAD";
 
-    // Execute handler using asyncio.run() for simplicity in tests
-    // This runs the Python coroutine synchronously
+    // Execute handler using asyncio.run() for simplicity
+    // Note: For streaming responses, we'll collect them synchronously
     let result_obj = match Python::attach(|py| -> PyResult<Py<PyAny>> {
         let dispatch = state.dispatch.clone_ref(py);
         let handler = route_handler.clone_ref(py);
@@ -747,6 +834,66 @@ async fn handle_test_request_internal(
             {
                 let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
 
+                // For tests, collect streaming content synchronously instead of async streaming
+                // This avoids issues with event loop contexts
+                let collected_body = Python::attach(|py| -> Vec<u8> {
+                    let mut chunks: Vec<u8> = Vec::new();
+                    let content = content_obj.bind(py);
+
+                    if is_async_generator {
+                        // For async generators, use asyncio to collect
+                        let asyncio = match py.import("asyncio") {
+                            Ok(m) => m,
+                            Err(_) => return chunks,
+                        };
+
+                        // Create a coroutine that collects all items
+                        let locals = PyDict::new(py);
+                        let code = pyo3::ffi::c_str!(r#"
+async def _collect_async_gen(gen):
+    result = []
+    async for item in gen:
+        if isinstance(item, bytes):
+            result.append(item)
+        elif isinstance(item, bytearray):
+            result.append(bytes(item))
+        elif isinstance(item, memoryview):
+            result.append(bytes(item))
+        elif isinstance(item, str):
+            result.append(item.encode('utf-8'))
+        else:
+            result.append(str(item).encode('utf-8'))
+    return b''.join(result)
+"#);
+                        if py.run(code, None, Some(&locals)).is_ok() {
+                            if let Ok(Some(collect_fn)) = locals.get_item("_collect_async_gen") {
+                                if let Ok(coro) = collect_fn.call1((content,)) {
+                                    if let Ok(result) = asyncio.call_method1("run", (coro,)) {
+                                        if let Ok(bytes) = result.extract::<Vec<u8>>() {
+                                            chunks = bytes;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Sync generator - iterate directly
+                        if let Ok(iter) = content.try_iter() {
+                            for item in iter {
+                                if let Ok(item) = item {
+                                    if let Ok(bytes) = item.extract::<Vec<u8>>() {
+                                        chunks.extend(bytes);
+                                    } else if let Ok(s) = item.extract::<String>() {
+                                        chunks.extend(s.as_bytes());
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    chunks
+                });
+
                 if media_type == "text/event-stream" {
                     if is_head_request {
                         let mut builder = response_builder::build_sse_response(
@@ -765,8 +912,7 @@ async fn handle_test_request_internal(
 
                     let mut builder =
                         response_builder::build_sse_response(status, headers, skip_compression);
-                    let stream = create_sse_stream(content_obj, is_async_generator);
-                    let mut response = builder.streaming(stream);
+                    let mut response = builder.body(collected_body);
                     if skip_cors {
                         response
                             .headers_mut()
@@ -796,8 +942,7 @@ async fn handle_test_request_internal(
                         builder.append_header(("x-bolt-skip-cors", "true"));
                     }
 
-                    let stream = create_python_stream(content_obj, is_async_generator);
-                    return builder.streaming(stream);
+                    return builder.body(collected_body);
                 }
             }
 

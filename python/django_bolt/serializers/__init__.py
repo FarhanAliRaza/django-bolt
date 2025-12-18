@@ -6,8 +6,32 @@ from msgspec import Meta
 
 from .base import Serializer, SerializerView
 from .decorators import computed_field, field_validator, model_validator
+from .errors import FieldError, ValidationError
+
+# Field mapping utilities
+from .field_mapping import (
+    REQUIRED,
+    get_field_default,
+    get_field_kwargs,
+    get_field_type,
+    is_field_read_only,
+    is_field_required,
+    needs_unique_validator,
+)
 from .fields import FieldConfig, field
 from .helpers import create_serializer, create_serializer_set
+
+# Model introspection utilities
+from .model_meta import (
+    FieldInfo,
+    RelationInfo,
+    get_all_field_names,
+    get_field_info,
+    get_unique_field_names,
+    get_unique_together_constraints,
+    is_abstract_model,
+)
+from .model_serializer import ModelSerializer
 from .nested import Nested
 
 # Re-export common types for convenience
@@ -68,10 +92,34 @@ from .types import (
     # Auth
     Username,
 )
+from .validators import (
+    ChoicesValidator,
+    EmailValidator,
+    ExistsValidator,
+    LengthValidator,
+    MaxLengthValidator,
+    MaxValueValidator,
+    MinLengthValidator,
+    MinValueValidator,
+    PhoneValidator,
+    RangeValidator,
+    RegexValidator,
+    SlugValidator,
+    UniqueForDateValidator,
+    UniqueForMonthValidator,
+    UniqueForYearValidator,
+    UniqueTogetherValidator,
+    UniqueValidator,
+    URLValidator,
+    UUIDValidator,
+    Validator,
+    validator,
+)
 
 __all__ = [
     # Core classes
     "Serializer",
+    "ModelSerializer",
     "SerializerView",
     # Field configuration
     "field",
@@ -141,4 +189,45 @@ __all__ = [
     "Rating10",
     # Simple constraints
     "NonEmptyStr",
+    # Errors
+    "ValidationError",
+    "FieldError",
+    # Validators
+    "validator",
+    "Validator",
+    "MinLengthValidator",
+    "MaxLengthValidator",
+    "LengthValidator",
+    "RegexValidator",
+    "MinValueValidator",
+    "MaxValueValidator",
+    "RangeValidator",
+    "ChoicesValidator",
+    "UniqueValidator",
+    "ExistsValidator",
+    "UniqueTogetherValidator",
+    "UniqueForDateValidator",
+    "UniqueForMonthValidator",
+    "UniqueForYearValidator",
+    "EmailValidator",
+    "URLValidator",
+    "SlugValidator",
+    "UUIDValidator",
+    "PhoneValidator",
+    # Model introspection
+    "FieldInfo",
+    "RelationInfo",
+    "get_field_info",
+    "is_abstract_model",
+    "get_all_field_names",
+    "get_unique_together_constraints",
+    "get_unique_field_names",
+    # Field mapping
+    "REQUIRED",
+    "get_field_type",
+    "get_field_kwargs",
+    "get_field_default",
+    "is_field_read_only",
+    "is_field_required",
+    "needs_unique_validator",
 ]

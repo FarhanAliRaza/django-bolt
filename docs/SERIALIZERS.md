@@ -140,6 +140,19 @@ class UserCreate(Serializer):
         return value
 ```
 
+### Validation with Annotated Validators
+
+You can use `Annotated` to attach reusable validators to fields:
+
+```python
+from typing import Annotated
+from django_bolt.serializers.validators import MinLengthValidator, UniqueValidator
+
+class UserCreate(Serializer):
+    username: Annotated[str, MinLengthValidator(3)]
+    email: Annotated[str, UniqueValidator(queryset=User.objects.all())]
+```
+
 ## Model Validators
 
 Model validators run after all fields are validated and allow cross-field validation.
@@ -296,9 +309,75 @@ Supported constraints:
 - **Numbers**: `gt`, `ge`, `lt`, `le`, `multiple_of`
 - **Collections**: `min_length`, `max_length`
 
+## ModelSerializer
+
+`ModelSerializer` provides a shortcut for creating serializers that deal with model instances and querysets. It automatically generates a set of fields for you, based on the model.
+
+### Basic Usage
+
+```python
+from django_bolt.serializers import ModelSerializer
+
+class UserSerializer(ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email']
+```
+
+### Automatic Field Generation
+
+The serializer will automatically generate fields corresponding to the model fields.
+- **Strings**: `CharField`, `TextField`, `SlugField`, `EmailField` -> `str`
+- **Numbers**: `IntegerField`, `FloatField`, `DecimalField` -> `int`/`float`/`Decimal`
+- **Booleans**: `BooleanField` -> `bool`
+- **Dates**: `DateTimeField`, `DateField` -> `datetime`/`date`
+- **UUIDs**: `UUIDField` -> `UUID` (and validated as such)
+
+### Validation
+
+`ModelSerializer` automatically applies validators based on model field attributes:
+- **Unique Fields**: `unique=True` adds a `UniqueValidator`.
+- **Max Length**: `max_length` adds string constraints.
+- **Null/Blank**: Determines if field is optional (`| None`).
+
+### Meta Configuration
+
+The `Meta` inner class controls serializer behavior:
+- `model`: The model class.
+- `fields`: List of field names to include, or `'__all__'`.
+- `exclude`: List of field names to exclude.
+- `read_only`: Set of fields to be read-only.
+- `write_only`: Set of fields to be write-only.
+- `depth`: Integer depth for nested relationships (default 0).
+- `extra_kwargs`: Dictionary to customize field options.
+
+```python
+class PostSerializer(ModelSerializer):
+    class Meta:
+        model = BlogPost
+        fields = '__all__'
+        read_only = {'created_at', 'updated_at'}
+        extra_kwargs = {
+            'password': {'write_only': True}
+        }
+```
+
+### Nested Serialization with depth
+
+Using `depth` automatically generates nested serializers for relationships:
+
+```python
+class PostDetailSerializer(ModelSerializer):
+    class Meta:
+        model = BlogPost
+        fields = '__all__'
+        depth = 1  # Will include full Author object instead of just ID
+```
+
 ## Django Model Integration
 
 ### Converting Models to Serializers
+See the [ModelSerializer](#modelserializer) section for automatic model serialization.
 
 ```python
 class UserPublic(Serializer):

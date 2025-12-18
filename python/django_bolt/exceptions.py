@@ -293,3 +293,66 @@ def parse_msgspec_decode_error(error: Exception, body_bytes: bytes) -> dict[str,
     }
 
 
+def parse_msgspec_validation_error(error: Exception) -> list[dict[str, Any]]:
+    """Parse msgspec.ValidationError to FastAPI-style error format.
+
+    Converts msgspec validation error messages to the FastAPI error format with
+    loc, msg, and type fields.
+
+    Args:
+        error: The msgspec.ValidationError exception
+
+    Returns:
+        List of error dicts in FastAPI format
+
+    Examples:
+        >>> parse_msgspec_validation_error(ValidationError("Object missing required field `email`"))
+        [{"loc": ["body", "email"], "msg": "field required", "type": "value_error.missing"}]
+    """
+    error_msg = str(error)
+    errors = []
+
+    # Pattern: "Object missing required field `field_name`"
+    missing_field_match = re.search(r"missing required field `(\w+)`", error_msg, re.IGNORECASE)
+    if missing_field_match:
+        field_name = missing_field_match.group(1)
+        errors.append({
+            "loc": ["body", field_name],
+            "msg": "field required",
+            "type": "value_error.missing",
+        })
+        return errors
+
+    # Pattern: "Expected `type` at `$.field_path`" or similar
+    path_match = re.search(r"at `\$\.([^`]+)`", error_msg)
+    if path_match:
+        # Convert $.foo.bar to ["body", "foo", "bar"]
+        field_path = path_match.group(1).split(".")
+        errors.append({
+            "loc": ["body"] + field_path,
+            "msg": error_msg,
+            "type": "type_error",
+        })
+        return errors
+
+    # Pattern: "Expected `type`, got `actual_type`"
+    type_mismatch = re.search(r"Expected `([^`]+)`, got `([^`]+)`", error_msg)
+    if type_mismatch:
+        expected_type = type_mismatch.group(1)
+        got_type = type_mismatch.group(2)
+        errors.append({
+            "loc": ["body"],
+            "msg": f"value is not a valid {expected_type}: got {got_type}",
+            "type": "type_error",
+        })
+        return errors
+
+    # Fallback: return the raw error message
+    errors.append({
+        "loc": ["body"],
+        "msg": error_msg,
+        "type": "value_error",
+    })
+    return errors
+
+

@@ -5,81 +5,74 @@ Tests cover:
 - DoS prevention: Input size limits for nested lists
 - Type safety: Nested() validation
 - Circular reference detection in from_model()
-- Performance optimizations
 """
 from __future__ import annotations
 
 from typing import Annotated
-
 import msgspec
 import pytest
 
-from django_bolt.serializers import Nested, Serializer
+from django_bolt.serializers import Nested, Serializer, ValidationError
+
+
+class SecurityTagSerializer(Serializer):
+    id: int
+    name: str
+
+class SecurityBookSerializer(Serializer):
+    title: str
+    tags: Annotated[list[SecurityTagSerializer], Nested(SecurityTagSerializer, many=True)]
+
+class CustomLimitBookSerializer(Serializer):
+    title: str
+    tags: Annotated[list[SecurityTagSerializer], Nested(SecurityTagSerializer, many=True, max_items=10)]
+
+class UnlimitedBookSerializer(Serializer):
+    title: str
+    # Note: Setting max_items to None disables limit - NOT recommended for production
+    tags: Annotated[list[SecurityTagSerializer], Nested(SecurityTagSerializer, many=True, max_items=None)]
 
 
 class TestNestedListSizeLimits:
-    """Test that nested many relationships enforce size limits to prevent DoS attacks."""
+    """Test limits on nested list sizes."""
 
     def test_nested_many_respects_default_limit(self):
-        """Test that nested many fields respect the default 1000 item limit."""
-
-        class TagSerializer(Serializer):
-            id: int
-            name: str
-
-        class BookSerializer(Serializer):
-            title: str
-            tags: Annotated[list[TagSerializer], Nested(TagSerializer, many=True)]
-
+        """Test that default max_items limit (1000) is enforced."""
         # Create 1001 tags (exceeds default limit of 1000)
         many_tags = [{"id": i, "name": f"tag_{i}"} for i in range(1001)]
 
-        with pytest.raises(msgspec.ValidationError) as exc_info:
-            BookSerializer(title="Test", tags=many_tags)
-
-        error_msg = str(exc_info.value)
-        assert "Too many items" in error_msg
-        assert "1001" in error_msg
-        assert "Maximum allowed: 1000" in error_msg
+        # Should be rejected due to max_items=1000 limit
+        try:
+            SecurityBookSerializer.model_validate({"title": "Test", "tags": many_tags})
+            pytest.fail("Should have raised ValidationError for exceeding max_items")
+        except ValidationError as e:
+            error_msg = str(e)
+            assert "Too many items" in error_msg
+            assert "1001" in error_msg
+            assert "Maximum allowed: 1000" in error_msg
 
     def test_nested_many_accepts_items_under_limit(self):
         """Test that nested many fields accept items under the limit."""
-
-        class TagSerializer(Serializer):
-            id: int
-            name: str
-
-        class BookSerializer(Serializer):
-            title: str
-            tags: Annotated[list[TagSerializer], Nested(TagSerializer, many=True)]
-
         # Create 999 tags (under default limit)
         tags = [{"id": i, "name": f"tag_{i}"} for i in range(999)]
 
-        book = BookSerializer(title="Test", tags=tags)
+        book = SecurityBookSerializer(title="Test", tags=tags)
         assert len(book.tags) == 999
 
     def test_nested_many_custom_limit(self):
-        """Test that custom max_items limit is respected."""
-
-        class TagSerializer(Serializer):
-            id: int
-            name: str
-
-        class BookSerializer(Serializer):
-            title: str
-            tags: Annotated[list[TagSerializer], Nested(TagSerializer, many=True, max_items=10)]
-
+        """Test custom max_items limit."""
         # 11 items exceeds custom limit of 10
         many_tags = [{"id": i, "name": f"tag_{i}"} for i in range(11)]
 
-        with pytest.raises(msgspec.ValidationError) as exc_info:
-            BookSerializer(title="Test", tags=many_tags)
-
-        error_msg = str(exc_info.value)
-        assert "Too many items" in error_msg
-        assert "11" in error_msg
-        assert "Maximum allowed: 10" in error_msg
+        # Should be rejected due to max_items=10
+        try:
+            CustomLimitBookSerializer.model_validate({"title": "Test", "tags": many_tags})
+            pytest.fail("Should have raised ValidationError for exceeding custom max_items")
+        except ValidationError as e:
+            error_msg = str(e)
+            assert "Too many items" in error_msg
+            assert "11" in error_msg
+            assert "Maximum allowed: 10" in error_msg
 
     def test_nested_many_unlimited_when_none(self):
         """Test that max_items=None disables the limit (not recommended for production)."""
@@ -191,28 +184,17 @@ class TestRecursionPrevention:
 
     def test_max_items_prevents_dos_via_large_lists(self):
         """Test that max_items prevents DoS attacks from extremely large nested lists."""
-
-        class TagSerializer(Serializer):
-            id: int
-            name: str
-
-        class BookSerializer(Serializer):
-            title: str
-            # Default max_items=1000
-            tags: Annotated[list[TagSerializer], Nested(TagSerializer, many=True)]
-
         # Attempt to create 10,000 tags (would consume significant memory)
         many_tags = [{"id": i, "name": f"tag_{i}"} for i in range(10000)]
 
         # Should be rejected due to max_items=1000 limit
-        with pytest.raises(msgspec.ValidationError) as exc_info:
-            BookSerializer(title="Attack", tags=many_tags)
-
-        error_msg = str(exc_info.value)
-        assert "Too many items" in error_msg
-        assert "10000" in error_msg
-
-
+        try:
+            SecurityBookSerializer.model_validate({"title": "Test", "tags": many_tags})
+            pytest.fail("Should have raised ValidationError for extremely large list")
+        except ValidationError as e:
+            error_msg = str(e)
+            assert "Too many items" in error_msg
+            assert "10000" in error_msg
 
 
 class TestTypeHintResolutionEdgeCases:

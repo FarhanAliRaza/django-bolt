@@ -138,3 +138,84 @@ class UserProfile(models.Model):
 
     def __str__(self):
         return f"Profile for {self.user.username}"
+
+
+class Event(models.Model):
+    """Event model for testing unique_together constraints."""
+
+    name = models.CharField(max_length=200)
+    venue = models.CharField(max_length=200)
+    date = models.DateField()
+    start_time = models.TimeField()
+
+    class Meta:
+        app_label = 'django_bolt'
+        unique_together = [('venue', 'date', 'start_time')]
+
+    def __str__(self):
+        return f"{self.name} at {self.venue}"
+
+
+class DailyReport(models.Model):
+    """DailyReport model for testing unique_for_date constraints."""
+
+    title = models.CharField(max_length=200, unique_for_date='report_date')
+    report_date = models.DateField()
+    content = models.TextField()
+
+    class Meta:
+        app_label = 'django_bolt'
+
+    def __str__(self):
+        return f"{self.title} - {self.report_date}"
+
+
+class MonthlyReport(models.Model):
+    """MonthlyReport model for testing unique_for_month constraints."""
+
+    category = models.CharField(max_length=100, unique_for_month='report_date')
+    report_date = models.DateField()
+    summary = models.TextField()
+
+    class Meta:
+        app_label = 'django_bolt'
+
+    def __str__(self):
+        return f"{self.category} - {self.report_date.strftime('%Y-%m')}"
+
+
+class YearlyReport(models.Model):
+    """YearlyReport model for testing unique_for_year constraints."""
+
+    department = models.CharField(max_length=100, unique_for_year='report_date')
+    report_date = models.DateField()
+    annual_summary = models.TextField()
+
+    class Meta:
+        app_label = 'django_bolt'
+
+    def __str__(self):
+        return f"{self.department} - {self.report_date.year}"
+
+
+class AbstractBaseModel(models.Model):
+    """Abstract base model for testing is_abstract_model()."""
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        abstract = True
+        app_label = 'django_bolt'
+
+
+class ConcreteModel(AbstractBaseModel):
+    """Concrete model that inherits from abstract base."""
+
+    name = models.CharField(max_length=100)
+
+    class Meta:
+        app_label = 'django_bolt'
+
+    def __str__(self):
+        return self.name

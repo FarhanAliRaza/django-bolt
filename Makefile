@@ -7,7 +7,7 @@ N ?= 10000
 P ?= 8
 WORKERS ?= 1
 
-.PHONY: build test-server test-server-bg kill bench clean orm-test setup-test-data seed-data orm-smoke compare-frameworks save-baseline test-py lint lint-lib ruff ruff-fix format release delete-tag
+.PHONY: build test-server test-server-bg kill bench clean orm-test setup-test-data seed-data orm-smoke compare-frameworks save-baseline test-py lint lint-lib ruff ruff-fix format release delete-tag docs docs-serve docs-build
 
 # Build Rust extension in release mode
 build:
@@ -153,3 +153,12 @@ delete-tag:
 	@echo "Deleting tag $(TAG) from remote..."
 	@git push origin :refs/tags/$(TAG) || echo "Tag $(TAG) not found on remote"
 	@echo "✅ Tag $(TAG) deleted successfully"
+
+# Documentation commands
+docs: docs-serve
+
+docs-serve:
+	cd docs && uv run zensical serve -a localhost:8080
+
+docs-build:
+	cd docs && uv run zensical build --clean

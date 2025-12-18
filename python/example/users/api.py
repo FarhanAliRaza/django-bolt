@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, List
 
 import msgspec
 from msgspec import Meta
@@ -255,7 +255,7 @@ class UserPaginatedViewSet(ViewSet):
     queryset = User.objects.only("id", "username", "email")
     pagination_class = PageNumberPagination
 
-    async def list(self, request) -> list[UserMini]:
+    async def list(self, request) -> List[UserMini]:
         """List all users with pagination."""
         qs = await self.get_queryset()
 

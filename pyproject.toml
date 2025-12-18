@@ -72,6 +72,9 @@ dev = [
     "django==6.0",
     "ruff>=0.8",
 ]
+docs = [
+    "zensical",
+]
 
 [tool.ruff]
 src = ["python"]

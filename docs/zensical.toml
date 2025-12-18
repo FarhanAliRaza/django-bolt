@@ -27,6 +27,10 @@ site_author = "Farhan"
 # Source directory for markdown files
 docs_dir = "src"
 
+# Repository URL for edit links and header icon
+repo_url = "https://github.com/FarhanAliRaza/django-bolt"
+repo_name = "FarhanAliRaza/django-bolt"
+
 # The site_url is the canonical URL for your site. When building online
 # documentation you should set this.
 # Read more: https://zensical.org/docs/setup/basics/#site_url
@@ -37,7 +41,7 @@ docs_dir = "src"
 #
 # Read more: https://zensical.org/docs/setup/basics/#copyright
 copyright = """
-Copyright &copy; 2025 The authors
+Copyright &copy; 2025 Farhan Ali Raza
 """
 
 # Zensical supports both implicit navigation and explicitly defined navigation.
@@ -59,8 +63,7 @@ Copyright &copy; 2025 The authors
 # The path provided should be relative to the "docs_dir".
 #
 # Read more: https://zensical.org/docs/customization/#additional-css
-#
-#extra_css = ["stylesheets/extra.css"]
+extra_css = ["stylesheets/bolt.css"]
 
 # With the `extra_javascript` option you can add your own JavaScript to your
 # project to customize the behavior according to your needs.
@@ -260,14 +263,16 @@ features = [
 # Read more:
 # - https://zensical.org/docs/setup/colors/
 # ----------------------------------------------------------------------------
+# Light mode - Icy Day
 [[project.theme.palette]]
 scheme = "default"
-toggle.icon = "lucide/sun"
+toggle.icon = "lucide/moon"
 toggle.name = "Switch to dark mode"
 
+# Dark mode - Arctic Night
 [[project.theme.palette]]
 scheme = "slate"
-toggle.icon = "lucide/moon"
+toggle.icon = "lucide/sun"
 toggle.name = "Switch to light mode"
 
 # ----------------------------------------------------------------------------
@@ -276,9 +281,9 @@ toggle.name = "Switch to light mode"
 # of suitably licensed fonts. There are options for a normal text font and for
 # a monospaced font used in code blocks.
 # ----------------------------------------------------------------------------
-#[project.theme.font]
-#text = "Inter"
-#code = "Jetbrains Mono"
+[project.theme.font]
+text = "Outfit"
+code = "JetBrains Mono"
 
 # ----------------------------------------------------------------------------
 # You can configure your own logo to be shown in the header using the "logo"
@@ -295,15 +300,19 @@ toggle.name = "Switch to light mode"
 # - https://zensical.org/docs/setup/logo-and-icons
 # - https://zensical.org/docs/authoring/icons-emojis/#search
 # ----------------------------------------------------------------------------
-#[project.theme.icon]
-#logo = "lucide/smile"
-#repo = "lucide/smile"
+[project.theme.icon]
+logo = "lucide/zap"
+repo = "fontawesome/brands/github"
 
 # ----------------------------------------------------------------------------
 # The "extra" section contains miscellaneous settings.
 # ----------------------------------------------------------------------------
-#[[project.extra.social]]
-#icon = "fontawesome/brands/github"
-#link = "https://github.com/user/repo"
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/FarhanAliRaza/django-bolt"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/python"
+link = "https://pypi.org/project/django-bolt/"
 
 

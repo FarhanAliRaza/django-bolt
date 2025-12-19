@@ -25,6 +25,7 @@ Django-Bolt provides comprehensive OpenAPI 3.1 documentation generation with mul
 - [Multiple UI Plugins](#multiple-ui-plugins)
 - [Excluding Routes](#excluding-routes)
 - [Disabling OpenAPI](#disabling-openapi)
+- [Protecting Docs with Django Authentication](#protecting-docs-with-django-authentication)
 - [Best Practices](#best-practices)
 
 ---
@@ -396,6 +397,7 @@ api = BoltAPI(openapi_config=config)
 | `security` | `List[SecurityRequirement] \| None` | `None` | Global security requirements |
 | `components` | `Components` | `Components()` | Reusable components |
 | `webhooks` | `Dict[str, PathItem \| Reference] \| None` | `None` | Webhook definitions |
+| `django_auth` | `Callable \| bool \| None` | `None` | Django auth decorator for docs protection |
 
 ---
 
@@ -1068,6 +1070,102 @@ api = BoltAPI(
     )
 )
 ```
+
+---
+
+## Protecting Docs with Django Authentication
+
+You can protect OpenAPI documentation using Django's built-in authentication decorators like `login_required` or `staff_member_required`. This is useful when you want to restrict access to API docs to authenticated users only.
+
+### Using login_required (Shorthand)
+
+The simplest way to require login is to set `django_auth=True`:
+
+```python
+from django_bolt import BoltAPI
+from django_bolt.openapi import OpenAPIConfig
+
+api = BoltAPI(
+    openapi_config=OpenAPIConfig(
+        title="My API",
+        version="1.0.0",
+        django_auth=True  # Requires Django login
+    )
+)
+```
+
+When a user visits `/docs` without being logged in, they will be redirected to Django's login page. After successful authentication, they'll be redirected back to the documentation.
+
+### Using staff_member_required
+
+For admin-only access to documentation:
+
+```python
+from django.contrib.admin.views.decorators import staff_member_required
+from django_bolt import BoltAPI
+from django_bolt.openapi import OpenAPIConfig
+
+api = BoltAPI(
+    openapi_config=OpenAPIConfig(
+        title="My API",
+        version="1.0.0",
+        django_auth=staff_member_required  # Staff only
+    )
+)
+```
+
+### Using Custom Django Decorators
+
+You can pass any Django view decorator:
+
+```python
+from django.contrib.auth.decorators import login_required, permission_required
+from django_bolt import BoltAPI
+from django_bolt.openapi import OpenAPIConfig
+
+# Require specific permission
+api = BoltAPI(
+    openapi_config=OpenAPIConfig(
+        title="My API",
+        version="1.0.0",
+        django_auth=permission_required("api.view_docs")
+    )
+)
+```
+
+### How It Works
+
+When `django_auth` is configured:
+
+1. A separate internal BoltAPI is created with `django_middleware=True`
+2. All documentation routes are registered on this internal API
+3. The Django decorator is applied to each handler
+4. The internal API is mounted at the docs path (e.g., `/docs`)
+
+This ensures Django session authentication works properly with the documentation endpoints while keeping your main API routes unchanged.
+
+### Protected Routes
+
+All documentation endpoints are protected:
+
+- `/docs` - Root UI
+- `/docs/openapi.json` - JSON schema
+- `/docs/openapi.yaml` - YAML schema
+- `/docs/swagger` - Swagger UI
+- `/docs/redoc` - ReDoc UI
+- `/docs/scalar` - Scalar UI
+- `/docs/rapidoc` - RapiDoc UI
+- `/docs/stoplight` - Stoplight Elements UI
+
+### Configuration Options
+
+| Value | Description |
+|-------|-------------|
+| `True` | Apply `login_required` (redirects to login page) |
+| `login_required` | Explicit login required |
+| `staff_member_required` | Requires staff status |
+| `permission_required("perm")` | Requires specific permission |
+| Custom decorator | Any Django view decorator |
 
 ---
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .plugins import (
     RapidocRenderPlugin,
@@ -227,6 +228,37 @@ class OpenAPIConfig:
             version="1.0.0",
             auth=[JWTAuthentication()],
             guards=[IsAuthenticated()]
+        )
+        ```
+    """
+
+    django_auth: Callable[..., Any] | bool | None = field(default=None)
+    """Django authentication decorator for OpenAPI documentation endpoints.
+
+    Use this to protect docs with Django's built-in authentication decorators
+    like login_required or staff_member_required.
+
+    Can be:
+    - True: Apply login_required (redirects to login page if not authenticated)
+    - A Django decorator: Apply directly (e.g., staff_member_required)
+
+    Example:
+        ```python
+        from django.contrib.auth.decorators import login_required
+        from django.contrib.admin.views.decorators import staff_member_required
+
+        # Login required (shorthand)
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            django_auth=True
+        )
+
+        # Staff only
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            django_auth=staff_member_required
         )
         ```
     """

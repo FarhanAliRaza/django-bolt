@@ -32,7 +32,7 @@ from django_bolt.serializers import Serializer, field_validator
 from django_bolt.shortcuts import render
 from django_bolt.types import Request
 from django_bolt.views import APIView, ViewSet
-
+from django.contrib.admin.views.decorators import staff_member_required
 from django_bolt.openapi import OpenAPIConfig                                        
 
 # OpenAPI is enabled by default at /docs with Swagger UI
@@ -44,7 +44,9 @@ from django_bolt.openapi import OpenAPIConfig
 api = BoltAPI(openapi_config=OpenAPIConfig(                                                    
           title="My API",                                                              
           version="1.0.0",                                                             
-          enabled=False                              
+          enabled=True, 
+          django_auth = True 
+                                     
       )
 )
 #

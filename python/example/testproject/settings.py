@@ -223,13 +223,4 @@ MIDDLEWARE += [
     'django.middleware.csp.ContentSecurityPolicyMiddleware',
 ]
 
-SECURE_CSP = {
-    "default-src": [CSP.SELF],
-    "script-src": [CSP.SELF, CSP.NONCE],  # Scripts require nonce!
-    "style-src": [CSP.SELF, CSP.UNSAFE_INLINE, "https://fonts.googleapis.com"],
-    "font-src": [CSP.SELF, "https://fonts.gstatic.com"],
-    "img-src": [CSP.SELF, "https:", "data:"],
-}
-
-
 

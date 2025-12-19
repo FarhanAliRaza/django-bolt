@@ -295,3 +295,99 @@ def test_openapi_all_routes_protected():
             response = client.get(route)
             assert response.status_code == 401, \
                 f"Route {route} should be protected (401), got {response.status_code}"
+
+
+def test_openapi_django_auth_redirects_to_login():
+    """Test that django_auth=True redirects unauthenticated users to login."""
+    from django.http import HttpResponseRedirect
+
+    api = BoltAPI(
+        openapi_config=OpenAPIConfig(
+            title="Test API",
+            version="1.0.0",
+            django_auth=True
+        )
+    )
+
+    @api.get("/test")
+    async def test_endpoint():
+        return {"status": "ok"}
+
+    api._register_openapi_routes()
+
+    with TestClient(api) as client:
+        # Without authentication, should redirect to login
+        response = client.get("/docs", follow_redirects=False)
+
+        # Django's login_required returns 302 redirect to login page
+        assert response.status_code == 302, \
+            f"Expected 302 redirect, got {response.status_code}"
+
+        # Should redirect to login URL (contains 'login' or 'accounts/login')
+        location = response.headers.get("location", "")
+        assert "login" in location.lower(), \
+            f"Should redirect to login page, got: {location}"
+
+
+def test_openapi_django_auth_with_staff_member_required():
+    """Test that staff_member_required decorator redirects non-staff to admin login."""
+    from django.contrib.admin.views.decorators import staff_member_required
+
+    api = BoltAPI(
+        openapi_config=OpenAPIConfig(
+            title="Test API",
+            version="1.0.0",
+            django_auth=staff_member_required
+        )
+    )
+
+    @api.get("/test")
+    async def test_endpoint():
+        return {"status": "ok"}
+
+    api._register_openapi_routes()
+
+    with TestClient(api) as client:
+        # staff_member_required redirects to admin login
+        response = client.get("/docs", follow_redirects=False)
+        assert response.status_code == 302, \
+            f"Expected 302 redirect, got {response.status_code}"
+
+        # Should redirect to admin login
+        location = response.headers.get("location", "")
+        assert "admin" in location.lower() or "login" in location.lower(), \
+            f"Should redirect to admin login, got: {location}"
+
+
+def test_openapi_django_auth_all_routes_protected():
+    """Test that all OpenAPI routes are protected when django_auth is set."""
+    api = BoltAPI(
+        openapi_config=OpenAPIConfig(
+            title="Test API",
+            version="1.0.0",
+            path="/docs",
+            django_auth=True,
+            render_plugins=[SwaggerRenderPlugin()]
+        )
+    )
+
+    @api.get("/test")
+    async def test_endpoint():
+        return {"status": "ok"}
+
+    api._register_openapi_routes()
+
+    with TestClient(api) as client:
+        # All doc routes should redirect to login (302)
+        routes_to_test = [
+            "/docs/openapi.json",
+            "/docs/openapi.yaml",
+            "/docs/openapi.yml",
+            "/docs",
+            "/docs/swagger",
+        ]
+
+        for route in routes_to_test:
+            response = client.get(route, follow_redirects=False)
+            assert response.status_code == 302, \
+                f"Route {route} should redirect to login (302), got {response.status_code}"

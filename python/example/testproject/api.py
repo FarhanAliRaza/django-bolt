@@ -9,8 +9,6 @@ from django.contrib.auth import aauthenticate, get_user_model
 from msgspec import Meta
 from users.api import UserMini
 from users.models import User
-from django.contrib import messages  # noqa: PLC0415
-from django_bolt.middleware import no_compress
 
 from django_bolt import (
     BoltAPI,
@@ -26,14 +24,13 @@ from django_bolt.exceptions import (
     UnprocessableEntity,
 )
 from django_bolt.health import add_health_check
+from django_bolt.middleware import no_compress
+from django_bolt.openapi import OpenAPIConfig
 from django_bolt.param_functions import Cookie, Depends, File, Form, Header
 from django_bolt.responses import HTML, FileResponse, PlainText, Redirect, StreamingResponse
 from django_bolt.serializers import Serializer, field_validator
-from django_bolt.shortcuts import render
 from django_bolt.types import Request
 from django_bolt.views import APIView, ViewSet
-from django.contrib.admin.views.decorators import staff_member_required
-from django_bolt.openapi import OpenAPIConfig                                        
 
 # OpenAPI is enabled by default at /docs with Swagger UI
 # You can customize it by passing openapi_config:
@@ -41,12 +38,12 @@ from django_bolt.openapi import OpenAPIConfig
 # Example compression configurations:
 #
 # 1. Default compression (brotli with gzip fallback):
-api = BoltAPI(openapi_config=OpenAPIConfig(                                                    
-          title="My API",                                                              
-          version="1.0.0",                                                             
-          enabled=True, 
-          django_auth = True 
-                                     
+api = BoltAPI(openapi_config=OpenAPIConfig(
+          title="My API",
+          version="1.0.0",
+          enabled=True,
+          django_auth = True
+
       )
 )
 #
@@ -95,6 +92,7 @@ class Item(msgspec.Struct):
 # Mount the middleware API as a sub-application (FastAPI-style)
 # This preserves the middleware_api's own middleware configuration
 from .middleware_demo import middleware_api
+
 api.mount("/middleware", middleware_api)
 
 

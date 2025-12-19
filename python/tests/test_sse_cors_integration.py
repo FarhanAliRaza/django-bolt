@@ -154,7 +154,7 @@ async def sse_no_cors():
             f.write(api_content)
 
         # Create manage.py
-        manage_content = f'''#!/usr/bin/env python
+        manage_content = '''#!/usr/bin/env python
 import os
 import sys
 

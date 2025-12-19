@@ -299,7 +299,6 @@ def test_openapi_all_routes_protected():
 
 def test_openapi_django_auth_redirects_to_login():
     """Test that django_auth=True redirects unauthenticated users to login."""
-    from django.http import HttpResponseRedirect
 
     api = BoltAPI(
         openapi_config=OpenAPIConfig(

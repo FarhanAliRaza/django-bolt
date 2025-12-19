@@ -880,7 +880,6 @@ class TestCSRFMiddleware:
         CSRF protection only applies to "unsafe" methods (POST, PUT, DELETE, etc.).
         GET requests should always be allowed through.
         """
-        from django.middleware.csrf import CsrfViewMiddleware
 
         api = BoltAPI(django_middleware=[
             'django.contrib.sessions.middleware.SessionMiddleware',

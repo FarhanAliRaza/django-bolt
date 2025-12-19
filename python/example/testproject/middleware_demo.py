@@ -1,13 +1,14 @@
 
 from typing import Annotated
-from django_bolt.shortcuts import render
+
 from django.contrib import messages  # noqa: PLC0415
-from django_bolt.middleware import BaseMiddleware, TimingMiddleware, no_compress
 
 from django_bolt import BoltAPI, Request
+from django_bolt.middleware import BaseMiddleware, TimingMiddleware
 from django_bolt.params import Form
+from django_bolt.shortcuts import render
 
-from django_bolt.middleware import no_compress
+
 class RequestIdMiddleware:
     """
     Custom middleware that adds a request ID to every request.
@@ -78,7 +79,6 @@ middleware_api = BoltAPI(
     ],
 )
 
-from django.contrib.auth.decorators import login_required
 @middleware_api.get("/demo")
 async def middleware_demo(request: Request):
     """
@@ -106,7 +106,8 @@ async def middleware_demo(request: Request):
         "request_id": request.state.get("request_id"),
         "tenant_id": request.state.get("tenant_id"),
     })
-from django.views.decorators.csrf import csrf_exempt
+
+
 @middleware_api.post("/demo")
 # @csrf_exempt
 async def middleware_demo(request: Request, test: Annotated[str, Form("test")]):

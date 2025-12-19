@@ -48,6 +48,9 @@ test-py:
 lint:
 	uv run ruff check .
 
+lint-fix:
+	uv run ruff check . --fix
+
 # Alias for lint
 ruff: lint
 

@@ -610,6 +610,7 @@ def test_large_file_upload_rejected_by_default(api):
 def test_large_file_upload_with_increased_limit(api):
     """Test that large file uploads (6MB) work when BOLT_MAX_UPLOAD_SIZE is set to 10MB."""
     from django.conf import settings
+
     import django_bolt.request_parsing as request_parsing
 
     # Set max upload size to 10MB (default is 1MB which would reject 6MB files)

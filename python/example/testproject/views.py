@@ -1,7 +1,6 @@
 import time
 
 from django.http import JsonResponse, StreamingHttpResponse
-from test_data import JSON_1K
 
 
 def index(request):

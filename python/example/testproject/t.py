@@ -1,12 +1,5 @@
-import asyncio
-import os
-import time
-from typing import Annotated, Protocol
 
 import msgspec
-import test_data
-from django.contrib.auth import aauthenticate, get_user_model
-from msgspec import Meta
 from users.api import UserMini
 from users.models import User
 
@@ -14,23 +7,9 @@ from django_bolt import (
     BoltAPI,
     WebSocket,
 )
-from django_bolt.auth import IsAuthenticated, JWTAuthentication, create_jwt_for_user, get_current_user
-from django_bolt.exceptions import (
-    BadRequest,
-    HTTPException,
-    NotFound,
-    RequestValidationError,
-    Unauthorized,
-    UnprocessableEntity,
-)
-from django_bolt.health import add_health_check
-from django_bolt.middleware import BaseMiddleware, TimingMiddleware, no_compress
-from django_bolt.param_functions import Cookie, Depends, File, Form, Header
-from django_bolt.responses import HTML, FileResponse, PlainText, Redirect, StreamingResponse
-from django_bolt.serializers import Serializer, field_validator
+from django_bolt.middleware import BaseMiddleware, TimingMiddleware
 from django_bolt.shortcuts import render
 from django_bolt.types import Request
-from django_bolt.views import APIView, ViewSet
 
 # ============================================================================
 # Custom Middleware Example

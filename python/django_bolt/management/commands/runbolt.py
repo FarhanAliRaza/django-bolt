@@ -191,11 +191,12 @@ class Command(BaseCommand):
         openapi_enabled = False
         openapi_config = None
 
-        # Find first API with OpenAPI config
+        # Find first API with OpenAPI config (project-level API takes priority)
+        # Respect enabled=False from the first API - don't let other APIs override it
         for _api_path, api in apis:
             if api.openapi_config:
                 openapi_config = api.openapi_config
-                openapi_enabled = True
+                openapi_enabled = api.openapi_config.enabled
                 break
 
         # Register OpenAPI routes on merged API if any API had OpenAPI enabled

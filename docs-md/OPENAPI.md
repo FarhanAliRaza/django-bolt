@@ -31,7 +31,7 @@ Django-Bolt provides comprehensive OpenAPI 3.1 documentation generation with mul
 
 ## Quick Start
 
-OpenAPI documentation is enabled by default with Scalar UI. Simply create a BoltAPI instance and your docs will be available at `/schema`:
+OpenAPI documentation is enabled by default with Swagger UI. Simply create a BoltAPI instance and your docs will be available at `/docs`:
 
 ```python
 from django_bolt import BoltAPI
@@ -50,10 +50,13 @@ async def create_item(item: Item) -> Item:
 ```
 
 **Available endpoints:**
-- `/schema` - Redirects to default UI (Scalar)
-- `/schema/openapi.json` - JSON schema
-- `/schema/openapi.yaml` - YAML schema
-- `/schema/scalar` or `/schema/` - Scalar UI (default)
+- `/docs` - Swagger UI (default)
+- `/docs/openapi.json` - JSON schema
+- `/docs/openapi.yaml` - YAML schema
+- `/docs/redoc` - ReDoc UI
+- `/docs/scalar` - Scalar UI
+- `/docs/rapidoc` - RapiDoc UI
+- `/docs/stoplight` - Stoplight Elements UI
 
 ### Custom Configuration
 
@@ -77,7 +80,38 @@ api = BoltAPI(
 
 Django-Bolt supports 7 different OpenAPI documentation renderers. Each plugin serves interactive documentation at a specific path.
 
-### Scalar (Default)
+By default, all UI plugins are enabled with Swagger UI as the default at the root path (`/docs`).
+
+### Swagger UI (Default)
+
+The classic OpenAPI documentation interface with try-it-out functionality. This is the default UI served at `/docs`.
+
+```python
+from django_bolt.openapi import SwaggerRenderPlugin
+
+api = BoltAPI(
+    openapi_config=OpenAPIConfig(
+        title="My API",
+        version="1.0.0",
+        render_plugins=[SwaggerRenderPlugin(path="/")]  # Serve at root
+    )
+)
+```
+
+**Paths:** `/docs/swagger` or `/docs` (when configured as root)
+
+**Options:**
+```python
+SwaggerRenderPlugin(
+    version="5.18.2",                    # Swagger UI version from CDN
+    js_url=None,                         # Custom JS bundle URL
+    css_url=None,                        # Custom CSS bundle URL
+    standalone_preset_js_url=None,       # Custom preset JS URL
+    path="/swagger"                      # Path to serve at
+)
+```
+
+### Scalar
 
 Modern, fast, and feature-rich OpenAPI documentation viewer.
 
@@ -93,7 +127,7 @@ api = BoltAPI(
 )
 ```
 
-**Paths:** `/schema/scalar`, `/schema/` (root)
+**Paths:** `/docs/scalar`
 
 **Options:**
 ```python
@@ -106,35 +140,6 @@ ScalarRenderPlugin(
         "theme": "purple",
         "darkMode": True
     }
-)
-```
-
-### Swagger UI
-
-The classic OpenAPI documentation interface with try-it-out functionality.
-
-```python
-from django_bolt.openapi import SwaggerRenderPlugin
-
-api = BoltAPI(
-    openapi_config=OpenAPIConfig(
-        title="My API",
-        version="1.0.0",
-        render_plugins=[SwaggerRenderPlugin()]
-    )
-)
-```
-
-**Paths:** `/schema/swagger`
-
-**Options:**
-```python
-SwaggerRenderPlugin(
-    version="5.18.2",                    # Swagger UI version from CDN
-    js_url=None,                         # Custom JS bundle URL
-    css_url=None,                        # Custom CSS bundle URL
-    standalone_preset_js_url=None,       # Custom preset JS URL
-    path="/swagger"                      # Path to serve at
 )
 ```
 
@@ -154,7 +159,7 @@ api = BoltAPI(
 )
 ```
 
-**Paths:** `/schema/redoc`
+**Paths:** `/docs/redoc`
 
 **Options:**
 ```python
@@ -182,7 +187,7 @@ api = BoltAPI(
 )
 ```
 
-**Paths:** `/schema/rapidoc`
+**Paths:** `/docs/rapidoc`
 
 **Options:**
 ```python
@@ -209,7 +214,7 @@ api = BoltAPI(
 )
 ```
 
-**Paths:** `/schema/elements`
+**Paths:** `/docs/stoplight`
 
 **Options:**
 ```python
@@ -237,7 +242,7 @@ api = BoltAPI(
 )
 ```
 
-**Paths:** `/schema/openapi.json` (automatically registered)
+**Paths:** `/docs/openapi.json` (automatically registered)
 
 **Content-Type:** `application/vnd.oai.openapi+json`
 
@@ -259,7 +264,7 @@ api = BoltAPI(
 )
 ```
 
-**Paths:** `/schema/openapi.yaml`, `/schema/openapi.yml` (automatically registered)
+**Paths:** `/docs/openapi.yaml`, `/docs/openapi.yml` (automatically registered)
 
 **Content-Type:** `text/yaml; charset=utf-8`
 
@@ -280,7 +285,7 @@ config = OpenAPIConfig(
     title="My API",                    # Required: API title
     version="1.0.0",                   # Required: API version
     description="API description",     # Optional: API description
-    path="/schema"                     # Optional: Base path for docs (default: "/schema")
+    path="/docs"                       # Optional: Base path for docs (default: "/docs")
 )
 ```
 
@@ -343,7 +348,7 @@ config = OpenAPIConfig(
     ],
 
     # Documentation Paths
-    path="/docs",                      # Base path (default: "/schema")
+    path="/docs",                      # Base path (default: "/docs")
 
     # Render Plugins
     render_plugins=[
@@ -382,8 +387,9 @@ api = BoltAPI(openapi_config=config)
 | `external_docs` | `ExternalDocumentation \| None` | `None` | External documentation link |
 | `servers` | `List[Server]` | `[Server(url="/")]` | Server configurations |
 | `tags` | `List[Tag] \| None` | `None` | Operation grouping tags |
-| `path` | `str` | `"/schema"` | Base path for documentation endpoints |
-| `render_plugins` | `List[OpenAPIRenderPlugin]` | `[ScalarRenderPlugin()]` | UI plugins (Scalar by default) |
+| `path` | `str` | `"/docs"` | Base path for documentation endpoints |
+| `render_plugins` | `List[OpenAPIRenderPlugin]` | All UI plugins with Swagger at root | UI plugins |
+| `enabled` | `bool` | `True` | Enable/disable OpenAPI documentation |
 | `use_handler_docstrings` | `bool` | `True` | Extract operation descriptions from docstrings |
 | `include_error_responses` | `bool` | `True` | Include 422 validation error responses |
 | `exclude_paths` | `List[str]` | `["/admin", "/static"]` | Path prefixes to exclude from schema |
@@ -963,13 +969,15 @@ api = BoltAPI(openapi_config=config)
 ```
 
 **Available endpoints:**
-- `/schema/` - Redirects to Scalar (first plugin with root path)
+- `/schema/` - Scalar UI (first plugin with root path)
 - `/schema/scalar` - Scalar UI
 - `/schema/swagger` - Swagger UI
 - `/schema/redoc` - ReDoc
 - `/schema/rapidoc` - RapiDoc
 - `/schema/openapi.json` - JSON schema (always available)
 - `/schema/openapi.yaml` - YAML schema (always available)
+
+**Note:** This example uses `/schema` as the base path. The default is `/docs`.
 
 ### Custom Plugin Paths
 
@@ -1017,26 +1025,48 @@ config = OpenAPIConfig(
 
 ## Disabling OpenAPI
 
-To completely disable OpenAPI documentation:
+### Using enabled=False
+
+The recommended way to disable OpenAPI documentation:
+
+```python
+from django_bolt import BoltAPI
+from django_bolt.openapi import OpenAPIConfig
+
+api = BoltAPI(
+    openapi_config=OpenAPIConfig(
+        title="My API",
+        version="1.0.0",
+        enabled=False  # Disable all doc endpoints
+    )
+)
+```
+
+This will prevent any documentation routes from being registered. All requests to `/docs/*` will return 404.
+
+**Note:** When using multiple APIs with autodiscovery, the first API's `enabled` setting takes priority. If your main project API sets `enabled=False`, documentation will be disabled even if other discovered APIs have it enabled.
+
+### Using openapi_config=None
+
+Alternatively, you can pass `None`:
 
 ```python
 api = BoltAPI(openapi_config=None)  # No OpenAPI docs
 ```
 
-Or remove from production:
+### Environment-based Configuration
 
 ```python
 from django.conf import settings
+from django_bolt.openapi import OpenAPIConfig
 
-openapi_config = None
-if settings.DEBUG:
-    # Only enable in development
-    openapi_config = OpenAPIConfig(
-        title="My API (Dev)",
-        version="1.0.0"
+api = BoltAPI(
+    openapi_config=OpenAPIConfig(
+        title="My API",
+        version="1.0.0",
+        enabled=settings.DEBUG  # Only enable in development
     )
-
-api = BoltAPI(openapi_config=openapi_config)
+)
 ```
 
 ---
@@ -1206,7 +1236,7 @@ def test_openapi_schema():
     """Test that OpenAPI schema is valid."""
     with TestClient(api) as client:
         # Get JSON schema
-        response = client.get("/schema/openapi.json")
+        response = client.get("/docs/openapi.json")
         assert response.status_code == 200
 
         schema = response.json()
@@ -1228,5 +1258,5 @@ def test_openapi_schema():
 
 ---
 
-**Last Updated:** October 2025
-**Django-Bolt Version:** 0.1.0
+**Last Updated:** December 2025
+**Django-Bolt Version:** 0.2.0

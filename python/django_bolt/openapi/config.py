@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from .plugins import ScalarRenderPlugin
+from .plugins import (
+    RapidocRenderPlugin,
+    RedocRenderPlugin,
+    ScalarRenderPlugin,
+    StoplightRenderPlugin,
+    SwaggerRenderPlugin,
+)
 from .spec import (
     Components,
     Contact,
@@ -19,6 +25,9 @@ from .spec import (
 )
 
 if TYPE_CHECKING:
+    from django_bolt.auth.backends import BaseAuthentication
+    from django_bolt.auth.guards import BasePermission
+
     from .plugins import OpenAPIRenderPlugin
 
 __all__ = ("OpenAPIConfig",)
@@ -88,7 +97,7 @@ class OpenAPIConfig:
     webhooks: dict[str, PathItem | Reference] | None = field(default=None)
     """A mapping of webhook name to PathItem or Reference."""
 
-    path: str = "/schema"
+    path: str = "/docs"
     """Base path for the OpenAPI documentation endpoints."""
 
     render_plugins: list[OpenAPIRenderPlugin] = field(default_factory=lambda: [])
@@ -151,10 +160,87 @@ class OpenAPIConfig:
         ```
     """
 
+    enabled: bool = field(default=True)
+    """Enable or disable OpenAPI documentation.
+
+    When False, no documentation routes will be registered.
+    This is useful for disabling docs in production.
+
+    Example:
+        ```python
+        import os
+        from django_bolt.openapi import OpenAPIConfig
+
+        # Disable docs in production
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            enabled=os.environ.get("ENABLE_DOCS", "false").lower() == "true"
+        )
+        ```
+    """
+
+    guards: list[BasePermission] | None = field(default=None)
+    """Permission guards to protect OpenAPI documentation endpoints.
+
+    When set, all documentation routes (JSON schema, YAML schema, and UI endpoints)
+    will require passing the specified guards before access is granted.
+
+    Example:
+        ```python
+        from django_bolt.openapi import OpenAPIConfig
+        from django_bolt.auth import JWTAuthentication, IsAuthenticated, IsStaff
+
+        # Require authentication for docs
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            auth=[JWTAuthentication()],
+            guards=[IsAuthenticated()]
+        )
+
+        # Require staff access for docs
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            auth=[JWTAuthentication()],
+            guards=[IsStaff()]
+        )
+        ```
+    """
+
+    auth: list[BaseAuthentication] | None = field(default=None)
+    """Authentication backends for OpenAPI documentation endpoints.
+
+    When set, these authentication backends will be used to authenticate
+    requests to documentation endpoints. Required when using guards that
+    depend on authentication (e.g., IsAuthenticated, IsStaff, IsAdminUser).
+
+    Example:
+        ```python
+        from django_bolt.openapi import OpenAPIConfig
+        from django_bolt.auth import JWTAuthentication, IsAuthenticated
+
+        # Protect docs with JWT authentication
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            auth=[JWTAuthentication()],
+            guards=[IsAuthenticated()]
+        )
+        ```
+    """
+
     def __post_init__(self) -> None:
         """Initialize default render plugin if none provided."""
         if not self.render_plugins:
-            self.render_plugins = [ScalarRenderPlugin()]
+            self.render_plugins = [
+                SwaggerRenderPlugin(path="/"),
+                RedocRenderPlugin(path="/redoc"),
+                ScalarRenderPlugin(path="/scalar"),
+                RapidocRenderPlugin(path="/rapidoc"),
+                StoplightRenderPlugin(path="/stoplight"),
+            ]
 
         # Normalize path
         self.path = "/" + self.path.strip("/")

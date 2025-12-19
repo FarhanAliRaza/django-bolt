@@ -21,8 +21,8 @@ class Item(msgspec.Struct):
 
 
 def test_openapi_json_endpoint():
-    """Test that /schema/openapi.json returns valid JSON without errors."""
-    # Create API with OpenAPI enabled (default path is /schema)
+    """Test that /docs/openapi.json returns valid JSON without errors."""
+    # Create API with OpenAPI enabled (default path is /docs)
     api = BoltAPI(
         openapi_config=OpenAPIConfig(
             title="Test API",
@@ -47,7 +47,7 @@ def test_openapi_json_endpoint():
     api._register_openapi_routes()
 
     with TestClient(api) as client:
-        response = client.get("/schema/openapi.json")
+        response = client.get("/docs/openapi.json")
 
         # Should return 200 OK (not 500 Internal Server Error)
         assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
@@ -69,8 +69,8 @@ def test_openapi_json_endpoint():
 
 
 def test_swagger_ui_endpoint():
-    """Test that /schema/swagger (Swagger UI) loads without internal errors."""
-    # Create API with Swagger UI enabled (default path is /schema)
+    """Test that /docs/swagger (Swagger UI) loads without internal errors."""
+    # Create API with Swagger UI enabled (default path is /docs)
     api = BoltAPI(
         openapi_config=OpenAPIConfig(
             title="Test API",
@@ -90,7 +90,7 @@ def test_swagger_ui_endpoint():
     api._register_openapi_routes()
 
     with TestClient(api) as client:
-        response = client.get("/schema/swagger")
+        response = client.get("/docs/swagger")
 
         # Should return 200 OK (not 500 Internal Server Error)
         assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
@@ -151,3 +151,147 @@ def test_openapi_root_path_serves_ui_directly():
         # Should contain Swagger UI content
         html = response.text
         assert "swagger" in html.lower(), "Response should contain Swagger UI"
+
+
+def test_openapi_disabled_returns_404():
+    """Test that disabled OpenAPI docs return 404."""
+    api = BoltAPI(
+        openapi_config=OpenAPIConfig(
+            title="Test API",
+            version="1.0.0",
+            enabled=False  # Explicitly disabled
+        )
+    )
+
+    @api.get("/test")
+    async def test_endpoint():
+        return {"status": "ok"}
+
+    # Register routes (should skip OpenAPI routes due to enabled=False)
+    api._register_openapi_routes()
+
+    with TestClient(api) as client:
+        # All doc routes should return 404
+        response = client.get("/docs/openapi.json")
+        assert response.status_code == 404, \
+            f"Disabled docs should return 404, got {response.status_code}"
+
+        response = client.get("/docs")
+        assert response.status_code == 404, \
+            f"Disabled docs UI should return 404, got {response.status_code}"
+
+
+def test_openapi_protected_without_auth_returns_401():
+    """Test that protected docs without authentication return 401."""
+    from django_bolt.auth import IsAuthenticated, JWTAuthentication
+
+    api = BoltAPI(
+        openapi_config=OpenAPIConfig(
+            title="Test API",
+            version="1.0.0",
+            auth=[JWTAuthentication(secret="test-secret")],
+            guards=[IsAuthenticated()]
+        )
+    )
+
+    @api.get("/test")
+    async def test_endpoint():
+        return {"status": "ok"}
+
+    api._register_openapi_routes()
+
+    with TestClient(api) as client:
+        # Without token, should get 401
+        response = client.get("/docs/openapi.json")
+        assert response.status_code == 401, \
+            f"Protected docs without auth should return 401, got {response.status_code}"
+
+        response = client.get("/docs")
+        assert response.status_code == 401, \
+            f"Protected docs UI without auth should return 401, got {response.status_code}"
+
+
+def test_openapi_protected_with_valid_auth():
+    """Test that protected docs with valid authentication work."""
+    import time
+
+    import jwt
+
+    from django_bolt.auth import IsAuthenticated, JWTAuthentication
+
+    api = BoltAPI(
+        openapi_config=OpenAPIConfig(
+            title="Test API",
+            version="1.0.0",
+            auth=[JWTAuthentication(secret="test-secret")],
+            guards=[IsAuthenticated()]
+        )
+    )
+
+    @api.get("/test")
+    async def test_endpoint():
+        return {"status": "ok"}
+
+    api._register_openapi_routes()
+
+    # Create valid token
+    token = jwt.encode(
+        {"sub": "user123", "exp": int(time.time()) + 3600},
+        "test-secret",
+        algorithm="HS256"
+    )
+
+    with TestClient(api) as client:
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # With valid token, should get 200
+        response = client.get("/docs/openapi.json", headers=headers)
+        assert response.status_code == 200, \
+            f"Protected docs with valid auth should return 200, got {response.status_code}"
+
+        # Verify it returns valid JSON schema
+        data = response.json()
+        assert "openapi" in data
+        assert data["info"]["title"] == "Test API"
+
+        # UI should also work
+        response = client.get("/docs", headers=headers)
+        assert response.status_code == 200, \
+            f"Protected docs UI with valid auth should return 200, got {response.status_code}"
+
+
+def test_openapi_all_routes_protected():
+    """Test that all OpenAPI routes are protected when guards are set."""
+    from django_bolt.auth import IsAuthenticated, JWTAuthentication
+
+    api = BoltAPI(
+        openapi_config=OpenAPIConfig(
+            title="Test API",
+            version="1.0.0",
+            path="/docs",
+            auth=[JWTAuthentication(secret="test-secret")],
+            guards=[IsAuthenticated()],
+            render_plugins=[SwaggerRenderPlugin()]
+        )
+    )
+
+    @api.get("/test")
+    async def test_endpoint():
+        return {"status": "ok"}
+
+    api._register_openapi_routes()
+
+    with TestClient(api) as client:
+        # All routes should return 401 without auth
+        routes_to_test = [
+            "/docs/openapi.json",
+            "/docs/openapi.yaml",
+            "/docs/openapi.yml",
+            "/docs",  # Root UI
+            "/docs/swagger",  # Swagger UI
+        ]
+
+        for route in routes_to_test:
+            response = client.get(route)
+            assert response.status_code == 401, \
+                f"Route {route} should be protected (401), got {response.status_code}"

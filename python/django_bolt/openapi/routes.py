@@ -38,10 +38,18 @@ class OpenAPIRouteRegistrar:
         if not self.api.openapi_config or self.api._openapi_routes_registered:
             return
 
+        # Check if docs are enabled
+        if not self.api.openapi_config.enabled:
+            return
+
+        # Get guards and auth from config for protecting doc routes
+        guards = self.api.openapi_config.guards
+        auth = self.api.openapi_config.auth
+
         # Always register JSON endpoint
         json_plugin = JsonRenderPlugin()
 
-        @self.api.get(f"{self.api.openapi_config.path}/openapi.json")
+        @self.api.get(f"{self.api.openapi_config.path}/openapi.json", guards=guards, auth=auth)
         async def openapi_json_handler(request):
             """Serve OpenAPI schema as JSON."""
             try:
@@ -60,7 +68,7 @@ class OpenAPIRouteRegistrar:
         # Always register YAML endpoints
         yaml_plugin = YamlRenderPlugin()
 
-        @self.api.get(f"{self.api.openapi_config.path}/openapi.yaml")
+        @self.api.get(f"{self.api.openapi_config.path}/openapi.yaml", guards=guards, auth=auth)
         async def openapi_yaml_handler(request):
             """Serve OpenAPI schema as YAML."""
             schema = self._get_schema()
@@ -72,7 +80,7 @@ class OpenAPIRouteRegistrar:
                 headers={"content-type": yaml_plugin.media_type}
             )
 
-        @self.api.get(f"{self.api.openapi_config.path}/openapi.yml")
+        @self.api.get(f"{self.api.openapi_config.path}/openapi.yml", guards=guards, auth=auth)
         async def openapi_yml_handler(request):
             """Serve OpenAPI schema as YAML (alternative extension)."""
             schema = self._get_schema()
@@ -108,6 +116,8 @@ class OpenAPIRouteRegistrar:
     def _register_ui_plugins(self) -> None:
         """Register UI plugin routes (Swagger UI, ReDoc, etc.)."""
         schema_url = f"{self.api.openapi_config.path}/openapi.json"
+        guards = self.api.openapi_config.guards
+        auth = self.api.openapi_config.auth
 
         for plugin in self.api.openapi_config.render_plugins:
             for plugin_path in plugin.paths:
@@ -134,7 +144,7 @@ class OpenAPIRouteRegistrar:
                             ) from e
                     return ui_handler
 
-                self.api.get(full_path)(make_handler(plugin))
+                self.api.get(full_path, guards=guards, auth=auth)(make_handler(plugin))
 
     def _register_root_redirect(self) -> None:
         """Register root path to serve default UI directly.
@@ -146,6 +156,8 @@ class OpenAPIRouteRegistrar:
         if self.api.openapi_config.default_plugin:
             schema_url = f"{self.api.openapi_config.path}/openapi.json"
             plugin = self.api.openapi_config.default_plugin
+            guards = self.api.openapi_config.guards
+            auth = self.api.openapi_config.auth
 
             # Capture plugin in closure
             def make_root_handler(p, url):
@@ -165,4 +177,4 @@ class OpenAPIRouteRegistrar:
                         ) from e
                 return openapi_root_handler
 
-            self.api.get(self.api.openapi_config.path)(make_root_handler(plugin, schema_url))
+            self.api.get(self.api.openapi_config.path, guards=guards, auth=auth)(make_root_handler(plugin, schema_url))

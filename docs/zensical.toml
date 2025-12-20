@@ -61,6 +61,7 @@ nav = [
     { "Routing" = "topics/routing.md" },
     { "Request Handling" = "topics/requests.md" },
     { "Responses" = "topics/responses.md" },
+    { "Async Django ORM" = "topics/async-orm.md" },
     { "Authentication" = "topics/authentication.md" },
     { "Permissions" = "topics/permissions.md" },
     { "Class-Based Views" = "topics/class-based-views.md" },

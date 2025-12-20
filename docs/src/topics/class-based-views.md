@@ -209,29 +209,142 @@ class ArticleViewSet(ModelViewSet):
 
 ## Custom actions
 
-Add custom actions using the `@action` decorator:
+Add custom actions using the `@action` decorator to create endpoints beyond standard CRUD operations.
+
+### Basic actions
 
 ```python
 from django_bolt import action
 
 @api.viewset("/articles")
 class ArticleViewSet(ViewSet):
-    @action(detail=False, methods=["get"])
-    async def published(self, request):
-        """GET /articles/published"""
-        return [{"id": 1, "published": True}]
+    queryset = Article.objects.all()
 
-    @action(detail=True, methods=["post"])
+    @action(methods=["GET"], detail=False)
+    async def published(self, request):
+        """Collection action: GET /articles/published"""
+        articles = []
+        async for article in Article.objects.filter(is_published=True):
+            articles.append({"id": article.id, "title": article.title})
+        return articles
+
+    @action(methods=["POST"], detail=True)
     async def publish(self, request, pk: int):
-        """POST /articles/{pk}/publish"""
-        return {"id": pk, "published": True}
+        """Instance action: POST /articles/{pk}/publish"""
+        article = await self.get_object(pk)
+        article.is_published = True
+        await article.asave()
+        return {"published": True, "article_id": pk}
 ```
 
-Action options:
+### Action parameters
 
-- `detail=False` - Collection action (e.g., `/articles/published`)
-- `detail=True` - Instance action (e.g., `/articles/{pk}/publish`)
-- `methods=["get", "post"]` - Allowed HTTP methods
+| Parameter | Description |
+|-----------|-------------|
+| `methods` | List of HTTP methods: `["GET"]`, `["POST"]`, etc. |
+| `detail` | `True` for instance actions (`/{pk}/action`), `False` for collection actions (`/action`) |
+| `path` | Custom URL path (defaults to function name) |
+
+### Custom path
+
+Override the URL path:
+
+```python
+@action(methods=["POST"], detail=True, path="custom-action-name")
+async def some_method_name(self, request, pk: int):
+    """POST /articles/{pk}/custom-action-name"""
+    return {"action": "custom-action-name", "article_id": pk}
+```
+
+### Actions with query parameters
+
+```python
+@action(methods=["GET"], detail=False)
+async def search(self, request, query: str, limit: int = 10):
+    """GET /articles/search?query=xxx&limit=5"""
+    articles = []
+    async for article in Article.objects.filter(title__icontains=query)[:limit]:
+        articles.append({"id": article.id, "title": article.title})
+    return {"query": query, "limit": limit, "results": articles}
+```
+
+### Actions with request body
+
+```python
+import msgspec
+
+class StatusUpdate(msgspec.Struct):
+    is_published: bool
+
+@action(methods=["POST"], detail=True, path="status")
+async def update_status(self, request, pk: int, data: StatusUpdate):
+    """POST /articles/{pk}/status with JSON body"""
+    article = await self.get_object(pk)
+    article.is_published = data.is_published
+    await article.asave()
+    return {"updated": True, "is_published": article.is_published}
+```
+
+### Multiple methods on same path
+
+Create separate actions for different HTTP methods on the same path:
+
+```python
+@action(methods=["GET"], detail=True, path="status")
+async def get_status(self, request, pk: int):
+    """GET /articles/{pk}/status"""
+    article = await self.get_object(pk)
+    return {"is_published": article.is_published}
+
+@action(methods=["POST"], detail=True, path="status")
+async def update_status(self, request, pk: int, data: StatusUpdate):
+    """POST /articles/{pk}/status"""
+    article = await self.get_object(pk)
+    article.is_published = data.is_published
+    await article.asave()
+    return {"updated": True}
+```
+
+### Custom lookup field with actions
+
+Actions respect the ViewSet's `lookup_field`:
+
+```python
+@api.viewset("/articles")
+class ArticleViewSet(ViewSet):
+    queryset = Article.objects.all()
+    lookup_field = 'id'  # Use 'id' instead of 'pk'
+
+    async def retrieve(self, request, id: int):
+        """GET /articles/{id}"""
+        article = await self.get_object(id=id)
+        return {"id": article.id, "title": article.title}
+
+    @action(methods=["POST"], detail=True)
+    async def feature(self, request, id: int):
+        """POST /articles/{id}/feature"""
+        return {"featured": True, "article_id": id}
+```
+
+### Important: Actions require api.viewset()
+
+The `@action` decorator only works with `api.viewset()`, not `api.view()`:
+
+```python
+# CORRECT: Use api.viewset()
+@api.viewset("/articles")
+class ArticleViewSet(ViewSet):
+    @action(methods=["POST"], detail=False)
+    async def custom_action(self, request):
+        return {"ok": True}
+
+# WRONG: Will raise ValueError
+@api.view("/articles", methods=["GET"])
+class ArticleView(ViewSet):
+    @action(methods=["POST"], detail=False)  # Error!
+    async def custom_action(self, request):
+        return {"ok": True}
+```
 
 ## Mixins
 

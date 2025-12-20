@@ -44,17 +44,37 @@ copyright = """
 Copyright &copy; 2025 Farhan Ali Raza
 """
 
-# Zensical supports both implicit navigation and explicitly defined navigation.
-# If you decide not to define a navigation here then Zensical will simply
-# derive the navigation structure from the directory structure of your
-# "docs_dir". The definition below demonstrates how a navigation structure
-# can be defined using TOML syntax.
+# Navigation structure following Django's progressive disclosure pattern:
+# - Start simple (Getting Started)
+# - Build understanding (Tutorials)
+# - Go deeper (Topic Guides)
+# - Reference for lookup (API Reference)
 #
 # Read more: https://zensical.org/docs/setup/navigation/
-# nav = [
-#   { "Get started" = "index.md" },
-#   { "Markdown in 5min" = "markdown.md" },
-# ]
+nav = [
+  { "Home" = "index.md" },
+  { "Getting Started" = [
+    { "Installation" = "tutorials/installation.md" },
+    { "Quick Start" = "tutorials/quickstart.md" },
+  ]},
+  { "Topic Guides" = [
+    { "Routing" = "topics/routing.md" },
+    { "Request Handling" = "topics/requests.md" },
+    { "Responses" = "topics/responses.md" },
+    { "Authentication" = "topics/authentication.md" },
+    { "Permissions" = "topics/permissions.md" },
+    { "Class-Based Views" = "topics/class-based-views.md" },
+    { "Middleware" = "topics/middleware.md" },
+    { "WebSocket" = "topics/websocket.md" },
+    { "OpenAPI" = "topics/openapi.md" },
+  ]},
+  { "Reference" = [
+    { "BoltAPI" = "ref/api.md" },
+    { "Responses" = "ref/responses.md" },
+    { "Authentication" = "ref/auth.md" },
+    { "Settings" = "ref/settings.md" },
+  ]},
+]
 
 # With the "extra_css" option you can add your own CSS styling to customize
 # your Zensical project according to your needs. You can add any number of

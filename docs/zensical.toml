@@ -79,6 +79,7 @@ nav = [
   { "Reference" = [
     { "BoltAPI" = "ref/api.md" },
     { "Responses" = "ref/responses.md" },
+    { "Exceptions" = "ref/exceptions.md" },
     { "Authentication" = "ref/auth.md" },
     { "Settings" = "ref/settings.md" },
   ]},

@@ -20,8 +20,7 @@ api = BoltAPI()
 
 @api.get("/profile", auth=[JWTAuthentication()], guards=[IsAuthenticated()])
 async def profile(request):
-    user_id = request.context.get("user_id")
-    return {"user_id": user_id}
+    return {"user_id": request.user.id}
 ```
 
 This endpoint:

@@ -71,7 +71,7 @@ class ProtectedView(APIView):
     guards = [IsAuthenticated()]
 
     async def get(self, request):
-        return {"user_id": request.context.get("user_id")}
+        return {"user_id": request.user.id}
 ```
 
 ### Path parameters
@@ -182,8 +182,7 @@ class MyArticleViewSet(ModelViewSet):
 
     async def get_queryset(self):
         qs = await super().get_queryset()
-        user_id = self.request.context.get("user_id")
-        return qs.filter(author_id=user_id)
+        return qs.filter(author_id=self.request.user.id)
 ```
 
 ### get_object

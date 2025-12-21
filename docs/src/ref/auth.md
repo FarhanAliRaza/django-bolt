@@ -257,7 +257,7 @@ After authentication, `request.context` contains:
 @api.get("/info")
 async def info(request):
     return {
-        "user_id": request.context.get("user_id"),
+        "user_id": request.user.id,
         "backend": request.context.get("auth_backend"),
     }
 ```

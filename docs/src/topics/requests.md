@@ -43,7 +43,7 @@ from django_bolt import Request
 @api.get("/profile", auth=[JWTAuthentication()], guards=[IsAuthenticated()])
 async def profile(request: Request):
     # IDE knows about .user, .context, .get(), etc.
-    return {"user_id": request.context.get("user_id")}
+    return {"user_id": request.user.id}
 ```
 
 The `Request` type provides:

@@ -230,7 +230,9 @@ async def delete_article(request, article_id: int):
     article = await Article.objects.aget(id=article_id)
 
     # Check if user owns the article or is admin
-    if article.author_id != request.user.id and not request.user.is_superuser:
+    user = request.user
+
+    if article.author_id != user.id and not user.is_superuser:
         raise Forbidden(detail="You can only delete your own articles")
 
     await article.adelete()

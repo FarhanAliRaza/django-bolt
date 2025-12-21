@@ -146,7 +146,7 @@ async def internal_endpoint(request):
 
 API keys are sent in the `X-API-Key` header by default.
 
-### API key permissions
+### API key permissions (In Development)
 
 Assign different permissions to different keys:
 

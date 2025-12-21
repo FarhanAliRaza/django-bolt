@@ -45,7 +45,6 @@ except ImportError:
     markcoroutinefunction = None
 
 # Lazy singleton for empty QueryDict - avoids requiring Django settings at import time
-# This is needed so `django-bolt init` works before Django is configured
 _EMPTY_QUERYDICT = None
 
 

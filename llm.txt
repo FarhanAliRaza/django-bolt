@@ -7,7 +7,6 @@ For detailed docs, see: docs/README.md
 
 ```bash
 pip install django-bolt
-python -m django_bolt init  # Creates api.py, updates settings
 python manage.py runbolt --host 0.0.0.0 --port 8000
 
 # Development mode with auto-reload

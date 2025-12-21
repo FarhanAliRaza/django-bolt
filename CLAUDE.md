@@ -109,18 +109,6 @@ make release VERSION=0.2.2 DRY_RUN=1    # Test without changes
 ./scripts/release.sh 0.2.2 --dry-run    # Test without changes
 ```
 
-### CLI Tool
-
-```bash
-# Initialize Django-Bolt in a new Django project
-python -m django_bolt init
-
-# This creates:
-# - api.py in project root
-# - Adds django_bolt to INSTALLED_APPS
-# - Configures basic settings
-```
-
 ## Architecture Overview
 
 ### Core Components
@@ -401,7 +389,7 @@ uv run --with pytest pytest python/tests -s -vv
 ### Django Integration
 
 - `bootstrap.py` - Django configuration helper
-- `cli.py` - CLI tool (`django-bolt init` command)
+- `cli.py` - CLI tool (`django-bolt version` command)
 - `management/commands/runbolt.py` - Django management command with autodiscovery
 - `apps.py` - Django app configuration
 

@@ -1,3 +1,7 @@
+---
+icon: lucide/file-json
+---
+
 # Serializers
 
 Django-Bolt provides a powerful `Serializer` class built on top of `msgspec.Struct`. It offers field validation, computed fields, dynamic field selection, and Django model integration - all with excellent performance.

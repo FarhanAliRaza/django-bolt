@@ -1,6 +1,32 @@
+---
+icon: lucide/zap
+---
+
 # Django-Bolt
 
 Django-Bolt is a high-performance API framework for Django. It lets you build APIs using familiar Django patterns while leveraging Rust for speed.
+
+## Installation
+
+Install using pip:
+
+```bash
+pip install django-bolt
+```
+
+Or with uv:
+
+```bash
+uv add django-bolt
+```
+
+Then initialize in your Django project:
+
+```bash
+django-bolt init
+```
+
+This adds `django_bolt` to your `INSTALLED_APPS` and creates an `api.py` file.
 
 ## At a glance
 
@@ -78,27 +104,14 @@ async def profile(request):
     return {"user_id": request.context.get("user_id")}
 ```
 
-## First steps
+## Next steps
 
-New to Django-Bolt? Start here:
-
-1. **[Installation](tutorials/installation.md)** - Get Django-Bolt installed and configured
-2. **[Quick Start](tutorials/quickstart.md)** - Build your first API in 5 minutes
+- **[Installation](getting-started/installation.md)** - Full installation guide with all options
+- **[Quick Start](getting-started/quickstart.md)** - Build your first API
+- **[Deployment](getting-started/deployment.md)** - Deploy with multiple processes
 
 ## Getting help
-
-Having trouble? Here's how to get help:
 
 - Check the [topic guides](topics/routing.md) for in-depth explanations
 - Look at the [API reference](ref/api.md) for detailed information
 - Report issues on [GitHub](https://github.com/FarhanAliRaza/django-bolt/issues)
-
-## How the documentation is organized
-
-Django-Bolt has different types of documentation for different purposes:
-
-- **[Tutorials](tutorials/installation.md)** take you through a series of steps to build something. Start here if you're new.
-
-- **[Topic guides](topics/routing.md)** explain key concepts and provide background information. Read these when you want to understand how things work.
-
-- **[Reference guides](ref/api.md)** contain technical reference for APIs and other aspects of Django-Bolt. They describe how things work and how to use them, assuming you already understand the key concepts.

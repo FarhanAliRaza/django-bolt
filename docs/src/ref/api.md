@@ -1,3 +1,7 @@
+---
+icon: lucide/code
+---
+
 # BoltAPI Reference
 
 This page documents the `BoltAPI` class and its methods.

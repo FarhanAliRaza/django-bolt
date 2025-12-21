@@ -1,3 +1,7 @@
+---
+icon: lucide/heart-pulse
+---
+
 # Health checks
 
 Django-Bolt provides a built-in health check system for Kubernetes readiness/liveness probes and load balancer health checks.

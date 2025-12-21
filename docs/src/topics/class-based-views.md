@@ -1,3 +1,7 @@
+---
+icon: lucide/boxes
+---
+
 # Class-Based Views
 
 Django-Bolt supports class-based views for organizing related endpoints. This guide covers `APIView`, `ViewSet`, and `ModelViewSet`.

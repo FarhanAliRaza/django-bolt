@@ -1,3 +1,7 @@
+---
+icon: lucide/shield-check
+---
+
 # Permissions
 
 Django-Bolt uses "guards" to control access to endpoints. Guards are permission checks that run in Rust after authentication but before your handler is called.

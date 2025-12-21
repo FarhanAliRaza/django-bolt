@@ -52,10 +52,11 @@ Copyright &copy; 2025 Farhan Ali Raza
 #
 # Read more: https://zensical.org/docs/setup/navigation/
 nav = [
-  { "Home" = "index.md" },
   { "Getting Started" = [
-    { "Installation" = "tutorials/installation.md" },
-    { "Quick Start" = "tutorials/quickstart.md" },
+    { "Overview" = "index.md" },
+    { "Installation" = "getting-started/installation.md" },
+    { "Quick Start" = "getting-started/quickstart.md" },
+    { "Deployment" = "getting-started/deployment.md" },
   ]},
   { "Topic Guides" = [
     { "Routing" = "topics/routing.md" },
@@ -258,6 +259,16 @@ features = [
     # starts to scroll up again.
     # https://zensical.org/docs/setup/navigation/#back-to-top-button
     "navigation.top",
+
+    # When tabs are enabled, top-level sections are rendered in a menu layer
+    # below the header for viewports above 1220px, but remain as-is on mobile.
+    # https://zensical.org/docs/setup/navigation/#navigation-tabs
+    "navigation.tabs",
+
+    # When sticky tabs are enabled, navigation tabs will lock below the header
+    # and always remain visible when scrolling down.
+    # https://zensical.org/docs/setup/navigation/#sticky-navigation-tabs
+    "navigation.tabs.sticky",
 
     # When anchor tracking is enabled, the URL in the address bar is
     # automatically updated with the active anchor as highlighted in the table

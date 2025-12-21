@@ -1,3 +1,7 @@
+---
+icon: lucide/flask-conical
+---
+
 # Testing
 
 Django-Bolt provides a `TestClient` for testing your API endpoints without starting a server.

@@ -1,3 +1,7 @@
+---
+icon: lucide/lock
+---
+
 # Authentication Reference
 
 This page documents all authentication and authorization classes.

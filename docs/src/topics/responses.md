@@ -1,3 +1,7 @@
+---
+icon: lucide/arrow-up-from-line
+---
+
 # Responses
 
 This guide covers all the response types available in Django-Bolt and how to use them.

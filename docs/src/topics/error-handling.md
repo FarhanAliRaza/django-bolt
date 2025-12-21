@@ -1,3 +1,7 @@
+---
+icon: lucide/triangle-alert
+---
+
 # Error handling
 
 Django-Bolt provides a structured exception hierarchy for HTTP errors and automatic error response formatting.

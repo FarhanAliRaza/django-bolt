@@ -1,3 +1,7 @@
+---
+icon: lucide/file-code-2
+---
+
 # OpenAPI Documentation
 
 Django-Bolt automatically generates OpenAPI documentation for your API. This guide covers how to configure and customize the documentation.

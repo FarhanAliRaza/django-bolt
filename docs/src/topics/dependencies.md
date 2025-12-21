@@ -1,3 +1,7 @@
+---
+icon: lucide/plug
+---
+
 # Dependencies
 
 Django-Bolt provides a dependency injection system using the `Depends` marker. Dependencies let you extract common logic into reusable functions.

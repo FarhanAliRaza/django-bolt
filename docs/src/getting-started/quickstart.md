@@ -1,13 +1,10 @@
+---
+icon: lucide/rocket
+---
+
 # Quick Start
 
 This tutorial walks you through building a simple API with Django-Bolt. By the end, you'll understand the core concepts and be ready to build your own APIs.
-
-## Prerequisites
-
-Make sure you have:
-
-- Django-Bolt installed ([Installation guide](installation.md))
-- A Django project with `django_bolt` in `INSTALLED_APPS`
 
 ## Your first endpoint
 
@@ -244,6 +241,7 @@ async def get_user(user_id: int):
 
 You now know the basics of Django-Bolt. Here's where to go next:
 
+- **[Deployment](deployment.md)** - Deploy with multiple processes
 - **[Routing](../topics/routing.md)** - Learn more about route patterns and path converters
 - **[Responses](../topics/responses.md)** - Explore all response types including streaming
 - **[Authentication](../topics/authentication.md)** - Add JWT or API key authentication

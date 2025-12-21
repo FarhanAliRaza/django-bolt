@@ -335,7 +335,7 @@ pub fn start_server_async(
                     .ok()
                     .and_then(|s| s.parse::<usize>().ok())
                     .filter(|&w| w >= 1)
-                    .unwrap_or(2);
+                    .unwrap_or(1);
 
                 // Read HTTP keep-alive configuration from environment
                 let keep_alive = std::env::var("DJANGO_BOLT_KEEP_ALIVE")

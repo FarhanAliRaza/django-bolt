@@ -1,3 +1,7 @@
+---
+icon: lucide/key-round
+---
+
 # Authentication
 
 Django-Bolt provides built-in authentication backends that run in Rust for high performance. This guide covers how to set up and use authentication in your API.

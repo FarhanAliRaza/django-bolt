@@ -1,3 +1,7 @@
+---
+icon: lucide/layers
+---
+
 # Middleware
 
 Django-Bolt provides middleware for cross-cutting concerns like CORS and rate limiting. This guide covers the built-in middleware and how to use it.

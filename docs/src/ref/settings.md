@@ -1,3 +1,7 @@
+---
+icon: lucide/settings
+---
+
 # Settings Reference
 
 Django-Bolt settings are configured in your Django `settings.py` file.

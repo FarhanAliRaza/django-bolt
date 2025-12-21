@@ -1,3 +1,7 @@
+---
+icon: lucide/cable
+---
+
 # WebSocket
 
 Django-Bolt provides WebSocket support for real-time bidirectional communication.

@@ -1,3 +1,7 @@
+---
+icon: lucide/arrow-down-to-line
+---
+
 # Request Handling
 
 This guide covers how Django-Bolt processes requests and how to access request data in your handlers.

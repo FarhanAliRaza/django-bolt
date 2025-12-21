@@ -1,3 +1,7 @@
+---
+icon: lucide/route
+---
+
 # Routing
 
 This guide explains how routing works in Django-Bolt and covers all the ways you can define API endpoints.

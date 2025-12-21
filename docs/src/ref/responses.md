@@ -1,3 +1,7 @@
+---
+icon: lucide/send
+---
+
 # Responses Reference
 
 This page documents all response types available in Django-Bolt.

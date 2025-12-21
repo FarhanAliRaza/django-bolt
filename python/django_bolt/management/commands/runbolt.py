@@ -43,9 +43,6 @@ class Command(BaseCommand):
             "--processes", type=int, default=1, help="Number of processes (default: 1)"
         )
         parser.add_argument(
-            "--workers", type=int, default=1, help="Workers per process (default: 1)"
-        )
-        parser.add_argument(
             "--no-admin",
             action="store_true",
             help="Disable Django admin integration (admin enabled by default)",
@@ -72,9 +69,8 @@ class Command(BaseCommand):
         processes = options['processes']
         dev_mode = options.get('dev', False)
 
-        # Dev mode: force single process + single worker + enable auto-reload
+        # Dev mode: force single process + enable auto-reload
         if dev_mode:
-            options['workers'] = 1
             if processes > 1:
                 self.stdout.write(
                     self.style.WARNING(
@@ -281,12 +277,12 @@ class Command(BaseCommand):
 
         if process_id is not None:
             self.stdout.write(self.style.SUCCESS(f"[django-bolt] Process {process_id}: Starting server on http://{options['host']}:{options['port']}"))
-            self.stdout.write(f"[django-bolt] Process {process_id}: Workers: {options['workers']}")
         else:
             self.stdout.write(self.style.SUCCESS(f"[django-bolt] Starting server on http://{options['host']}:{options['port']}"))
-            self.stdout.write(f"[django-bolt] Workers: {options['workers']}, Processes: {options['processes']}")
-        # Set environment variable for Rust to read worker count, backlog, and keep-alive
-        os.environ['DJANGO_BOLT_WORKERS'] = str(options['workers'])
+            if options['processes'] > 1:
+                self.stdout.write(f"[django-bolt] Processes: {options['processes']}")
+        # Set environment variables for Rust
+        os.environ['DJANGO_BOLT_WORKERS'] = '1'
         os.environ['DJANGO_BOLT_BACKLOG'] = str(options['backlog'])
         if options.get('keep_alive') is not None:
             os.environ['DJANGO_BOLT_KEEP_ALIVE'] = str(options['keep_alive'])

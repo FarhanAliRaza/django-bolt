@@ -1,3 +1,7 @@
+---
+icon: lucide/database
+---
+
 # Async Django ORM
 
 Django-Bolt handlers are async, which means you use Django's async ORM methods. This guide explains how to work with the ORM efficiently and avoid common pitfalls.

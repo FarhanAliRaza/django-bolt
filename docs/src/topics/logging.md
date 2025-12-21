@@ -1,3 +1,7 @@
+---
+icon: lucide/scroll-text
+---
+
 # Logging
 
 Django-Bolt provides a comprehensive logging system with queue-based non-blocking logging, configurable log levels, request/response logging, and header obfuscation.

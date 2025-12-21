@@ -75,6 +75,51 @@ async def template():
     return HTML(html)
 ```
 
+### Django templates
+
+Use the `render()` function to render Django templates. It works like [Django's `render()` shortcut](https://docs.djangoproject.com/en/dev/topics/http/shortcuts/#render):
+
+```python
+from django_bolt import Request
+from django_bolt.shortcuts import render
+
+@api.get("/page")
+async def show_page(request: Request):
+    return render(request, "myapp/page.html", {
+        "title": "My Page",
+        "items": ["item1", "item2"],
+    })
+```
+
+Use standard Django templates - nothing special required:
+
+```html
+<!-- templates/myapp/page.html -->
+<!DOCTYPE html>
+<html>
+<head><title>{{ title }}</title></head>
+<body>
+    <h1>{{ title }}</h1>
+    <ul>
+    {% for item in items %}
+        <li>{{ item }}</li>
+    {% endfor %}
+    </ul>
+</body>
+</html>
+```
+
+Parameters:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `request` | `Request` | required | The request object |
+| `template_name` | `str` | required | Path to the template file |
+| `context` | `dict` | `None` | Template context variables |
+| `content_type` | `str` | `None` | Response content type |
+| `status` | `int` | `200` | HTTP status code |
+| `using` | `str` | `None` | Template engine to use |
+
 ## Redirects
 
 Redirect to another URL:

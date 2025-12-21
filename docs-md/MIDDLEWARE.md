@@ -32,8 +32,21 @@ from django_bolt.auth import JWTAuthentication, IsAuthenticated
 # Use Django middleware from settings.MIDDLEWARE
 api = BoltAPI(django_middleware=True)
 
-# Or with custom Python middleware (pass classes, not instances)
+# Or with built-in Bolt middleware (pass classes)
 api = BoltAPI(middleware=[TimingMiddleware])
+
+# For custom Django-style middleware, use DjangoMiddlewareStack
+from django_bolt.middleware import DjangoMiddlewareStack
+
+class MyCustomMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+    def __call__(self, request):
+        response = self.get_response(request)
+        response["X-Custom"] = "value"
+        return response
+
+api = BoltAPI(middleware=[DjangoMiddlewareStack([MyCustomMiddleware])])
 
 # Per-route rate limiting (Rust-accelerated)
 @api.get("/api/data")
@@ -173,32 +186,50 @@ async def flexible_auth(request):
 
 ## Python Middleware
 
-For custom logic and Django middleware integration. Uses Django's standard pattern.
+For custom logic and Django middleware integration.
 
-### Django-Style Pattern
+### Custom Django-Style Middleware
 
-All Python middleware follows Django's pattern:
+For custom middleware using Django's pattern, wrap in `DjangoMiddlewareStack`:
 
 ```python
-class MyMiddleware:
+from django_bolt import BoltAPI
+from django_bolt.middleware import DjangoMiddlewareStack
+
+# Define custom middleware with Django's pattern
+class HeaderAddingMiddleware:
     def __init__(self, get_response):
         """Called ONCE at registration time."""
         self.get_response = get_response
-        # Do expensive setup here (compiled patterns, connections, etc.)
 
-    async def __call__(self, request):
+    def __call__(self, request):
         """Called for each request."""
-        # Before request processing
-        request.state["custom_value"] = "hello"
-
-        response = await self.get_response(request)
-
-        # After request processing
-        response.headers["X-Custom-Header"] = "value"
+        response = self.get_response(request)
+        response["X-Custom-Header"] = "value"
         return response
+
+class ShortCircuitMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.path == "/blocked":
+            from django.http import HttpResponse
+            return HttpResponse("Blocked", status=403)
+        return self.get_response(request)
+
+# Use custom middleware wrapped in DjangoMiddlewareStack
+api = BoltAPI()
+api.middleware = [DjangoMiddlewareStack([
+    HeaderAddingMiddleware,
+    ShortCircuitMiddleware,
+])]
 ```
 
-**Key Point:** `__init__` is called once at startup, not per-request.
+**Key Points:**
+- `__init__(get_response)` is called once at startup, not per-request
+- Custom Django-style middleware must be wrapped in `DjangoMiddlewareStack`
+- This handles sync/async bridging automatically
 
 ### Using Django Middleware
 
@@ -473,12 +504,14 @@ async def dashboard(request):
     }
 ```
 
-### Built-in Python Middleware
+### Built-in Bolt Middleware
+
+Django-Bolt provides built-in async middleware that extends `BaseMiddleware`. These can be passed directly as classes:
 
 ```python
 from django_bolt.middleware import TimingMiddleware, LoggingMiddleware, ErrorHandlerMiddleware
 
-# Pass classes (not instances) - Django-style
+# Built-in Bolt middleware - pass as classes (not instances)
 api = BoltAPI(middleware=[
     TimingMiddleware,      # Adds X-Request-ID and X-Response-Time headers
     LoggingMiddleware,     # Logs requests/responses
@@ -500,10 +533,11 @@ api = BoltAPI(middleware=[
 
 ### BaseMiddleware Helper
 
-For middleware with path/method exclusions:
+For **async Bolt middleware** with path/method exclusions, extend `BaseMiddleware`. Unlike Django-style middleware, these are passed directly as classes (no `DjangoMiddlewareStack` needed):
 
 ```python
 from django_bolt.middleware import BaseMiddleware
+from django_bolt.exceptions import HTTPException
 
 class AuthMiddleware(BaseMiddleware):
     exclude_paths = ["/health", "/metrics", "/docs/*"]  # Glob patterns
@@ -513,12 +547,16 @@ class AuthMiddleware(BaseMiddleware):
         if not request.headers.get("authorization"):
             raise HTTPException(401, "Unauthorized")
         return await self.get_response(request)
+
+# Pass directly as class
+api = BoltAPI(middleware=[AuthMiddleware])
 ```
 
 **Features:**
 - `exclude_paths` - Glob patterns compiled once at startup
 - `exclude_methods` - O(1) set lookup
 - Automatic skip check before `process_request`
+- Async by design - works directly in middleware chain
 
 ### Combining Django and Custom Middleware
 

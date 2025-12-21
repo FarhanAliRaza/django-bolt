@@ -138,6 +138,10 @@ Supported algorithms:
 
 ## API key authentication
 
+!!! info "In Development"
+
+    API key permissions (`key_permissions` parameter) are in development. Basic API key validation works, but per-key permissions are not yet finalized.
+
 For service-to-service communication, use API key authentication:
 
 ```python

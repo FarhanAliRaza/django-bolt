@@ -44,6 +44,10 @@ JWTAuthentication(
 
 ### APIKeyAuthentication
 
+!!! info "In Development"
+
+    API key permissions (`key_permissions` parameter) are in development. Basic API key validation works, but per-key permissions are not yet finalized.
+
 API key authentication.
 
 ```python
@@ -68,6 +72,10 @@ APIKeyAuthentication(
 | `key_permissions` | `dict`     | `None`        | Key to permissions mapping |
 
 ### SessionAuthentication
+
+!!! warning "In Development"
+
+    Session authentication is not yet implemented. This is a placeholder for future functionality.
 
 Django session authentication.
 

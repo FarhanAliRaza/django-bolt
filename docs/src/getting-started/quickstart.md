@@ -146,6 +146,62 @@ async def delete_resource(id: int):
     return {"method": "DELETE", "id": id}
 ```
 
+## Headers
+
+Extract header values using `Annotated`:
+
+```python
+from typing import Annotated
+from django_bolt.param_functions import Header
+
+@api.get("/auth")
+async def check_auth(
+    authorization: Annotated[str, Header(alias="Authorization")]
+):
+    return {"token": authorization}
+
+@api.get("/optional-header")
+async def optional_header(
+    x_custom: Annotated[str | None, Header(alias="X-Custom")] = None
+):
+    return {"custom": x_custom}
+```
+
+## Form data
+
+Handle form submissions:
+
+```python
+from typing import Annotated
+from django_bolt.param_functions import Form
+
+@api.post("/login")
+async def login(
+    username: Annotated[str, Form()],
+    password: Annotated[str, Form()]
+):
+    return {"username": username}
+```
+
+## File uploads
+
+Handle file uploads:
+
+```python
+from typing import Annotated
+from django_bolt.param_functions import File
+
+@api.post("/upload")
+async def upload(
+    files: Annotated[list[dict], File(alias="file")]
+):
+    for f in files:
+        print(f"Received: {f.get('filename')} ({f.get('size')} bytes)")
+    return {"uploaded": len(files)}
+```
+
+Each file dict contains `filename`, `content_type`, `size`, and `content` (bytes).
+
 ## Response types
 
 By default, returning a dict creates a JSON response. You can also return other types:
@@ -164,6 +220,22 @@ async def html_page():
 @api.get("/redirect")
 async def redirect():
     return Redirect("/hello")
+```
+
+## Rendering Django templates
+
+Use the `render()` function to render Django templates. It works like Django's `render()` but returns an [HTML response](../topics/responses.md#django-templates):
+
+```python
+from django_bolt import Request
+from django_bolt.shortcuts import render
+
+@api.get("/page")
+async def show_page(request: Request):
+    return render(request, "page.html", {
+        "title": "My Page",
+        "items": ["item1", "item2"],
+    })
 ```
 
 ## Working with Django models

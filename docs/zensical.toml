@@ -54,7 +54,6 @@ Copyright &copy; 2025 Farhan Ali Raza
 nav = [
   { "Getting Started" = [
     { "Overview" = "index.md" },
-    { "Installation" = "getting-started/installation.md" },
     { "Quick Start" = "getting-started/quickstart.md" },
     { "Deployment" = "getting-started/deployment.md" },
   ]},

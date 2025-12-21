@@ -29,7 +29,7 @@ python manage.py runbolt --dev
 Visit `http://localhost:8000/hello` in your browser. You'll see:
 
 ```json
-{"message": "Hello, World!"}
+{ "message": "Hello, World!" }
 ```
 
 ## Path parameters
@@ -45,7 +45,7 @@ async def get_user(user_id: int):
 The `user_id` parameter is automatically converted to an integer. Try:
 
 - `http://localhost:8000/users/42` returns `{"user_id": 42}`
-- `http://localhost:8000/users/abc` returns a 400 error (invalid integer)
+- `http://localhost:8000/users/abc` returns a 422 error (invalid integer)
 
 ## Query parameters
 
@@ -62,7 +62,7 @@ Try: `http://localhost:8000/search?q=python&page=2`
 Returns:
 
 ```json
-{"query": "python", "page": 2, "limit": 10}
+{ "query": "python", "page": 2, "limit": 10 }
 ```
 
 Optional parameters have default values. Required parameters (like `q`) return a 400 error if missing.
@@ -95,7 +95,7 @@ curl -X POST http://localhost:8000/items \
 Returns:
 
 ```json
-{"name": "Widget", "price": 29.99}
+{ "name": "Widget", "price": 29.99 }
 ```
 
 Invalid data returns a detailed validation error:

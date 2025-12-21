@@ -8,11 +8,19 @@ Django-Bolt automatically generates OpenAPI documentation for your API. This gui
 
 ## Accessing the documentation
 
-By default, documentation is available at:
+By default, Django-Bolt serves multiple documentation UIs automatically:
 
-- `/docs` - Interactive Swagger UI
+| Path | UI |
+|------|-----|
+| `/docs` | Swagger UI (default) |
+| `/docs/redoc` | Redoc |
+| `/docs/scalar` | Scalar |
+| `/docs/rapidoc` | RapiDoc |
+| `/docs/stoplight` | Stoplight Elements |
+| `/docs/openapi.json` | Raw JSON schema |
+| `/docs/openapi.yaml` | Raw YAML schema |
 
-Start your server and visit `http://localhost:8000/docs`.
+Start your server and visit any of these URLs to browse your API documentation.
 
 ## Configuring OpenAPI
 
@@ -130,97 +138,166 @@ async def create_user():
     return {"id": 1}
 ```
 
-## Alternative documentation UIs
+## Customizing documentation UIs
 
-Django-Bolt supports multiple documentation renderers:
+By default, all documentation UIs are served automatically. To serve only specific UIs, provide a custom `render_plugins` list:
 
-### Swagger UI (default)
+### Swagger UI only
 
 ```python
-from django_bolt.openapi import SwaggerRenderPlugin
+from django_bolt.openapi import OpenAPIConfig, SwaggerRenderPlugin
 
 api = BoltAPI(
     openapi_config=OpenAPIConfig(
         title="My API",
-        render_plugin=SwaggerRenderPlugin(),
+        version="1.0.0",
+        render_plugins=[SwaggerRenderPlugin(path="/")],
     )
 )
 ```
 
-### ReDoc
+### ReDoc only
 
 ```python
-from django_bolt.openapi import RedocRenderPlugin
+from django_bolt.openapi import OpenAPIConfig, RedocRenderPlugin
 
 api = BoltAPI(
     openapi_config=OpenAPIConfig(
         title="My API",
-        render_plugin=RedocRenderPlugin(),
+        version="1.0.0",
+        render_plugins=[RedocRenderPlugin(path="/")],
     )
 )
 ```
 
-### Scalar
+### Scalar only
 
 ```python
-from django_bolt.openapi import ScalarRenderPlugin
+from django_bolt.openapi import OpenAPIConfig, ScalarRenderPlugin
 
 api = BoltAPI(
     openapi_config=OpenAPIConfig(
         title="My API",
-        render_plugin=ScalarRenderPlugin(),
+        version="1.0.0",
+        render_plugins=[ScalarRenderPlugin(path="/")],
     )
 )
 ```
 
-### Stoplight Elements
+### Stoplight Elements only
 
 ```python
-from django_bolt.openapi import StoplightRenderPlugin
+from django_bolt.openapi import OpenAPIConfig, StoplightRenderPlugin
 
 api = BoltAPI(
     openapi_config=OpenAPIConfig(
         title="My API",
-        render_plugin=StoplightRenderPlugin(),
+        version="1.0.0",
+        render_plugins=[StoplightRenderPlugin(path="/")],
     )
 )
 ```
 
-### RapiDoc
+### RapiDoc only
 
 ```python
-from django_bolt.openapi import RapidocRenderPlugin
+from django_bolt.openapi import OpenAPIConfig, RapidocRenderPlugin
 
 api = BoltAPI(
     openapi_config=OpenAPIConfig(
         title="My API",
-        render_plugin=RapidocRenderPlugin(),
+        version="1.0.0",
+        render_plugins=[RapidocRenderPlugin(path="/")],
+    )
+)
+```
+
+### Multiple UIs at custom paths
+
+```python
+from django_bolt.openapi import (
+    OpenAPIConfig,
+    SwaggerRenderPlugin,
+    RedocRenderPlugin,
+)
+
+api = BoltAPI(
+    openapi_config=OpenAPIConfig(
+        title="My API",
+        version="1.0.0",
+        render_plugins=[
+            SwaggerRenderPlugin(path="/"),      # /docs
+            RedocRenderPlugin(path="/redoc"),   # /docs/redoc
+        ],
     )
 )
 ```
 
 ## Raw OpenAPI JSON/YAML
 
-Access the raw OpenAPI specification:
+The raw OpenAPI specification is always available at:
 
-- `/openapi.json` - JSON format
-- `/openapi.yaml` - YAML format
-
-```python
-from django_bolt.openapi import JsonRenderPlugin, YamlRenderPlugin
-```
+- `/docs/openapi.json` - JSON format
+- `/docs/openapi.yaml` - YAML format (requires `pyyaml` package)
 
 ## Protecting documentation
 
-### Django admin authentication
+### Django session authentication
 
-Require Django admin login to access docs:
+Require Django user login to access docs (redirects to login page):
 
 ```python
 api = BoltAPI(
     openapi_config=OpenAPIConfig(
         title="My API",
-        django_auth=True,  # Requires Django admin login
+        version="1.0.0",
+        django_auth=True,  # Requires any logged-in Django user
+    )
+)
+```
+
+For staff-only access, use Django's `staff_member_required`:
+
+```python
+from django.contrib.admin.views.decorators import staff_member_required
+
+api = BoltAPI(
+    openapi_config=OpenAPIConfig(
+        title="My API",
+        version="1.0.0",
+        django_auth=staff_member_required,  # Requires staff user
+    )
+)
+```
+
+### API-based authentication
+
+Protect docs with JWT or API key authentication (returns 401/403 instead of redirects):
+
+```python
+from django_bolt.auth import JWTAuthentication, IsAuthenticated
+
+api = BoltAPI(
+    openapi_config=OpenAPIConfig(
+        title="My API",
+        version="1.0.0",
+        auth=[JWTAuthentication()],
+        guards=[IsAuthenticated()],
+    )
+)
+```
+
+For staff-only API access:
+
+```python
+from django_bolt.auth import JWTAuthentication, IsStaff
+
+api = BoltAPI(
+    openapi_config=OpenAPIConfig(
+        title="My API",
+        version="1.0.0",
+        auth=[JWTAuthentication()],
+        guards=[IsStaff()],
     )
 )
 ```

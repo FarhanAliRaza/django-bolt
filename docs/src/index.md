@@ -20,14 +20,6 @@ Or with uv:
 uv add django-bolt
 ```
 
-Then initialize in your Django project:
-
-```bash
-django-bolt init
-```
-
-This adds `django_bolt` to your `INSTALLED_APPS` and creates an `api.py` file.
-
 ## At a glance
 
 Here's a simple API endpoint:
@@ -37,18 +29,34 @@ from django_bolt import BoltAPI
 
 api = BoltAPI()
 
-@api.get("/hello")
+@api.get("/", summary="My first api endpoint 🤗")
 async def hello():
     return {"message": "Hello, World!"}
+
+```
+
+Add `django_bolt` to your `INSTALLED_APPS` in `settings.py`:
+
+```python
+INSTALLED_APPS = [
+    ...
+    "django_bolt",
+]
 ```
 
 Run it with:
 
 ```bash
-python manage.py runbolt
+python manage.py runbolt --dev
 ```
 
-That's it. You now have an API endpoint at `http://localhost:8000/hello`.
+That's it. You now have an API endpoint at `http://localhost:8000`.
+
+You also get automatic API documentation at `http://localhost:8000/docs`:
+
+![OpenAPI Swagger UI](images/openapi-intro.png)
+
+Other documentation UIs are also available by default: [Redoc](topics/openapi.md#redoc-only) (`/docs/redoc`), [Scalar](topics/openapi.md#scalar-only) (`/docs/scalar`), [RapiDoc](topics/openapi.md#rapidoc-only) (`/docs/rapidoc`), and [Stoplight Elements](topics/openapi.md#stoplight-elements-only) (`/docs/stoplight`). See the [OpenAPI documentation](topics/openapi.md) for customization options.
 
 ## Why Django-Bolt?
 
@@ -61,7 +69,7 @@ Django-Bolt is designed for developers who:
 
 ## Key features
 
-**Simple routing** - Decorator-based routing similar to FastAPI and Flask:
+**Simple routing** - Decorator-based routing similar to FastAPI, Litestar and Flask:
 
 ```python
 @api.get("/users/{user_id}")
@@ -101,12 +109,11 @@ from django_bolt.auth import JWTAuthentication, IsAuthenticated
 
 @api.get("/profile", auth=[JWTAuthentication()], guards=[IsAuthenticated()])
 async def profile(request):
-    return {"user_id": request.context.get("user_id")}
+    return {"user_id": request.user.id}
 ```
 
 ## Next steps
 
-- **[Installation](getting-started/installation.md)** - Full installation guide with all options
 - **[Quick Start](getting-started/quickstart.md)** - Build your first API
 - **[Deployment](getting-started/deployment.md)** - Deploy with multiple processes
 

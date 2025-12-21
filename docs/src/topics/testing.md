@@ -349,15 +349,34 @@ def test_article_viewset(api):
         assert response.json()["title"] == "Test Article"
 ```
 
-## HTTP layer testing
+## AsyncTestClient
 
-For more realistic testing that includes HTTP layer behavior:
+For async test functions, use `AsyncTestClient`:
 
 ```python
-with TestClient(api, use_http_layer=True) as client:
-    response = client.get("/sse-endpoint")
-    assert response.headers.get("content-type").startswith("text/event-stream")
+import pytest
+from django_bolt import BoltAPI
+from django_bolt.testing import AsyncTestClient
+
+api = BoltAPI()
+
+@api.get("/hello")
+async def hello():
+    return {"message": "world"}
+
+@pytest.mark.asyncio
+async def test_async():
+    async with AsyncTestClient(api) as client:
+        response = await client.get("/hello")
+        assert response.status_code == 200
+        assert response.json() == {"message": "world"}
 ```
+
+The `AsyncTestClient` is useful when:
+
+- Your test function is async
+- You need to await other async operations in the same test
+- You're using `pytest-asyncio`
 
 ## Test isolation
 

@@ -29,14 +29,23 @@ Django-Bolt provides pre-configured exceptions for common status codes:
 
 ```python
 from django_bolt.exceptions import (
+    # 4xx Client Errors
     BadRequest,           # 400
     Unauthorized,         # 401
     Forbidden,            # 403
     NotFound,             # 404
+    MethodNotAllowed,     # 405
+    NotAcceptable,        # 406
+    Conflict,             # 409
+    Gone,                 # 410
     UnprocessableEntity,  # 422
     TooManyRequests,      # 429
+
+    # 5xx Server Errors
     InternalServerError,  # 500
+    BadGateway,           # 502
     ServiceUnavailable,   # 503
+    GatewayTimeout,       # 504
 )
 ```
 
@@ -315,13 +324,26 @@ The original traceback is preserved for debugging.
 
 ## Exception reference
 
+### Client errors (4xx)
+
 | Exception | Status Code | Default Message |
 |-----------|-------------|-----------------|
 | `BadRequest` | 400 | Bad Request |
 | `Unauthorized` | 401 | Unauthorized |
 | `Forbidden` | 403 | Forbidden |
 | `NotFound` | 404 | Not Found |
+| `MethodNotAllowed` | 405 | Method Not Allowed |
+| `NotAcceptable` | 406 | Not Acceptable |
+| `Conflict` | 409 | Conflict |
+| `Gone` | 410 | Gone |
 | `UnprocessableEntity` | 422 | Unprocessable Entity |
 | `TooManyRequests` | 429 | Too Many Requests |
+
+### Server errors (5xx)
+
+| Exception | Status Code | Default Message |
+|-----------|-------------|-----------------|
 | `InternalServerError` | 500 | Internal Server Error |
+| `BadGateway` | 502 | Bad Gateway |
 | `ServiceUnavailable` | 503 | Service Unavailable |
+| `GatewayTimeout` | 504 | Gateway Timeout |

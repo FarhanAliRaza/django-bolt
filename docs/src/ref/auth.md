@@ -27,14 +27,14 @@ JWTAuthentication(
 
 #### Parameters
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `secret` | `str` | Django SECRET_KEY | JWT signing secret |
-| `algorithms` | `list[str]` | `["HS256"]` | Allowed JWT algorithms |
-| `header` | `str` | `"authorization"` | Header containing token |
-| `audience` | `str` | `None` | Required `aud` claim |
-| `issuer` | `str` | `None` | Required `iss` claim |
-| `revocation_store` | RevocationStore | `None` | Token revocation store |
+| Parameter          | Type            | Default           | Description             |
+| ------------------ | --------------- | ----------------- | ----------------------- |
+| `secret`           | `str`           | Django SECRET_KEY | JWT signing secret      |
+| `algorithms`       | `list[str]`     | `["HS256"]`       | Allowed JWT algorithms  |
+| `header`           | `str`           | `"authorization"` | Header containing token |
+| `audience`         | `str`           | `None`            | Required `aud` claim    |
+| `issuer`           | `str`           | `None`            | Required `iss` claim    |
+| `revocation_store` | RevocationStore | `None`            | Token revocation store  |
 
 #### Supported algorithms
 
@@ -61,11 +61,11 @@ APIKeyAuthentication(
 
 #### Parameters
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `api_keys` | `set[str]` | `set()` | Valid API keys |
-| `header` | `str` | `"x-api-key"` | Header containing key |
-| `key_permissions` | `dict` | `None` | Key to permissions mapping |
+| Parameter         | Type       | Default       | Description                |
+| ----------------- | ---------- | ------------- | -------------------------- |
+| `api_keys`        | `set[str]` | `set()`       | Valid API keys             |
+| `header`          | `str`      | `"x-api-key"` | Header containing key      |
+| `key_permissions` | `dict`     | `None`        | Key to permissions mapping |
 
 ### SessionAuthentication
 
@@ -169,22 +169,34 @@ token = create_jwt_for_user(user, expires_in=3600)
 
 #### Parameters
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `user` | User | required | Django user instance |
-| `expires_in` | `int` | `3600` | Token lifetime in seconds |
-| `extra_claims` | `dict` | `None` | Additional claims to include |
+| Parameter      | Type   | Default  | Description                  |
+| -------------- | ------ | -------- | ---------------------------- |
+| `user`         | User   | required | Django user instance         |
+| `expires_in`   | `int`  | `3600`   | Token lifetime in seconds    |
+| `extra_claims` | `dict` | `None`   | Additional claims to include |
 
 #### Token claims
 
-The generated token includes:
+The generated token automatically includes:
 
-- `user_id` - User's primary key
-- `is_staff` - Staff status
-- `is_superuser` - Superuser status
-- `permissions` - List of permissions
-- `exp` - Expiration timestamp
-- `iat` - Issued at timestamp
+| Claim          | Description                    |
+| -------------- | ------------------------------ |
+| `sub`          | User's primary key (as string) |
+| `is_staff`     | Staff status                   |
+| `is_superuser` | Superuser status               |
+| `username`     | Username                       |
+| `email`        | Email (if available)           |
+| `exp`          | Expiration timestamp           |
+| `iat`          | Issued at timestamp            |
+
+**Note:** Permissions are NOT automatically included. Pass them via `extra_claims`:
+
+```python
+token = create_jwt_for_user(
+    user,
+    extra_claims={"permissions": list(user.get_all_permissions())}
+)
+```
 
 ### get_current_user
 
@@ -244,14 +256,14 @@ Requires a model with a `jti` field.
 
 After authentication, `request.context` contains:
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `user_id` | `str` | User identifier |
-| `is_staff` | `bool` | Staff status |
-| `is_superuser` | `bool` | Superuser status |
-| `auth_backend` | `str` | Backend name (`jwt`, `api_key`) |
-| `permissions` | `list[str]` | User permissions |
-| `auth_claims` | `dict` | JWT claims (JWT only) |
+| Key            | Type        | Description                     |
+| -------------- | ----------- | ------------------------------- |
+| `user_id`      | `str`       | User identifier                 |
+| `is_staff`     | `bool`      | Staff status                    |
+| `is_superuser` | `bool`      | Superuser status                |
+| `auth_backend` | `str`       | Backend name (`jwt`, `api_key`) |
+| `permissions`  | `list[str]` | User permissions                |
+| `auth_claims`  | `dict`      | JWT claims (JWT only)           |
 
 ```python
 @api.get("/info")

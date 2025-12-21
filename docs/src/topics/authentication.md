@@ -65,11 +65,22 @@ async def login(credentials: LoginRequest):
 
 The generated token includes:
 
-- `user_id` - User's primary key
+- `sub` - User's primary key
 - `is_staff` - Staff status
 - `is_superuser` - Superuser status
-- `permissions` - User's permissions list
+- `username` - Username
 - `exp` - Expiration timestamp
+
+!!! note "Permissions not included by default"
+
+    Permissions are NOT automatically included in the token. To use `HasPermission` guards, pass permissions via `extra_claims`:
+
+    ```python
+    token = create_jwt_for_user(
+        user,
+        extra_claims={"permissions": list(user.get_all_permissions())}
+    )
+    ```
 
 ### Accessing the authenticated user
 
@@ -264,22 +275,42 @@ async def public_endpoint():
 
 ## Global authentication
 
-Set default authentication for all endpoints:
+Configure default authentication and guards for all endpoints in `settings.py`:
 
 ```python
-api = BoltAPI(
-    default_auth=[JWTAuthentication()],
-    default_guards=[IsAuthenticated()]
-)
+# settings.py
+from django_bolt.auth import JWTAuthentication, IsAuthenticated
 
-# All endpoints now require authentication by default
+# Default authentication backends for all endpoints
+BOLT_AUTHENTICATION_CLASSES = [
+    JWTAuthentication(),
+]
 
-@api.get("/protected")
-async def protected():
-    return {"protected": True}
+# Default permission guards for all endpoints
+BOLT_DEFAULT_PERMISSION_CLASSES = [
+    IsAuthenticated(),
+]
+```
 
-# Override for specific endpoints
+!!! warning "Security Notice"
+
+    If `BOLT_DEFAULT_PERMISSION_CLASSES` is not set, it defaults to `[AllowAny()]` which means **all endpoints are publicly accessible**. Always configure both settings in production.
+
+When configured, all endpoints require authentication by default:
+
+```python
+# Uses global auth + guards - requires valid JWT
+@api.get("/profile")
+async def profile(request):
+    return {"user_id": request.user.id}
+
+# Override guards for public endpoint
 @api.get("/public", guards=[AllowAny()])
 async def public():
-    return {"public": True}
+    return {"message": "Anyone can access"}
+
+# Override auth for specific endpoint
+@api.get("/api-only", auth=[APIKeyAuthentication(api_keys={"secret"})])
+async def api_only(request):
+    return {"status": "ok"}
 ```

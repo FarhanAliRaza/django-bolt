@@ -65,7 +65,7 @@ Returns:
 { "query": "python", "page": 2, "limit": 10 }
 ```
 
-Optional parameters have default values. Required parameters (like `q`) return a 400 error if missing.
+Optional parameters have default values. Required parameters (like `q`) return a 422 error if missing.
 
 ## Request body validation
 
@@ -106,7 +106,19 @@ curl -X POST http://localhost:8000/items \
   -d '{"name": "Widget"}'
 ```
 
-Returns a 400 error because `price` is required.
+Returns a [422 Unprocessable Entity](../topics/requests.md#validation-errors) because `price` is required:
+
+```json
+{
+    "detail": [
+        {
+            "loc": ["body", "price"],
+            "msg": "Object missing required field `price`",
+            "type": "missing_field"
+        }
+    ]
+}
+```
 
 ## HTTP methods
 

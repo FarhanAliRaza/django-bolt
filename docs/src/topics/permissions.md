@@ -17,7 +17,7 @@ from django_bolt.auth import JWTAuthentication, IsAuthenticated
 
 @api.get("/profile", auth=[JWTAuthentication()], guards=[IsAuthenticated()])
 async def profile(request):
-    return {"user_id": request.context.get("user_id")}
+    return {"user_id": request.user.id}
 ```
 
 Returns 401 Unauthorized if authentication fails.
@@ -138,20 +138,59 @@ Guards return appropriate HTTP status codes:
 
 ## Permissions in JWT tokens
 
-For guards to work, your JWT tokens must include the relevant claims:
+Guards run in Rust without database access, so all permission data must be embedded in the JWT token itself.
+
+### How it works
+
+1. When you create a JWT token, you include the user's permissions in the token claims
+2. The Rust layer validates the token and extracts permissions from claims
+3. Guards check permissions against the extracted claims - no database queries
+
+### Creating tokens with permissions
+
+The `create_jwt_for_user()` function automatically includes `is_staff` and `is_superuser`, but **permissions must be passed explicitly** via `extra_claims`:
 
 ```python
 from django_bolt.auth import create_jwt_for_user
 
-# This function automatically includes permissions from the user
+# Basic token - includes is_staff, is_superuser, but NOT permissions
 token = create_jwt_for_user(user, expires_in=3600)
+
+# Token with permissions - required for HasPermission guards
+token = create_jwt_for_user(
+    user,
+    expires_in=3600,
+    extra_claims={
+        "permissions": ["blog.add_article", "blog.change_article"]
+    }
+)
 ```
 
-The token includes:
+### Loading permissions from Django
 
-- `is_staff` - For `IsStaff` guard
-- `is_superuser` - For `IsAdminUser` guard
-- `permissions` - List of permission strings for `HasPermission` guards
+To include a user's Django permissions in the token:
+
+```python
+from django_bolt.auth import create_jwt_for_user
+
+def create_token_with_permissions(user):
+    # Get all permissions for the user (from groups and direct assignments)
+    permissions = list(user.get_all_permissions())
+
+    return create_jwt_for_user(
+        user,
+        expires_in=3600,
+        extra_claims={"permissions": permissions}
+    )
+```
+
+### Token claims reference
+
+| Claim | Included By Default | Used By Guard |
+|-------|---------------------|---------------|
+| `is_staff` | Yes | `IsStaff` |
+| `is_superuser` | Yes | `IsAdminUser` |
+| `permissions` | No (use `extra_claims`) | `HasPermission`, `HasAnyPermission`, `HasAllPermissions` |
 
 ## Default guards
 
@@ -191,10 +230,7 @@ async def delete_article(request, article_id: int):
     article = await Article.objects.aget(id=article_id)
 
     # Check if user owns the article or is admin
-    user_id = request.context.get("user_id")
-    is_superuser = request.context.get("is_superuser")
-
-    if str(article.author_id) != user_id and not is_superuser:
+    if article.author_id != request.user.id and not request.user.is_superuser:
         raise Forbidden(detail="You can only delete your own articles")
 
     await article.adelete()

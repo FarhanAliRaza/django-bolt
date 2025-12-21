@@ -171,10 +171,56 @@ async def timed_endpoint():
 
 ## Django middleware integration
 
-Use existing Django middleware with Django-Bolt:
+Django-Bolt seamlessly integrates with Django's middleware system, allowing you to use existing Django middleware with your API endpoints.
+
+### Quick start
+
+The simplest approach is to use the `django_middleware` parameter, which loads middleware from your Django `settings.MIDDLEWARE`:
 
 ```python
-from django_bolt import DjangoMiddleware
+from django_bolt import BoltAPI
+
+# Load all middleware from settings.MIDDLEWARE
+api = BoltAPI(django_middleware=True)
+```
+
+### Configuration options
+
+The `django_middleware` parameter accepts several configuration formats:
+
+```python
+# Load all middleware from settings.MIDDLEWARE
+api = BoltAPI(django_middleware=True)
+
+# Disable Django middleware
+api = BoltAPI(django_middleware=False)
+
+# Load specific middleware only
+api = BoltAPI(django_middleware=[
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+])
+
+# Exclude specific middleware
+api = BoltAPI(django_middleware={
+    "exclude": ["django.middleware.csrf.CsrfViewMiddleware"]
+})
+
+# Include only specific middleware
+api = BoltAPI(django_middleware={
+    "include": [
+        "django.contrib.sessions.middleware.SessionMiddleware",
+        "django.contrib.auth.middleware.AuthenticationMiddleware",
+    ]
+})
+```
+
+### Using DjangoMiddleware wrapper
+
+For wrapping individual middleware classes directly:
+
+```python
+from django_bolt import BoltAPI, DjangoMiddleware
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.contrib.auth.middleware import AuthenticationMiddleware
 
@@ -185,6 +231,83 @@ api = BoltAPI(
     ]
 )
 ```
+
+You can also use import path strings:
+
+```python
+api = BoltAPI(
+    middleware=[
+        DjangoMiddleware("django.contrib.sessions.middleware.SessionMiddleware"),
+        DjangoMiddleware("myapp.middleware.CustomMiddleware"),
+    ]
+)
+```
+
+### Using DjangoMiddlewareStack
+
+When using multiple Django middleware, `DjangoMiddlewareStack` is more efficient as it performs a single request conversion instead of one per middleware:
+
+```python
+from django_bolt import BoltAPI
+from django_bolt.middleware import DjangoMiddlewareStack
+from django.contrib.sessions.middleware import SessionMiddleware
+from django.contrib.auth.middleware import AuthenticationMiddleware
+
+api = BoltAPI(
+    middleware=[
+        DjangoMiddlewareStack([
+            SessionMiddleware,
+            AuthenticationMiddleware,
+        ])
+    ]
+)
+```
+
+### Accessing Django request attributes
+
+Django middleware sets attributes on the request that are automatically synced to the Bolt request:
+
+```python
+@api.get("/profile")
+async def profile(request):
+    # User from AuthenticationMiddleware
+    user = request.user
+
+    # Session from SessionMiddleware
+    session = request.state.get("session")
+
+    # Messages from MessageMiddleware
+    messages = request.state.get("_messages")
+
+    # META dict for template compatibility
+    meta = request.state.get("META")
+
+    return {
+        "user": str(user),
+        "authenticated": user.is_authenticated,
+        "session_key": session.session_key if session else None,
+    }
+```
+
+Available synced attributes:
+
+| Attribute | Source | Access |
+|-----------|--------|--------|
+| User | AuthenticationMiddleware | `request.user` |
+| Session | SessionMiddleware | `request.state["session"]` |
+| Messages | MessageMiddleware | `request.state["_messages"]` |
+| META | All middleware | `request.state["META"]` |
+| CSRF token | CsrfViewMiddleware | `request.state["_csrf_token"]` |
+
+### Performance notes
+
+Django-Bolt optimizes middleware execution with a three-tier system:
+
+1. **Django built-in middleware** - Executed directly without thread pool overhead (fastest)
+2. **Third-party middleware with hooks** - Wrapped in `sync_to_async` for safety
+3. **Custom `__call__` middleware** - Executed as a chain via single `sync_to_async` call
+
+The `DjangoMiddlewareStack` automatically categorizes your middleware for optimal performance.
 
 ## Middleware order
 

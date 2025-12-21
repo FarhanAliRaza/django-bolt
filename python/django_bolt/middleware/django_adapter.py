@@ -34,8 +34,6 @@ try:
     from django.http import HttpRequest, HttpResponse, QueryDict
     from django.utils.module_loading import import_string
     DJANGO_AVAILABLE = True
-    # Pre-create empty QueryDict singleton to avoid allocation on hot path
-    _EMPTY_QUERYDICT = QueryDict()
 except ImportError:
     DJANGO_AVAILABLE = False
     HttpRequest = None
@@ -45,7 +43,18 @@ except ImportError:
     sync_to_async = None
     iscoroutinefunction = None
     markcoroutinefunction = None
-    _EMPTY_QUERYDICT = None
+
+# Lazy singleton for empty QueryDict - avoids requiring Django settings at import time
+# This is needed so `django-bolt init` works before Django is configured
+_EMPTY_QUERYDICT = None
+
+
+def _get_empty_querydict():
+    """Get the empty QueryDict singleton, creating it lazily on first access."""
+    global _EMPTY_QUERYDICT
+    if _EMPTY_QUERYDICT is None:
+        _EMPTY_QUERYDICT = QueryDict()
+    return _EMPTY_QUERYDICT
 
 if TYPE_CHECKING:
     from ..request import Request
@@ -471,7 +480,6 @@ _csrf_callback_not_exempt.csrf_exempt = False
 # Module-level constants to avoid allocation on hot path
 _EMPTY_TUPLE: tuple = ()
 _EMPTY_DICT: dict = {}
-# Note: _EMPTY_QUERYDICT is created lazily after Django import check
 
 # Frozenset for O(1) header skip check (avoid tuple creation in loop)
 _SKIP_HEADERS = frozenset(("content-type", "content-length"))
@@ -792,7 +800,7 @@ def _to_django_request(request: Request) -> HttpRequest:
         for key, value in request.query.items():
             django_request.GET[key] = value
     else:
-        django_request.GET = _EMPTY_QUERYDICT  # Reuse singleton (no allocation)
+        django_request.GET = _get_empty_querydict()  # Reuse singleton (no allocation)
 
     # Parse POST data for form submissions (needed for CSRF token validation)
     # Django's CsrfViewMiddleware reads request.POST['csrfmiddlewaretoken']
@@ -803,7 +811,7 @@ def _to_django_request(request: Request) -> HttpRequest:
         # Parse form data into POST QueryDict
         django_request.POST = QueryDict(body, mutable=False)
     else:
-        django_request.POST = _EMPTY_QUERYDICT  # Reuse singleton (no allocation)
+        django_request.POST = _get_empty_querydict()  # Reuse singleton (no allocation)
 
     # Store body for raw access
     django_request._body = body

@@ -87,7 +87,7 @@ async def get_comment(post_id: int, comment_id: int):
 
 Path parameters are automatically converted to the type specified in the function signature:
 
-- `user_id: int` - converts to integer, returns 400 if not a valid integer
+- `user_id: int` - converts to integer, returns 422 if not a valid integer
 - `user_id: str` - keeps as string (default)
 - `user_id: float` - converts to float
 
@@ -135,7 +135,7 @@ async def create_user(user: CreateUser):
     return {"username": user.username, "email": user.email}
 ```
 
-The request body is automatically validated. Invalid data returns a 400 error.
+The request body is automatically validated. Invalid data returns a 422 error.
 
 ## Headers
 

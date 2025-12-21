@@ -69,7 +69,7 @@ Type conversion happens automatically:
 - `float` - Converts to float
 - `str` - Keeps as string (default)
 
-Invalid conversions return a 400 Bad Request.
+Invalid conversions return a 422 Unprocessable Entity.
 
 ## Query parameters
 
@@ -253,7 +253,7 @@ Dependencies can be chained and cached. See [Dependency Injection](../ref/api.md
 
 ## Validation errors
 
-When request validation fails, Django-Bolt returns a 400 Bad Request with details:
+When request validation fails, Django-Bolt returns a 422 Unprocessable Entity with details:
 
 ```json
 {

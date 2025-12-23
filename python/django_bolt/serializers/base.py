@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar, get_args, get_origin, get_type_hints
 
@@ -13,6 +14,8 @@ from msgspec import ValidationError as MsgspecValidationError
 from msgspec import structs as msgspec_structs
 from msgspec._core import StructMeta
 
+from django_bolt.exceptions import RequestValidationError
+
 from .decorators import (
     ComputedFieldConfig,
     collect_computed_fields,
@@ -21,6 +24,10 @@ from .decorators import (
 )
 from .fields import FieldConfig, _FieldMarker
 from .nested import get_nested_config, validate_nested_field
+
+# Regex to extract field path from msgspec error messages (e.g., "at `$.field_name`")
+# Borrowed from Litestar's approach
+ERR_RE = re.compile(r"`\$\.(.+)`$")
 
 logger = logging.getLogger(__name__)
 
@@ -385,11 +392,18 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         if cls.__skip_validation__:
             return
 
-        # Run field validators
-        self._run_field_validators()
+        # Collect all validation errors instead of stopping at first
+        errors: list[dict] = []
+
+        # Run field validators (includes nested/literal validation)
+        errors.extend(self._run_field_validators())
 
         # Run model validators
-        self._run_model_validators()
+        errors.extend(self._run_model_validators())
+
+        # Raise all errors at once if any occurred
+        if errors:
+            raise RequestValidationError(errors=errors)
 
     def _fix_field_marker_defaults_impl(self) -> None:
         """
@@ -470,11 +484,17 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         # Mark as collected so we don't run again
         cls.__field_configs_collected__ = True
 
-    def _run_field_validators(self) -> None:
-        """Execute all field validators in order."""
+    def _run_field_validators(self) -> list[dict]:
+        """Execute all field validators, collecting all errors instead of stopping at first.
+
+        Returns:
+            List of error dicts with 'loc', 'msg', and 'type' keys.
+        """
+        errors: list[dict] = []
+
         # First, validate nested/literal fields if any exist
         if self.__has_nested_or_literal__:
-            self._validate_nested_and_literal_fields()
+            errors.extend(self._validate_nested_and_literal_fields())
 
         # Then run custom field validators if any exist
         if self.__has_field_validators__:
@@ -502,17 +522,28 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     _setattr(self, field_name, current_value)
 
                 except (ValueError, TypeError) as e:
-                    # Convert to ValidationError with field context
-                    raise MsgspecValidationError(f"{field_name}: {e}") from e
+                    # Collect error instead of raising immediately
+                    errors.append({
+                        "loc": ["body", field_name],
+                        "msg": str(e),
+                        "type": "value_error",
+                    })
 
-    def _validate_nested_and_literal_fields(self) -> None:
+        return errors
+
+    def _validate_nested_and_literal_fields(self) -> list[dict]:
         """
         Validate nested serializer fields and Literal (choice) fields using cached metadata.
 
         This method handles two types of validation:
         1. Nested fields: Fields with Nested() annotation that contain serializer instances
         2. Literal fields: Fields with Literal[] type hints that restrict values to specific choices
+
+        Returns:
+            List of error dicts with 'loc', 'msg', and 'type' keys.
         """
+        errors: list[dict] = []
+
         # Cache force_setattr for nested field validation (optimization #2)
         _setattr = msgspec_structs.force_setattr
 
@@ -528,26 +559,32 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 if validated_value is not current_value:
                     _setattr(self, field_name, validated_value)
             except (ValueError, TypeError) as e:
-                raise MsgspecValidationError(str(e)) from e
-            except Exception:
-                raise
+                errors.append({
+                    "loc": ["body", field_name],
+                    "msg": str(e),
+                    "type": "value_error",
+                })
 
         # Validate literal (choice) fields (now with O(1) frozenset lookup - optimization #3)
         for field_name, allowed_values in self.__literal_fields__.items():
-            try:
-                current_value = getattr(self, field_name)
-                if current_value not in allowed_values:
-                    raise ValueError(
-                        f"{field_name}: invalid value {current_value!r}. "
-                        f"Expected one of: {', '.join(repr(v) for v in allowed_values)}"
-                    )
-            except (ValueError, TypeError) as e:
-                raise MsgspecValidationError(str(e)) from e
-            except Exception:
-                raise
+            current_value = getattr(self, field_name)
+            if current_value not in allowed_values:
+                errors.append({
+                    "loc": ["body", field_name],
+                    "msg": f"invalid value {current_value!r}. Expected one of: {', '.join(repr(v) for v in allowed_values)}",
+                    "type": "value_error",
+                })
 
-    def _run_model_validators(self) -> None:
-        """Execute all model validators in order."""
+        return errors
+
+    def _run_model_validators(self) -> list[dict]:
+        """Execute all model validators, collecting all errors instead of stopping at first.
+
+        Returns:
+            List of error dicts with 'loc', 'msg', and 'type' keys.
+        """
+        errors: list[dict] = []
+
         for validator in self.__model_validators__:
             try:
                 # Model validators should either modify self or return None
@@ -557,9 +594,13 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     # This shouldn't happen with proper usage, but handle it gracefully
                     pass
             except (ValueError, TypeError) as e:
-                raise MsgspecValidationError(str(e)) from e
-            except Exception:
-                raise
+                errors.append({
+                    "loc": ["body"],
+                    "msg": str(e),
+                    "type": "value_error",
+                })
+
+        return errors
 
     def validate(self: T) -> T:
         """
@@ -586,11 +627,60 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         return msgspec.convert(data, type=self.__class__)
 
     @classmethod
+    def _collect_msgspec_errors(
+        cls: type[T], data: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """
+        Collect all msgspec validation errors by validating each field individually.
+
+        This is based on Litestar's approach: when msgspec.convert() fails with a
+        ValidationError (which is fail-fast), we iterate through each field and
+        validate it individually to collect ALL errors.
+
+        Args:
+            data: Dictionary of field values to validate
+
+        Returns:
+            List of error dicts with 'loc', 'msg', and 'type' keys
+        """
+        errors: list[dict[str, Any]] = []
+        annotations = get_type_hints(cls, include_extras=True)
+
+        for field_name in cls.__struct_fields__:
+            if field_name not in data:
+                # Missing field - msgspec will handle this
+                continue
+
+            try:
+                field_type = annotations.get(field_name, Any)
+                # Validate this field individually
+                msgspec.convert(data[field_name], type=field_type, strict=False)
+            except MsgspecValidationError as e:
+                # Extract field path from error message if present
+                error_msg = str(e)
+                match = ERR_RE.search(error_msg)
+                if match:
+                    # Nested field path like "address.city"
+                    nested_path = match.group(1)
+                    loc = ["body", field_name, *nested_path.split(".")]
+                else:
+                    loc = ["body", field_name]
+
+                errors.append({
+                    "loc": tuple(loc),
+                    "msg": error_msg,
+                    "type": "validation_error",
+                })
+
+        return errors
+
+    @classmethod
     def model_validate(cls: type[T], data: dict[str, Any] | Any) -> T:
         """
         Validate data and create a serializer instance (Pydantic-style API).
 
         This triggers full msgspec validation (Meta constraints) plus custom validators.
+        If validation fails, collects ALL errors (Litestar-style) before raising.
 
         Args:
             data: Dictionary or object to validate
@@ -599,7 +689,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             Validated Serializer instance
 
         Raises:
-            ValidationError: If validation fails
+            RequestValidationError: If validation fails (with all errors collected)
 
         Example:
             data = {"id": 1, "name": "  John  ", "email": "JOHN@EXAMPLE.COM"}
@@ -607,7 +697,16 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             # author.name == 'John' (stripped)
             # author.email == 'john@example.com' (lowercased)
         """
-        return msgspec.convert(data, type=cls)
+        try:
+            return msgspec.convert(data, type=cls)
+        except MsgspecValidationError as e:
+            # Collect all errors by validating field-by-field (Litestar approach)
+            if isinstance(data, dict):
+                errors = cls._collect_msgspec_errors(data)
+                if errors:
+                    raise RequestValidationError(errors=errors) from e
+            # Re-raise original error if we couldn't collect more details
+            raise
 
     @classmethod
     def model_validate_json(cls: type[T], json_data: str | bytes) -> T:
@@ -615,6 +714,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         Validate JSON string and create a serializer instance (Pydantic-style API).
 
         This triggers full msgspec validation (Meta constraints) plus custom validators.
+        If validation fails, collects ALL errors (Litestar-style) before raising.
 
         Args:
             json_data: JSON string or bytes to validate
@@ -623,7 +723,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             Validated Serializer instance
 
         Raises:
-            ValidationError: If validation fails
+            RequestValidationError: If validation fails (with all errors collected)
 
         Example:
             json_str = '{"id": 1, "name": "  John  ", "email": "JOHN@EXAMPLE.COM"}'
@@ -631,7 +731,28 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             # author.name == 'John' (stripped)
             # author.email == 'john@example.com' (lowercased)
         """
-        return msgspec.json.decode(json_data, type=cls)
+        try:
+            return msgspec.json.decode(json_data, type=cls)
+        except MsgspecValidationError as e:
+            # Check if the error was caused by our validators (RequestValidationError)
+            # msgspec wraps exceptions from __post_init__ in ValidationError
+            if isinstance(e.__cause__, RequestValidationError):
+                raise e.__cause__ from e
+
+            # Try to parse JSON first to get dict, then collect errors field-by-field
+            try:
+                data = msgspec.json.decode(json_data)
+            except msgspec.DecodeError:
+                # JSON is malformed, re-raise original validation error
+                raise e from e
+
+            if isinstance(data, dict):
+                errors = cls._collect_msgspec_errors(data)
+                if errors:
+                    raise RequestValidationError(errors=errors) from e
+
+            # Re-raise original error if we couldn't collect more details
+            raise
 
     @classmethod
     def from_model(

@@ -6,8 +6,8 @@ from typing import Literal, get_args, get_origin
 
 import pytest
 from django.db import models
-from msgspec import ValidationError
 
+from django_bolt.exceptions import RequestValidationError
 from django_bolt.serializers import Serializer, create_serializer
 from django_bolt.serializers.fields import get_msgspec_type_for_django_field
 
@@ -116,7 +116,7 @@ class TestChoicesSerializerCreation:
             status: Literal["draft", "published"]
 
         # Invalid status should raise ValidationError
-        with pytest.raises(ValidationError):
+        with pytest.raises(RequestValidationError):
             ArticleSerializer(title="Test", status="invalid")
 
     def test_serializer_with_integer_choices(self):
@@ -131,7 +131,7 @@ class TestChoicesSerializerCreation:
         assert priority.level == 3
 
         # Invalid choice should fail
-        with pytest.raises(ValidationError):
+        with pytest.raises(RequestValidationError):
             PrioritySerializer(name="Invalid", level=99)
 
 
@@ -236,7 +236,7 @@ class TestChoicesValidation:
             status: Literal["active", "inactive"]
 
         # Invalid value should raise ValidationError
-        with pytest.raises(ValidationError) as exc_info:
+        with pytest.raises(RequestValidationError) as exc_info:
             StatusSerializer(status="deleted")
 
         # Error message should mention the invalid value
@@ -262,5 +262,5 @@ class TestChoicesValidation:
         assert obj.code == "2"
 
         # Actual number should not work (type mismatch)
-        with pytest.raises(ValidationError):
+        with pytest.raises(RequestValidationError):
             NumericStringChoice(code=2)  # int instead of str

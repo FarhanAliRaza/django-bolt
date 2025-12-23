@@ -107,7 +107,33 @@ Response:
 
 ### RequestValidationError
 
-Raised when request validation fails:
+Raised when request validation fails. Django-Bolt's Serializer **automatically collects all validation errors** from `@field_validator` and `@model_validator` before raising, so users see all issues at once:
+
+```python
+from django_bolt.serializers import Serializer, field_validator
+
+class UserSerializer(Serializer):
+    email: str
+    age: int
+
+    @field_validator("email")
+    def validate_email(cls, value):
+        if "@" not in value:
+            raise ValueError("Invalid email format")
+        return value
+
+    @field_validator("age")
+    def validate_age(cls, value):
+        if value < 0:
+            raise ValueError("Must be positive")
+        return value
+
+# Both fields fail - ALL errors returned, not just the first
+UserSerializer(email="invalid", age=-5)
+# Raises RequestValidationError with both errors
+```
+
+You can also raise manually:
 
 ```python
 from django_bolt.exceptions import RequestValidationError

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from msgspec import ValidationError
 
+from django_bolt.exceptions import RequestValidationError
 from django_bolt.serializers import Serializer, field_validator, model_validator
 
 
@@ -66,7 +66,7 @@ class TestFieldValidators:
         assert user.email == "valid@example.com"
 
         # Invalid email should raise
-        with pytest.raises(ValidationError) as exc_info:
+        with pytest.raises(RequestValidationError) as exc_info:
             UserSerializer(email="invalid")
         assert "Invalid email" in str(exc_info.value)
 
@@ -106,11 +106,11 @@ class TestFieldValidators:
         assert user.password == "SecurePass123"
 
         # Too short
-        with pytest.raises(ValidationError):
+        with pytest.raises(RequestValidationError):
             UserSerializer(password="Short1")
 
         # No uppercase
-        with pytest.raises(ValidationError):
+        with pytest.raises(RequestValidationError):
             UserSerializer(password="longpassword1")
 
     def test_field_validator_without_return(self):
@@ -131,7 +131,7 @@ class TestFieldValidators:
         assert user.email == "valid@example.com"
 
         # Invalid email should still raise
-        with pytest.raises(ValidationError) as exc_info:
+        with pytest.raises(RequestValidationError) as exc_info:
             UserSerializer(email="invalid")
         assert "Invalid email" in str(exc_info.value)
 
@@ -158,7 +158,7 @@ class TestFieldValidators:
         assert user.email == "test@example.com"
 
         # Should still validate with first validator
-        with pytest.raises(ValidationError):
+        with pytest.raises(RequestValidationError):
             UserSerializer(email="invalid-email")
 
 
@@ -182,7 +182,7 @@ class TestModelValidators:
         assert data.password == "Secret123"
 
         # Non-matching passwords
-        with pytest.raises(ValidationError) as exc_info:
+        with pytest.raises(RequestValidationError) as exc_info:
             PasswordSerializer(password="Secret123", password_confirm="Different456")
         assert "don't match" in str(exc_info.value)
 
@@ -204,7 +204,7 @@ class TestModelValidators:
         assert data.max_value == 10
 
         # Invalid range
-        with pytest.raises(ValidationError):
+        with pytest.raises(RequestValidationError):
             RangeSerializer(min_value=10, max_value=1)
 
 
@@ -272,7 +272,7 @@ class TestSerializerInheritance:
             is_admin: bool = False
 
         # Child serializer should inherit validators
-        with pytest.raises(ValidationError):
+        with pytest.raises(RequestValidationError):
             AdminSerializer(username="alice", email="invalid", is_admin=True)
 
         # Valid data should work
@@ -296,3 +296,145 @@ class TestConfigClass:
                 model = DummyModel
 
         assert UserSerializer.Config.model == DummyModel
+
+
+class TestMultiErrorCollection:
+    """Test that validation collects all errors instead of stopping at the first."""
+
+    def test_multiple_field_errors_collected(self):
+        """Test that multiple field validation errors are collected."""
+
+        class UserSerializer(Serializer):
+            email: str
+            password: str
+
+            @field_validator("email")
+            def validate_email(cls, value):
+                if "@" not in value:
+                    raise ValueError("Invalid email")
+                return value
+
+            @field_validator("password")
+            def validate_password(cls, value):
+                if len(value) < 8:
+                    raise ValueError("Password too short")
+                return value
+
+        # Both email and password are invalid
+        with pytest.raises(RequestValidationError) as exc_info:
+            UserSerializer(email="invalid", password="short")
+
+        # Should contain both errors
+        errors = exc_info.value.errors()
+        assert len(errors) == 2
+
+        error_msgs = [e["msg"] for e in errors]
+        assert "Invalid email" in error_msgs
+        assert "Password too short" in error_msgs
+
+    def test_field_and_model_errors_collected(self):
+        """Test that field and model validation errors are all collected."""
+
+        class PasswordSerializer(Serializer):
+            email: str
+            password: str
+            password_confirm: str
+
+            @field_validator("email")
+            def validate_email(cls, value):
+                if "@" not in value:
+                    raise ValueError("Invalid email")
+                return value
+
+            @model_validator
+            def check_passwords_match(self):
+                if self.password != self.password_confirm:
+                    raise ValueError("Passwords do not match")
+                return self
+
+        # Email is invalid AND passwords don't match
+        with pytest.raises(RequestValidationError) as exc_info:
+            PasswordSerializer(
+                email="invalid",
+                password="secret123",
+                password_confirm="different"
+            )
+
+        # Should contain both field error and model error
+        errors = exc_info.value.errors()
+        assert len(errors) == 2
+
+        error_msgs = [e["msg"] for e in errors]
+        assert "Invalid email" in error_msgs
+        assert "Passwords do not match" in error_msgs
+
+    def test_error_str_contains_all_messages(self):
+        """Test that error string representation includes all errors."""
+
+        class UserSerializer(Serializer):
+            email: str
+            age: int
+
+            @field_validator("email")
+            def validate_email(cls, value):
+                if "@" not in value:
+                    raise ValueError("Invalid email format")
+                return value
+
+            @field_validator("age")
+            def validate_age(cls, value):
+                if value < 0:
+                    raise ValueError("Age must be positive")
+                return value
+
+        with pytest.raises(RequestValidationError) as exc_info:
+            UserSerializer(email="bad", age=-5)
+
+        error_str = str(exc_info.value)
+        assert "Invalid email format" in error_str
+        assert "Age must be positive" in error_str
+
+    def test_single_error_still_works(self):
+        """Test that single validation error still works correctly."""
+
+        class UserSerializer(Serializer):
+            email: str
+            name: str
+
+            @field_validator("email")
+            def validate_email(cls, value):
+                if "@" not in value:
+                    raise ValueError("Invalid email")
+                return value
+
+        # Only email is invalid
+        with pytest.raises(RequestValidationError) as exc_info:
+            UserSerializer(email="invalid", name="John")
+
+        errors = exc_info.value.errors()
+        assert len(errors) == 1
+        assert errors[0]["msg"] == "Invalid email"
+
+    def test_valid_data_with_validators(self):
+        """Test that valid data passes all validators without errors."""
+
+        class UserSerializer(Serializer):
+            email: str
+            password: str
+
+            @field_validator("email")
+            def validate_email(cls, value):
+                if "@" not in value:
+                    raise ValueError("Invalid email")
+                return value
+
+            @field_validator("password")
+            def validate_password(cls, value):
+                if len(value) < 8:
+                    raise ValueError("Password too short")
+                return value
+
+        # Both fields are valid
+        user = UserSerializer(email="valid@example.com", password="longpassword123")
+        assert user.email == "valid@example.com"
+        assert user.password == "longpassword123"

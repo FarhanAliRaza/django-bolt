@@ -183,7 +183,97 @@ class UserSerializer(Serializer):
         return value
 ```
 
-Validators run in order. If the first fails, subsequent validators don't run.
+For the same field, validators run in order - if one fails, subsequent validators on that field don't run.
+
+### Multi-error collection
+
+Django-Bolt **collects all validation errors** from `@field_validator` and `@model_validator` across all fields before raising:
+
+```python
+class UserSerializer(Serializer):
+    email: str
+    password: str
+
+    @field_validator("email")
+    def validate_email(cls, value):
+        if "@" not in value:
+            raise ValueError("Invalid email")
+        return value
+
+    @field_validator("password")
+    def validate_password(cls, value):
+        if len(value) < 8:
+            raise ValueError("Password too short")
+        return value
+
+# Both email AND password are invalid
+try:
+    UserSerializer(email="invalid", password="short")
+except RequestValidationError as e:
+    # Returns ALL errors, not just the first one
+    print(e.errors())
+    # [
+    #     {"loc": ["body", "email"], "msg": "Invalid email", "type": "value_error"},
+    #     {"loc": ["body", "password"], "msg": "Password too short", "type": "value_error"}
+    # ]
+```
+
+This matches Pydantic's behavior and provides a better user experience - users can fix all issues at once instead of discovering them one at a time.
+
+### Understanding validation layers
+
+Django-Bolt Serializer has **two validation layers** with different behaviors:
+
+| Layer | Validated by | Behavior | Exception Type |
+|-------|--------------|----------|----------------|
+| **Meta constraints** | msgspec (C/Rust) | Fail-fast (stops at first error) | `msgspec.ValidationError` |
+| **Custom validators** | Python (`@field_validator`, `@model_validator`) | Collects all errors | `RequestValidationError` |
+
+**Meta constraints** use `msgspec.Meta` and are validated by msgspec's high-performance C code:
+
+```python
+from typing import Annotated
+from msgspec import Meta
+
+class UserSerializer(Serializer):
+    name: Annotated[str, Meta(min_length=2, max_length=100)]
+    email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
+    age: Annotated[int, Meta(ge=0, le=150)]
+```
+
+These constraints are extremely fast but **fail-fast** - msgspec stops at the first constraint violation.
+
+**Custom validators** run after msgspec validation and **collect all errors**:
+
+```python
+class UserSerializer(Serializer):
+    # Meta constraints (fail-fast, validated by msgspec)
+    name: Annotated[str, Meta(min_length=2)]
+    email: str
+    password: str
+
+    # Custom validators (multi-error collection)
+    @field_validator("email")
+    def validate_email(cls, value):
+        if "@" not in value:
+            raise ValueError("Invalid email")
+        return value.lower()
+
+    @field_validator("password")
+    def validate_password(cls, value):
+        if len(value) < 8:
+            raise ValueError("Password too short")
+        return value
+```
+
+**Validation order:**
+
+1. **msgspec parses and validates** - Type checking and Meta constraints (fail-fast)
+2. **`@field_validator` runs** - Custom field validation (collects errors)
+3. **`@model_validator` runs** - Cross-field validation (collects errors)
+4. **All errors raised together** - Single `RequestValidationError` with all custom validator errors
+
+For best performance, use Meta constraints for simple validations (length, range, pattern) and reserve `@field_validator` for complex logic or value transformations.
 
 ### Using msgspec.Meta for constraints
 
@@ -639,6 +729,81 @@ async def get_user(user_id: int) -> UserDetailSerializer:
     return UserDetailSerializer.from_model(user)
 ```
 
+## Serializer vs raw msgspec.Struct
+
+Django-Bolt's `Serializer` extends `msgspec.Struct` with important enhancements, particularly around error handling:
+
+### Error handling differences
+
+| Feature | `msgspec.Struct` | Django-Bolt `Serializer` |
+|---------|------------------|--------------------------|
+| Meta constraint errors | Fail-fast (first error only) | **Collects all errors** via `model_validate()`/`model_validate_json()` |
+| Custom validators | Not supported | `@field_validator`, `@model_validator` with multi-error collection |
+| Error format | `msgspec.ValidationError` (string) | `RequestValidationError` with structured `errors()` list |
+| Direct instantiation | No validation | Runs custom validators (Meta constraints bypassed) |
+
+### Multi-error collection with model_validate()
+
+When using `model_validate()` or `model_validate_json()`, the Serializer collects **all** validation errors before raising:
+
+```python
+from typing import Annotated
+from msgspec import Meta
+from django_bolt.serializers import Serializer
+from django_bolt.exceptions import RequestValidationError
+
+class UserSerializer(Serializer):
+    name: Annotated[str, Meta(min_length=2)]
+    email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+$")]
+    age: Annotated[int, Meta(ge=0, le=150)]
+
+# All three fields are invalid
+try:
+    UserSerializer.model_validate({
+        "name": "X",        # Too short
+        "email": "invalid", # No @ symbol
+        "age": 200          # Over 150
+    })
+except RequestValidationError as e:
+    # Returns ALL errors, not just the first
+    for err in e.errors():
+        print(f"{err['loc']}: {err['msg']}")
+    # ('body', 'name'): Expected `str` of length >= 2
+    # ('body', 'email'): Expected `str` matching regex...
+    # ('body', 'age'): Expected `int` <= 150
+```
+
+This is inspired by [Litestar's approach](https://litestar.dev/) to validation - validating each field individually when the initial validation fails, then collecting all errors.
+
+### When errors are collected vs fail-fast
+
+| Method | Behavior |
+|--------|----------|
+| `Serializer(field=value)` | Runs custom validators (multi-error), **bypasses** Meta constraints |
+| `model_validate(dict)` | Collects all Meta + custom validator errors |
+| `model_validate_json(json)` | Collects all Meta + custom validator errors |
+| `msgspec.convert(data, Serializer)` | Fail-fast (raw msgspec behavior) |
+| `msgspec.json.decode(json, type=Serializer)` | Fail-fast (raw msgspec behavior) |
+
+**Recommendation**: Always use `model_validate()` or `model_validate_json()` for user input to get comprehensive error messages.
+
+### Why direct instantiation bypasses Meta constraints
+
+This is msgspec's design - Meta constraints (`min_length`, `pattern`, `ge`, etc.) are for **parsing external data**, not for constructing objects in Python:
+
+```python
+class User(Serializer):
+    age: Annotated[int, Meta(ge=0)]
+
+# Direct instantiation - Meta constraint NOT checked
+user = User(age=-5)  # Works! No error raised
+
+# Parsing - Meta constraint IS checked
+User.model_validate({"age": -5})  # Raises RequestValidationError
+```
+
+Custom validators (`@field_validator`, `@model_validator`) always run, regardless of how the instance is created.
+
 ## Performance tips
 
 1. **Use field selection for lists**: Only include fields you need in list views.
@@ -648,3 +813,5 @@ async def get_user(user_id: int) -> UserDetailSerializer:
 3. **Use subset() for type safety**: Creates actual classes that editors can type-check.
 
 4. **Use write_only for sensitive data**: Password fields should never appear in output.
+
+5. **Use Meta constraints for simple validation**: They're validated by msgspec's C code - much faster than Python validators.

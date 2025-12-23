@@ -116,6 +116,21 @@ class RequestValidationError(ValidationException):
         super().__init__(errors)
         self.body = body
 
+    def __str__(self) -> str:
+        """Return string representation with all error messages."""
+        messages = []
+        for err in self._errors:
+            if isinstance(err, dict):
+                loc = ".".join(str(x) for x in err.get("loc", []))
+                msg = err.get("msg", "")
+                if loc:
+                    messages.append(f"{loc}: {msg}")
+                else:
+                    messages.append(msg)
+            else:
+                messages.append(str(err))
+        return "; ".join(messages) if messages else "Validation error"
+
 
 class ResponseValidationError(ValidationException):
     """Response data validation error.

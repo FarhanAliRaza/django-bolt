@@ -16,8 +16,8 @@ from typing import Annotated
 import msgspec
 import pytest
 from msgspec import Meta
-from msgspec import ValidationError as MsgspecValidationError
 
+from django_bolt.exceptions import RequestValidationError
 from django_bolt.serializers import Nested, Serializer, field_validator
 from tests.test_models import Author, BlogPost, Comment, Tag
 
@@ -160,7 +160,7 @@ class TestSingleNestedForeignKey:
         """Test that passing just an ID raises a validation error."""
 
         # Passing just an ID should now raise an error
-        with pytest.raises(MsgspecValidationError) as exc_info:
+        with pytest.raises(RequestValidationError) as exc_info:
             BlogPostSerializer(
                 id=1,
                 title="New Post",
@@ -269,7 +269,7 @@ class TestNestedManyToMany:
         """Test that passing tag IDs raises validation error."""
 
         # Passing tag IDs should now raise an error
-        with pytest.raises(MsgspecValidationError):
+        with pytest.raises(RequestValidationError):
             BlogPostSerializer(
                 id=1,
                 title="Post",
@@ -283,7 +283,7 @@ class TestNestedManyToMany:
         """Test that mixing tag IDs and dicts raises validation error."""
 
         # Mixed IDs and dicts should now raise an error
-        with pytest.raises(MsgspecValidationError):
+        with pytest.raises(RequestValidationError):
             BlogPostSerializer(
                 id=1,
                 title="Post",
@@ -385,16 +385,16 @@ class TestQueryOptimization:
         )
         tag = Tag.objects.create(name="test")
 
-        posts = []
+        post_ids = []
         for i in range(3):
             post = BlogPost.objects.create(
                 title=f"Post {i}", content="Content", author=author
             )
             post.tags.add(tag)
-            posts.append(post)
+            post_ids.append(post.id)
 
-        # Fetch all without any optimization
-        all_posts = BlogPost.objects.all()
+        # Fetch only the posts we created
+        all_posts = BlogPost.objects.filter(id__in=post_ids)
         serializers = [BlogPostSerializer.from_model(p) for p in all_posts]
 
         assert len(serializers) == 3
@@ -411,15 +411,15 @@ class TestQueryOptimization:
             name="Jack", email="jack@example.com"
         )
 
-        posts = []
+        post_ids = []
         for i in range(2):
             post = BlogPost.objects.create(
                 title=f"Post {i}", content="Content", author=author
             )
-            posts.append(post)
+            post_ids.append(post.id)
 
-        # Fetch with select_related
-        all_posts = BlogPost.objects.select_related("author").all()
+        # Fetch only the posts we created with select_related
+        all_posts = BlogPost.objects.filter(id__in=post_ids).select_related("author")
         serializers = [BlogPostSerializer.from_model(p) for p in all_posts]
 
         assert len(serializers) == 2
@@ -437,19 +437,19 @@ class TestQueryOptimization:
         tag1 = Tag.objects.create(name="tag1")
         tag2 = Tag.objects.create(name="tag2")
 
-        posts = []
+        post_ids = []
         for i in range(2):
             post = BlogPost.objects.create(
                 title=f"Post {i}", content="Content", author=author
             )
             post.tags.add(tag1, tag2)
-            posts.append(post)
+            post_ids.append(post.id)
 
-        # Fetch with prefetch_related
+        # Fetch only the posts we created with prefetch_related
         all_posts = (
-            BlogPost.objects.select_related("author")
+            BlogPost.objects.filter(id__in=post_ids)
+            .select_related("author")
             .prefetch_related("tags")
-            .all()
         )
         serializers = [BlogPostSerializer.from_model(p) for p in all_posts]
 
@@ -481,12 +481,11 @@ class TestQueryOptimization:
             post=post, author=commenter, text="Nice!"
         )
 
-        # Fetch with complete prefetch
+        # Fetch only the post we created with complete prefetch
         all_posts = (
-            BlogPost.objects
+            BlogPost.objects.filter(id=post.id)
             .select_related("author")
             .prefetch_related("tags", "comments__author")
-            .all()
         )
         serializers = [BlogPostDetailedSerializer.from_model(p) for p in all_posts]
 
@@ -507,7 +506,7 @@ class TestValidationErrors:
         """Test that string ID is rejected (strict type validation)."""
 
         # String IDs should be rejected - only int or AuthorSerializer allowed
-        with pytest.raises(MsgspecValidationError) as exc_info:
+        with pytest.raises(RequestValidationError) as exc_info:
             BlogPostSerializer(
                 id=1,
                 title="Post",
@@ -524,7 +523,7 @@ class TestValidationErrors:
         """Test that non-list in many field raises validation error."""
 
         # Passing a string for a list field should raise ValidationError
-        with pytest.raises(MsgspecValidationError) as exc_info:
+        with pytest.raises(RequestValidationError) as exc_info:
             BlogPostSerializer(
                 id=1,
                 title="Post",
@@ -541,7 +540,7 @@ class TestValidationErrors:
         """Test that nested validation works in deeply nested structures."""
 
         # Create a serializer with invalid nested comment (missing required email field)
-        with pytest.raises(MsgspecValidationError) as exc_info:
+        with pytest.raises(RequestValidationError) as exc_info:
             BlogPostDetailedSerializer(
                 id=1,
                 title="Post",
@@ -588,8 +587,8 @@ class TestNestedFieldValidation:
 
     def test_nested_author_with_invalid_email_no_at_sign(self):
         """Test that email without @ sign raises validation error (via msgspec.convert)."""
-        # Meta constraints are enforced during deserialization, not direct instantiation
-        with pytest.raises(MsgspecValidationError) as exc_info:
+        # Meta constraints are enforced during deserialization - msgspec.ValidationError
+        with pytest.raises(msgspec.ValidationError) as exc_info:
             msgspec.convert(
                 {"id": 1, "name": "Bob", "email": "bobexample.com"},
                 type=AuthorSerializer
@@ -600,8 +599,8 @@ class TestNestedFieldValidation:
 
     def test_nested_author_with_invalid_email_no_domain(self):
         """Test that email without domain extension raises validation error (via msgspec.convert)."""
-        # Meta constraints are enforced during deserialization, not direct instantiation
-        with pytest.raises(MsgspecValidationError) as exc_info:
+        # Meta constraints are enforced during deserialization - msgspec.ValidationError
+        with pytest.raises(msgspec.ValidationError) as exc_info:
             msgspec.convert(
                 {"id": 1, "name": "Charlie", "email": "charlie@example"},
                 type=AuthorSerializer
@@ -613,8 +612,8 @@ class TestNestedFieldValidation:
     def test_nested_author_with_invalid_name_too_short(self):
         """Test that name that's too short raises validation error (via msgspec.convert)."""
 
-        # Meta constraints are enforced during deserialization, not direct instantiation
-        with pytest.raises(MsgspecValidationError) as exc_info:
+        # Meta constraints are enforced during deserialization - msgspec.ValidationError
+        with pytest.raises(msgspec.ValidationError) as exc_info:
             msgspec.convert(
                 {"id": 1, "name": "A", "email": "a@example.com"},
                 type=AuthorSerializer
@@ -626,8 +625,8 @@ class TestNestedFieldValidation:
     def test_nested_author_with_empty_name(self):
         """Test that empty name raises validation error (via msgspec.convert)."""
 
-        # Meta constraints are enforced during deserialization, not direct instantiation
-        with pytest.raises(MsgspecValidationError) as exc_info:
+        # Meta constraints are enforced during deserialization - msgspec.ValidationError
+        with pytest.raises(msgspec.ValidationError) as exc_info:
             msgspec.convert(
                 {"id": 1, "name": "", "email": "test@example.com"},
                 type=AuthorSerializer
@@ -686,8 +685,8 @@ class TestNestedFieldValidation:
     def test_deeply_nested_validation_error_propagation(self):
         """Test that validation errors in deeply nested structures propagate (via msgspec.convert)."""
 
-        # Meta constraints are enforced during deserialization, not direct instantiation
-        with pytest.raises(MsgspecValidationError) as exc_info:
+        # Meta constraints are enforced during deserialization - msgspec.ValidationError
+        with pytest.raises(msgspec.ValidationError) as exc_info:
             msgspec.convert(
                 {"id": 2, "name": "J", "email": "j@example.com"},
                 type=AuthorSerializer
@@ -754,8 +753,8 @@ class TestNestedFieldValidation:
     def test_validation_error_for_short_name(self):
         """Test that validation errors are properly raised for short names (via msgspec.convert)."""
 
-        # Meta constraints are enforced during deserialization, not direct instantiation
-        with pytest.raises(MsgspecValidationError) as exc_info:
+        # Meta constraints are enforced during deserialization - msgspec.ValidationError
+        with pytest.raises(msgspec.ValidationError) as exc_info:
             msgspec.convert(
                 {"id": 1, "name": "X", "email": "x@example.com"},
                 type=AuthorSerializer
@@ -832,7 +831,7 @@ class TestEdgeCases:
         assert isinstance(serializer2.author, AuthorSerializer)
 
         # Test with plain ID - should fail
-        with pytest.raises(MsgspecValidationError):
+        with pytest.raises(RequestValidationError):
             CommentSerializer(
                 id=1,
                 text="Comment",
@@ -857,8 +856,8 @@ class TestAuthorSerializerValidation:
     def test_meta_email_pattern_invalid_no_at(self):
         """Test that email without @ fails Meta pattern validation."""
 
-        # Email without @ should fail
-        with pytest.raises(MsgspecValidationError) as exc_info:
+        # Email without @ should fail - msgspec.ValidationError from Meta constraint
+        with pytest.raises(msgspec.ValidationError) as exc_info:
             msgspec.convert(
                 {"id": 1, "name": "Test", "email": "testexample.com"},
                 type=AuthorSerializer
@@ -870,8 +869,8 @@ class TestAuthorSerializerValidation:
     def test_meta_email_pattern_invalid_no_tld(self):
         """Test that email without TLD fails Meta pattern validation."""
 
-        # Email without TLD (.com, .org, etc) should fail
-        with pytest.raises(MsgspecValidationError) as exc_info:
+        # Email without TLD (.com, .org, etc) should fail - msgspec.ValidationError
+        with pytest.raises(msgspec.ValidationError) as exc_info:
             msgspec.convert(
                 {"id": 1, "name": "Test", "email": "test@example"},
                 type=AuthorSerializer
@@ -900,8 +899,8 @@ class TestAuthorSerializerValidation:
     def test_meta_name_min_length_invalid(self):
         """Test that name with less than 2 characters fails Meta min_length validation."""
 
-        # Single character should fail
-        with pytest.raises(MsgspecValidationError) as exc_info:
+        # Single character should fail - msgspec.ValidationError from Meta constraint
+        with pytest.raises(msgspec.ValidationError) as exc_info:
             msgspec.convert(
                 {"id": 1, "name": "A", "email": "test@example.com"},
                 type=AuthorSerializer
@@ -910,8 +909,8 @@ class TestAuthorSerializerValidation:
         error_msg = str(exc_info.value)
         assert "name" in error_msg.lower()
 
-        # Empty string should fail
-        with pytest.raises(MsgspecValidationError) as exc_info:
+        # Empty string should fail - msgspec.ValidationError from Meta constraint
+        with pytest.raises(msgspec.ValidationError) as exc_info:
             msgspec.convert(
                 {"id": 2, "name": "", "email": "test@example.com"},
                 type=AuthorSerializer

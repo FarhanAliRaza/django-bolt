@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import json
 
-import msgspec
 import pytest
 
+from django_bolt.exceptions import RequestValidationError
 from django_bolt.serializers import (
     URL,
     Email,
@@ -65,10 +65,10 @@ class TestEmailType:
         class UserSerializer(Serializer):
             email: Email
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             UserSerializer.model_validate_json(to_json({"email": "not-an-email"}))
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             UserSerializer.model_validate_json(to_json({"email": "missing@domain"}))
 
 
@@ -93,10 +93,10 @@ class TestURLType:
         class LinkSerializer(Serializer):
             url: URL
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             LinkSerializer.model_validate_json(to_json({"url": "not-a-url"}))
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             LinkSerializer.model_validate_json(to_json({"url": "ftp://example.com"}))
 
 
@@ -118,7 +118,7 @@ class TestHttpsURLType:
         class SecureLinkSerializer(Serializer):
             url: HttpsURL
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             SecureLinkSerializer.model_validate_json(to_json({"url": "http://example.com"}))
 
 
@@ -143,10 +143,10 @@ class TestPhoneType:
         class ContactSerializer(Serializer):
             phone: Phone
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             ContactSerializer.model_validate_json(to_json({"phone": "555-1234"}))
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             ContactSerializer.model_validate_json(to_json({"phone": "abc123"}))
 
 
@@ -175,10 +175,10 @@ class TestSlugType:
         class PostSerializer(Serializer):
             slug: Slug
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             PostSerializer.model_validate_json(to_json({"slug": "My Blog Post"}))
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             PostSerializer.model_validate_json(to_json({"slug": "post@123"}))
 
 
@@ -208,7 +208,7 @@ class TestUsernameType:
             username: Username
 
         # Space is not valid
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             UserSerializer.model_validate_json(to_json({"username": "user name"}))
 
 
@@ -233,7 +233,7 @@ class TestNonEmptyStrType:
         class NameSerializer(Serializer):
             name: NonEmptyStr
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             NameSerializer.model_validate_json(to_json({"name": ""}))
 
 
@@ -258,7 +258,7 @@ class TestPositiveIntType:
         class CountSerializer(Serializer):
             count: PositiveInt
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             CountSerializer.model_validate_json(to_json({"count": 0}))
 
     def test_negative_rejected(self):
@@ -267,7 +267,7 @@ class TestPositiveIntType:
         class CountSerializer(Serializer):
             count: PositiveInt
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             CountSerializer.model_validate_json(to_json({"count": -1}))
 
 
@@ -292,7 +292,7 @@ class TestNonNegativeIntType:
         class IndexSerializer(Serializer):
             index: NonNegativeInt
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             IndexSerializer.model_validate_json(to_json({"index": -1}))
 
 
@@ -320,10 +320,10 @@ class TestPercentageType:
         class ProgressSerializer(Serializer):
             progress: Percentage
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             ProgressSerializer.model_validate_json(to_json({"progress": -1.0}))
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             ProgressSerializer.model_validate_json(to_json({"progress": 100.1}))
 
 
@@ -348,7 +348,7 @@ class TestGeoTypes:
         class LocationSerializer(Serializer):
             lat: Latitude
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             LocationSerializer.model_validate_json(to_json({"lat": 91.0}))
 
     def test_valid_longitude(self):
@@ -366,7 +366,7 @@ class TestGeoTypes:
         class LocationSerializer(Serializer):
             lng: Longitude
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             LocationSerializer.model_validate_json(to_json({"lng": 181.0}))
 
 
@@ -394,10 +394,10 @@ class TestPortType:
         class ServerSerializer(Serializer):
             port: Port
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             ServerSerializer.model_validate_json(to_json({"port": 0}))
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             ServerSerializer.model_validate_json(to_json({"port": 65536}))
 
 
@@ -422,10 +422,10 @@ class TestHexColorType:
         class ThemeSerializer(Serializer):
             color: HexColor
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             ThemeSerializer.model_validate_json(to_json({"color": "FF5733"}))  # Missing #
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             ThemeSerializer.model_validate_json(to_json({"color": "#FFF"}))  # Too short
 
 
@@ -447,7 +447,7 @@ class TestUUIDType:
         class EntitySerializer(Serializer):
             id: UUID
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             EntitySerializer.model_validate_json(to_json({"id": "not-a-uuid"}))
 
 
@@ -471,10 +471,10 @@ class TestTypesWithSubset:
         assert user.email == "test@example.com"
 
         # Invalid values should still fail
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             UserMini.model_validate_json(to_json({"id": -1, "email": "test@example.com"}))
 
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             UserMini.model_validate_json(to_json({"id": 1, "email": "not-an-email"}))
 
 
@@ -495,5 +495,5 @@ class TestDirectInstantiationNote:
         assert user.count == -5
 
         # Use model_validate_json for validation
-        with pytest.raises(msgspec.ValidationError):
+        with pytest.raises(RequestValidationError):
             UserSerializer.model_validate_json(to_json({"email": "invalid", "count": -5}))

@@ -6,12 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Multi-error validation collection** - Serializer now collects ALL validation errors before raising, matching Pydantic's behavior. Both `@field_validator` and `@model_validator` errors are collected across all fields.
+- **Meta constraint multi-error collection** - `model_validate()` and `model_validate_json()` now collect all msgspec Meta constraint errors (min_length, pattern, ge, le, etc.) using Litestar's field-by-field validation approach.
 - **Parameter models** - Support for `Annotated[Struct/Serializer, Form()]` pattern like FastAPI. Group related form fields, query parameters, headers, or cookies into a single validated object using `msgspec.Struct` or `Serializer`.
   - `Annotated[FormModel, Form()]` - Group form fields with validation
   - `Annotated[QueryModel, Query()]` - Group query parameters
   - `Annotated[HeaderModel, Header()]` - Group headers (snake_case fields map to kebab-case headers)
   - `Annotated[CookieModel, Cookie()]` - Group cookies
 - **Testing documentation** - Comprehensive testing guide covering TestClient usage, database transactions, and integration testing patterns.
+- **Serializer vs msgspec.Struct documentation** - New docs section explaining differences in error handling between raw msgspec.Struct and Django-Bolt Serializer.
 
 ### Changed
 

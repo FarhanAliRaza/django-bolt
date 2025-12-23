@@ -42,7 +42,7 @@ from django_bolt.serializers import (
 from django_bolt.serializers import (
     model_validator as bolt_model_validator,
 )
-from django_bolt.serializers.types import Email, HttpUrl, NonEmptyStr, PositiveInt
+from django_bolt.serializers.types import Email, HttpsURL, NonEmptyStr, PositiveInt
 
 # ============================================================================
 # Test Data
@@ -208,7 +208,7 @@ class PydanticUserWithComputed(BaseModel):
 class BoltUserWithFieldConfig(Serializer):
     """django-bolt serializer with field() configuration."""
     id: int = field(read_only=True, default=0)
-    name: str = field(min_length=1, max_length=100)
+    name: Annotated[str, Meta(min_length=1, max_length=100)]
     email: str
     password: str = field(write_only=True, default="")
     created_at: str = field(read_only=True, default="")
@@ -262,7 +262,7 @@ class BoltUserWithTypes(Serializer):
     id: PositiveInt
     name: NonEmptyStr
     email: Email
-    website: HttpUrl | None = None
+    website: HttpsURL | None = None
 
 
 class PydanticUserWithTypes(BaseModel):

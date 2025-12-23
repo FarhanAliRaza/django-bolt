@@ -14,6 +14,7 @@ from typing import Annotated
 import msgspec
 import pytest
 
+from django_bolt.exceptions import RequestValidationError
 from django_bolt.serializers import Nested, Serializer
 
 
@@ -34,7 +35,7 @@ class TestNestedListSizeLimits:
         # Create 1001 tags (exceeds default limit of 1000)
         many_tags = [{"id": i, "name": f"tag_{i}"} for i in range(1001)]
 
-        with pytest.raises(msgspec.ValidationError) as exc_info:
+        with pytest.raises(RequestValidationError) as exc_info:
             BookSerializer(title="Test", tags=many_tags)
 
         error_msg = str(exc_info.value)
@@ -73,7 +74,7 @@ class TestNestedListSizeLimits:
         # 11 items exceeds custom limit of 10
         many_tags = [{"id": i, "name": f"tag_{i}"} for i in range(11)]
 
-        with pytest.raises(msgspec.ValidationError) as exc_info:
+        with pytest.raises(RequestValidationError) as exc_info:
             BookSerializer(title="Test", tags=many_tags)
 
         error_msg = str(exc_info.value)
@@ -205,7 +206,7 @@ class TestRecursionPrevention:
         many_tags = [{"id": i, "name": f"tag_{i}"} for i in range(10000)]
 
         # Should be rejected due to max_items=1000 limit
-        with pytest.raises(msgspec.ValidationError) as exc_info:
+        with pytest.raises(RequestValidationError) as exc_info:
             BookSerializer(title="Attack", tags=many_tags)
 
         error_msg = str(exc_info.value)

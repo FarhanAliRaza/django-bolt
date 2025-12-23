@@ -28,6 +28,7 @@ from typing import Annotated
 import msgspec
 import pytest
 
+from django_bolt.exceptions import RequestValidationError
 from django_bolt.serializers import (
     URL,
     Email,
@@ -492,7 +493,7 @@ class TestModelValidatorsWithDjango:
     def test_model_validator_fails(self):
         """Test model validator raises on invalid data."""
         # Model validators raise msgspec.ValidationError (wrapping the ValueError)
-        with pytest.raises(msgspec.ValidationError, match="Passwords do not match"):
+        with pytest.raises(RequestValidationError, match="Passwords do not match"):
             UserCreateSerializer(
                 username="user",
                 email="user@example.com",
@@ -504,8 +505,8 @@ class TestModelValidatorsWithDjango:
         """Test model validator runs during JSON parsing."""
         json_data = b'{"username": "user", "email": "user@example.com", "password": "abc", "password_confirm": "xyz"}'
 
-        # Model validators raise msgspec.ValidationError
-        with pytest.raises(msgspec.ValidationError, match="Passwords do not match"):
+        # Model validators raise RequestValidationError
+        with pytest.raises(RequestValidationError, match="Passwords do not match"):
             UserCreateSerializer.model_validate_json(json_data)
 
 
@@ -663,11 +664,11 @@ class TestDynamicFieldSelectionWithDjango:
     @pytest.mark.django_db
     def test_dump_many_with_field_selection(self):
         """Test dump_many with only() on multiple instances."""
-        Author.objects.create(name="Author1", email="a1@example.com")
-        Author.objects.create(name="Author2", email="a2@example.com")
-        Author.objects.create(name="Author3", email="a3@example.com")
+        a1 = Author.objects.create(name="Author1", email="a1@example.com")
+        a2 = Author.objects.create(name="Author2", email="a2@example.com")
+        a3 = Author.objects.create(name="Author3", email="a3@example.com")
 
-        authors = Author.objects.all()
+        authors = Author.objects.filter(id__in=[a1.id, a2.id, a3.id])
         serializers = [AuthorSerializer.from_model(a) for a in authors]
 
         result = AuthorSerializer.only("id", "name").dump_many(serializers)
@@ -788,8 +789,8 @@ class TestValidatedTypesWithDjango:
         )
         assert author.email == "valid@example.com"
 
-        # Invalid email
-        with pytest.raises(msgspec.ValidationError):
+        # Invalid email - Meta pattern validation in msgspec
+        with pytest.raises(RequestValidationError):
             StrictAuthorSerializer.model_validate_json(
                 b'{"name": "Test", "email": "invalid-email"}'
             )
@@ -805,12 +806,12 @@ class TestValidatedTypesWithDjango:
         item = ItemSerializer.model_validate_json(b'{"name": "Widget", "quantity": 10}')
         assert item.quantity == 10
 
-        # Invalid (zero)
-        with pytest.raises(msgspec.ValidationError):
+        # Invalid (zero) - Meta constraint validation in msgspec
+        with pytest.raises(RequestValidationError):
             ItemSerializer.model_validate_json(b'{"name": "Widget", "quantity": 0}')
 
-        # Invalid (negative)
-        with pytest.raises(msgspec.ValidationError):
+        # Invalid (negative) - Meta constraint validation in msgspec
+        with pytest.raises(RequestValidationError):
             ItemSerializer.model_validate_json(b'{"name": "Widget", "quantity": -5}')
 
     def test_geographic_types_validation(self):
@@ -822,14 +823,14 @@ class TestValidatedTypesWithDjango:
         assert loc.latitude == 40.7128
         assert loc.longitude == -74.0060
 
-        # Invalid latitude (> 90)
-        with pytest.raises(msgspec.ValidationError):
+        # Invalid latitude (> 90) - Meta constraint in msgspec
+        with pytest.raises(RequestValidationError):
             LocationSerializer.model_validate_json(
                 b'{"name": "Invalid", "latitude": 91.0, "longitude": 0}'
             )
 
-        # Invalid longitude (> 180)
-        with pytest.raises(msgspec.ValidationError):
+        # Invalid longitude (> 180) - Meta constraint in msgspec
+        with pytest.raises(RequestValidationError):
             LocationSerializer.model_validate_json(
                 b'{"name": "Invalid", "latitude": 0, "longitude": 181.0}'
             )
@@ -838,8 +839,8 @@ class TestValidatedTypesWithDjango:
         """Test validated types are preserved in subset."""
         UserMini = UserSerializer.subset("id", "username", "email")
 
-        # Validation should still work (via JSON parsing)
-        with pytest.raises(msgspec.ValidationError):
+        # Validation should still work (via JSON parsing) - Meta constraint in msgspec
+        with pytest.raises(RequestValidationError):
             UserMini.model_validate_json(b'{"id": 1, "username": "ab", "email": "invalid"}')
 
 
@@ -1133,11 +1134,11 @@ class TestBulkOperationsWithDjango:
     @pytest.mark.django_db
     def test_dump_many_with_django_queryset(self):
         """Test dump_many with a queryset of models."""
-        Author.objects.create(name="Author1", email="a1@example.com")
-        Author.objects.create(name="Author2", email="a2@example.com")
-        Author.objects.create(name="Author3", email="a3@example.com")
+        a1 = Author.objects.create(name="Author1", email="a1@example.com")
+        a2 = Author.objects.create(name="Author2", email="a2@example.com")
+        a3 = Author.objects.create(name="Author3", email="a3@example.com")
 
-        authors = Author.objects.all()
+        authors = Author.objects.filter(id__in=[a1.id, a2.id, a3.id])
         serializers = [AuthorSerializer.from_model(a) for a in authors]
 
         result = AuthorSerializer.dump_many(serializers)
@@ -1184,16 +1185,18 @@ class TestComplexDjangoScenarios:
         """Test typical API list view pattern."""
         # Create test data
         author = Author.objects.create(name="Blogger", email="blogger@example.com")
+        created_posts = []
         for i in range(5):
-            BlogPost.objects.create(
+            post = BlogPost.objects.create(
                 title=f"Post {i + 1}",
                 content=f"Content for post {i + 1}",
                 author=author,
                 published=i % 2 == 0,
             )
+            created_posts.append(post.id)
 
-        # Fetch posts with list optimization
-        posts = BlogPost.objects.select_related("author").order_by("-created_at")
+        # Fetch only the posts we created
+        posts = BlogPost.objects.filter(id__in=created_posts).select_related("author").order_by("-created_at")
 
         # Use list field set for minimal data
         BlogPostList = BlogPostSerializer.fields("list")
@@ -1550,7 +1553,7 @@ class TestComprehensiveSerializer:
 
     def test_model_validator_fails_on_invalid_discount(self):
         """Test model validator rejects invalid discount on zero price."""
-        with pytest.raises(msgspec.ValidationError, match="Cannot apply discount"):
+        with pytest.raises(RequestValidationError, match="Cannot apply discount"):
             ComprehensiveProductSerializer(
                 id=1,
                 name="Invalid Product",
@@ -1562,7 +1565,7 @@ class TestComprehensiveSerializer:
 
     def test_model_validator_fails_on_100_percent_discount(self):
         """Test model validator rejects 100% discount."""
-        with pytest.raises(msgspec.ValidationError, match="Discount cannot be 100%"):
+        with pytest.raises(RequestValidationError, match="Discount cannot be 100%"):
             ComprehensiveProductSerializer(
                 id=1,
                 name="Free Product",
@@ -2075,7 +2078,8 @@ class TestComprehensiveSerializer:
             "quantity": 1
         }'''
 
-        with pytest.raises(msgspec.ValidationError):
+        # Meta pattern validation in msgspec
+        with pytest.raises(RequestValidationError):
             ComprehensiveProductSerializer.model_validate_json(json_data)
 
     # -------------------------------------------------------------------------
@@ -2176,7 +2180,8 @@ class TestComprehensiveSerializer:
             "manufacturer_email": "not-an-email"
         }'''
 
-        with pytest.raises(msgspec.ValidationError):
+        # Meta pattern validation in msgspec
+        with pytest.raises(RequestValidationError):
             ComprehensiveProductSerializer.model_validate_json(json_data)
 
     def test_validated_type_url_valid(self):
@@ -2203,7 +2208,8 @@ class TestComprehensiveSerializer:
             "quantity": 0
         }'''
 
-        with pytest.raises(msgspec.ValidationError):
+        # Meta constraint validation in msgspec
+        with pytest.raises(RequestValidationError):
             ComprehensiveProductSerializer.model_validate_json(json_data)
 
     # -------------------------------------------------------------------------

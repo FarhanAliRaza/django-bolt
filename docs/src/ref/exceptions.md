@@ -103,15 +103,31 @@ RequestValidationError(
 )
 ```
 
+**Multi-error collection:** Django-Bolt collects all `@field_validator` and `@model_validator` errors before raising, so users see all issues at once:
+
+```python
+# Access all errors
+try:
+    serializer = MySerializer(email="bad", password="short")
+except RequestValidationError as e:
+    all_errors = e.errors()  # Returns list of error dicts
+    print(str(e))  # "body.email: Invalid email; body.password: Too short"
+```
+
 **Response format:**
 
 ```json
 {
     "detail": [
         {
-            "loc": ["body", "field_name"],
-            "msg": "Error message",
-            "type": "error_type"
+            "loc": ["body", "email"],
+            "msg": "Invalid email",
+            "type": "value_error"
+        },
+        {
+            "loc": ["body", "password"],
+            "msg": "Password too short",
+            "type": "value_error"
         }
     ]
 }
@@ -128,6 +144,45 @@ ResponseValidationError(
 )
 ```
 
+## Validation Layers
+
+Django-Bolt's Serializer has two validation layers:
+
+| Layer | Source | Raw msgspec | With `model_validate()` |
+|-------|--------|-------------|-------------------------|
+| **Meta constraints** | `Meta(min_length, pattern, ge, le, ...)` | Fail-fast | **Collects all errors** |
+| **Custom validators** | `@field_validator`, `@model_validator` | N/A | **Collects all errors** |
+
+### Multi-error collection
+
+When using `model_validate()` or `model_validate_json()`, **all errors are collected** before raising `RequestValidationError`:
+
+```python
+# Both Meta constraints AND custom validators collect errors
+try:
+    UserSerializer.model_validate({
+        "name": "X",        # Meta: min_length=2 violated
+        "email": "bad",     # Meta: pattern violated
+        "age": 200          # Meta: le=150 violated
+    })
+except RequestValidationError as e:
+    print(len(e.errors()))  # 3 errors, not just 1
+```
+
+This approach is inspired by [Litestar](https://litestar.dev/) - when validation fails, each field is validated individually to collect all errors.
+
+### When to expect which exception
+
+| How you validate | Exception | Multi-error? |
+|------------------|-----------|--------------|
+| `Serializer.model_validate(dict)` | `RequestValidationError` | Yes |
+| `Serializer.model_validate_json(json)` | `RequestValidationError` | Yes |
+| `Serializer(field=value)` (direct) | `RequestValidationError` | Yes (custom only) |
+| `msgspec.convert(data, Serializer)` | `msgspec.ValidationError` | No (fail-fast) |
+| `msgspec.json.decode(json, type=Serializer)` | `msgspec.ValidationError` | No (fail-fast) |
+
+**Note**: Direct instantiation (`Serializer(field=value)`) runs custom validators but **bypasses Meta constraints** - this is msgspec's design for performance.
+
 ## Validation Error Types
 
 When validation fails, Django-Bolt returns structured errors with these types:
@@ -135,9 +190,9 @@ When validation fails, Django-Bolt returns structured errors with these types:
 | Type | Description | Example Message |
 |------|-------------|-----------------|
 | `missing_field` | Required field not provided | `Object missing required field 'price'` |
-| `validation_error` | Type mismatch or constraint violation | `Expected 'int', got 'str'` |
+| `validation_error` | Type mismatch or Meta constraint violation | `Expected 'int', got 'str'` |
 | `json_invalid` | Malformed JSON | `Invalid JSON at line 2, column 5` |
-| `value_error` | Invalid value | `Must be positive` |
+| `value_error` | Custom `@field_validator` or `@model_validator` failure | `Invalid email format` |
 
 ### Error Location (`loc`)
 

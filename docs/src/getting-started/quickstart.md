@@ -245,27 +245,34 @@ Returns:
 {"id": 1, "name": "Artemis II", "status": "planned", "message": "Mission created successfully"}
 ```
 
-If you send invalid data, Django-Bolt returns a detailed validation error:
+If you send invalid data, Django-Bolt collects **all validation errors** and returns them together:
 
 ```bash
 curl -X POST http://localhost:8000/missions \
   -H "Content-Type: application/json" \
-  -d '{}'
+  -d '{"name": "", "description": "x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]x]"}'
 ```
 
-Returns 422:
+Returns 422 with all errors:
 
 ```json
 {
     "detail": [
         {
             "loc": ["body", "name"],
-            "msg": "Object missing required field `name`",
-            "type": "missing_field"
+            "msg": "Expected `str` of length >= 1",
+            "type": "validation_error"
+        },
+        {
+            "loc": ["body", "description"],
+            "msg": "Expected `str` of length <= 500",
+            "type": "validation_error"
         }
     ]
 }
 ```
+
+This multi-error collection lets users fix all issues at once instead of discovering them one at a time.
 
 ## HTTP methods
 

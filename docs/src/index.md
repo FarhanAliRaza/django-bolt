@@ -29,7 +29,7 @@ from django_bolt import BoltAPI
 
 api = BoltAPI()
 
-@api.get("/", summary="My first api endpoint 🤗")
+@api.get("/")
 async def hello():
     return {"message": "Hello, World!"}
 
@@ -62,10 +62,10 @@ Other documentation UIs are also available by default: [Redoc](topics/openapi.md
 
 Django-Bolt is designed for developers who:
 
-- Already know Django and want to build APIs quickly
-- Need high performance without leaving Python
+- Already know Django and want blazingly fast APIs
 - Want type-safe request handling with automatic validation
 - Prefer async/await for I/O-bound operations
+- Need incremental migration from existing Django REST APIs—all Django features (ORM, authentication, middleware, signals, admin) work out of the box
 
 ## Key features
 

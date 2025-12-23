@@ -107,7 +107,18 @@ def create_query_extractor(
     default: Any,
     alias: str | None = None
 ) -> Callable:
-    """Create a pre-compiled extractor for query parameters."""
+    """Create a pre-compiled extractor for query parameters.
+
+    Supports both individual fields and Struct/Serializer types.
+    When annotation is a msgspec.Struct or Serializer, extracts all struct
+    fields from the query parameters and constructs the struct instance.
+    """
+    # Check if annotation is a Struct/Serializer type
+    unwrapped = unwrap_optional(annotation)
+    if is_msgspec_struct(unwrapped):
+        return _create_param_struct_extractor(unwrapped, default, "query parameter")
+
+    # Individual field extraction (original behavior)
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
     def converter(v):
@@ -132,7 +143,18 @@ def create_header_extractor(
     default: Any,
     alias: str | None = None
 ) -> Callable:
-    """Create a pre-compiled extractor for HTTP headers."""
+    """Create a pre-compiled extractor for HTTP headers.
+
+    Supports both individual fields and Struct/Serializer types.
+    When annotation is a msgspec.Struct or Serializer, extracts all struct
+    fields from the headers and constructs the struct instance.
+    """
+    # Check if annotation is a Struct/Serializer type
+    unwrapped = unwrap_optional(annotation)
+    if is_msgspec_struct(unwrapped):
+        return _create_header_struct_extractor(unwrapped, default)
+
+    # Individual field extraction (original behavior)
     # Convert underscores to hyphens for HTTP header lookup
     # e.g., x_custom -> x-custom, content_type -> content-type
     key = (alias or name).lower().replace("_", "-")
@@ -159,7 +181,18 @@ def create_cookie_extractor(
     default: Any,
     alias: str | None = None
 ) -> Callable:
-    """Create a pre-compiled extractor for cookies."""
+    """Create a pre-compiled extractor for cookies.
+
+    Supports both individual fields and Struct/Serializer types.
+    When annotation is a msgspec.Struct or Serializer, extracts all struct
+    fields from the cookies and constructs the struct instance.
+    """
+    # Check if annotation is a Struct/Serializer type
+    unwrapped = unwrap_optional(annotation)
+    if is_msgspec_struct(unwrapped):
+        return _create_param_struct_extractor(unwrapped, default, "cookie")
+
+    # Individual field extraction (original behavior)
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
     def converter(v):
@@ -184,7 +217,18 @@ def create_form_extractor(
     default: Any,
     alias: str | None = None
 ) -> Callable:
-    """Create a pre-compiled extractor for form fields."""
+    """Create a pre-compiled extractor for form fields.
+
+    Supports both individual fields and Struct/Serializer types.
+    When annotation is a msgspec.Struct or Serializer, extracts all struct
+    fields from the form data and constructs the struct instance.
+    """
+    # Check if annotation is a Struct/Serializer type
+    unwrapped = unwrap_optional(annotation)
+    if is_msgspec_struct(unwrapped):
+        return _create_param_struct_extractor(unwrapped, default, "form field")
+
+    # Individual field extraction (original behavior)
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
     def converter(v):
@@ -199,6 +243,113 @@ def create_form_extractor(
             if key not in form_map:
                 raise HTTPException(status_code=400, detail=f"Missing required form field: {key}")
             return converter(form_map[key])
+
+    return extract
+
+
+def _create_param_struct_extractor(struct_type: type, default: Any, param_type: str) -> Callable:
+    """Create an extractor that builds a Struct/Serializer from parameter data.
+
+    Generic helper used by Form(), Query(), and Cookie() extractors.
+
+    Args:
+        struct_type: The msgspec.Struct or Serializer class
+        default: Default value if the entire struct is optional
+        param_type: Type name for error messages (e.g., "form field", "query parameter")
+
+    Returns:
+        Extractor function that takes param_map and returns struct instance
+    """
+    # Pre-compute field info at registration time
+    fields_info = []
+    for field in msgspec.structs.fields(struct_type):
+        fields_info.append({
+            'name': field.name,
+            'type': field.type,
+            'required': field.required,
+            'default': field.default,
+        })
+
+    def extract(param_map: dict[str, Any]) -> Any:
+        # Convert param values to appropriate types
+        converted = {}
+        for field_info in fields_info:
+            field_name = field_info['name']
+            field_type = field_info['type']
+
+            if field_name in param_map:
+                # Convert string value to appropriate type
+                value = param_map[field_name]
+                if isinstance(value, str):
+                    converted[field_name] = convert_primitive(value, field_type)
+                else:
+                    converted[field_name] = value
+            elif field_info['required']:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing required {param_type}: {field_name}"
+                )
+            # If not in param_map and not required, let msgspec use the default
+
+        # Use msgspec.convert to create and validate the struct
+        # This runs @field_validator decorators for Serializer types
+        try:
+            return msgspec.convert(converted, struct_type)
+        except msgspec.ValidationError:
+            raise  # Let error_handlers.py handle validation errors
+
+    return extract
+
+
+def _create_header_struct_extractor(struct_type: type, default: Any) -> Callable:
+    """Create an extractor that builds a Struct/Serializer from HTTP headers.
+
+    Similar to _create_param_struct_extractor but converts field names from
+    snake_case to kebab-case for HTTP header lookup.
+
+    Args:
+        struct_type: The msgspec.Struct or Serializer class
+        default: Default value if the entire struct is optional
+
+    Returns:
+        Extractor function that takes headers_map and returns struct instance
+    """
+    # Pre-compute field info at registration time
+    # Include the kebab-case header name for lookup
+    fields_info = []
+    for field in msgspec.structs.fields(struct_type):
+        fields_info.append({
+            'name': field.name,
+            'header_name': field.name.lower().replace("_", "-"),
+            'type': field.type,
+            'required': field.required,
+            'default': field.default,
+        })
+
+    def extract(headers_map: dict[str, str]) -> Any:
+        # Convert header values to appropriate types
+        converted = {}
+        for field_info in fields_info:
+            field_name = field_info['name']
+            header_name = field_info['header_name']
+            field_type = field_info['type']
+
+            if header_name in headers_map:
+                # Convert string value to appropriate type
+                value = headers_map[header_name]
+                converted[field_name] = convert_primitive(value, field_type)
+            elif field_info['required']:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing required header: {header_name}"
+                )
+            # If not in headers_map and not required, let msgspec use the default
+
+        # Use msgspec.convert to create and validate the struct
+        try:
+            return msgspec.convert(converted, struct_type)
+        except msgspec.ValidationError:
+            raise
 
     return extract
 

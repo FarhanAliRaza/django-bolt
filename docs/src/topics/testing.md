@@ -281,6 +281,8 @@ def test_hello(client):
 
 ### Testing with Django database
 
+When testing endpoints that access the Django database, you **must** use `@pytest.mark.django_db(transaction=True)`:
+
 ```python
 import pytest
 from django_bolt import BoltAPI
@@ -308,6 +310,114 @@ def test_get_user(api):
         assert response.status_code == 200
         assert response.json()["username"] == "testuser"
 ```
+
+#### Why `transaction=True` is required
+
+Django-Bolt's `TestClient` routes requests through the Rust/Actix HTTP layer, which runs async handlers in a **separate thread** with its own database connection. This differs from in-process test clients that share the same thread and connection.
+
+The problem with pytest-django's default `@pytest.mark.django_db`:
+
+```
+Test Thread (Connection A)          Rust/Actix Thread (Connection B)
+─────────────────────────          ─────────────────────────────────
+BEGIN TRANSACTION
+User.objects.create(id=1)
+  ↓ (uncommitted)
+                                    TestClient.get("/users/1")
+                                      ↓
+                                    await User.objects.aget(id=1)
+                                      ↓
+                                    ❌ Not found! (can't see uncommitted)
+ROLLBACK
+```
+
+Without `transaction=True`, pytest-django wraps tests in a transaction that never commits. The async handler runs in a separate database connection that cannot see uncommitted data from the test's transaction.
+
+With `transaction=True`, data is committed immediately and visible to all connections:
+
+```
+Test Thread                         Rust/Actix Thread
+───────────                         ─────────────────
+User.objects.create(id=1)
+  ↓ (committed immediately)
+                                    TestClient.get("/users/1")
+                                      ↓
+                                    await User.objects.aget(id=1)
+                                      ↓
+                                    ✅ Found! (committed data visible)
+```
+
+#### Recommended approach: Cleanup fixture
+
+Since `transaction=True` commits data, you need explicit cleanup between tests:
+
+```python
+import pytest
+from django_bolt.testing import TestClient
+from myapp.models import User
+from myapp.api import api
+
+@pytest.fixture(autouse=True)
+def clean_db(db):
+    """Clean database before and after each test."""
+    User.objects.all().delete()
+    yield
+    User.objects.all().delete()
+
+
+@pytest.mark.django_db(transaction=True)
+class TestUserEndpoints:
+
+    def test_get_user(self):
+        user = User.objects.create(username="testuser")
+
+        with TestClient(api) as client:
+            response = client.get(f"/users/{user.id}")
+            assert response.status_code == 200
+            assert response.json()["username"] == "testuser"
+
+    def test_list_users(self):
+        User.objects.create(username="user1")
+        User.objects.create(username="user2")
+
+        with TestClient(api) as client:
+            response = client.get("/users")
+            assert response.status_code == 200
+            assert response.json()["count"] == 2
+```
+
+#### Alternative approach: Create data via API
+
+For true end-to-end tests, create data through the API itself:
+
+```python
+@pytest.mark.django_db(transaction=True)
+class TestUserEndpoints:
+
+    def test_create_and_get_user(self):
+        with TestClient(api) as client:
+            # Create via API (automatically committed)
+            create_response = client.post(
+                "/users",
+                json={"username": "testuser", "email": "test@example.com"}
+            )
+            assert create_response.status_code == 200
+            user_id = create_response.json()["id"]
+
+            # Fetch via API
+            get_response = client.get(f"/users/{user_id}")
+            assert get_response.status_code == 200
+            assert get_response.json()["username"] == "testuser"
+```
+
+**When to use each approach:**
+
+| Approach | Use when |
+|----------|----------|
+| ORM + cleanup fixture | Testing specific endpoints with controlled test data |
+| Create via API | Testing full CRUD flows, integration tests |
+
+Both approaches work well. The ORM approach is more concise for focused tests, while the API approach tests the complete request flow.
 
 ### Testing ViewSets
 

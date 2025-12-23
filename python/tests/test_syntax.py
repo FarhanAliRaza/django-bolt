@@ -8,7 +8,8 @@ import pytest
 
 from django_bolt import JSON, BoltAPI, Response, StreamingResponse
 from django_bolt.exceptions import HTTPException
-from django_bolt.param_functions import Cookie, Depends, Form, Header
+from django_bolt.param_functions import Cookie, Depends, Form, Header, Query
+from django_bolt.serializers import Serializer, field_validator
 from django_bolt.param_functions import File as FileParam
 from django_bolt.responses import HTML, File, FileResponse, PlainText, Redirect
 from django_bolt.testing import TestClient
@@ -235,6 +236,59 @@ def api():
     async def form_urlencoded(a: Annotated[str, Form()], b: Annotated[int, Form()]):
         return {"a": a, "b": b}
 
+    # Form data with Struct/Serializer
+    class FormDataStruct(msgspec.Struct):
+        username: str
+        age: int
+        active: bool = True
+
+    @api.post("/form-struct")
+    async def form_struct(data: Annotated[FormDataStruct, Form()]):
+        return {"username": data.username, "age": data.age, "active": data.active}
+
+    # Form data with Serializer and field_validator
+    class FormDataSerializer(Serializer):
+        username: str
+        email: str
+
+        @field_validator("username")
+        def validate_username(cls, value):
+            if len(value) < 3:
+                raise ValueError("Username must be at least 3 characters")
+            return value
+
+    @api.post("/form-serializer")
+    async def form_serializer(data: Annotated[FormDataSerializer, Form()]):
+        return {"username": data.username, "email": data.email}
+
+    # Query parameters with Struct
+    class QueryParams(msgspec.Struct):
+        limit: int = 10
+        offset: int = 0
+        search: str | None = None
+
+    @api.get("/query-struct")
+    async def query_struct(params: Annotated[QueryParams, Query()]):
+        return {"limit": params.limit, "offset": params.offset, "search": params.search}
+
+    # Header parameters with Struct
+    class HeaderParams(msgspec.Struct):
+        x_api_key: str
+        x_request_id: str | None = None
+
+    @api.get("/header-struct")
+    async def header_struct(headers: Annotated[HeaderParams, Header()]):
+        return {"api_key": headers.x_api_key, "request_id": headers.x_request_id}
+
+    # Cookie parameters with Struct
+    class CookieParams(msgspec.Struct):
+        session_id: str
+        theme: str = "light"
+
+    @api.get("/cookie-struct")
+    async def cookie_struct(cookies: Annotated[CookieParams, Cookie()]):
+        return {"session_id": cookies.session_id, "theme": cookies.theme}
+
     @api.post("/upload")
     async def upload(files: Annotated[list[dict], FileParam(alias="file")]):
         return {"count": len(files), "names": [f.get("filename") for f in files]}
@@ -258,6 +312,16 @@ def api():
                 yield "data: [DONE]\n\n"
             return StreamingResponse(agen(), media_type="text/event-stream")
         return {"non_streaming": True}
+
+    # 204 No Content - returning None should work
+    @api.delete("/no-content", status_code=204)
+    async def no_content():
+        return None
+
+    # Returning None without 204 should error
+    @api.get("/none-return")
+    async def none_return():
+        return None
 
     return api
 
@@ -750,3 +814,134 @@ def test_method_validation():
         @api.options("/test-options")
         async def options_with_body(body: Body):
             return {"ok": True}
+
+
+def test_204_no_content_with_none_return(client):
+    """Test that returning None with status_code=204 returns empty response."""
+    response = client.delete("/no-content")
+    assert response.status_code == 204
+    assert response.content == b""
+
+
+def test_none_return_without_204_returns_500(client):
+    """Test that returning None without 204 status code returns 500 error."""
+    response = client.get("/none-return")
+    assert response.status_code == 500
+
+
+def test_form_struct(client):
+    """Test Form() with Struct type parses form data into struct."""
+    response = client.post(
+        "/form-struct",
+        data={"username": "john", "age": "30", "active": "true"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["username"] == "john"
+    assert data["age"] == 30
+    assert data["active"] is True
+
+
+def test_form_struct_with_defaults(client):
+    """Test Form() with Struct uses default values."""
+    response = client.post(
+        "/form-struct",
+        data={"username": "jane", "age": "25"}  # active not provided, uses default
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["username"] == "jane"
+    assert data["age"] == 25
+    assert data["active"] is True  # default value
+
+
+def test_form_struct_missing_required(client):
+    """Test Form() with Struct returns 400 for missing required fields."""
+    response = client.post(
+        "/form-struct",
+        data={"username": "john"}  # missing age
+    )
+    assert response.status_code == 400
+
+
+def test_form_serializer(client):
+    """Test Form() with Serializer parses and validates form data."""
+    response = client.post(
+        "/form-serializer",
+        data={"username": "john", "email": "john@example.com"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["username"] == "john"
+    assert data["email"] == "john@example.com"
+
+
+def test_form_serializer_validation_error(client):
+    """Test Form() with Serializer runs field_validator and returns 422."""
+    response = client.post(
+        "/form-serializer",
+        data={"username": "ab", "email": "ab@example.com"}  # username too short
+    )
+    assert response.status_code == 422
+
+
+def test_query_struct(client):
+    """Test Query() with Struct type parses query parameters into struct."""
+    response = client.get("/query-struct?limit=20&offset=5&search=test")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["limit"] == 20
+    assert data["offset"] == 5
+    assert data["search"] == "test"
+
+
+def test_query_struct_with_defaults(client):
+    """Test Query() with Struct uses default values."""
+    response = client.get("/query-struct")  # no params, uses defaults
+    assert response.status_code == 200
+    data = response.json()
+    assert data["limit"] == 10
+    assert data["offset"] == 0
+    assert data["search"] is None
+
+
+def test_header_struct(client):
+    """Test Header() with Struct type parses headers into struct."""
+    response = client.get(
+        "/header-struct",
+        headers={"X-Api-Key": "secret123", "X-Request-Id": "req-456"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["api_key"] == "secret123"
+    assert data["request_id"] == "req-456"
+
+
+def test_header_struct_missing_required(client):
+    """Test Header() with Struct returns 400 for missing required headers."""
+    response = client.get("/header-struct")  # missing X-Api-Key
+    assert response.status_code == 400
+
+
+def test_cookie_struct(client):
+    """Test Cookie() with Struct type parses cookies into struct."""
+    response = client.get(
+        "/cookie-struct",
+        cookies={"session_id": "abc123", "theme": "dark"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["session_id"] == "abc123"
+    assert data["theme"] == "dark"
+
+
+def test_cookie_struct_with_defaults(client):
+    """Test Cookie() with Struct uses default values."""
+    response = client.get(
+        "/cookie-struct",
+        cookies={"session_id": "xyz789"}  # theme not provided, uses default
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["session_id"] == "xyz789"
+    assert data["theme"] == "light"  # default value

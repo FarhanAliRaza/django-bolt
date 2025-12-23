@@ -196,6 +196,113 @@ async def update_profile(
     return {"name": name, "bio": bio}
 ```
 
+## Parameter models
+
+You can use `msgspec.Struct` or `Serializer` to group related parameters into a single validated object. This works with `Form()`, `Query()`, `Header()`, and `Cookie()`.
+
+### Form models
+
+Group form fields into a struct:
+
+```python
+import msgspec
+from typing import Annotated
+from django_bolt.param_functions import Form
+
+class LoginForm(msgspec.Struct):
+    username: str
+    password: str
+    remember_me: bool = False
+
+@api.post("/login")
+async def login(form: Annotated[LoginForm, Form()]):
+    return {"username": form.username, "remember": form.remember_me}
+```
+
+With `Serializer` for custom validation:
+
+```python
+from django_bolt.serializers import Serializer, field_validator
+
+class RegisterForm(Serializer):
+    username: str
+    email: str
+    password: str
+
+    @field_validator("username")
+    def validate_username(cls, value):
+        if len(value) < 3:
+            raise ValueError("Username must be at least 3 characters")
+        return value
+
+@api.post("/register")
+async def register(form: Annotated[RegisterForm, Form()]):
+    return {"username": form.username}
+```
+
+### Query models
+
+Group query parameters:
+
+```python
+class FilterParams(msgspec.Struct):
+    limit: int = 10
+    offset: int = 0
+    search: str | None = None
+    sort_by: str = "created_at"
+
+@api.get("/items")
+async def list_items(params: Annotated[FilterParams, Query()]):
+    return {
+        "limit": params.limit,
+        "offset": params.offset,
+        "search": params.search
+    }
+```
+
+Request: `GET /items?limit=20&search=test`
+
+### Header models
+
+Group headers into a struct. Field names are converted from `snake_case` to `kebab-case` for HTTP header lookup:
+
+```python
+class AuthHeaders(msgspec.Struct):
+    x_api_key: str           # maps to X-Api-Key header
+    x_request_id: str | None = None  # maps to X-Request-Id header
+
+@api.get("/secure")
+async def secure_endpoint(headers: Annotated[AuthHeaders, Header()]):
+    return {"api_key": headers.x_api_key}
+```
+
+Request: `GET /secure` with headers `X-Api-Key: secret123`
+
+### Cookie models
+
+Group cookies:
+
+```python
+class SessionCookies(msgspec.Struct):
+    session_id: str
+    theme: str = "light"
+    language: str = "en"
+
+@api.get("/preferences")
+async def get_preferences(cookies: Annotated[SessionCookies, Cookie()]):
+    return {"theme": cookies.theme, "language": cookies.language}
+```
+
+### Benefits of parameter models
+
+| Feature | Individual params | Parameter models |
+|---------|-------------------|------------------|
+| Reusability | Copy-paste params | Define once, use everywhere |
+| Validation | Per-field only | Custom `@field_validator` |
+| Defaults | Per-field | Centralized in struct |
+| IDE support | Basic | Full autocomplete |
+| Documentation | Manual | Auto-generated from struct |
+
 ## File uploads
 
 ```python

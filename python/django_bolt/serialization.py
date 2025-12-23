@@ -51,6 +51,11 @@ def _convert_serializers(result: Any) -> Any:
 
 async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTuple:
     """Serialize handler result to HTTP response."""
+    # Handle 204 No Content - allow None return value
+    status_code = int(meta.get("default_status_code", 200))
+    if result is None and status_code == 204:
+        return 204, [], b""
+
     response_tp = meta.get("response_type")
 
     # Convert Serializer instances to dicts (handles write_only, computed_field)
@@ -114,6 +119,11 @@ async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTupl
 
 def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple:
     """Serialize handler result to HTTP response (sync version for sync handlers)."""
+    # Handle 204 No Content - allow None return value
+    status_code = int(meta.get("default_status_code", 200))
+    if result is None and status_code == 204:
+        return 204, [], b""
+
     response_tp = meta.get("response_type")
 
     # Convert Serializer instances to dicts (handles write_only, computed_field)

@@ -254,7 +254,7 @@ raise BadRequest(
 
 | Code | Exception | When Raised |
 |------|-----------|-------------|
-| 400 | `BadRequest` | Explicit raise, missing required params |
+| 400 | `BadRequest` | Explicit raise only |
 | 401 | `Unauthorized` | Authentication failed |
 | 403 | `Forbidden` | Guard/permission denied |
 | 404 | `NotFound` | Resource not found, `FileNotFoundError` |
@@ -262,7 +262,7 @@ raise BadRequest(
 | 406 | `NotAcceptable` | Cannot produce requested format |
 | 409 | `Conflict` | State conflict |
 | 410 | `Gone` | Resource deleted |
-| 422 | `UnprocessableEntity` | **Validation errors** (automatic) |
+| 422 | `UnprocessableEntity` | **Validation errors**, missing required params (automatic) |
 | 429 | `TooManyRequests` | Rate limit exceeded |
 | 500 | `InternalServerError` | Unhandled exceptions, response validation |
 | 501 | `NotImplemented` | Feature not implemented |

@@ -856,12 +856,12 @@ def test_form_struct_with_defaults(client):
 
 
 def test_form_struct_missing_required(client):
-    """Test Form() with Struct returns 400 for missing required fields."""
+    """Test Form() with Struct returns 422 for missing required fields."""
     response = client.post(
         "/form-struct",
         data={"username": "john"}  # missing age
     )
-    assert response.status_code == 400
+    assert response.status_code == 422
 
 
 def test_form_serializer(client):
@@ -918,9 +918,9 @@ def test_header_struct(client):
 
 
 def test_header_struct_missing_required(client):
-    """Test Header() with Struct returns 400 for missing required headers."""
+    """Test Header() with Struct returns 422 for missing required headers."""
     response = client.get("/header-struct")  # missing X-Api-Key
-    assert response.status_code == 400
+    assert response.status_code == 422
 
 
 def test_cookie_struct(client):

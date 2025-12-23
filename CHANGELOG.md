@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Parameter models** - Support for `Annotated[Struct/Serializer, Form()]` pattern like FastAPI. Group related form fields, query parameters, headers, or cookies into a single validated object using `msgspec.Struct` or `Serializer`.
+  - `Annotated[FormModel, Form()]` - Group form fields with validation
+  - `Annotated[QueryModel, Query()]` - Group query parameters
+  - `Annotated[HeaderModel, Header()]` - Group headers (snake_case fields map to kebab-case headers)
+  - `Annotated[CookieModel, Cookie()]` - Group cookies
+- **Testing documentation** - Comprehensive testing guide covering TestClient usage, database transactions, and integration testing patterns.
+
+### Changed
+
+- **204 No Content support** - Framework now properly handles `None` return values for endpoints with `status_code=204`. DELETE endpoints should return nothing with 204 status.
+
+### Fixed
+
+- **500 error on 204 responses** - Fixed server error when handlers returned `None` for 204 No Content responses.
+- **Validation errors now return 422** - Missing required parameters (query, header, cookie, form, file) now return 422 Unprocessable Entity instead of 400 Bad Request, per RFC standards.
+
+### Removed
+
+- **`django-bolt init` command** - Removed CLI initialization command. The CLI now only provides the `version` command.
+
 ## [0.4.0]
 
 ### Changed

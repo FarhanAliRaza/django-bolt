@@ -373,3 +373,15 @@ When request validation fails, Django-Bolt returns a 422 Unprocessable Entity wi
     ]
 }
 ```
+
+Common validation scenarios that return 422:
+
+| Scenario | Example Message |
+|----------|-----------------|
+| Missing required query param | `Missing required query parameter: page` |
+| Missing required header | `Missing required header: x-api-key` |
+| Missing required cookie | `Missing required cookie: session` |
+| Missing required form field | `Missing required form field: username` |
+| Missing required file | `Missing required file: document` |
+| Type conversion failure | `Invalid integer value: 'abc'` |
+| Struct field validation | `name: Name must be at least 3 characters` |

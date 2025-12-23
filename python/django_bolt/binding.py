@@ -95,7 +95,7 @@ def create_path_extractor(name: str, annotation: Any, alias: str | None = None) 
 
     def extract(params_map: dict[str, Any]) -> Any:
         if key not in params_map:
-            raise HTTPException(status_code=400, detail=f"Missing required path parameter: {key}")
+            raise HTTPException(status_code=422, detail=f"Missing required path parameter: {key}")
         return converter(params_map[key])
 
     return extract
@@ -131,7 +131,7 @@ def create_query_extractor(
     else:
         def extract(query_map: dict[str, Any]) -> Any:
             if key not in query_map:
-                raise HTTPException(status_code=400, detail=f"Missing required query parameter: {key}")
+                raise HTTPException(status_code=422, detail=f"Missing required query parameter: {key}")
             return converter(query_map[key])
 
     return extract
@@ -169,7 +169,7 @@ def create_header_extractor(
     else:
         def extract(headers_map: dict[str, str]) -> Any:
             if key not in headers_map:
-                raise HTTPException(status_code=400, detail=f"Missing required header: {key}")
+                raise HTTPException(status_code=422, detail=f"Missing required header: {key}")
             return converter(headers_map[key])
 
     return extract
@@ -205,7 +205,7 @@ def create_cookie_extractor(
     else:
         def extract(cookies_map: dict[str, str]) -> Any:
             if key not in cookies_map:
-                raise HTTPException(status_code=400, detail=f"Missing required cookie: {key}")
+                raise HTTPException(status_code=422, detail=f"Missing required cookie: {key}")
             return converter(cookies_map[key])
 
     return extract
@@ -241,7 +241,7 @@ def create_form_extractor(
     else:
         def extract(form_map: dict[str, Any]) -> Any:
             if key not in form_map:
-                raise HTTPException(status_code=400, detail=f"Missing required form field: {key}")
+                raise HTTPException(status_code=422, detail=f"Missing required form field: {key}")
             return converter(form_map[key])
 
     return extract
@@ -286,7 +286,7 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
                     converted[field_name] = value
             elif field_info['required']:
                 raise HTTPException(
-                    status_code=400,
+                    status_code=422,
                     detail=f"Missing required {param_type}: {field_name}"
                 )
             # If not in param_map and not required, let msgspec use the default
@@ -340,7 +340,7 @@ def _create_header_struct_extractor(struct_type: type, default: Any) -> Callable
                 converted[field_name] = convert_primitive(value, field_type)
             elif field_info['required']:
                 raise HTTPException(
-                    status_code=400,
+                    status_code=422,
                     detail=f"Missing required header: {header_name}"
                 )
             # If not in headers_map and not required, let msgspec use the default
@@ -380,7 +380,7 @@ def create_file_extractor(
     else:
         def extract(files_map: dict[str, Any]) -> Any:
             if key not in files_map:
-                raise HTTPException(status_code=400, detail=f"Missing required file: {key}")
+                raise HTTPException(status_code=422, detail=f"Missing required file: {key}")
             value = files_map[key]
             # Wrap single file in list if annotation expects list
             if expects_list and not isinstance(value, list):

@@ -7,7 +7,7 @@ from msgspec import Meta
 
 from django_bolt import BoltAPI
 from django_bolt.exceptions import NotFound
-from django_bolt.param_functions import Form, Query
+from django_bolt.param_functions import Cookie, File, Form, Header, Query
 from django_bolt.serializers import Serializer, field_validator
 
 from missions.models import Astronaut, Mission
@@ -189,3 +189,87 @@ async def list_astronauts(mission_id: int):
             "role": astronaut.role,
         })
     return {"mission": mission.name, "astronauts": astronauts}
+
+
+# Header model for API metadata
+class APIHeaders(Serializer):
+    x_api_key: str
+    x_request_id: str | None = None
+
+
+# Cookie model for user preferences
+class UserPreferences(Serializer):
+    theme: str = "light"
+    language: str = "en"
+
+
+# File upload endpoint
+@api.post("/missions/{mission_id}/documents")
+async def upload_document(
+    mission_id: int,
+    title: Annotated[str, Form()],
+    files: Annotated[list[dict], File(alias="file")],
+):
+    """Upload documents for a mission."""
+    try:
+        mission = await Mission.objects.aget(id=mission_id)
+    except Mission.DoesNotExist:
+        raise NotFound(detail=f"Mission {mission_id} not found")
+
+    uploaded = []
+    for f in files:
+        uploaded.append({
+            "filename": f.get("filename"),
+            "content_type": f.get("content_type"),
+            "size": f.get("size"),
+        })
+
+    return {
+        "mission": mission.name,
+        "title": title,
+        "documents": uploaded,
+        "count": len(uploaded),
+    }
+
+
+# Header struct endpoint
+@api.get("/missions/secure")
+async def secure_endpoint(headers: Annotated[APIHeaders, Header()]):
+    """Endpoint requiring API key header."""
+    return {
+        "api_key": headers.x_api_key,
+        "request_id": headers.x_request_id,
+        "message": "Access granted",
+    }
+
+
+# Cookie struct endpoint
+@api.get("/missions/preferences")
+async def get_preferences(cookies: Annotated[UserPreferences, Cookie()]):
+    """Get user preferences from cookies."""
+    return {
+        "theme": cookies.theme,
+        "language": cookies.language,
+    }
+
+
+# Mixed form and file upload
+@api.post("/missions/{mission_id}/report")
+async def submit_report(
+    mission_id: int,
+    title: Annotated[str, Form()],
+    summary: Annotated[str, Form()] = "",
+    attachments: Annotated[list[dict], File(alias="file")] = [],
+):
+    """Submit a mission report with optional attachments."""
+    try:
+        mission = await Mission.objects.aget(id=mission_id)
+    except Mission.DoesNotExist:
+        raise NotFound(detail=f"Mission {mission_id} not found")
+
+    return {
+        "mission": mission.name,
+        "title": title,
+        "summary": summary,
+        "attachments": len(attachments),
+    }

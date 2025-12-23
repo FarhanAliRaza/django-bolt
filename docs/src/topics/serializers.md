@@ -222,12 +222,12 @@ This matches Pydantic's behavior and provides a better user experience - users c
 
 ### Understanding validation layers
 
-Django-Bolt Serializer has **two validation layers** with different behaviors:
+Django-Bolt Serializer has **two validation layers**:
 
-| Layer | Validated by | Behavior | Exception Type |
-|-------|--------------|----------|----------------|
-| **Meta constraints** | msgspec (C/Rust) | Fail-fast (stops at first error) | `msgspec.ValidationError` |
-| **Custom validators** | Python (`@field_validator`, `@model_validator`) | Collects all errors | `RequestValidationError` |
+| Layer | Source | Raw msgspec | With `model_validate()` |
+|-------|--------|-------------|-------------------------|
+| **Meta constraints** | `Meta(min_length, pattern, ge, le, ...)` | Fail-fast | **Collects all errors** |
+| **Custom validators** | `@field_validator`, `@model_validator` | N/A | **Collects all errors** |
 
 **Meta constraints** use `msgspec.Meta` and are validated by msgspec's high-performance C code:
 
@@ -241,18 +241,18 @@ class UserSerializer(Serializer):
     age: Annotated[int, Meta(ge=0, le=150)]
 ```
 
-These constraints are extremely fast but **fail-fast** - msgspec stops at the first constraint violation.
+When using raw msgspec (`msgspec.convert()` or direct decoding), Meta constraints are fail-fast. However, when using `model_validate()` or `model_validate_json()`, **all Meta constraint errors are collected**.
 
-**Custom validators** run after msgspec validation and **collect all errors**:
+**Custom validators** run after msgspec validation and also **collect all errors**:
 
 ```python
 class UserSerializer(Serializer):
-    # Meta constraints (fail-fast, validated by msgspec)
+    # Meta constraints (validated by msgspec)
     name: Annotated[str, Meta(min_length=2)]
     email: str
     password: str
 
-    # Custom validators (multi-error collection)
+    # Custom validators
     @field_validator("email")
     def validate_email(cls, value):
         if "@" not in value:
@@ -268,10 +268,10 @@ class UserSerializer(Serializer):
 
 **Validation order:**
 
-1. **msgspec parses and validates** - Type checking and Meta constraints (fail-fast)
-2. **`@field_validator` runs** - Custom field validation (collects errors)
-3. **`@model_validator` runs** - Cross-field validation (collects errors)
-4. **All errors raised together** - Single `RequestValidationError` with all custom validator errors
+1. **msgspec parses and validates** - Type checking and Meta constraints
+2. **`@field_validator` runs** - Custom field validation
+3. **`@model_validator` runs** - Cross-field validation
+4. **All errors raised together** - Single `RequestValidationError` with all Meta and custom validator errors
 
 For best performance, use Meta constraints for simple validations (length, range, pattern) and reserve `@field_validator` for complex logic or value transformations.
 

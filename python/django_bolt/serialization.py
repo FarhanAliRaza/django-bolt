@@ -51,15 +51,31 @@ def _convert_serializers(result: Any) -> Any:
 
 async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTuple:
     """Serialize handler result to HTTP response."""
+    # Extract status code once (used in multiple branches)
+    status_code = meta.get("default_status_code", 200)
+
     # Handle 204 No Content - allow None return value
-    status_code = int(meta.get("default_status_code", 200))
     if result is None and status_code == 204:
         return 204, [], b""
+
+    # Fast path: dict/list are the most common response types (90%+ of handlers)
+    # Check these first before any other processing
+    if isinstance(result, dict):
+        return await serialize_json_data(result, meta.get("response_type"), meta)
+    if isinstance(result, list):
+        # Only convert Serializers for lists (single Serializer handled by dict path)
+        result = _convert_serializers(result)
+        return await serialize_json_data(result, meta.get("response_type"), meta)
 
     response_tp = meta.get("response_type")
 
     # Convert Serializer instances to dicts (handles write_only, computed_field)
+    # Only called for non-dict/list types now
     result = _convert_serializers(result)
+
+    # After Serializer conversion, result may now be a dict/list - handle that case
+    if isinstance(result, (dict, list)):
+        return await serialize_json_data(result, response_tp, meta)
 
     # Check if result is already a raw response tuple (status, headers, body)
     # This is used by ASGI bridge and other low-level handlers
@@ -70,64 +86,75 @@ async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTupl
             return status, headers, bytes(body)
 
     # Handle different response types (ordered by frequency for performance)
-    # Most common: plain dict/list JSON responses
-    if isinstance(result, (dict, list)):
-        return await serialize_json_data(result, response_tp, meta)
     # Common: JSON wrapper
-    elif isinstance(result, JSON):
+    if isinstance(result, JSON):
         return await serialize_json_response(result, response_tp, meta)
     # Common: Streaming responses
-    elif isinstance(result, StreamingResponse):
+    if isinstance(result, StreamingResponse):
         return result
     # Less common: Other response types
-    elif isinstance(result, PlainText):
+    if isinstance(result, PlainText):
         return serialize_plaintext_response(result)
-    elif isinstance(result, HTML):
+    if isinstance(result, HTML):
         return serialize_html_response(result)
-    elif isinstance(result, (bytes, bytearray)):
-        status = int(meta.get("default_status_code", 200))
-        return status, [("content-type", "application/octet-stream")], bytes(result)
-    elif isinstance(result, str):
-        status = int(meta.get("default_status_code", 200))
-        return status, [("content-type", "text/plain; charset=utf-8")], result.encode()
-    elif isinstance(result, Redirect):
+    if isinstance(result, (bytes, bytearray)):
+        return int(status_code), [("content-type", "application/octet-stream")], bytes(result)
+    if isinstance(result, str):
+        return int(status_code), [("content-type", "text/plain; charset=utf-8")], result.encode()
+    if isinstance(result, Redirect):
         return serialize_redirect_response(result)
-    elif isinstance(result, File):
+    if isinstance(result, File):
         return serialize_file_response(result)
-    elif isinstance(result, FileResponse):
+    if isinstance(result, FileResponse):
         return serialize_file_streaming_response(result)
-    elif isinstance(result, ResponseClass):
+    if isinstance(result, ResponseClass):
         return await serialize_generic_response(result, response_tp, meta)
-    elif isinstance(result, msgspec.Struct):
+    if isinstance(result, msgspec.Struct):
         # Handle msgspec.Struct instances (e.g., PaginatedResponse)
         return await serialize_json_data(result, response_tp, meta)
-    elif isinstance(result, QuerySet):
+    if isinstance(result, QuerySet):
         # Handle Django QuerySets - convert to list for JSON serialization
         # Use sync_to_async since QuerySet iteration is sync-only
         result_list = await sync_to_async(list, thread_sensitive=True)(result)
         return await serialize_json_data(result_list, response_tp, meta)
-    elif isinstance(result, DjangoHttpResponse):
+    if isinstance(result, DjangoHttpResponse):
         # Handle Django HttpResponse types (e.g., from @login_required decorator)
         return serialize_django_response(result)
-    else:
-        # Unknown type - raise clear error instead of failing in JSON serialization
-        raise TypeError(
-            f"Handler returned unsupported type {type(result).__name__!r}. "
-            f"Return dict, list, or a Bolt response type (JSON, PlainText, HTML, Redirect, etc.)"
-        )
+
+    # Unknown type - raise clear error instead of failing in JSON serialization
+    raise TypeError(
+        f"Handler returned unsupported type {type(result).__name__!r}. "
+        f"Return dict, list, or a Bolt response type (JSON, PlainText, HTML, Redirect, etc.)"
+    )
 
 
 def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple:
     """Serialize handler result to HTTP response (sync version for sync handlers)."""
+    # Extract status code once (used in multiple branches)
+    status_code = meta.get("default_status_code", 200)
+
     # Handle 204 No Content - allow None return value
-    status_code = int(meta.get("default_status_code", 200))
     if result is None and status_code == 204:
         return 204, [], b""
+
+    # Fast path: dict/list are the most common response types (90%+ of handlers)
+    # Check these first before any other processing
+    if isinstance(result, dict):
+        return serialize_json_data_sync(result, meta.get("response_type"), meta)
+    if isinstance(result, list):
+        # Only convert Serializers for lists (single Serializer handled by dict path)
+        result = _convert_serializers(result)
+        return serialize_json_data_sync(result, meta.get("response_type"), meta)
 
     response_tp = meta.get("response_type")
 
     # Convert Serializer instances to dicts (handles write_only, computed_field)
+    # Only called for non-dict/list types now
     result = _convert_serializers(result)
+
+    # After Serializer conversion, result may now be a dict/list - handle that case
+    if isinstance(result, (dict, list)):
+        return serialize_json_data_sync(result, response_tp, meta)
 
     # Check if result is already a raw response tuple (status, headers, body)
     if isinstance(result, tuple) and len(result) == 3:
@@ -136,11 +163,8 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
             return status, headers, bytes(body)
 
     # Handle different response types (ordered by frequency for performance)
-    # Most common: plain dict/list JSON responses
-    if isinstance(result, (dict, list)):
-        return serialize_json_data_sync(result, response_tp, meta)
     # Common: JSON wrapper
-    elif isinstance(result, JSON):
+    if isinstance(result, JSON):
         # Sync version of serialize_json_response
         has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
         if has_custom_content_type:
@@ -166,11 +190,9 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
     elif isinstance(result, HTML):
         return serialize_html_response(result)
     elif isinstance(result, (bytes, bytearray)):
-        status = int(meta.get("default_status_code", 200))
-        return status, [("content-type", "application/octet-stream")], bytes(result)
+        return int(status_code), [("content-type", "application/octet-stream")], bytes(result)
     elif isinstance(result, str):
-        status = int(meta.get("default_status_code", 200))
-        return status, [("content-type", "text/plain; charset=utf-8")], result.encode()
+        return int(status_code), [("content-type", "text/plain; charset=utf-8")], result.encode()
     elif isinstance(result, Redirect):
         return serialize_redirect_response(result)
     elif isinstance(result, File):

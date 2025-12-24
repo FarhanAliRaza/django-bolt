@@ -9,6 +9,8 @@ All notable changes to this project will be documented in this file.
 - **Rust hot path optimizations** - Merged GIL acquisitions, removed redundant `to_ascii_lowercase()` calls in header extraction, optimized WebSocket upgrade guards to avoid allocations.
 - **Python hot path optimizations** - Changed `_handler_meta` to use `handler_id` (int) keys instead of callable keys for faster O(1) hash lookups.
 - **Dispatch loop optimizations** - Eliminated `hasattr()` checks by initializing `_handler_api_map` in `__init__`, cached `isEnabledFor()` timing decisions per logging middleware instance, and reduced redundant `.get()` calls by pre-extracting commonly used metadata before conditional branches.
+- **Lazy user loading optimization** - Replaced lambda with `functools.partial` for `SimpleLazyObject` user loader, avoiding closure allocation overhead per authenticated request.
+- **Response serialization fast path** - Added dedicated fast path for dict/list responses (90%+ of handlers) that skips `_convert_serializers()` check and unnecessary isinstance chain. Extracted `default_status_code` once at function start to avoid repeated dict lookups.
 
 ## [0.4.6]
 

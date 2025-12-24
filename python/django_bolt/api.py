@@ -8,6 +8,7 @@ import sys
 import time
 import types
 from collections.abc import Callable
+from functools import partial
 from typing import Annotated, Any, get_args, get_origin, get_type_hints
 
 import msgspec
@@ -1884,10 +1885,10 @@ class BoltAPI:
                 backend_name = auth_context.get("auth_backend")
                 # Use pre-computed is_async from handler metadata (avoids runtime loop check)
                 # Default True for ASGI bridge handlers that don't set is_async
-                is_async = meta.get("is_async", True)
-                # Use lambda with default args to capture values (avoid late binding)
+                is_async_ctx = meta.get("is_async", True)
+                # Use functools.partial instead of lambda - faster, no closure overhead
                 request["user"] = SimpleLazyObject(
-                    lambda u=user_id, b=backend_name, a=auth_context, async_ctx=is_async: load_user_sync(u, b, a, async_ctx)
+                    partial(load_user_sync, user_id, backend_name, auth_context, is_async_ctx)
                 )
             else:
                 request["user"] = None
@@ -1954,6 +1955,7 @@ class BoltAPI:
             # Log response if logging enabled
             if logging_middleware and start_time is not None:
                 duration = time.time() - start_time
+                # Response is usually a tuple (status, headers, body) but StreamingResponse is passed through
                 status_code = response[0] if isinstance(response, tuple) else 200
                 logging_middleware.log_response(request, status_code, duration)
 

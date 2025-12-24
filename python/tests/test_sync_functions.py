@@ -195,17 +195,35 @@ class TestMetadataDetection:
 
     def test_async_handler_metadata(self, api):
         """Async handlers should be marked as async."""
-        meta = api._handler_meta[api._async_handler]
+        # Find the route with the async handler
+        handler_id = None
+        for method, path, hid, handler in api._routes:
+            if handler == api._async_handler:
+                handler_id = hid
+                break
+        meta = api._handler_meta[handler_id]
         assert meta["is_async"] is True, "Async handler should be marked as async"
 
     def test_sync_inline_handler_metadata(self, api):
         """Sync inline handlers should be marked as sync."""
-        meta = api._handler_meta[api._sync_inline_handler]
+        # Find the route with the sync inline handler
+        handler_id = None
+        for method, path, hid, handler in api._routes:
+            if handler == api._sync_inline_handler:
+                handler_id = hid
+                break
+        meta = api._handler_meta[handler_id]
         assert meta["is_async"] is False, "Sync handler should be marked as sync"
 
     def test_sync_blocking_handler_metadata(self, api):
         """Sync blocking handlers should be marked as sync."""
-        meta = api._handler_meta[api._sync_blocking_handler]
+        # Find the route with the sync blocking handler
+        handler_id = None
+        for method, path, hid, handler in api._routes:
+            if handler == api._sync_blocking_handler:
+                handler_id = hid
+                break
+        meta = api._handler_meta[handler_id]
         assert meta["is_async"] is False, "Sync handler should be marked as sync"
 
 

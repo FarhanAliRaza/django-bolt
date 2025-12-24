@@ -301,7 +301,7 @@ class TestClient(httpx.Client):
         ws_routes = []
         for path, handler_id, handler in api._websocket_routes:
             # Get pre-compiled injector from handler metadata (same as runbolt.py)
-            meta = api._handler_meta.get(handler, {})
+            meta = api._handler_meta.get(handler_id, {})
             injector = meta.get("injector")
             ws_routes.append((path, handler_id, handler, injector))
         if ws_routes:
@@ -519,7 +519,7 @@ class AsyncTestClient(httpx.AsyncClient):
         # Register WebSocket routes
         ws_routes = []
         for path, handler_id, handler in api._websocket_routes:
-            meta = api._handler_meta.get(handler, {})
+            meta = api._handler_meta.get(handler_id, {})
             injector = meta.get("injector")
             ws_routes.append((path, handler_id, handler, injector))
         if ws_routes:

@@ -262,11 +262,12 @@ class TestMiddlewareExecution:
             "context": None  # Will be populated by middleware
         }
 
-        # Get handler
-        handler = api._handlers[0]
+        # Get handler and handler_id
+        handler_id = 0  # First registered handler
+        handler = api._handlers[handler_id]
 
-        # Dispatch
-        result = await api._dispatch(handler, test_request)
+        # Dispatch with handler_id
+        result = await api._dispatch(handler, test_request, handler_id)
         status, headers, body = result
 
         assert status == 200
@@ -308,8 +309,9 @@ class TestMiddlewareExecution:
             "context": None
         }
 
-        handler = api._handlers[0]
-        result = await api._dispatch(handler, test_request)
+        handler_id = 0  # First registered handler
+        handler = api._handlers[handler_id]
+        result = await api._dispatch(handler, test_request, handler_id)
         status, headers, body = result
 
         assert status == 200

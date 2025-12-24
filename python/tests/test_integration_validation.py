@@ -76,8 +76,8 @@ def test_crud_operations_validation():
     assert len(api._routes) == 6
 
     # Verify parameter sources
-    for method, path, _handler_id, fn in api._routes:
-        meta = api._handler_meta[fn]
+    for method, path, handler_id, fn in api._routes:
+        meta = api._handler_meta[handler_id]
 
         if method == "GET" and path == "/users":
             # Query params should be inferred
@@ -155,8 +155,8 @@ def test_authentication_headers():
     assert len(api._routes) == 2
 
     # Verify header sources
-    for _method, _path, _handler_id, fn in api._routes:
-        meta = api._handler_meta[fn]
+    for _method, _path, handler_id, fn in api._routes:
+        meta = api._handler_meta[handler_id]
         for field in meta["fields"]:
             assert field.source == "header"
 
@@ -203,7 +203,8 @@ def test_mixed_parameter_sources():
     ):
         return {"item_id": item_id, "details": include_details}
 
-    meta = api._handler_meta[api._routes[0][3]]
+    method, path, handler_id, handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     sources = {f.name: f.source for f in meta["fields"]}
     assert sources["item_id"] == "path"
@@ -259,8 +260,8 @@ def test_nested_resources_with_path_params():
         return {"org": org_id, "team": team_id, "member": member_id}
 
     # Verify all path params detected
-    for _method, path, _handler_id, fn in api._routes:
-        meta = api._handler_meta[fn]
+    for _method, path, handler_id, fn in api._routes:
+        meta = api._handler_meta[handler_id]
         path_fields = [f for f in meta["fields"] if f.source == "path"]
 
         # Count expected path params
@@ -287,7 +288,8 @@ def test_optional_and_required_parameters():
             tags = []
         return {"items": []}
 
-    meta = api._handler_meta[api._routes[0][3]]
+    method, path, handler_id, handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     category_field = next(f for f in meta["fields"] if f.name == "category")
     min_price_field = next(f for f in meta["fields"] if f.name == "min_price")
@@ -311,7 +313,8 @@ def test_explicit_path_marker():
     async def get_item(item_id: int = Path()):
         return {"id": item_id}
 
-    meta = api._handler_meta[api._routes[0][3]]
+    method, path, handler_id, handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
     item_id_field = next(f for f in meta["fields"] if f.name == "item_id")
     assert item_id_field.source == "path"
 
@@ -355,9 +358,9 @@ def test_real_world_api_structure():
     assert len(api._routes) == 6
 
     # Verify no GET endpoints have body params
-    for method, path, _handler_id, fn in api._routes:
+    for method, path, handler_id, fn in api._routes:
         if method == "GET":
-            meta = api._handler_meta[fn]
+            meta = api._handler_meta[handler_id]
             body_fields = [f for f in meta["fields"] if f.source == "body"]
             assert len(body_fields) == 0, f"GET {path} should not have body params"
 

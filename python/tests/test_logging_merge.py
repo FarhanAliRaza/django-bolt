@@ -48,24 +48,26 @@ class TestMergedAPILoggingPreservation:
         next_handler_id = 0
 
         # Merge routes from api1 (renumber handler_ids to avoid collisions)
-        for method, path, _old_handler_id, handler in api1._routes:
+        for method, path, old_handler_id, handler in api1._routes:
             new_handler_id = next_handler_id
             next_handler_id += 1
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api1
-            if handler in api1._handler_meta:
-                merged._handler_meta[handler] = api1._handler_meta[handler]
+            # Copy handler metadata using the old handler_id from api1
+            if old_handler_id in api1._handler_meta:
+                merged._handler_meta[new_handler_id] = api1._handler_meta[old_handler_id]
 
         # Merge routes from api2 (renumber handler_ids to avoid collisions)
-        for method, path, _old_handler_id, handler in api2._routes:
+        for method, path, old_handler_id, handler in api2._routes:
             new_handler_id = next_handler_id
             next_handler_id += 1
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api2
-            if handler in api2._handler_meta:
-                merged._handler_meta[handler] = api2._handler_meta[handler]
+            # Copy handler metadata using the old handler_id from api2
+            if old_handler_id in api2._handler_meta:
+                merged._handler_meta[new_handler_id] = api2._handler_meta[old_handler_id]
 
         merged._next_handler_id = next_handler_id
 
@@ -126,19 +128,25 @@ class TestMergedAPILoggingPreservation:
         merged._handler_api_map = {}
         next_handler_id = 0
 
-        for method, path, _old_handler_id, handler in api1._routes:
+        for method, path, old_handler_id, handler in api1._routes:
             new_handler_id = next_handler_id
             next_handler_id += 1
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api1
+            # Copy handler metadata
+            if old_handler_id in api1._handler_meta:
+                merged._handler_meta[new_handler_id] = api1._handler_meta[old_handler_id]
 
-        for method, path, _old_handler_id, handler in api2._routes:
+        for method, path, old_handler_id, handler in api2._routes:
             new_handler_id = next_handler_id
             next_handler_id += 1
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api2
+            # Copy handler metadata
+            if old_handler_id in api2._handler_meta:
+                merged._handler_meta[new_handler_id] = api2._handler_meta[old_handler_id]
 
         # Verify each API retains its own skip_paths
         api1_from_map = merged._handler_api_map[0]
@@ -172,19 +180,25 @@ class TestMergedAPILoggingPreservation:
         merged._handler_api_map = {}
         next_handler_id = 0
 
-        for method, path, _old_handler_id, handler in api1._routes:
+        for method, path, old_handler_id, handler in api1._routes:
             new_handler_id = next_handler_id
             next_handler_id += 1
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api1
+            # Copy handler metadata
+            if old_handler_id in api1._handler_meta:
+                merged._handler_meta[new_handler_id] = api1._handler_meta[old_handler_id]
 
-        for method, path, _old_handler_id, handler in api2._routes:
+        for method, path, old_handler_id, handler in api2._routes:
             new_handler_id = next_handler_id
             next_handler_id += 1
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api2
+            # Copy handler metadata
+            if old_handler_id in api2._handler_meta:
+                merged._handler_meta[new_handler_id] = api2._handler_meta[old_handler_id]
 
         # Verify each API retains its own sample_rate
         api1_from_map = merged._handler_api_map[0]
@@ -216,19 +230,25 @@ class TestMergedAPILoggingPreservation:
         merged._handler_api_map = {}
         next_handler_id = 0
 
-        for method, path, _old_handler_id, handler in api1._routes:
+        for method, path, old_handler_id, handler in api1._routes:
             new_handler_id = next_handler_id
             next_handler_id += 1
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api1
+            # Copy handler metadata
+            if old_handler_id in api1._handler_meta:
+                merged._handler_meta[new_handler_id] = api1._handler_meta[old_handler_id]
 
-        for method, path, _old_handler_id, handler in api2._routes:
+        for method, path, old_handler_id, handler in api2._routes:
             new_handler_id = next_handler_id
             next_handler_id += 1
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api2
+            # Copy handler metadata
+            if old_handler_id in api2._handler_meta:
+                merged._handler_meta[new_handler_id] = api2._handler_meta[old_handler_id]
 
         # Verify each API retains its own min_duration_ms
         api1_from_map = merged._handler_api_map[0]
@@ -259,20 +279,24 @@ class TestMergedAPILoggingPreservation:
         merged._handler_api_map = {}
         next_handler_id = 0
 
-        for method, path, _old_handler_id, handler in api1._routes:
+        for method, path, old_handler_id, handler in api1._routes:
             new_handler_id = next_handler_id
             next_handler_id += 1
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api1
-
-        for method, path, _old_handler_id, handler in api2._routes:
+            # Copy handler metadata
+            if old_handler_id is not None and old_handler_id in api1._handler_meta:
+                merged._handler_meta[new_handler_id] = api1._handler_meta[old_handler_id]
+        for method, path, old_handler_id, handler in api2._routes:
             new_handler_id = next_handler_id
             next_handler_id += 1
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api2
-
+            # Copy handler metadata
+            if old_handler_id is not None and old_handler_id in api2._handler_meta:
+                merged._handler_meta[new_handler_id] = api2._handler_meta[old_handler_id]
         # Verify api1 has logging, api2 doesn't
         api1_from_map = merged._handler_api_map[0]
         api2_from_map = merged._handler_api_map[1]

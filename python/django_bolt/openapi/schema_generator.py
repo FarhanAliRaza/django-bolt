@@ -72,7 +72,7 @@ class SchemaGenerator:
                 paths[path] = PathItem()
 
             # Get handler metadata
-            meta = self.api._handler_meta.get(handler, {})
+            meta = self.api._handler_meta.get(handler_id, {})
 
             # Create operation
             operation = self._create_operation(
@@ -111,7 +111,7 @@ class SchemaGenerator:
                 paths[ws_path] = PathItem()
 
             # Get handler metadata
-            meta = self.api._handler_meta.get(handler, {})
+            meta = self.api._handler_meta.get(handler_id, {})
 
             # Create WebSocket operation (as GET with upgrade)
             operation = self._create_websocket_operation(

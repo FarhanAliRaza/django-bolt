@@ -309,8 +309,14 @@ class TestStaticRouteMetadata:
 
         assert static_handler is not None, "Static route should be registered"
 
-        # Get metadata for the static handler
-        meta = api._handler_meta.get(static_handler)
+        # Get metadata for the static handler (find handler_id from routes)
+        handler_id = None
+        for method, path, hid, handler in api._routes:
+            if handler == static_handler:
+                handler_id = hid
+                break
+        assert handler_id is not None, "Static handler should be in routes"
+        meta = api._handler_meta.get(handler_id)
         assert meta is not None, "Static handler should have metadata"
 
         # Verify injector exists (this is the key fix)
@@ -339,7 +345,14 @@ class TestStaticRouteMetadata:
 
         assert static_handler is not None, "Static route should be registered"
 
-        meta = api._handler_meta[static_handler]
+        # Get metadata using handler_id from routes
+        handler_id = None
+        for method, path, hid, handler in api._routes:
+            if handler == static_handler:
+                handler_id = hid
+                break
+        assert handler_id is not None, "Static handler should be in routes"
+        meta = api._handler_meta[handler_id]
         injector = meta["injector"]
 
         # Test the injector with a mock request
@@ -370,7 +383,14 @@ class TestStaticRouteMetadata:
 
         assert static_handler is not None, "Static route should be registered"
 
-        meta = api._handler_meta[static_handler]
+        # Get metadata using handler_id from routes
+        handler_id = None
+        for method, path, hid, handler in api._routes:
+            if handler == static_handler:
+                handler_id = hid
+                break
+        assert handler_id is not None, "Static handler should be in routes"
+        meta = api._handler_meta[handler_id]
         injector = meta["injector"]
 
         # Test with missing path param

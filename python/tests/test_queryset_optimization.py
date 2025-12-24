@@ -31,8 +31,8 @@ def test_metadata_precomputes_field_names():
         return []
 
     # Access the handler metadata
-    handler = api._handlers[0]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     # Verify field names are pre-computed
     assert "response_field_names" in meta, "Field names should be pre-computed"
@@ -52,8 +52,8 @@ def test_metadata_has_no_field_names_for_non_list_responses():
     async def get_user() -> UserSchema:
         return UserSchema(id=1, username="test")
 
-    handler = api._handlers[0]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     # Should NOT have field names for single object responses
     assert "response_field_names" not in meta, "Single object responses shouldn't have field names"
@@ -104,8 +104,8 @@ def test_precomputed_fields_match_struct():
     async def list_items() -> list[DetailedSchema]:
         return []
 
-    handler = api._handlers[0]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     # Pre-computed fields should exactly match struct annotations
     assert "response_field_names" in meta
@@ -134,8 +134,8 @@ def test_field_order_preserved():
     async def list_items() -> list[OrderedSchema]:
         return []
 
-    handler = api._handlers[0]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     # Check that all fields are present
     field_names = meta["response_field_names"]

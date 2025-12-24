@@ -273,7 +273,9 @@ class BoltAPI:
         self._routes: list[tuple[str, str, int, Callable]] = []
         self._websocket_routes: list[tuple[str, int, Callable]] = []  # (path, handler_id, handler)
         self._handlers: dict[int, Callable] = {}
-        self._handler_meta: dict[Callable, HandlerMetadata] = {}
+        # OPTIMIZATION: Use handler_id (int) as key instead of callable
+        # Integer hashing is O(1) with minimal overhead vs callable hashing
+        self._handler_meta: dict[int, HandlerMetadata] = {}
         self._handler_middleware: dict[int, dict[str, Any]] = {}  # Middleware metadata per handler
         self._next_handler_id = 0
         self.prefix = prefix.rstrip("/")  # Remove trailing slash
@@ -524,7 +526,7 @@ class BoltAPI:
             meta["injector"] = injector
             meta["injector_is_async"] = inspect.iscoroutinefunction(injector)
 
-            self._handler_meta[fn] = meta
+            self._handler_meta[handler_id] = meta
 
             # Compile middleware metadata for WebSocket handler
             # Always call compile_middleware_meta to pick up:
@@ -952,7 +954,7 @@ class BoltAPI:
             # Store whether injector is async (avoids runtime check with inspect.iscoroutinefunction)
             meta["injector_is_async"] = inspect.iscoroutinefunction(injector)
 
-            self._handler_meta[fn] = meta
+            self._handler_meta[handler_id] = meta
 
             # Compile middleware metadata for this handler (including guards and auth)
             middleware_meta = compile_middleware_meta(
@@ -1867,8 +1869,9 @@ class BoltAPI:
             logging_middleware.log_request(request)
 
         try:
-            # 1. Direct metadata access (guaranteed to exist - fastest path)
-            meta = self._handler_meta[handler]
+            # 1. Direct metadata access using handler_id (int key is faster than callable key)
+            # Integer hashing is O(1) with minimal overhead vs callable hashing
+            meta = self._handler_meta[handler_id]
 
             # 2. Lazy user loading using SimpleLazyObject (Django pattern)
             # User is only loaded from DB when request.user is actually accessed
@@ -2078,9 +2081,9 @@ class BoltAPI:
             self._routes.append((method, new_path, new_handler_id, handler))
             self._handlers[new_handler_id] = handler
 
-            # Copy handler metadata
-            if handler in app._handler_meta:
-                self._handler_meta[handler] = app._handler_meta[handler]
+            # Copy handler metadata (now keyed by handler_id for performance)
+            if handler_id in app._handler_meta:
+                self._handler_meta[new_handler_id] = app._handler_meta[handler_id]
 
             # Copy middleware metadata (with path updated)
             if handler_id in app._handler_middleware:
@@ -2102,8 +2105,9 @@ class BoltAPI:
             self._websocket_routes.append((new_path, new_handler_id, handler))
             self._handlers[new_handler_id] = handler
 
-            if handler in app._handler_meta:
-                self._handler_meta[handler] = app._handler_meta[handler]
+            # Copy handler metadata (now keyed by handler_id for performance)
+            if handler_id in app._handler_meta:
+                self._handler_meta[new_handler_id] = app._handler_meta[handler_id]
 
             if handler_id in app._handler_middleware:
                 middleware_meta = app._handler_middleware[handler_id].copy()

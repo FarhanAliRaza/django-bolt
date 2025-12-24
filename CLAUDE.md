@@ -16,13 +16,13 @@ Django-Bolt is a high-performance API framework for Django that provides Rust-po
 
 ```bash
 # Build Rust extension (required after any Rust code changes)
-make build
+just build
 
 # Full rebuild (clean + build)
-make rebuild
+just rebuild
 
 # Clean build artifacts
-make clean
+just clean
 ```
 
 ### Running the Server
@@ -35,17 +35,17 @@ python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 2 --workers 2
 python manage.py runbolt --dev
 
 # Background multi-process (for testing)
-make run-bg HOST=127.0.0.1 PORT=8000 P=2 WORKERS=2
+just run-bg HOST=127.0.0.1 PORT=8000 P=2 WORKERS=2
 
 # Kill any running servers
-make kill
+just kill
 ```
 
 ### Testing
 
 ```bash
 # Python unit tests
-make test-py
+just test-py
 
 # Run specific test file
 uv run --with pytest pytest python/tests/test_syntax.py -s -vv
@@ -54,24 +54,24 @@ uv run --with pytest pytest python/tests/test_syntax.py -s -vv
 uv run --with pytest pytest python/tests/test_syntax.py::test_streaming_async_mixed_types -s -vv
 
 # Quick endpoint smoke tests
-make smoke      # Test basic endpoints
-make orm-smoke  # Test ORM endpoints (requires seeded data)
+just smoke      # Test basic endpoints
+just orm-smoke  # Test ORM endpoints (requires seeded data)
 ```
 
 ### Code Quality & Linting
 
 ```bash
 # Run ruff linter on all code (library, tests, examples)
-make lint       # or: make ruff
+just lint       # or: just ruff
 
 # Check only library code (excludes tests and examples)
-make lint-lib   # Should always pass - library code must be clean
+just lint-lib   # Should always pass - library code must be clean
 
 # Fix auto-fixable errors
-make ruff-fix
+just ruff-fix
 
 # Format code with ruff
-make format
+just format
 ```
 
 **Note**: Some S110 errors (try-except-pass) in test/example files are acceptable for WebSocket handlers where client disconnection is expected. All library code (`python/django_bolt/`) must pass all linting checks.
@@ -80,16 +80,16 @@ make format
 
 ```bash
 # Full benchmark suite (saves results)
-make save-bench  # Creates/rotates BENCHMARK_BASELINE.md and BENCHMARK_DEV.md
+just save-bench  # Creates/rotates BENCHMARK_BASELINE.md and BENCHMARK_DEV.md
 
 # Custom benchmark
-make bench C=100 N=50000  # 100 concurrent, 50k requests
+just bench C=100 N=50000  # 100 concurrent, 50k requests
 
 # High-performance test
-make perf-test  # 4 processes × 1 worker, 50k requests
+just perf-test  # 4 processes × 1 worker, 50k requests
 
 # ORM-specific benchmark
-make orm-test   # Sets up DB, seeds data, benchmarks ORM endpoints
+just orm-test   # Sets up DB, seeds data, benchmarks ORM endpoints
 ```
 
 ### Database (Standard Django)
@@ -104,9 +104,9 @@ python manage.py makemigrations [app_name]
 
 ```bash
 # Create a new release (bumps version, commits, tags, and pushes)
-make release VERSION=0.2.2              # Standard release
-make release VERSION=0.3.0-alpha1       # Pre-release
-make release VERSION=0.2.2 DRY_RUN=1    # Test without changes
+just release VERSION=0.2.2              # Standard release
+just release VERSION=0.3.0-alpha1       # Pre-release
+just release VERSION=0.2.2 DRY_RUN=1    # Test without changes
 
 # Or use the script directly
 ./scripts/release.sh 0.2.2              # Standard release
@@ -306,13 +306,13 @@ uv run --with pytest pytest python/tests -s -vv
 
 ### After Modifying Rust Code
 
-1. Run `make build` to rebuild the Rust extension
-2. Run tests: `make test-py`
-3. Optionally run benchmarks: `make save-bench`
+1. Run `just build` to rebuild the Rust extension
+2. Run tests: `just test-py`
+3. Optionally run benchmarks: `just save-bench`
 
 ### After Modifying Python Code
 
-1. Run tests: `make test-py` (tests will fail if modifications break functionality)
+1. Run tests: `just test-py` (tests will fail if modifications break functionality)
 2. No rebuild needed (Python is interpreted)
 3. For middleware/auth changes, test both in isolation and with integration tests
 
@@ -322,7 +322,7 @@ uv run --with pytest pytest python/tests -s -vv
 2. Implement in both Python (`python/django_bolt/`) and Rust (`src/`) if needed
 3. Add comprehensive tests in `python/tests/`
 4. Update relevant documentation in `docs/`
-5. Run full test suite: `make test-py`
+5. Run full test suite: `just test-py`
 
 ### Adding a New Authentication Backend
 
@@ -334,9 +334,9 @@ uv run --with pytest pytest python/tests -s -vv
 
 ### Debugging Performance Issues
 
-1. Run `make save-bench` to establish baseline
+1. Run `just save-bench` to establish baseline
 2. Make changes
-3. Run `make save-bench` again (rotates baseline, creates new dev benchmark)
+3. Run `just save-bench` again (rotates baseline, creates new dev benchmark)
 4. Compare BENCHMARK_BASELINE.md vs BENCHMARK_DEV.md
 5. Key metrics: Requests per second, Failed requests
 
@@ -401,14 +401,14 @@ uv run --with pytest pytest python/tests -s -vv
 
 ### Build fails after modifying Rust code
 
-**Problem**: `make build` fails with compilation errors
+**Problem**: `just build` fails with compilation errors
 
 **Solution**:
 
 1. Check Rust syntax: `cargo check`
 2. Review error message for specific file/line
 3. Ensure PyO3 types are correct in Rust code
-4. Try clean rebuild: `make rebuild`
+4. Try clean rebuild: `just rebuild`
 5. Check Rust version compatibility: `rustc --version` (should support PyO3)
 
 ### Tests fail inconsistently
@@ -417,7 +417,7 @@ uv run --with pytest pytest python/tests -s -vv
 
 **Solution**:
 
-1. Always run with `-s -vv` flags for detailed output: `make test-py`
+1. Always run with `-s -vv` flags for detailed output: `just test-py`
 2. Check for async/await issues - ensure all async code awaits properly
 3. Look for race conditions in concurrent test execution
 4. Verify database state between tests (use fixtures/conftest)
@@ -429,7 +429,7 @@ uv run --with pytest pytest python/tests -s -vv
 
 **Solution**:
 
-1. Run benchmarks to quantify: `make save-bench` (creates baseline comparison)
+1. Run benchmarks to quantify: `just save-bench` (creates baseline comparison)
 2. Check which component regressed: compare BENCHMARK_BASELINE.md vs BENCHMARK_DEV.md
 3. Profile Rust hot paths: check `src/handler.rs`, `src/routing.rs`, serialization
 4. Check for GIL contention in Python: look at `src/handler.rs` for Python interop efficiency
@@ -464,7 +464,7 @@ uv run --with pytest pytest python/tests -s -vv
 - **Tests must be meaningful**: Only add tests that verify actual functionality; tests must fail when functionality changes
 - **Prefer `from __future__ import annotations`**: Use PEP 563 for cleaner type hints across Python files
 - **Imports at top**: Always place imports at module top, never inline imports
-- **Test-driven discipline**: Don't remove failing test asserts or skip tests to make them pass - report the failure and investigate the root cause
+- **Test-driven discipline**: Don't remove failing test asserts or skip tests to just them pass - report the failure and investigate the root cause
 
 ## When to Edit Which Files
 

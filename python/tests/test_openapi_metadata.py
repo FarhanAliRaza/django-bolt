@@ -19,8 +19,9 @@ def test_route_decorator_with_tags():
         return []
 
     # Check that tags are stored in metadata
-    meta = api._handler_meta.get(get_items)
-    assert meta is not None
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta.get(handler_id, {})
+    assert meta != {}
     assert meta.get("openapi_tags") == ["Items", "Inventory"]
 
 
@@ -34,8 +35,9 @@ def test_route_decorator_with_summary():
         return []
 
     # Check that summary is stored in metadata
-    meta = api._handler_meta.get(get_items)
-    assert meta is not None
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta.get(handler_id, {})
+    assert meta != {}
     assert meta.get("openapi_summary") == "Retrieve all items"
 
 
@@ -49,8 +51,9 @@ def test_route_decorator_with_description():
         return []
 
     # Check that description is stored in metadata
-    meta = api._handler_meta.get(get_items)
-    assert meta is not None
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta.get(handler_id, {})
+    assert meta != {}
     assert meta.get("openapi_description") == "This endpoint returns all items from the inventory."
 
 
@@ -69,8 +72,9 @@ def test_route_decorator_with_all_metadata():
         return {"id": 1}
 
     # Check that all metadata is stored
-    meta = api._handler_meta.get(create_item)
-    assert meta is not None
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta.get(handler_id, {})
+    assert meta != {}
     assert meta.get("openapi_tags") == ["Items"]
     assert meta.get("openapi_summary") == "Create a new item"
     assert meta.get("openapi_description") == "Creates a new item in the inventory with the provided data."
@@ -248,11 +252,15 @@ def test_action_metadata_passed_to_route():
             break
 
     assert deactivate_route is not None
-    meta = api._handler_meta.get(deactivate_route)
-    assert meta is not None
-    assert meta.get("openapi_tags") == ["UserActions"]
-    assert meta.get("openapi_summary") == "Deactivate user"
-    assert meta.get("openapi_description") == "Deactivates a user account."
+    # Find the handler_id from routes
+    for _method, path, handler_id, handler in api._routes:
+        if path == "/users/{pk}/deactivate":
+            meta = api._handler_meta.get(handler_id, {})
+            assert meta != {}
+            assert meta.get("openapi_tags") == ["UserActions"]
+            assert meta.get("openapi_summary") == "Deactivate user"
+            assert meta.get("openapi_description") == "Deactivates a user account."
+            break
 
 
 def test_multiple_http_methods_with_metadata():
@@ -280,9 +288,9 @@ def test_multiple_http_methods_with_metadata():
         return {}
 
     # Verify all handlers have metadata
-    for handler in [get_test, post_test, put_test, patch_test, delete_test]:
-        meta = api._handler_meta.get(handler)
-        assert meta is not None
+    for _method, _path, handler_id, _handler in api._routes:
+        meta = api._handler_meta.get(handler_id, {})
+        assert meta != {}
         assert meta.get("openapi_tags") == ["Test"]
         assert "test" in meta.get("openapi_summary", "").lower()
 
@@ -295,8 +303,9 @@ def test_empty_tags_not_stored():
     async def get_items():
         return []
 
-    meta = api._handler_meta.get(get_items)
-    assert meta is not None
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta.get(handler_id, {})
+    assert meta != {}
     assert meta.get("openapi_tags") is None
 
 

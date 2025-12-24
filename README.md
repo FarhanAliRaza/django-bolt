@@ -78,7 +78,7 @@ python manage.py runbolt --dev
 
 > **⚠️ Disclaimer:** Django-Bolt is a **feature-incomplete framework** currently in development. Benchmarks were run on a Ryzen 5600G with 16GB RAM (8 processes × 1 worker, C=100 N=10,000) on localhost. Performance will vary significantly based on hardware, OS, configuration, and workload.
 >
-> **📁 Resources:** Example project available at [python/example/](python/example/). Run benchmarks with `make save-bench` or see [scripts/benchmark.sh](scripts/benchmark.sh).
+> **📁 Resources:** Example project available at [python/example/](python/example/). Run benchmarks with `just save-bench` or see [scripts/benchmark.sh](scripts/benchmark.sh).
 
 ### Standard Endpoints
 
@@ -124,25 +124,25 @@ cd django-bolt
 # Install dependencies
 uv sync
 # Build Rust extension
-make build  # or: maturin develop --release
+just build  # or: maturin develop --release
 # Run tests
-make test-py
+just test-py
 # for linting
-make lint-lib
+just lint-lib
 ```
 
 ### Commands
 
 ```bash
 # Build
-make build          # Build Rust extension
-make rebuild        # Clean and rebuild
+just build          # Build Rust extension
+just rebuild        # Clean and rebuild
 
 # Testing
-make test-py        # Run Python tests
+just test-py        # Run Python tests
 
 # Benchmarking
-make save-bench     # Run and save results
+just save-bench     # Run and save results
 
 ```
 
@@ -155,7 +155,7 @@ Contributions welcome! Here's how:
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
-4. Run tests (`make test-py`)
+4. Run tests (`just test-py`)
 5. Commit (`git commit -m 'Add amazing feature'`)
 6. Push (`git push origin feature/amazing-feature`)
 7. Open a Pull Request

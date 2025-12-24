@@ -182,7 +182,7 @@ class WebSocketTestClient:
         ws_routes = []
         for path, handler_id, handler in self.api._websocket_routes:
             # Get pre-compiled injector from handler metadata (same as runbolt.py)
-            meta = self.api._handler_meta.get(handler, {})
+            meta = self.api._handler_meta.get(handler_id, {})
             injector = meta.get("injector")
             ws_routes.append((path, handler_id, handler, injector))
         if ws_routes:
@@ -284,7 +284,7 @@ class WebSocketTestClient:
         # This ensures tests actually verify the injector implementation
 
         # Get the pre-compiled injector from handler metadata (same as Rust does)
-        meta = self.api._handler_meta.get(handler)
+        meta = self.api._handler_meta.get(handler_id)
 
         if meta and "injector" in meta:
             # Build request dict from scope (same as Rust's build_websocket_request call)

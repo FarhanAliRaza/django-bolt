@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Performance
+
+- **Rust hot path optimizations** - Merged GIL acquisitions, removed redundant `to_ascii_lowercase()` calls in header extraction, optimized WebSocket upgrade guards to avoid allocations.
+- **Python hot path optimizations** - Changed `_handler_meta` to use `handler_id` (int) keys instead of callable keys for faster O(1) hash lookups.
+
 ## [0.4.6]
 
 ### Added

@@ -42,7 +42,6 @@ api = BoltAPI(openapi_config=OpenAPIConfig(
           title="My API",
           version="1.0.0",
           enabled=True,
-          django_auth = True
 
       )
 )

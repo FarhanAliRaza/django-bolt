@@ -45,13 +45,15 @@ fn get_build_request_fn(py: Python<'_>) -> PyResult<&Py<PyAny>> {
 }
 
 /// Check if a request is a WebSocket upgrade request
+/// OPTIMIZATION: Use case-insensitive comparison without allocation
 #[inline]
 pub fn is_websocket_upgrade(req: &HttpRequest) -> bool {
+    // Check for Connection: upgrade header (can be comma-separated list)
     let has_upgrade_connection = req
         .headers()
         .get("connection")
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.to_lowercase().contains("upgrade"))
+        .map(|v| v.split(',').any(|p| p.trim().eq_ignore_ascii_case("upgrade")))
         .unwrap_or(false);
 
     if !has_upgrade_connection {
@@ -77,10 +79,11 @@ fn build_scope(
     scope_dict.set_item("query_string", req.query_string().as_bytes())?;
 
     // Add headers as dict (FastAPI style)
+    // OPTIMIZATION: HeaderName::as_str() already returns lowercase (http crate canonical form)
     let headers_dict = PyDict::new(py);
     for (key, value) in req.headers().iter() {
         if let Ok(v) = value.to_str() {
-            headers_dict.set_item(key.as_str().to_lowercase(), v)?;
+            headers_dict.set_item(key.as_str(), v)?;
         }
     }
     scope_dict.set_item("headers", headers_dict)?;
@@ -405,10 +408,11 @@ pub async fn handle_websocket_upgrade_with_handler(
     }
 
     // Extract headers for rate limiting and auth
+    // OPTIMIZATION: HeaderName::as_str() already returns lowercase (http crate canonical form)
     let mut headers: AHashMap<String, String> = AHashMap::new();
     for (key, value) in req.headers().iter() {
         if let Ok(v) = value.to_str() {
-            headers.insert(key.as_str().to_lowercase(), v.to_string());
+            headers.insert(key.as_str().to_owned(), v.to_owned());
         }
     }
 

@@ -251,8 +251,8 @@ class Command(BaseCommand):
         for path, handler_id, handler in merged_api._websocket_routes:
             convert = getattr(merged_api, "_convert_path", None)
             norm_path = convert(path) if callable(convert) else path
-            # Get pre-compiled injector from handler metadata
-            meta = merged_api._handler_meta.get(handler, {})
+            # Get pre-compiled injector from handler metadata (handler_id is already in the tuple)
+            meta = merged_api._handler_meta.get(handler_id, {})
             injector = meta.get("injector")
             ws_routes.append((norm_path, handler_id, handler, injector))
 
@@ -472,9 +472,9 @@ class Command(BaseCommand):
                     # Route belongs directly to this API
                     merged._handler_api_map[new_handler_id] = api
 
-                # Merge handler metadata
-                if handler in api._handler_meta:
-                    merged._handler_meta[handler] = api._handler_meta[handler]
+                # Merge handler metadata (use handler_id as key, old_handler_id is already in the tuple)
+                if old_handler_id in api._handler_meta:
+                    merged._handler_meta[new_handler_id] = api._handler_meta[old_handler_id]
 
                 # Merge middleware metadata (use NEW handler_id)
                 if old_handler_id in api._handler_middleware:
@@ -504,9 +504,9 @@ class Command(BaseCommand):
                 else:
                     merged._handler_api_map[new_ws_handler_id] = api
 
-                # Merge handler metadata for WebSocket
-                if ws_handler in api._handler_meta:
-                    merged._handler_meta[ws_handler] = api._handler_meta[ws_handler]
+                # Merge handler metadata for WebSocket (use handler_id as key, old_ws_handler_id is already in the tuple)
+                if old_ws_handler_id in api._handler_meta:
+                    merged._handler_meta[new_ws_handler_id] = api._handler_meta[old_ws_handler_id]
 
                 # Merge middleware metadata for WebSocket
                 if old_ws_handler_id in api._handler_middleware:

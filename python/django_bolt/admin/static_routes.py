@@ -110,4 +110,4 @@ class StaticRouteRegistrar:
         meta["injector"] = static_injector
         meta["injector_is_async"] = False
 
-        self.api._handler_meta[handler] = meta
+        self.api._handler_meta[handler_id] = meta

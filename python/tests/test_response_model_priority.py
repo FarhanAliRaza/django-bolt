@@ -55,7 +55,8 @@ def test_response_model_overrides_annotation():
         pass
 
     # Get metadata from registered handler
-    meta = api._handler_meta[get_users]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     # Verify response_type is UserMini (from response_model), not UserFull (from annotation)
     assert meta["response_type"] == list[UserMini]
@@ -74,7 +75,8 @@ def test_response_model_overrides_annotation_async():
         """Async version - response_model should override annotation."""
         pass
 
-    meta = api._handler_meta[get_users_async]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     assert meta["response_type"] == list[UserMini]
     assert "response_field_names" in meta
@@ -94,7 +96,8 @@ def test_return_annotation_fallback():
         """Return users using return annotation."""
         pass
 
-    meta = api._handler_meta[get_users]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     # Verify response_type is UserMini (from return annotation)
     assert meta["response_type"] == list[UserMini]
@@ -113,7 +116,8 @@ def test_return_annotation_fallback_async():
         """Async version using return annotation."""
         pass
 
-    meta = api._handler_meta[get_users_async]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     assert meta["response_type"] == list[UserMini]
     assert "response_field_names" in meta
@@ -139,8 +143,10 @@ def test_both_syntaxes_produce_same_metadata():
     def get_users2() -> list[UserMini]:
         pass
 
-    meta1 = api1._handler_meta[get_users1]
-    meta2 = api2._handler_meta[get_users2]
+    _method1, _path1, handler_id1, _handler1 = api1._routes[0]
+    meta1 = api1._handler_meta[handler_id1]
+    _method2, _path2, handler_id2, _handler2 = api2._routes[0]
+    meta2 = api2._handler_meta[handler_id2]
 
     # Both should have same response_type
     assert meta1["response_type"] == meta2["response_type"]
@@ -163,8 +169,10 @@ def test_both_syntaxes_produce_same_metadata_async():
     async def get_users2() -> list[UserMini]:
         pass
 
-    meta1 = api1._handler_meta[get_users1]
-    meta2 = api2._handler_meta[get_users2]
+    _method1, _path1, handler_id1, _handler1 = api1._routes[0]
+    meta1 = api1._handler_meta[handler_id1]
+    _method2, _path2, handler_id2, _handler2 = api2._routes[0]
+    meta2 = api2._handler_meta[handler_id2]
 
     assert meta1["response_type"] == meta2["response_type"]
     assert meta1["response_field_names"] == meta2["response_field_names"]
@@ -191,8 +199,8 @@ def test_serializer_field_extraction():
         pass
 
     # Get handler function name from previous decorator
-    handler = list(api._handler_meta.keys())[-1]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
 
     # Verify all UserFull fields extracted
@@ -210,8 +218,8 @@ def test_plain_msgspec_struct_field_extraction():
         pass
 
     # Get handler function name from previous decorator
-    handler = list(api._handler_meta.keys())[-1]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
 
     # Verify PlainStruct fields extracted
@@ -232,8 +240,8 @@ def test_no_response_type_specified():
         pass
 
     # Get handler function name from previous decorator
-    handler = list(api._handler_meta.keys())[-1]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
 
     # Should not have response_type or field names
@@ -250,8 +258,8 @@ def test_non_list_response_type():
         pass
 
     # Get handler function name from previous decorator
-    handler = list(api._handler_meta.keys())[-1]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
 
     # Should have response_type but NOT field names (optimization only for list[Struct])
@@ -271,8 +279,10 @@ def test_non_struct_response_type():
     def get_data2():
         pass
 
-    meta1 = api._handler_meta[get_data1]
-    meta2 = api._handler_meta[get_data2]
+    _method1, _path1, handler_id1, _handler1 = api._routes[0]
+    meta1 = api._handler_meta[handler_id1]
+    _method2, _path2, handler_id2, _handler2 = api._routes[1]
+    meta2 = api._handler_meta[handler_id2]
 
     # Should have response_type but NOT field names
     assert meta1["response_type"] is dict
@@ -310,8 +320,8 @@ def test_metadata_extraction_at_registration():
 
     # Get metadata - should not trigger another call
     # Get handler function name from previous decorator
-    handler = list(api._handler_meta.keys())[-1]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     assert "response_field_names" in meta
 
@@ -332,8 +342,8 @@ def test_response_model_with_post():
         pass
 
     # Get handler function name from previous decorator
-    handler = list(api._handler_meta.keys())[-1]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
 
     assert meta["response_type"] == UserMini
@@ -349,8 +359,8 @@ def test_response_model_with_put():
         pass
 
     # Get handler function name from previous decorator
-    handler = list(api._handler_meta.keys())[-1]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
 
     assert meta["response_type"] == UserMini
@@ -366,8 +376,8 @@ def test_response_model_with_patch():
         pass
 
     # Get handler function name from previous decorator
-    handler = list(api._handler_meta.keys())[-1]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
 
     assert meta["response_type"] == UserMini
@@ -383,8 +393,8 @@ def test_response_model_with_delete():
         pass
 
     # Get handler function name from previous decorator
-    handler = list(api._handler_meta.keys())[-1]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
 
     assert meta["response_type"] is dict
@@ -404,8 +414,8 @@ def test_compile_binder_focused_on_parameters():
         pass
 
     # Get handler function name from previous decorator
-    handler = list(api._handler_meta.keys())[-1]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
 
     # Verify parameter fields extracted correctly
@@ -435,8 +445,8 @@ def test_nested_list_extraction():
         pass
 
     # Get handler function name from previous decorator
-    handler = list(api._handler_meta.keys())[-1]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
 
     # Should work with typing.List as well
@@ -458,8 +468,8 @@ def test_signature_preserved_with_response_model():
         pass
 
     # Get handler function name from previous decorator
-    handler = list(api._handler_meta.keys())[-1]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
 
     # Verify signature preserved
@@ -484,8 +494,8 @@ def test_signature_preserved_with_annotation():
         pass
 
     # Get handler function name from previous decorator
-    handler = list(api._handler_meta.keys())[-1]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
 
     # Verify signature preserved

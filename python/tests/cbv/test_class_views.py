@@ -281,8 +281,8 @@ def test_bolt_api_view_status_code_override(api):
             return {"created": True}
 
     # Verify status code in handler metadata
-    handler = api._routes[0][3]
-    meta = api._handler_meta.get(handler)
+    method, path, handler_id, handler = api._routes[0]
+    meta = api._handler_meta.get(handler_id)
     assert meta is not None
     assert meta.get("default_status_code") == 201
 

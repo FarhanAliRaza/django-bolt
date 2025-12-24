@@ -287,8 +287,8 @@ def test_sync_api_view_status_code_override(api):
         def post(self, request) -> dict:
             return {"created": True}
 
-    handler = api._routes[0][3]
-    meta = api._handler_meta.get(handler)
+    method, path, handler_id, handler = api._routes[0]
+    meta = api._handler_meta.get(handler_id)
     assert meta is not None
     assert meta.get("default_status_code") == 201
 
@@ -427,8 +427,8 @@ def test_sync_handler_is_sync_metadata(api):
         def get(self, request) -> dict:
             return {"sync": True}
 
-    handler = api._routes[0][3]
-    meta = api._handler_meta.get(handler)
+    method, path, handler_id, handler = api._routes[0]
+    meta = api._handler_meta.get(handler_id)
     assert meta is not None
     assert meta.get("is_async") is False  # Should be sync
 
@@ -440,8 +440,8 @@ def test_async_handler_is_async_metadata(api):
         async def get(self, request) -> dict:
             return {"async": True}
 
-    handler = api._routes[0][3]
-    meta = api._handler_meta.get(handler)
+    method, path, handler_id, handler = api._routes[0]
+    meta = api._handler_meta.get(handler_id)
     assert meta is not None
     assert meta.get("is_async") is True  # Should be async
 

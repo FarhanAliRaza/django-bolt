@@ -166,13 +166,13 @@ def test_django_user_dependency_injection():
 
     # Verify the route was registered correctly
     assert len(api._routes) == 1
-    method, path, _, handler_fn = api._routes[0]
+    method, path, handler_id, handler_fn = api._routes[0]
     assert method == "GET"
     assert path == "/me"
 
     # Verify handler metadata
-    assert handler_fn in api._handler_meta
-    meta = api._handler_meta[handler_fn]
+    assert handler_id in api._handler_meta
+    meta = api._handler_meta[handler_id]
     assert "fields" in meta
 
     # Check that the dependency parameter was detected

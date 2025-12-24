@@ -88,4 +88,4 @@ class AdminRouteRegistrar:
             "sig": None,
             "fields": [],
         }
-        self.api._handler_meta[admin_handler] = meta
+        self.api._handler_meta[handler_id] = meta

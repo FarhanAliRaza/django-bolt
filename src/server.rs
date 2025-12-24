@@ -447,14 +447,16 @@ pub fn start_server_async(
 
 /// Guard function to detect WebSocket upgrade requests
 /// Used for catch-all WebSocket 404 route
+/// OPTIMIZATION: Use case-insensitive comparison without allocation
 fn is_websocket_upgrade_guard(ctx: &actix_web::guard::GuardContext) -> bool {
     let headers = ctx.head().headers();
 
-    // Check for Connection: upgrade header
+    // Check for Connection: upgrade header (can be comma-separated list)
+    // OPTIMIZATION: Use eq_ignore_ascii_case instead of to_lowercase().contains()
     let has_upgrade_connection = headers
         .get("connection")
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.to_lowercase().contains("upgrade"))
+        .map(|v| v.split(',').any(|p| p.trim().eq_ignore_ascii_case("upgrade")))
         .unwrap_or(false);
 
     if !has_upgrade_connection {

@@ -85,8 +85,8 @@ def test_get_with_simple_types_inferred_as_query():
     assert len(api._routes) == 1
 
     # Check that parameters were inferred as query params
-    handler = api._routes[0][3]
-    meta = api._handler_meta[handler]
+    handler_id = api._routes[0][2]
+    meta = api._handler_meta[handler_id]
 
     for field in meta["fields"]:
         if field.name in ("page", "limit", "search"):
@@ -101,8 +101,8 @@ def test_post_with_struct_inferred_as_body():
     async def create_user(user: UserCreate):
         return {"id": 1}
 
-    handler = api._routes[0][3]
-    meta = api._handler_meta[handler]
+    handler_id = api._routes[0][2]
+    meta = api._handler_meta[handler_id]
 
     user_field = next(f for f in meta["fields"] if f.name == "user")
     assert user_field.source == "body"
@@ -116,8 +116,8 @@ def test_path_params_inferred_correctly():
     async def get_post(user_id: int, post_id: int):
         return {"user_id": user_id, "post_id": post_id}
 
-    handler = api._routes[0][3]
-    meta = api._handler_meta[handler]
+    handler_id = api._routes[0][2]
+    meta = api._handler_meta[handler_id]
 
     user_id_field = next(f for f in meta["fields"] if f.name == "user_id")
     post_id_field = next(f for f in meta["fields"] if f.name == "post_id")
@@ -134,8 +134,8 @@ def test_mixed_params_inference():
     async def get_user(user_id: int, include_posts: bool = False):
         return {"user_id": user_id, "include_posts": include_posts}
 
-    handler = api._routes[0][3]
-    meta = api._handler_meta[handler]
+    handler_id = api._routes[0][2]
+    meta = api._handler_meta[handler_id]
 
     user_id_field = next(f for f in meta["fields"] if f.name == "user_id")
     include_posts_field = next(f for f in meta["fields"] if f.name == "include_posts")
@@ -152,8 +152,8 @@ def test_explicit_body_marker_with_post():
     async def create_user(user: UserCreate = Body()):
         return {"id": 1}
 
-    handler = api._routes[0][3]
-    meta = api._handler_meta[handler]
+    handler_id = api._routes[0][2]
+    meta = api._handler_meta[handler_id]
 
     user_field = next(f for f in meta["fields"] if f.name == "user")
     assert user_field.source == "body"

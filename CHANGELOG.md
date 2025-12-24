@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 
 - **Rust hot path optimizations** - Merged GIL acquisitions, removed redundant `to_ascii_lowercase()` calls in header extraction, optimized WebSocket upgrade guards to avoid allocations.
 - **Python hot path optimizations** - Changed `_handler_meta` to use `handler_id` (int) keys instead of callable keys for faster O(1) hash lookups.
+- **Dispatch loop optimizations** - Eliminated `hasattr()` checks by initializing `_handler_api_map` in `__init__`, cached `isEnabledFor()` timing decisions per logging middleware instance, and reduced redundant `.get()` calls by pre-extracting commonly used metadata before conditional branches.
 
 ## [0.4.6]
 

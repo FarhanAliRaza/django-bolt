@@ -355,6 +355,9 @@ class BoltAPI:
         self._middleware_chain_built = False
         self._middleware_chain = None  # Will be the outermost middleware instance
 
+        # Handler-to-API mapping for merged APIs (initialized here to avoid hasattr in hot path)
+        self._handler_api_map: dict[int, BoltAPI] = {}
+
         # Register this instance globally for autodiscovery
         _BOLT_API_REGISTRY.append(self)
 
@@ -1829,6 +1832,8 @@ class BoltAPI:
         - Inline user loading (eliminates function call overhead)
         - Pre-compiled argument injector (zero parameter binding overhead)
         - Streamlined execution flow (minimal branching)
+        - Eliminated hasattr() checks via __init__ initialization
+        - Cached logging decisions to avoid per-request isEnabledFor() calls
 
         Args:
             handler: The route handler function
@@ -1837,32 +1842,30 @@ class BoltAPI:
         """
         # For merged APIs, use the original API's logging middleware and middleware chain
         # This preserves per-API logging, auth, and middleware config (Litestar-style)
-        logging_middleware = self._logging_middleware
-        original_api = None
-        if handler_id is not None and hasattr(self, '_handler_api_map'):
-            original_api = self._handler_api_map.get(handler_id)
-            if original_api and original_api._logging_middleware:
-                logging_middleware = original_api._logging_middleware
+        # Note: _handler_api_map is always initialized in __init__ (no hasattr needed)
+        original_api = self._handler_api_map.get(handler_id) if handler_id is not None else None
+        logging_middleware = original_api._logging_middleware if original_api else self._logging_middleware
 
         # Start timing only if we might log
+        # Use cached should_time flag (computed once per logging middleware instance)
         start_time = None
         if logging_middleware:
-            # Determine if INFO logs are enabled or a slow-only threshold exists
-            logger = logging_middleware.logger
-            should_time = False
-            try:
-                if logger.isEnabledFor(logging.INFO):
-                    should_time = True
-            except Exception as e:
-                logging.getLogger(__name__).debug(
-                    "Failed to check logger level for timing decision. "
-                    "Defaulting to no timing. Error: %s",
-                    e
-                )
-            if not should_time:
-                # If slow-only is configured, we still need timing
-                should_time = bool(getattr(logging_middleware.config, 'min_duration_ms', None))
-            if should_time:
+            # Check cached timing decision (computed once at first request)
+            if not hasattr(logging_middleware, '_should_time_cached'):
+                # First request: compute and cache the timing decision
+                should_time = False
+                try:
+                    if logging_middleware.logger.isEnabledFor(logging.INFO):
+                        should_time = True
+                except Exception:
+                    # Logger might not be fully configured; default to no timing
+                    # This is expected during testing or when logger is unavailable
+                    should_time = False
+                if not should_time:
+                    should_time = bool(getattr(logging_middleware.config, 'min_duration_ms', None))
+                logging_middleware._should_time_cached = should_time
+
+            if logging_middleware._should_time_cached:
                 start_time = time.time()
 
             # Log request if logging enabled (DEBUG-level guard happens inside)
@@ -1877,10 +1880,11 @@ class BoltAPI:
             # User is only loaded from DB when request.user is actually accessed
             auth_context = request.get("auth")
             if auth_context and auth_context.get("user_id"):
-                user_id = auth_context.get("user_id")
+                user_id = auth_context["user_id"]  # Direct access - key exists
                 backend_name = auth_context.get("auth_backend")
                 # Use pre-computed is_async from handler metadata (avoids runtime loop check)
-                is_async = meta["is_async"]
+                # Default True for ASGI bridge handlers that don't set is_async
+                is_async = meta.get("is_async", True)
                 # Use lambda with default args to capture values (avoid late binding)
                 request["user"] = SimpleLazyObject(
                     lambda u=user_id, b=backend_name, a=auth_context, async_ctx=is_async: load_user_sync(u, b, a, async_ctx)
@@ -1906,31 +1910,37 @@ class BoltAPI:
                 )
             else:
                 # Fast path: no middleware, execute handler directly
+                # Pre-extract commonly used metadata to avoid repeated dict lookups
+                mode = meta.get("mode")
+                is_async = meta.get("is_async", True)  # Default True for ASGI bridge handlers
+                is_blocking = meta.get("is_blocking", False)
+
                 # 3. Fast path for request-only handlers (no parameter extraction)
-                if meta.get("mode") == "request_only":
-                    if meta.get("is_async", True):
+                if mode == "request_only":
+                    if is_async:
                         result = await handler(request)
                     else:
                         # Smart thread pool: only use for blocking handlers
-                        if meta.get("is_blocking", False):
+                        if is_blocking:
                             result = await sync_to_thread(handler, request)
                         else:
                             result = handler(request)
                 else:
                     # 4. Use pre-compiled injector (sync or async based on needs)
+                    # Note: injector_is_async defaults to False for most handlers
                     if meta.get("injector_is_async", False):
                         args, kwargs = await meta["injector"](request)
                     else:
                         args, kwargs = meta["injector"](request)
 
                     # 5. Execute handler (async or sync)
-                    if meta.get("is_async", True):
+                    if is_async:
                         result = await handler(*args, **kwargs)
                     else:
                         # Sync handler execution with smart thread pool usage:
                         # - is_blocking=True (ORM/IO detected): Use thread pool to avoid blocking event loop
                         # - is_blocking=False (pure CPU): Call directly for maximum performance
-                        if meta.get("is_blocking", False):
+                        if is_blocking:
                             # Handler does blocking I/O (ORM, file, network) - use thread pool
                             result = await sync_to_thread(handler, *args, **kwargs)
                         else:
@@ -2092,8 +2102,7 @@ class BoltAPI:
                 self._handler_middleware[new_handler_id] = middleware_meta
 
             # Track which API owns this handler (for logging, etc.)
-            if not hasattr(self, '_handler_api_map'):
-                self._handler_api_map = {}
+            # _handler_api_map is always initialized in __init__
             self._handler_api_map[new_handler_id] = app
 
         # Copy WebSocket routes
@@ -2114,8 +2123,8 @@ class BoltAPI:
                 middleware_meta['path'] = new_path
                 self._handler_middleware[new_handler_id] = middleware_meta
 
-            if not hasattr(self, '_handler_api_map'):
-                self._handler_api_map = {}
+            # Track which API owns this handler (for logging, etc.)
+            # _handler_api_map is always initialized in __init__
             self._handler_api_map[new_handler_id] = app
 
         # Remove sub-app from global registry (parent handles its routes now)

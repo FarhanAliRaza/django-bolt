@@ -29,13 +29,13 @@ just clean
 
 ```bash
 # From Django project directory (e.g., python/example)
-python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 2 --workers 2
+python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 1
 
 # Development mode with auto-reload (single process, watches for file changes)
 python manage.py runbolt --dev
 
 # Background multi-process (for testing)
-just run-bg HOST=127.0.0.1 PORT=8000 P=2 WORKERS=2
+just run-bg HOST=127.0.0.1 PORT=8000 P=2
 
 # Kill any running servers
 just kill

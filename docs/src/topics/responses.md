@@ -389,6 +389,58 @@ async def options_items():
     )
 ```
 
+## Setting cookies
+
+Set cookies using the `Set-Cookie` header:
+
+```python
+from django_bolt import JSON
+
+@api.post("/login")
+async def login():
+    return JSON(
+        {"message": "Logged in"},
+        headers={"Set-Cookie": "session=abc123; Path=/; HttpOnly; SameSite=Lax"}
+    )
+```
+
+For multiple cookies, use multiple `Set-Cookie` headers by returning a `Response` with a list:
+
+```python
+from django_bolt import Response
+
+@api.post("/login")
+async def login():
+    return Response(
+        {"message": "Logged in"},
+        headers={
+            "Set-Cookie": "session=abc123; Path=/; HttpOnly",
+        }
+    )
+```
+
+Common cookie attributes:
+
+| Attribute | Description |
+|-----------|-------------|
+| `Path=/` | Cookie is sent for all paths |
+| `HttpOnly` | Not accessible via JavaScript |
+| `Secure` | Only sent over HTTPS |
+| `SameSite=Lax` | CSRF protection (Lax, Strict, or None) |
+| `Max-Age=3600` | Expires in 3600 seconds |
+| `Expires=<date>` | Specific expiration date |
+
+To delete a cookie, set it with an expired date:
+
+```python
+@api.post("/logout")
+async def logout():
+    return JSON(
+        {"message": "Logged out"},
+        headers={"Set-Cookie": "session=; Path=/; Max-Age=0"}
+    )
+```
+
 ## Response validation
 
 Validate response data against a schema using `response_model`:

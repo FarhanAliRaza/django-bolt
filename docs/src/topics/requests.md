@@ -86,6 +86,8 @@ async def search(
     return {"q": q, "page": page, "limit": limit, "sort": sort}
 ```
 
+If no type annotation is provided, the parameter is treated as a string.
+
 ## Request body
 
 ### JSON body

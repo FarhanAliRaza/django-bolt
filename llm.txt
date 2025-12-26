@@ -1,577 +1,337 @@
-# Django-Bolt LLM Quick Reference
+# Django-Bolt
 
-Django-Bolt is a Rust-powered API framework for Django with 60k+ RPS performance.
-For detailed docs, see: docs/README.md
+High-performance API framework for Django with Rust-powered HTTP handling. 60k+ RPS.
 
-## Installation & Setup
+**Docs:** https://bolt.farhana.li | **Quickstart:** https://bolt.farhana.li/getting-started/quickstart
+
+## Setup
 
 ```bash
 pip install django-bolt
-python manage.py runbolt --host 0.0.0.0 --port 8000
-
-# Development mode with auto-reload
-python manage.py runbolt --dev
-
-# Production multi-process
-python manage.py runbolt --processes 4 --workers 1
 ```
 
-## Basic API (Async and Sync)
+Add to `INSTALLED_APPS`:
+
+```python
+INSTALLED_APPS = ["django_bolt", ...]
+```
+
+## Auto-Discovery
+
+Django-Bolt automatically discovers `api.py` files in your project root and all installed apps:
+
+```
+myproject/
+    myproject/
+        settings.py
+        api.py          # Auto-discovered (project-level)
+    users/
+        api.py          # Auto-discovered (app in INSTALLED_APPS)
+```
+
+**APIs in non-discoverable locations:** If your API is in a file that's not auto-discovered (e.g., `myproject/views.py`), import and mount it from a discoverable `api.py`:
+
+```python
+# myproject/api.py (auto-discovered)
+from django_bolt import BoltAPI
+from myproject.views import internal_api
+
+api = BoltAPI()
+api.mount("/internal", internal_api)
+```
+
+Run with: `python manage.py runbolt --dev`
+
+## Basic Routes
+
+> Details: https://bolt.farhana.li/topics/routing
 
 ```python
 from django_bolt import BoltAPI
 
 api = BoltAPI()
 
-# Async handlers (preferred for I/O operations)
-@api.get("/hello")
-async def hello():
-    return {"message": "Hello, World!"}
+@api.get("/")
+async def root():
+    return {"message": "Hello"}
 
-# Sync handlers (for CPU-bound operations)
-@api.get("/compute")
-def compute():
-    return {"result": 42}
+@api.get("/items/{item_id}")
+async def get_item(item_id: int, q: str | None = None):
+    return {"item_id": item_id, "q": q}
 ```
 
+Path params use `{name}` syntax and auto-convert to the annotated type. Query params are inferred from function args not in the path.
 
-## Route Parameters
+## Request Body & Validation
 
-```python
-# Path parameters - automatically typed
-@api.get("/users/{user_id}")
-async def get_user(user_id: int):
-    return {"id": user_id}
+> Details: https://bolt.farhana.li/topics/requests | https://bolt.farhana.li/topics/serializers
 
-# Query parameters - use defaults for optional
-@api.get("/search")
-async def search(q: str, page: int = 1):
-    return {"query": q, "page": page}
-
-# Headers, cookies, form data
-from django_bolt.params import Header, Cookie, Form
-
-@api.get("/protected")
-async def protected(x_api_key: str = Header("X-API-Key")):
-    return {"key": x_api_key}
-```
-
-## Serializers (Request/Response Validation)
-
-Use `Serializer` for validation with field validators (5-10x faster than Pydantic):
+Use `Serializer` with `msgspec.Meta` for validated request bodies:
 
 ```python
+from typing import Annotated
+from msgspec import Meta
 from django_bolt.serializers import Serializer, field_validator
 
-class UserCreate(Serializer):
-    name: str
-    email: str
+class CreateUser(Serializer):
+    name: Annotated[str, Meta(min_length=2, max_length=100)]
+    email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+$")]
+    age: Annotated[int, Meta(ge=0, le=150)] = 18
 
-    @field_validator('email')
-    def validate_email(cls, value):
-        if '@' not in value:
-            raise ValueError('Invalid email')
-        return value.lower()
+    @field_validator("name")
+    def validate_name(cls, value):
+        if value.lower() == "admin":
+            raise ValueError("Reserved name")
+        return value
 
-class UserResponse(Serializer):
-    id: int
-    name: str
-
-@api.post("/users", response_model=UserResponse)
-async def create_user(data: UserCreate):
-    user = await User.objects.acreate(**data.to_dict())
-    return UserResponse.from_model(user)
+@api.post("/users")
+async def create_user(user: CreateUser):
+    return {"created": user.name}
 ```
 
-Key methods:
-- `from_model(obj)` - Convert Django model to serializer
-- `to_dict()` - Convert serializer to dict
-- `@field_validator('field')` - Single field validation
-- `@model_validator` - Cross-field validation
+## Query Parameter Models
 
-Invalid requests return 422 with validation errors. See docs/SERIALIZERS.md for details.
+Group query params into a validated `Serializer`:
 
-## Response Types
+```python
+from django_bolt.param_functions import Query
+
+class Filters(Serializer):
+    limit: Annotated[int, Meta(ge=1, le=100)] = 10
+    search: str | None = None
+
+@api.get("/items")
+async def list_items(filters: Annotated[Filters, Query()]):
+    return {"limit": filters.limit, "search": filters.search}
+```
+
+## Headers, Cookies, Form, File
+
+```python
+from django_bolt.param_functions import Header, Cookie, Form, File
+
+@api.get("/auth")
+async def auth(token: Annotated[str, Header(alias="Authorization")]):
+    return {"token": token}
+
+@api.post("/login")
+async def login(
+    username: Annotated[str, Form()],
+    password: Annotated[str, Form()],
+):
+    return {"username": username}
+
+@api.post("/upload")
+async def upload(files: Annotated[list[dict], File(alias="file")]):
+    return {"count": len(files)}
+```
+
+## Mount & Router
+
+### Mount (Sub-API with own middleware)
+
+Import an API from another file and mount it under a prefix. The sub-API keeps its own middleware.
+
+```python
+# users/api.py
+from django_bolt import BoltAPI
+
+api = BoltAPI(middleware=[AuthMiddleware])
+
+@api.get("/me")
+async def me(request):
+    return {"user": request.user.username}
+```
+
+```python
+# myproject/api.py
+from django_bolt import BoltAPI
+from users.api import api as users_api
+
+api = BoltAPI()
+api.mount("/users", users_api)  # Routes: /users/me
+```
+
+## Authentication
+
+> Details: https://bolt.farhana.li/topics/authentication
+
+Configure globally in `settings.py` so you don't repeat on every endpoint:
+
+```python
+# settings.py
+from django_bolt.auth import JWTAuthentication, IsAuthenticated
+
+BOLT_AUTHENTICATION_CLASSES = [JWTAuthentication()]
+BOLT_DEFAULT_PERMISSION_CLASSES = [IsAuthenticated()]
+```
+
+Now all endpoints require auth by default:
+
+```python
+@api.get("/profile")  # Automatically requires JWT + IsAuthenticated
+async def profile(request):
+    return {"user_id": request.user.id}
+
+# Override for public endpoints
+from django_bolt.auth import AllowAny
+
+@api.post("/login", guards=[AllowAny()])  # No auth required
+async def login(creds: LoginRequest):
+    user = await aauthenticate(username=creds.username, password=creds.password)
+    if not user:
+        raise Unauthorized("Invalid credentials")
+    return {"access_token": create_jwt_for_user(user, expires_in=3600)}
+```
+
+## Guards (Permissions)
+
+> Details: https://bolt.farhana.li/topics/permissions
+
+Guards run in Rust after auth, before your handler. Permission data must be in the JWT token.
+
+```python
+from django_bolt.auth import IsAdminUser, IsStaff, HasPermission, HasAnyPermission
+
+@api.get("/admin", guards=[IsAdminUser()])
+async def admin():
+    return {"admin": True}
+
+@api.get("/articles", guards=[HasPermission("blog.view_article")])
+async def articles():
+    return []
+```
+
+Include permissions when creating tokens:
+
+```python
+token = create_jwt_for_user(user, extra_claims={"permissions": list(user.get_all_permissions())})
+```
+
+## Middleware
+
+> Details: https://bolt.farhana.li/topics/middleware
+
+### Django Middleware Integration
+
+```python
+api = BoltAPI(django_middleware=True)  # Load from settings.MIDDLEWARE
+```
+
+### Custom Middleware
+
+```python
+class TimingMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    async def __call__(self, request):
+        import time
+        start = time.time()
+        response = await self.get_response(request)
+        response.headers["X-Response-Time"] = f"{time.time() - start:.4f}s"
+        return response
+
+api = BoltAPI(middleware=[TimingMiddleware])
+```
+
+### Decorator Middleware (Rust-accelerated)
+
+```python
+from django_bolt.middleware import rate_limit, cors, no_compress
+
+@api.get("/data")
+@rate_limit(rps=100, burst=200)
+async def data():
+    return {"data": "value"}
+
+@api.get("/public")
+@cors(origins=["https://example.com"], credentials=True)
+async def public():
+    return {}
+```
+
+## Responses
+
+> Details: https://bolt.farhana.li/topics/responses
 
 ```python
 from django_bolt.responses import PlainText, HTML, Redirect, FileResponse, StreamingResponse
+from django_bolt.shortcuts import render
 
 @api.get("/text")
 async def text():
     return PlainText("Hello")
 
+@api.get("/page")
+async def page(request):
+    return render(request, "myapp/page.html", {"title": "Hello"})
+
 @api.get("/download")
 async def download():
-    return FileResponse("/path/to/file.pdf")  # Streaming, for large files
-
-@api.get("/events")
-async def sse():
-    async def generate():
-        for i in range(10):
-            yield f"data: Event {i}\n\n"
-    return StreamingResponse(generate(), media_type="text/event-stream")
-```
-
-## Django ORM (Async and Sync)
-
-```python
-# Async ORM (preferred for async handlers)
-@api.get("/async/users/{user_id}")
-async def get_user_async(user_id: int):
-    user = await User.objects.aget(pk=user_id)
-    return {"id": user.id, "name": user.username}
-
-@api.get("/async/users")
-async def list_users_async():
-    users = []
-    async for user in User.objects.all():
-        users.append({"id": user.id, "name": user.username})
-    return users
-
-# Sync ORM (for sync handlers)
-@api.get("/sync/users/{user_id}")
-def get_user_sync(user_id: int):
-    user = User.objects.get(pk=user_id)
-    return {"id": user.id, "name": user.username}
-
-@api.post("/sync/users")
-def create_user_sync(user: UserCreate):
-    new_user = User.objects.create(username=user.name, email=user.email)
-    return {"id": new_user.id}
-```
-
-## Authentication & JWT Tokens
-
-### Creating JWT Tokens (Login)
-
-```python
-from django_bolt.auth.jwt_utils import create_jwt_for_user
-from django.contrib.auth import authenticate
-from django_bolt.exceptions import Unauthorized
-
-# Login endpoint that issues JWT tokens
-@api.post("/auth/login")
-async def login(credentials: LoginCredentials):
-    # Authenticate user
-    user = await authenticate(username=credentials.username, password=credentials.password)
-    if not user:
-        raise Unauthorized(detail="Invalid credentials")
-
-    # Create JWT token
-    token = create_jwt_for_user(
-        user=user,
-        secret="your-secret-key",
-        expires_delta=timedelta(days=7)
-    )
-
-    return {"access_token": token, "token_type": "bearer"}
-
-# Or create token manually with jwt library
-import jwt
-import time
-
-@api.post("/auth/token")
-async def create_token(user_id: int):
-    payload = {
-        "sub": str(user_id),  # Subject claim (user identifier)
-        "user_id": str(user_id),
-        "exp": int(time.time()) + 3600,  # Expires in 1 hour
-        "iat": int(time.time()),  # Issued at
-        # Optional claims:
-        "is_staff": False,
-        "is_superuser": False,
-        "permissions": ["read", "write"],
-    }
-    token = jwt.encode(payload, "your-secret", algorithm="HS256")
-    return {"token": token}
-```
-
-### Validating JWT Tokens (Protected Routes)
-
-```python
-from django_bolt.auth import JWTAuthentication, IsAuthenticated, APIKeyAuthentication
-
-# JWT Authentication with automatic user loading
-jwt_auth = JWTAuthentication(secret="your-secret")
-
-@api.get("/me", auth=[jwt_auth], guards=[IsAuthenticated()])
-async def get_current_user(request):
-    # request.user is automatically loaded from database
-    user = request.user
-    return {"id": user.id, "username": user.username}
-
-# Access auth context directly
-@api.get("/profile", auth=[jwt_auth], guards=[IsAuthenticated()])
-async def get_profile(request):
-    auth = request.get("auth", {})
-    user_id = auth.get("user_id")
-    is_staff = auth.get("is_staff", False)
-    return {"user_id": user_id, "is_staff": is_staff}
-
-# API Key Authentication
-api_key_auth = APIKeyAuthentication(api_keys={"secret-key-123"})
-
-@api.get("/api/data", auth=[api_key_auth], guards=[IsAuthenticated()])
-async def protected_data(request):
-    return {"data": "sensitive"}
-
-# Works in sync handlers too
-@api.get("/sync/me", auth=[jwt_auth], guards=[IsAuthenticated()])
-def get_current_user_sync(request):
-    user = request.user
-    return {"id": user.id}
-```
-
-### Token Revocation
-
-```python
-from django_bolt.auth.revocation import InMemoryRevocation, DjangoCacheRevocation
-
-# Use in-memory revocation (simple, single-process)
-revocation_store = InMemoryRevocation()
-
-jwt_auth = JWTAuthentication(
-    secret="your-secret",
-    revocation_store=revocation_store
-)
-
-# Logout endpoint - revoke token
-@api.post("/auth/logout", auth=[jwt_auth], guards=[IsAuthenticated()])
-async def logout(request):
-    auth = request.get("auth", {})
-    jti = auth.get("jti")  # Token ID (include in JWT when creating)
-    if jti:
-        await revocation_store.revoke(jti)
-    return {"message": "Logged out"}
-
-# For multi-process: use DjangoCacheRevocation or DjangoORMRevocation
-from django_bolt.auth.revocation import DjangoCacheRevocation
-revocation_store = DjangoCacheRevocation()
-```
-
-Guards: `IsAuthenticated()`, `IsAdminUser()`, `IsStaff()`, `HasPermission("perm")`, `HasAnyPermission([...])`, `HasAllPermissions([...])`
-
-## Rate Limiting
-
-```python
-from django_bolt.middleware import rate_limit
-
-@api.get("/api/data")
-@rate_limit(rps=100, burst=200, key="ip")
-async def get_data():
-    return {"data": "example"}
-```
-
-Keys: `"ip"` (default), `"user_id"`, `"api_key"`, or header name.
-
-## CORS
-
-Set in Django settings (recommended):
-
-```python
-CORS_ALLOWED_ORIGINS = ["http://localhost:3000", "https://example.com"]
-CORS_ALLOW_CREDENTIALS = True
-```
-
-## Compression
-
-Enabled by default (brotli with gzip fallback). Disable per-route:
-
-```python
-from django_bolt.compression import no_compress
+    return FileResponse("/path/file.pdf", filename="doc.pdf")
 
 @api.get("/stream")
 @no_compress
 async def stream():
-    ...
-```
-
-For config details, see docs/COMPRESSION.md
-
-## Dependency Injection
-
-```python
-from django_bolt import Depends
-
-async def get_db_session():
-    return await get_session()
-
-@api.get("/items")
-async def get_items(session = Depends(get_db_session)):
-    return await session.execute(...)
-```
-
-## Class-Based Views
-
-```python
-from django_bolt.viewsets import ViewSet, ModelViewSet, action
-from django_bolt.auth import IsAuthenticated
-
-# Basic ViewSet
-@api.viewset("/users")
-class UserViewSet(ViewSet):
-    async def list(self, request):
-        """GET /users"""
-        return [...]
-
-    async def retrieve(self, request, pk: int):
-        """GET /users/{pk}"""
-        return {...}
-
-    async def create(self, request, data: UserCreate):
-        """POST /users"""
-        return {...}
-
-    async def update(self, request, pk: int, data: UserUpdate):
-        """PUT /users/{pk}"""
-        return {...}
-
-    async def partial_update(self, request, pk: int, data: UserPartialUpdate):
-        """PATCH /users/{pk}"""
-        return {...}
-
-    async def destroy(self, request, pk: int):
-        """DELETE /users/{pk}"""
-        return {"deleted": True}
-
-    @action(methods=["POST"], detail=True)
-    async def activate(self, request, pk: int):
-        """POST /users/{pk}/activate"""
-        return {...}
-
-    @action(methods=["GET"], detail=False)
-    async def active(self, request):
-        """GET /users/active"""
-        return [...]
-
-# ModelViewSet (automatically implements CRUD)
-@api.viewset("/articles")
-class ArticleViewSet(ModelViewSet):
-    queryset = Article.objects.all()
-    serializer_class = ArticleSerializer
-
-    # Optional: override default behavior
-    async def list(self, request):
-        articles = await self.get_queryset().all()
-        return await self.serialize_many(articles)
-
-    # Add custom actions
-    @action(methods=["POST"], detail=True, guards=[IsAuthenticated()])
-    async def publish(self, request, pk: int):
-        article = await self.get_object(pk)
-        article.published = True
-        await article.asave()
-        return await self.serialize(article)
-
-# Sync ViewSet handlers
-@api.viewset("/sync/items")
-class SyncItemViewSet(ViewSet):
-    def list(self, request):
-        """Sync list handler"""
-        items = Item.objects.all()
-        return list(items.values())
-
-    def create(self, request, data: ItemCreate):
-        """Sync create handler"""
-        item = Item.objects.create(**data.to_dict())
-        return {"id": item.id}
-```
-
-## Pagination
-
-```python
-from django_bolt import paginate, PageNumberPagination
-
-@api.get("/articles")
-@paginate(PageNumberPagination)
-async def list_articles(request):
-    return Article.objects.all()
-
-# Usage: GET /articles?page=2&page_size=20
-```
-
-Options: `PageNumberPagination`, `LimitOffsetPagination`, `CursorPagination`
-
-## Error Handling
-
-```python
-from django_bolt.exceptions import NotFound, BadRequest, Unauthorized
-
-@api.get("/users/{user_id}")
-async def get_user(user_id: int):
-    user = await User.objects.filter(pk=user_id).afirst()
-    if not user:
-        raise NotFound(detail=f"User {user_id} not found")
-    return user
-```
-
-## OpenAPI Documentation
-
-Auto-generated at `/schema` by default:
-
-```python
-from django_bolt.openapi import OpenAPIConfig
-
-api = BoltAPI(
-    openapi_config=OpenAPIConfig(
-        title="My API",
-        version="1.0.0"
-    )
-)
-```
-
-## Testing
-
-```python
-from django_bolt.testing import TestClient, WebSocketTestClient
-import pytest
-
-# HTTP Testing
-def test_hello():
-    with TestClient(api) as client:
-        response = client.get("/hello")
-        assert response.status_code == 200
-        assert response.json() == {"message": "Hello, World!"}
-
-# HTTP Testing with stream=True for SSE
-def test_sse():
-    with TestClient(api, use_http_layer=True) as client:
-        response = client.get("/events", stream=True)
-        for chunk in response.iter_content(chunk_size=64, decode_unicode=True):
-            if chunk:
-                assert "data:" in chunk
-
-# WebSocket Testing
-@pytest.mark.asyncio
-async def test_websocket():
-    async with WebSocketTestClient(api, "/ws/echo") as ws:
-        await ws.send_text("hello")
-        response = await ws.receive_text()
-        assert response == "Echo: hello"
-
-# WebSocket with headers/query/cookies
-@pytest.mark.asyncio
-async def test_ws_with_params():
-    headers = {"Authorization": "Bearer token"}
-    async with WebSocketTestClient(
-        api,
-        "/ws/chat/room123",
-        query_string="token=abc",
-        headers=headers
-    ) as ws:
-        msg = await ws.receive_text()
-        assert "room123" in msg
-```
-
-## Logging
-
-```python
-from django_bolt.logging import LoggingConfig
-
-api = BoltAPI(
-    logging_config=LoggingConfig(
-        request_log_fields={"method", "path"},
-        response_log_fields={"status_code", "duration"},
-        skip_paths={"/health"},
-    )
-)
-```
-
-## Running the Server
-
-```bash
-# Development (auto-reload)
-python manage.py runbolt --dev
-
-# Production (multi-process)
-python manage.py runbolt --host 0.0.0.0 --port 8000 --processes 4 --workers 1
+    async def gen():
+        for i in range(10):
+            yield f"data: {i}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream")
 ```
 
 ## WebSockets
 
+> Details: https://bolt.farhana.li/topics/websocket
+
 ```python
-from django_bolt import BoltAPI, WebSocket
-from django_bolt.auth import JWTAuthentication, IsAuthenticated
-from typing import Annotated
-from django_bolt.param_functions import Query, Header, Cookie
+from django_bolt import WebSocket
 
-api = BoltAPI()
-
-# Basic WebSocket echo
-@api.websocket("/ws/echo")
-async def echo_handler(websocket: WebSocket):
+@api.websocket("/ws")
+async def ws(websocket: WebSocket):
     await websocket.accept()
-    async for message in websocket.iter_text():
-        await websocket.send_text(f"Echo: {message}")
-
-# WebSocket with path parameters (with type coercion)
-@api.websocket("/ws/chat/{room_id}")
-async def chat_handler(websocket: WebSocket, room_id: int):
-    await websocket.accept()
-    await websocket.send_text(f"Joined room: {room_id}")
-
-# WebSocket with query/header/cookie parameters
-@api.websocket("/ws/advanced")
-async def advanced_ws(
-    websocket: WebSocket,
-    token: Annotated[str, Query()],
-    auth: Annotated[str, Header()],
-    session: Annotated[str, Cookie()]
-):
-    await websocket.accept()
-    await websocket.send_json({"token": token, "auth": auth})
-
-# Protected WebSocket with guards
-@api.websocket(
-    "/ws/protected",
-    auth=[JWTAuthentication(secret="secret")],
-    guards=[IsAuthenticated()]
-)
-async def protected_ws(websocket: WebSocket):
-    await websocket.accept()
-    await websocket.send_text("authenticated")
-
-# JSON, binary, and close handling
-async for data in websocket.iter_json():  # JSON messages
-    await websocket.send_json({"received": data})
-
-async for data in websocket.iter_bytes():  # Binary messages
-    await websocket.send_bytes(data)
-
-await websocket.close(code=1000, reason="done")  # Close connection
+    async for msg in websocket.iter_text():
+        await websocket.send_text(f"Echo: {msg}")
 ```
 
-WebSocket features:
-- Path parameters with type coercion (int, float, bool, str)
-- Query/Header/Cookie parameter injection
-- Guards and authentication (runs in Rust)
-- Text, JSON, and binary message handling
-- Graceful close with custom codes
+## Error Handling
 
-## Server-Sent Events (SSE)
+> Details: https://bolt.farhana.li/topics/error-handling
 
 ```python
-from django_bolt import StreamingResponse
-import asyncio
+from django_bolt.exceptions import HTTPException, NotFound, BadRequest, Unauthorized, Forbidden
 
-# Async SSE
-@api.get("/events")
-async def sse_events():
-    async def generate():
-        for i in range(10):
-            yield f"data: Event {i}\n\n"
-            await asyncio.sleep(1)
-    return StreamingResponse(generate(), media_type="text/event-stream")
+@api.get("/item/{id}")
+async def get_item(id: int):
+    item = await Item.objects.filter(id=id).afirst()
+    if not item:
+        raise NotFound(f"Item {id} not found")
+    return item
+```
 
+## OpenAPI Docs
 
-## Key Points
+> Details: https://bolt.farhana.li/topics/openapi
 
-- Handlers can be `async def` (preferred) or `def` (for CPU-bound work)
-- Use `Serializer` for request/response schemas with validation
-- Use Django async ORM in async handlers: `aget()`, `acreate()`, `afilter()`, `async for`
-- Use Django sync ORM in sync handlers: `get()`, `create()`, `filter()`
-- Auth/guards run in Rust (no Python GIL overhead)
-- Compression enabled by default
-- OpenAPI docs at `/schema`
-- WebSockets support path/query/header/cookie parameters
-- SSE works with both async and sync generators
+Auto-generated at `/docs` (Swagger), `/docs/redoc`, `/docs/scalar`.
+
+```python
+api = BoltAPI(title="My API", version="1.0.0")
+
+@api.get("/items", tags=["items"], summary="List items")
+async def list_items():
+    return []
+```
+
+## Global Defaults (settings.py)
+
+> Details: https://bolt.farhana.li/ref/settings
+
+```python
+from django_bolt.auth import JWTAuthentication, IsAuthenticated
+
+BOLT_AUTHENTICATION_CLASSES = [JWTAuthentication()]
+BOLT_DEFAULT_PERMISSION_CLASSES = [IsAuthenticated()]  # Default: AllowAny
+BOLT_CORS_ALLOWED_ORIGINS = ["https://example.com"]
+BOLT_ALLOWED_FILE_PATHS = ["/var/www/static"]
+```

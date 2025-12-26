@@ -7,6 +7,9 @@
 
 # High-Performance Fully Typed API Framework for Django
 
+[![Run in Smithery](https://smithery.ai/badge/skills/farhanaliraza)](https://smithery.ai/skills?ns=farhanaliraza&utm_source=github&utm_medium=badge)
+
+
 Your first question might be: why? Well, consider this: **Faster than _FastAPI_, but with Django ORM, Django Admin, and Django packages**. That’s exactly what this project achieves. Django-Bolt is a high-performance API framework for Django, providing Rust-powered API endpoints capable of 60k+ RPS. Similar to Django REST Framework or Django Ninja, it integrates seamlessly with existing Django projects while leveraging Actix Web for HTTP handling, PyO3 to bridge Python async handlers with Rust's async runtime, and msgspec for fast serialization. You can deploy it directly—no gunicorn or uvicorn needed.
 
 ## 🚀 Quick Start

@@ -564,6 +564,7 @@ class BoltAPI:
         guards: list[Any] | None = None,
         auth: list[Any] | None = None,
         status_code: int | None = None,
+        tags: list[str] | None = None,
     ):
         """
         Register a class-based view as a decorator.
@@ -584,6 +585,7 @@ class BoltAPI:
             guards: Optional per-route guard overrides (merged with class-level guards)
             auth: Optional per-route auth overrides (merged with class-level auth)
             status_code: Optional per-route status code override
+            tags: Optional per-route tags override
 
         Returns:
             Decorator function that registers the view class
@@ -648,6 +650,7 @@ class BoltAPI:
                     status_code=merged_status_code,
                     guards=merged_guards,
                     auth=merged_auth,
+                    tags=tags,
                 )
 
                 # Apply decorator to register the handler
@@ -669,7 +672,8 @@ class BoltAPI:
         guards: list[Any] | None = None,
         auth: list[Any] | None = None,
         status_code: int | None = None,
-        lookup_field: str = "pk"
+        lookup_field: str = "pk",
+        tags: list[str] | None = None
     ):
         """
         Register a ViewSet with automatic CRUD route generation as a decorator.
@@ -704,6 +708,7 @@ class BoltAPI:
             auth: Optional auth backends to apply to all routes
             status_code: Optional default status code (overrides action-specific defaults)
             lookup_field: Field name for object lookup (default: "pk")
+            tags: Optional tags to apply to all routes
 
         Returns:
             Decorator function that registers the viewset
@@ -771,7 +776,8 @@ class BoltAPI:
                     response_model=None,
                     status_code=merged_status_code,
                     guards=merged_guards,
-                    auth=merged_auth
+                    auth=merged_auth,
+                    tags=tags
                 )
                 route_decorator(handler)
 

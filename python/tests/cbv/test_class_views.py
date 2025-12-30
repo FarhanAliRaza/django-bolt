@@ -556,3 +556,30 @@ def test_bolt_api_view_method_names_customization():
     # Only GET should be registered (POST not in http_method_names)
     assert len(api._routes) == 1
     assert api._routes[0][0] == "GET"
+
+def test_viewset_tags_registration(api):
+    """
+    Test tags passed to api.viewset() are correctly registered
+    """
+    @api.viewset("/items", tags=["Items", "Public"])
+    class TaggedItemViewSet(ViewSet):
+        async def list(self, request):
+            return []
+
+        async def create(self, request, data: dict):
+            return {}
+
+    def get_meta(method, path):
+        for route_method, route_path, handler_id, _ in api._routes:
+            if route_method == method and route_path == "/items":
+                return api._handler_meta.get(handler_id)
+        return None
+
+    list_meta = get_meta("GET", "/items")
+    assert list_meta is not None
+    assert "openapi_tags" in list_meta
+    assert list_meta["openapi_tags"] == ["Items", "Public"]
+
+    create_meta = get_meta("POST", "/items")
+    assert create_meta is not None
+    assert create_meta["openapi_tags"] == ["Items", "Public"]

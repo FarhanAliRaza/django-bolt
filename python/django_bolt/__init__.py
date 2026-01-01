@@ -72,6 +72,9 @@ from .auth import (
 # Decorators module
 from .decorators import action
 
+# Enums module
+from .enums import MediaType
+
 # Middleware module
 from .middleware import (
     BaseMiddleware,
@@ -168,6 +171,8 @@ __all__ = [
     "StreamingResponse",
     "CompressionConfig",
     "Depends",
+    # Enums
+    "MediaType",
     # Router
     "Router",
     # Types

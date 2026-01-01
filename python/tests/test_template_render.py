@@ -50,7 +50,6 @@ def client(api):
 
 
 class TestRenderShortcut:
-
     def test_render_returns_200(self, client):
         with override_settings(TEMPLATES=TEMPLATES):
             response = client.get("/dashboard")

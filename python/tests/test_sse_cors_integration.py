@@ -11,6 +11,7 @@ TestClient with use_http_layer=True does NOT exercise handler.rs for streaming
 responses - it uses test_state.rs instead. This integration test is the only
 way to verify the production SSE CORS fix works.
 """
+
 from __future__ import annotations
 
 import os
@@ -58,7 +59,7 @@ def sse_cors_server():
         os.makedirs(project_dir)
 
         # Create settings.py
-        settings_content = '''
+        settings_content = """
 import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SECRET_KEY = "test-secret-key-for-sse-cors"
@@ -77,14 +78,14 @@ DATABASES = {
 }
 USE_TZ = True
 ROOT_URLCONF = "testproj.urls"
-'''
+"""
         with open(os.path.join(project_dir, "settings.py"), "w") as f:
             f.write(settings_content)
 
         # Create urls.py
-        urls_content = '''
+        urls_content = """
 urlpatterns = []
-'''
+"""
         with open(os.path.join(project_dir, "urls.py"), "w") as f:
             f.write(urls_content)
 
@@ -154,7 +155,7 @@ async def sse_no_cors():
             f.write(api_content)
 
         # Create manage.py
-        manage_content = '''#!/usr/bin/env python
+        manage_content = """#!/usr/bin/env python
 import os
 import sys
 
@@ -162,7 +163,7 @@ if __name__ == "__main__":
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "testproj.settings")
     from django.core.management import execute_from_command_line
     execute_from_command_line(sys.argv)
-'''
+"""
         manage_path = os.path.join(tmpdir, "manage.py")
         with open(manage_path, "w") as f:
             f.write(manage_content)
@@ -174,10 +175,13 @@ if __name__ == "__main__":
 
         # Start the server
         cmd = [
-            sys.executable, manage_path,
+            sys.executable,
+            manage_path,
             "runbolt",
-            "--host", HOST,
-            "--port", str(PORT),
+            "--host",
+            HOST,
+            "--port",
+            str(PORT),
         ]
 
         process = subprocess.Popen(
@@ -193,9 +197,7 @@ if __name__ == "__main__":
             if not wait_for_server(HOST, PORT, timeout=TIMEOUT):
                 stdout, stderr = process.communicate(timeout=5)
                 pytest.fail(
-                    f"Server failed to start within {TIMEOUT}s.\n"
-                    f"stdout: {stdout.decode()}\n"
-                    f"stderr: {stderr.decode()}"
+                    f"Server failed to start within {TIMEOUT}s.\nstdout: {stdout.decode()}\nstderr: {stderr.decode()}"
                 )
 
             base_url = f"http://{HOST}:{PORT}"
@@ -227,32 +229,26 @@ class TestSSECorsProduction:
         Without the fix, browsers would block EventSource connections.
         """
         with httpx.Client(timeout=30) as client:
-            response = client.get(
-                f"{sse_cors_server}/sse-cors-async",
-                headers={"Origin": "https://example.com"}
-            )
+            response = client.get(f"{sse_cors_server}/sse-cors-async", headers={"Origin": "https://example.com"})
 
         assert response.status_code == 200
         assert "text/event-stream" in response.headers.get("content-type", "")
 
         # CRITICAL: Must have CORS headers from production handler.rs
-        assert response.headers.get("access-control-allow-origin") == "https://example.com", \
+        assert response.headers.get("access-control-allow-origin") == "https://example.com", (
             "Production SSE response missing Access-Control-Allow-Origin header"
+        )
 
         # Must have Vary: Origin when reflecting origin
         # httpx may return multiple Vary headers as separate entries, so check all
         vary_headers = response.headers.get_list("vary")
         all_vary = ", ".join(vary_headers).lower()
-        assert "origin" in all_vary, \
-            f"Production SSE response missing Vary: Origin header. Got: {vary_headers}"
+        assert "origin" in all_vary, f"Production SSE response missing Vary: Origin header. Got: {vary_headers}"
 
     def test_sync_sse_has_cors_headers(self, sse_cors_server):
         """Test that sync SSE responses include CORS headers."""
         with httpx.Client(timeout=30) as client:
-            response = client.get(
-                f"{sse_cors_server}/sse-cors-sync",
-                headers={"Origin": "https://sync-app.com"}
-            )
+            response = client.get(f"{sse_cors_server}/sse-cors-sync", headers={"Origin": "https://sync-app.com"})
 
         assert response.status_code == 200
         assert response.headers.get("access-control-allow-origin") == "https://sync-app.com"
@@ -260,10 +256,7 @@ class TestSSECorsProduction:
     def test_sse_cors_credentials(self, sse_cors_server):
         """Test that SSE responses include credentials header when configured."""
         with httpx.Client(timeout=30) as client:
-            response = client.get(
-                f"{sse_cors_server}/sse-cors-credentials",
-                headers={"Origin": "https://secure.com"}
-            )
+            response = client.get(f"{sse_cors_server}/sse-cors-credentials", headers={"Origin": "https://secure.com"})
 
         assert response.status_code == 200
         assert response.headers.get("access-control-allow-origin") == "https://secure.com"
@@ -272,10 +265,7 @@ class TestSSECorsProduction:
     def test_sse_cors_wildcard(self, sse_cors_server):
         """Test that SSE responses with wildcard CORS return '*'."""
         with httpx.Client(timeout=30) as client:
-            response = client.get(
-                f"{sse_cors_server}/sse-cors-wildcard",
-                headers={"Origin": "https://any-domain.com"}
-            )
+            response = client.get(f"{sse_cors_server}/sse-cors-wildcard", headers={"Origin": "https://any-domain.com"})
 
         assert response.status_code == 200
         assert response.headers.get("access-control-allow-origin") == "*"
@@ -283,10 +273,7 @@ class TestSSECorsProduction:
     def test_sse_rejects_disallowed_origin(self, sse_cors_server):
         """Test that SSE responses reject disallowed origins."""
         with httpx.Client(timeout=30) as client:
-            response = client.get(
-                f"{sse_cors_server}/sse-cors-async",
-                headers={"Origin": "https://evil.com"}
-            )
+            response = client.get(f"{sse_cors_server}/sse-cors-async", headers={"Origin": "https://evil.com"})
 
         assert response.status_code == 200
         # Must NOT have CORS headers for disallowed origin
@@ -295,10 +282,7 @@ class TestSSECorsProduction:
     def test_sse_without_cors_decorator(self, sse_cors_server):
         """Test that SSE without CORS decorator has no CORS headers."""
         with httpx.Client(timeout=30) as client:
-            response = client.get(
-                f"{sse_cors_server}/sse-no-cors",
-                headers={"Origin": "https://example.com"}
-            )
+            response = client.get(f"{sse_cors_server}/sse-no-cors", headers={"Origin": "https://example.com"})
 
         assert response.status_code == 200
         # No CORS decorator = no CORS headers
@@ -307,10 +291,7 @@ class TestSSECorsProduction:
     def test_sse_content_is_correct(self, sse_cors_server):
         """Test that SSE content is correctly streamed with CORS headers."""
         with httpx.Client(timeout=30) as client:
-            response = client.get(
-                f"{sse_cors_server}/sse-cors-async",
-                headers={"Origin": "https://example.com"}
-            )
+            response = client.get(f"{sse_cors_server}/sse-cors-async", headers={"Origin": "https://example.com"})
 
         assert response.status_code == 200
 

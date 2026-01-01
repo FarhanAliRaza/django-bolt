@@ -6,6 +6,7 @@ This version uses async-native Rust testing infrastructure which provides:
 - Production code path testing (same middleware, CORS, compression)
 - Streaming response support via stream=True parameter
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -45,19 +46,19 @@ class BoltTestTransport(httpx.BaseTransport):
         # Parse URL
         url = request.url
         path = url.path
-        query_string = url.query.decode('utf-8') if url.query else None
+        query_string = url.query.decode("utf-8") if url.query else None
 
         # Extract headers
-        headers = [(k.decode('utf-8'), v.decode('utf-8')) for k, v in request.headers.raw]
+        headers = [(k.decode("utf-8"), v.decode("utf-8")) for k, v in request.headers.raw]
 
         # Get body
         if hasattr(request, "_content"):
             body_bytes = request.content
         else:
             try:
-                body_bytes = request.stream.read() if hasattr(request.stream, 'read') else b''.join(request.stream)
+                body_bytes = request.stream.read() if hasattr(request.stream, "read") else b"".join(request.stream)
             except Exception:
-                body_bytes = request.content if hasattr(request, "_content") else b''
+                body_bytes = request.content if hasattr(request, "_content") else b""
 
         method = request.method
 
@@ -87,7 +88,7 @@ class BoltTestTransport(httpx.BaseTransport):
             # Return 500 error
             return Response(
                 status_code=500,
-                headers=[('content-type', 'text/plain')],
+                headers=[("content-type", "text/plain")],
                 content=f"Test client error: {e}".encode(),
                 request=request,
             )
@@ -114,10 +115,10 @@ class AsyncBoltTestTransport(httpx.AsyncBaseTransport):
         # Parse URL
         url = request.url
         path = url.path
-        query_string = url.query.decode('utf-8') if url.query else None
+        query_string = url.query.decode("utf-8") if url.query else None
 
         # Extract headers
-        headers = [(k.decode('utf-8'), v.decode('utf-8')) for k, v in request.headers.raw]
+        headers = [(k.decode("utf-8"), v.decode("utf-8")) for k, v in request.headers.raw]
 
         # Get body
         if hasattr(request, "_content"):
@@ -126,7 +127,7 @@ class AsyncBoltTestTransport(httpx.AsyncBaseTransport):
             try:
                 body_bytes = await request.aread()
             except Exception:
-                body_bytes = b''
+                body_bytes = b""
 
         method = request.method
 
@@ -160,7 +161,7 @@ class AsyncBoltTestTransport(httpx.AsyncBaseTransport):
             # Return 500 error
             return Response(
                 status_code=500,
-                headers=[('content-type', 'text/plain')],
+                headers=[("content-type", "text/plain")],
                 content=f"Test client error: {e}".encode(),
                 request=request,
             )
@@ -200,8 +201,8 @@ class TestClient(httpx.Client):
         """
         try:
             # Check if any CORS setting is defined
-            has_origins = hasattr(settings, 'CORS_ALLOWED_ORIGINS')
-            has_all_origins = hasattr(settings, 'CORS_ALLOW_ALL_ORIGINS') and settings.CORS_ALLOW_ALL_ORIGINS
+            has_origins = hasattr(settings, "CORS_ALLOWED_ORIGINS")
+            has_all_origins = hasattr(settings, "CORS_ALLOW_ALL_ORIGINS") and settings.CORS_ALLOW_ALL_ORIGINS
 
             if not has_origins and not has_all_origins:
                 return None
@@ -211,40 +212,40 @@ class TestClient(httpx.Client):
 
             # Origins
             if has_all_origins:
-                cors_config['origins'] = ["*"]
+                cors_config["origins"] = ["*"]
             elif has_origins:
                 origins = settings.CORS_ALLOWED_ORIGINS
                 if isinstance(origins, (list, tuple)):
-                    cors_config['origins'] = list(origins)
+                    cors_config["origins"] = list(origins)
                 else:
-                    cors_config['origins'] = []
+                    cors_config["origins"] = []
             else:
-                cors_config['origins'] = []
+                cors_config["origins"] = []
 
             # Credentials
-            cors_config['credentials'] = getattr(settings, 'CORS_ALLOW_CREDENTIALS', False)
+            cors_config["credentials"] = getattr(settings, "CORS_ALLOW_CREDENTIALS", False)
 
             # Methods
-            if hasattr(settings, 'CORS_ALLOW_METHODS'):
+            if hasattr(settings, "CORS_ALLOW_METHODS"):
                 methods = settings.CORS_ALLOW_METHODS
                 if isinstance(methods, (list, tuple)):
-                    cors_config['methods'] = list(methods)
+                    cors_config["methods"] = list(methods)
 
             # Headers
-            if hasattr(settings, 'CORS_ALLOW_HEADERS'):
+            if hasattr(settings, "CORS_ALLOW_HEADERS"):
                 headers = settings.CORS_ALLOW_HEADERS
                 if isinstance(headers, (list, tuple)):
-                    cors_config['headers'] = list(headers)
+                    cors_config["headers"] = list(headers)
 
             # Expose headers
-            if hasattr(settings, 'CORS_EXPOSE_HEADERS'):
+            if hasattr(settings, "CORS_EXPOSE_HEADERS"):
                 expose = settings.CORS_EXPOSE_HEADERS
                 if isinstance(expose, (list, tuple)):
-                    cors_config['expose_headers'] = list(expose)
+                    cors_config["expose_headers"] = list(expose)
 
             # Max age
-            if hasattr(settings, 'CORS_PREFLIGHT_MAX_AGE'):
-                cors_config['max_age'] = settings.CORS_PREFLIGHT_MAX_AGE
+            if hasattr(settings, "CORS_PREFLIGHT_MAX_AGE"):
+                cors_config["max_age"] = settings.CORS_PREFLIGHT_MAX_AGE
 
             return cors_config
         except (ImportError, AttributeError):
@@ -282,7 +283,7 @@ class TestClient(httpx.Client):
 
         if cors_allowed_origins is not None:
             # Explicit origins provided - create minimal config
-            cors_config = {'origins': cors_allowed_origins}
+            cors_config = {"origins": cors_allowed_origins}
         elif read_django_settings:
             # Read full CORS config from Django settings (same as production server)
             cors_config = self._read_cors_settings_from_django()
@@ -291,10 +292,7 @@ class TestClient(httpx.Client):
         self.app_id = _core.create_test_app(api._dispatch, False, cors_config)
 
         # Register routes
-        rust_routes = [
-            (method, path, handler_id, handler)
-            for method, path, handler_id, handler in api._routes
-        ]
+        rust_routes = [(method, path, handler_id, handler) for method, path, handler_id, handler in api._routes]
         _core.register_test_routes(self.app_id, rust_routes)
 
         # Register WebSocket routes with pre-compiled injectors (same as production)
@@ -309,10 +307,7 @@ class TestClient(httpx.Client):
 
         # Register middleware metadata if any exists
         if api._handler_middleware:
-            middleware_data = [
-                (handler_id, meta)
-                for handler_id, meta in api._handler_middleware.items()
-            ]
+            middleware_data = [(handler_id, meta) for handler_id, meta in api._handler_middleware.items()]
             _core.register_test_middleware_metadata(self.app_id, middleware_data)
 
         # Register authentication backends for user resolution (lazy loading in request.user)
@@ -344,9 +339,7 @@ class TestClient(httpx.Client):
         )
         response.iter_content = response._iter_content  # type: ignore
 
-        response._iter_lines = lambda decode_unicode=True: self._iter_response_lines(
-            response.content, decode_unicode
-        )
+        response._iter_lines = lambda decode_unicode=True: self._iter_response_lines(response.content, decode_unicode)
         response.iter_lines = response._iter_lines  # type: ignore
 
         return response
@@ -502,7 +495,7 @@ class AsyncTestClient(httpx.AsyncClient):
         cors_config = None
 
         if cors_allowed_origins is not None:
-            cors_config = {'origins': cors_allowed_origins}
+            cors_config = {"origins": cors_allowed_origins}
         elif read_django_settings:
             cors_config = TestClient._read_cors_settings_from_django()
 
@@ -510,10 +503,7 @@ class AsyncTestClient(httpx.AsyncClient):
         self.app_id = _core.create_test_app(api._dispatch, False, cors_config)
 
         # Register routes
-        rust_routes = [
-            (method, path, handler_id, handler)
-            for method, path, handler_id, handler in api._routes
-        ]
+        rust_routes = [(method, path, handler_id, handler) for method, path, handler_id, handler in api._routes]
         _core.register_test_routes(self.app_id, rust_routes)
 
         # Register WebSocket routes
@@ -527,10 +517,7 @@ class AsyncTestClient(httpx.AsyncClient):
 
         # Register middleware metadata
         if api._handler_middleware:
-            middleware_data = [
-                (handler_id, meta)
-                for handler_id, meta in api._handler_middleware.items()
-            ]
+            middleware_data = [(handler_id, meta) for handler_id, meta in api._handler_middleware.items()]
             _core.register_test_middleware_metadata(self.app_id, middleware_data)
 
         api._register_auth_backends()

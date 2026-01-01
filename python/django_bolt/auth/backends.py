@@ -13,6 +13,7 @@ The authentication flow:
 
 Performance: ~60k+ RPS with JWT validation happening entirely in Rust.
 """
+
 from __future__ import annotations
 
 import sys
@@ -34,6 +35,7 @@ class AuthContext:
 
     This is populated in Rust and passed to Python handlers via request.context.
     """
+
     user_id: str | None = None
     is_staff: bool = False
     is_superuser: bool = False
@@ -134,7 +136,7 @@ class JWTAuthentication(BaseAuthentication):
         # If no secret provided, try to get Django's SECRET_KEY
         if self.secret is None:
             try:
-                if not hasattr(settings, 'SECRET_KEY'):
+                if not hasattr(settings, "SECRET_KEY"):
                     raise ImproperlyConfigured(
                         "JWTAuthentication requires a 'secret' parameter or Django's SECRET_KEY setting. "
                         "Neither was provided."
@@ -142,7 +144,7 @@ class JWTAuthentication(BaseAuthentication):
 
                 self.secret = settings.SECRET_KEY
 
-                if not self.secret or self.secret == '':
+                if not self.secret or self.secret == "":
                     raise ImproperlyConfigured(
                         "JWTAuthentication secret cannot be empty. "
                         "Please provide a non-empty 'secret' parameter or set Django's SECRET_KEY."
@@ -259,9 +261,7 @@ class APIKeyAuthentication(BaseAuthentication):
             "type": "api_key",
             "api_keys": list(self.api_keys),
             "header": self.header.lower(),
-            "key_permissions": {
-                k: list(v) for k, v in self.key_permissions.items()
-            },
+            "key_permissions": {k: list(v) for k, v in self.key_permissions.items()},
         }
 
 
@@ -344,9 +344,8 @@ def get_default_authentication_classes() -> list[BaseAuthentication]:
     returns an empty list (no authentication by default).
     """
     try:
-
         try:
-            if hasattr(settings, 'BOLT_AUTHENTICATION_CLASSES'):
+            if hasattr(settings, "BOLT_AUTHENTICATION_CLASSES"):
                 return settings.BOLT_AUTHENTICATION_CLASSES
         except ImproperlyConfigured:
             # Settings not configured, return empty list

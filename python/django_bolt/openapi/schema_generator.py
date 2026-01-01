@@ -132,7 +132,7 @@ class SchemaGenerator:
             # Add x-websocket extension to mark this as a WebSocket endpoint
             if paths[ws_path].extensions is None:
                 paths[ws_path].extensions = {}
-            paths[ws_path].extensions['x-websocket'] = True
+            paths[ws_path].extensions["x-websocket"] = True
 
         openapi.paths = paths
 
@@ -339,9 +339,7 @@ class SchemaGenerator:
 
         return operation
 
-    def _extract_parameters(
-        self, meta: dict[str, Any], path: str
-    ) -> list[Parameter]:
+    def _extract_parameters(self, meta: dict[str, Any], path: str) -> list[Parameter]:
         """Extract OpenAPI parameters from handler metadata.
 
         Args:
@@ -464,9 +462,7 @@ class SchemaGenerator:
             required=True,
         )
 
-    def _extract_responses(
-        self, meta: dict[str, Any], handler_id: int
-    ) -> dict[str, OpenAPIResponse]:
+    def _extract_responses(self, meta: dict[str, Any], handler_id: int) -> dict[str, OpenAPIResponse]:
         """Extract OpenAPI responses from handler metadata.
 
         Args:
@@ -497,9 +493,7 @@ class SchemaGenerator:
             responses["200"] = OpenAPIResponse(
                 description="Successful response",
                 content={
-                    "application/json": OpenAPIMediaType(
-                        schema=Schema(type="object")
-                    ),
+                    "application/json": OpenAPIMediaType(schema=Schema(type="object")),
                 },
             )
 
@@ -507,8 +501,7 @@ class SchemaGenerator:
         if self.config.include_error_responses:
             # Check if request body is present (for 422 validation errors)
             has_request_body = meta.get("body_struct_param") or any(
-                f.source in ("body", "form", "file")
-                for f in meta.get("fields", [])
+                f.source in ("body", "form", "file") for f in meta.get("fields", [])
             )
 
             if has_request_body:
@@ -516,9 +509,7 @@ class SchemaGenerator:
                 responses["422"] = OpenAPIResponse(
                     description="Validation Error - Request data failed validation",
                     content={
-                        "application/json": OpenAPIMediaType(
-                            schema=self._get_validation_error_schema()
-                        ),
+                        "application/json": OpenAPIMediaType(schema=self._get_validation_error_schema()),
                     },
                 )
 
@@ -653,9 +644,7 @@ class SchemaGenerator:
         # Return sorted list of Tag objects
         return list(tag_objects.values()) if tag_objects else None
 
-    def _type_to_schema(
-        self, type_annotation: Any, register_component: bool = False
-    ) -> Schema | Reference:
+    def _type_to_schema(self, type_annotation: Any, register_component: bool = False) -> Schema | Reference:
         """Convert Python type annotation to OpenAPI Schema.
 
         Args:
@@ -671,30 +660,30 @@ class SchemaGenerator:
 
         # Handle msgspec type info objects (IntType, StrType, BoolType, etc.)
         type_name = type(type_annotation).__name__
-        if hasattr(type_annotation, '__class__') and type_name.endswith('Type'):
+        if hasattr(type_annotation, "__class__") and type_name.endswith("Type"):
             # Map msgspec type objects to OpenAPI schemas
             msgspec_type_map = {
-                'IntType': Schema(type="integer"),
-                'StrType': Schema(type="string"),
-                'FloatType': Schema(type="number"),
-                'BoolType': Schema(type="boolean"),
-                'BytesType': Schema(type="string", format="binary"),
-                'DateTimeType': Schema(type="string", format="date-time"),
-                'DateType': Schema(type="string", format="date"),
-                'TimeType': Schema(type="string", format="time"),
-                'UUIDType': Schema(type="string", format="uuid"),
+                "IntType": Schema(type="integer"),
+                "StrType": Schema(type="string"),
+                "FloatType": Schema(type="number"),
+                "BoolType": Schema(type="boolean"),
+                "BytesType": Schema(type="string", format="binary"),
+                "DateTimeType": Schema(type="string", format="date-time"),
+                "DateType": Schema(type="string", format="date"),
+                "TimeType": Schema(type="string", format="time"),
+                "UUIDType": Schema(type="string", format="uuid"),
             }
             if type_name in msgspec_type_map:
                 return msgspec_type_map[type_name]
             # For list/array types from msgspec
-            if type_name == 'ListType':
-                item_type = getattr(type_annotation, 'item_type', None)
+            if type_name == "ListType":
+                item_type = getattr(type_annotation, "item_type", None)
                 if item_type:
                     item_schema = self._type_to_schema(item_type, register_component=register_component)
                     return Schema(type="array", items=item_schema)
                 return Schema(type="array", items=Schema(type="object"))
             # For dict types from msgspec
-            if type_name == 'DictType':
+            if type_name == "DictType":
                 return Schema(type="object", additional_properties=True)
 
         # Unwrap Optional

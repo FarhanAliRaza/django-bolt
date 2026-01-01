@@ -5,6 +5,7 @@ Supports both eager and lazy loading strategies.
 Lazy loading (default): Uses SimpleLazyObject to defer DB query until first access
 Eager loading (optional): Loads user immediately at dispatch time
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -26,9 +27,7 @@ def _get_executor() -> concurrent.futures.ThreadPoolExecutor:
     """Get or create the shared thread pool executor."""
     global _user_loader_executor
     if _user_loader_executor is None:
-        _user_loader_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="user_loader"
-        )
+        _user_loader_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="user_loader")
     return _user_loader_executor
 
 
@@ -50,9 +49,7 @@ def get_registered_backend(backend_name: str) -> Any | None:
     return _auth_backend_registry.get(backend_name)
 
 
-async def load_user(
-    user_id: str | None, backend_name: str | None, auth_context: dict | None = None
-) -> Any | None:
+async def load_user(user_id: str | None, backend_name: str | None, auth_context: dict | None = None) -> Any | None:
     """
     Eagerly load user from auth context.
 
@@ -123,6 +120,7 @@ def load_user_sync(
     if backend and hasattr(backend, "get_user"):
         get_user_method = backend.get_user
         if inspect.iscoroutinefunction(get_user_method):
+
             def run_async_get_user():
                 return asyncio.run(get_user_method(user_id, auth_context or {}))
 

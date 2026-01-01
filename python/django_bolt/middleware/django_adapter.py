@@ -11,6 +11,7 @@ Performance considerations:
 - Django request attributes are synced back only when needed
 - Uses sync_to_async for Django operations that may touch the database
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -33,6 +34,7 @@ try:
     from asgiref.sync import iscoroutinefunction, markcoroutinefunction, sync_to_async
     from django.http import HttpRequest, HttpResponse, QueryDict
     from django.utils.module_loading import import_string
+
     DJANGO_AVAILABLE = True
 except ImportError:
     DJANGO_AVAILABLE = False
@@ -55,6 +57,7 @@ def _get_empty_querydict():
         _EMPTY_QUERYDICT = QueryDict()
     return _EMPTY_QUERYDICT
 
+
 if TYPE_CHECKING:
     from ..request import Request
     from ..responses import Response
@@ -63,9 +66,7 @@ if TYPE_CHECKING:
 # Context variable to hold per-request state for the get_response bridge
 # This allows middleware instances to be created once at startup while
 # still having access to the correct call_next at request time
-_request_context: contextvars.ContextVar[dict] = contextvars.ContextVar(
-    "_django_middleware_request_context"
-)
+_request_context: contextvars.ContextVar[dict] = contextvars.ContextVar("_django_middleware_request_context")
 
 
 class DjangoMiddleware:
@@ -117,11 +118,7 @@ class DjangoMiddleware:
         "_middleware_is_async",
     )
 
-    def __init__(
-        self,
-        middleware_class_or_get_response: type | str | Callable,
-        **init_kwargs: Any
-    ):
+    def __init__(self, middleware_class_or_get_response: type | str | Callable, **init_kwargs: Any):
         """
         Initialize the Django middleware wrapper.
 
@@ -135,14 +132,15 @@ class DjangoMiddleware:
             **init_kwargs: Additional kwargs passed to middleware __init__
         """
         if not DJANGO_AVAILABLE:
-            raise ImportError(
-                "Django is required to use DjangoMiddleware. "
-                "Install Django with: pip install django"
-            )
+            raise ImportError("Django is required to use DjangoMiddleware. Install Django with: pip install django")
 
         # Check if this is chain building call (get_response is a callable)
         # vs initial configuration (middleware_class is a type or string)
-        if callable(middleware_class_or_get_response) and not isinstance(middleware_class_or_get_response, type) and not isinstance(middleware_class_or_get_response, str):
+        if (
+            callable(middleware_class_or_get_response)
+            and not isinstance(middleware_class_or_get_response, type)
+            and not isinstance(middleware_class_or_get_response, str)
+        ):
             # This is being called during chain building: DjangoMiddleware(get_response)
             # We need to check if this instance was already configured with a middleware class
             # This happens when the middleware was pre-configured and is now being instantiated
@@ -215,9 +213,7 @@ class DjangoMiddleware:
         markcoroutinefunction(get_response_bridge)
 
         # Create middleware instance with the async bridge
-        self._middleware_instance = self.middleware_class(
-            get_response_bridge, **self.init_kwargs
-        )
+        self._middleware_instance = self.middleware_class(get_response_bridge, **self.init_kwargs)
 
         # Check if the middleware instance is async-capable
         # MiddlewareMixin sets this when get_response is async
@@ -273,9 +269,7 @@ class DjangoMiddleware:
                 return self._to_bolt_response(django_response)
             else:
                 # Sync middleware without async support - run in thread pool
-                django_response = await sync_to_async(
-                    self._middleware_instance, thread_sensitive=True
-                )(django_request)
+                django_response = await sync_to_async(self._middleware_instance, thread_sensitive=True)(django_request)
                 return self._to_bolt_response(django_response)
         except Exception as e:
             logger.error(
@@ -335,9 +329,7 @@ class DjangoMiddleware:
 
     def _build_meta(self, request: Request) -> dict:
         """Build Django META dict from Bolt request headers."""
-        query_string = "&".join(
-            f"{k}={v}" for k, v in request.query.items()
-        ) if request.query else ""
+        query_string = "&".join(f"{k}={v}" for k, v in request.query.items()) if request.query else ""
 
         meta = {
             "REQUEST_METHOD": request.method,
@@ -359,11 +351,7 @@ class DjangoMiddleware:
 
         return meta
 
-    def _sync_request_attributes(
-        self,
-        django_request: HttpRequest,
-        bolt_request: Request
-    ) -> None:
+    def _sync_request_attributes(self, django_request: HttpRequest, bolt_request: Request) -> None:
         """
         Sync attributes added by Django middleware to Bolt request.
 
@@ -376,29 +364,29 @@ class DjangoMiddleware:
         since PyRequest is a Rust object with fixed attributes.
         """
         # Sync user directly to bolt_request.user (same as Django) - this is writable
-        if hasattr(django_request, 'user'):
+        if hasattr(django_request, "user"):
             bolt_request.user = django_request.user
 
         # Sync auser to state
-        if hasattr(django_request, 'auser'):
+        if hasattr(django_request, "auser"):
             bolt_request.state["auser"] = django_request.auser
 
         # Sync session to state
-        if hasattr(django_request, 'session'):
+        if hasattr(django_request, "session"):
             bolt_request.state["session"] = django_request.session
 
         # Sync _messages for Django's messages framework
         # This enables {% for message in messages %} in templates when using MessageMiddleware
         # Uses state dict - reading works via __getattr__ (request._messages)
-        if hasattr(django_request, '_messages'):
+        if hasattr(django_request, "_messages"):
             bolt_request.state["_messages"] = django_request._messages
 
         # Sync CSRF token
-        if hasattr(django_request, 'META') and 'CSRF_COOKIE' in django_request.META:
-            bolt_request.state["_csrf_token"] = django_request.META['CSRF_COOKIE']
+        if hasattr(django_request, "META") and "CSRF_COOKIE" in django_request.META:
+            bolt_request.state["_csrf_token"] = django_request.META["CSRF_COOKIE"]
 
         # Sync other common middleware attributes to state
-        for attr in ('csrf_processing_done', 'csrf_cookie_needs_reset'):
+        for attr in ("csrf_processing_done", "csrf_cookie_needs_reset"):
             try:
                 value = getattr(django_request, attr, None)
                 if value is not None:
@@ -406,22 +394,21 @@ class DjangoMiddleware:
             except (AttributeError, TypeError):
                 continue
 
-
     def _to_django_response(self, response: Response) -> HttpResponse:
         """Convert Bolt Response/MiddlewareResponse to Django HttpResponse."""
         # Handle different response types
-        if hasattr(response, 'body'):
+        if hasattr(response, "body"):
             # MiddlewareResponse has .body
             content = response.body if isinstance(response.body, bytes) else str(response.body).encode()
-        elif hasattr(response, 'to_bytes'):
+        elif hasattr(response, "to_bytes"):
             content = response.to_bytes()
-        elif hasattr(response, 'content'):
+        elif hasattr(response, "content"):
             content = response.content if isinstance(response.content, bytes) else str(response.content).encode()
         else:
             content = b""
 
-        status_code = getattr(response, 'status_code', 200)
-        headers = getattr(response, 'headers', {})
+        status_code = getattr(response, "status_code", 200)
+        headers = getattr(response, "headers", {})
 
         django_response = HttpResponse(
             content=content,
@@ -441,9 +428,9 @@ class DjangoMiddleware:
 
         # Extract cookies into dedicated list (supports multiple Set-Cookie headers)
         set_cookies = []
-        if hasattr(django_response, 'cookies') and django_response.cookies:
+        if hasattr(django_response, "cookies") and django_response.cookies:
             for cookie in django_response.cookies.values():
-                cookie_header = cookie.output(header='').strip()
+                cookie_header = cookie.output(header="").strip()
                 set_cookies.append(cookie_header)
 
         return MiddlewareResponse(
@@ -469,8 +456,10 @@ def _noop_get_response(request):
 def _csrf_callback_not_exempt(request):
     pass
 
+
 def _csrf_callback_exempt(request):
     pass
+
 
 _csrf_callback_exempt.csrf_exempt = True
 _csrf_callback_not_exempt.csrf_exempt = False
@@ -486,16 +475,18 @@ _SKIP_HEADERS = frozenset(("content-type", "content-length"))
 
 # Known-safe Django middleware modules that don't do blocking I/O in hooks
 # These get the fast path (direct calls without sync_to_async)
-_DJANGO_SAFE_MIDDLEWARE_PREFIXES = frozenset([
-    "django.middleware.",           # security, common, csrf, clickjacking, gzip, locale, http
-    "django.contrib.sessions.",     # SessionMiddleware
-    "django.contrib.auth.",         # AuthenticationMiddleware, etc.
-    "django.contrib.messages.",     # MessageMiddleware
-    "django.contrib.flatpages.",    # FlatpageFallbackMiddleware
-    "django.contrib.redirects.",    # RedirectFallbackMiddleware
-    "django.contrib.sites.",        # CurrentSiteMiddleware
-    "django.contrib.admindocs.",    # XViewMiddleware
-])
+_DJANGO_SAFE_MIDDLEWARE_PREFIXES = frozenset(
+    [
+        "django.middleware.",  # security, common, csrf, clickjacking, gzip, locale, http
+        "django.contrib.sessions.",  # SessionMiddleware
+        "django.contrib.auth.",  # AuthenticationMiddleware, etc.
+        "django.contrib.messages.",  # MessageMiddleware
+        "django.contrib.flatpages.",  # FlatpageFallbackMiddleware
+        "django.contrib.redirects.",  # RedirectFallbackMiddleware
+        "django.contrib.sites.",  # CurrentSiteMiddleware
+        "django.contrib.admindocs.",  # XViewMiddleware
+    ]
+)
 
 
 def _is_django_builtin_middleware(middleware_class: type) -> bool:
@@ -545,16 +536,16 @@ class DjangoMiddlewareStack:
     __slots__ = (
         "middleware_classes",
         "get_response",
-        "_django_hook_middleware",           # Django built-in: fast path (direct calls)
-        "_thirdparty_hook_middleware",       # Third-party: safe path (sync_to_async)
-        "_call_middleware_chain",            # __call__-only middleware chain (or None)
+        "_django_hook_middleware",  # Django built-in: fast path (direct calls)
+        "_thirdparty_hook_middleware",  # Third-party: safe path (sync_to_async)
+        "_call_middleware_chain",  # __call__-only middleware chain (or None)
         # Pre-computed for hot path (avoid hasattr/reversed in loops)
-        "_django_process_request",           # Middleware with process_request
-        "_django_process_response_reversed", # Middleware with process_response (reversed)
-        "_django_process_view",              # Middleware with process_view
-        "_thirdparty_process_request",       # Third-party with process_request
+        "_django_process_request",  # Middleware with process_request
+        "_django_process_response_reversed",  # Middleware with process_response (reversed)
+        "_django_process_view",  # Middleware with process_view
+        "_thirdparty_process_request",  # Third-party with process_request
         "_thirdparty_process_response_reversed",  # Third-party with process_response (reversed)
-        "_thirdparty_process_view",          # Third-party with process_view
+        "_thirdparty_process_view",  # Third-party with process_view
     )
 
     def __init__(self, middleware_classes: list):
@@ -567,15 +558,14 @@ class DjangoMiddlewareStack:
         """
         if not DJANGO_AVAILABLE:
             raise ImportError(
-                "Django is required to use DjangoMiddlewareStack. "
-                "Install Django with: pip install django"
+                "Django is required to use DjangoMiddlewareStack. Install Django with: pip install django"
             )
 
         self.middleware_classes = middleware_classes
         self.get_response = None
-        self._django_hook_middleware = []      # Django built-in: direct calls
+        self._django_hook_middleware = []  # Django built-in: direct calls
         self._thirdparty_hook_middleware = []  # Third-party: sync_to_async
-        self._call_middleware_chain = None     # __call__-only: sync chain
+        self._call_middleware_chain = None  # __call__-only: sync chain
         # Pre-computed lists (populated in _create_middleware_instance)
         self._django_process_request = []
         self._django_process_response_reversed = []
@@ -594,14 +584,14 @@ class DjangoMiddlewareStack:
         self.get_response = get_response
 
         # Categorize middleware into three groups
-        django_hook_classes = []      # Django built-in with hooks
+        django_hook_classes = []  # Django built-in with hooks
         thirdparty_hook_classes = []  # Third-party with hooks
-        call_only_classes = []        # __call__-only (no hooks)
+        call_only_classes = []  # __call__-only (no hooks)
 
         for middleware_class in self.middleware_classes:
             # Check class for hooks (don't create instance just to check)
-            has_process_request = hasattr(middleware_class, 'process_request')
-            has_process_response = hasattr(middleware_class, 'process_response')
+            has_process_request = hasattr(middleware_class, "process_request")
+            has_process_response = hasattr(middleware_class, "process_response")
 
             if has_process_request or has_process_response:
                 # Has hooks - check if Django built-in or third-party
@@ -619,11 +609,11 @@ class DjangoMiddlewareStack:
             instance = middleware_class(_noop_get_response)
             self._django_hook_middleware.append(instance)
             # Pre-compute capabilities (avoid hasattr in hot path)
-            if hasattr(instance, 'process_request'):
+            if hasattr(instance, "process_request"):
                 self._django_process_request.append(instance)
-            if hasattr(instance, 'process_response'):
+            if hasattr(instance, "process_response"):
                 django_process_response.append(instance)
-            if hasattr(instance, 'process_view'):
+            if hasattr(instance, "process_view"):
                 self._django_process_view.append(instance)
         # Pre-reverse for response hooks
         self._django_process_response_reversed = list(reversed(django_process_response))
@@ -634,11 +624,11 @@ class DjangoMiddlewareStack:
             instance = middleware_class(_noop_get_response)
             self._thirdparty_hook_middleware.append(instance)
             # Pre-compute capabilities (avoid hasattr in hot path)
-            if hasattr(instance, 'process_request'):
+            if hasattr(instance, "process_request"):
                 self._thirdparty_process_request.append(instance)
-            if hasattr(instance, 'process_response'):
+            if hasattr(instance, "process_response"):
                 thirdparty_process_response.append(instance)
-            if hasattr(instance, 'process_view'):
+            if hasattr(instance, "process_view"):
                 self._thirdparty_process_view.append(instance)
         # Pre-reverse for response hooks
         self._thirdparty_process_response_reversed = list(reversed(thirdparty_process_response))
@@ -695,9 +685,7 @@ class DjangoMiddlewareStack:
 
         # 3. Run third-party process_request hooks via sync_to_async (safe for blocking I/O)
         for middleware in self._thirdparty_process_request:
-            response = await sync_to_async(
-                middleware.process_request, thread_sensitive=True
-            )(django_request)
+            response = await sync_to_async(middleware.process_request, thread_sensitive=True)(django_request)
             if response is not None:
                 return _to_bolt_response(response)
 
@@ -706,25 +694,20 @@ class DjangoMiddlewareStack:
 
         # 4. Run process_view hooks (for CSRF validation, etc.)
         # Pick the right singleton based on csrf_exempt state
-        csrf_exempt = (
-            hasattr(request, 'state') and request.state
-            and request.state.get("_csrf_exempt", False)
-        )
+        csrf_exempt = hasattr(request, "state") and request.state and request.state.get("_csrf_exempt", False)
         _csrf_callback = _csrf_callback_exempt if csrf_exempt else _csrf_callback_not_exempt
 
         # Run Django built-in process_view hooks (includes CsrfViewMiddleware)
         for middleware in self._django_process_view:
-            response = middleware.process_view(
-                django_request, _csrf_callback, _EMPTY_TUPLE, _EMPTY_DICT
-            )
+            response = middleware.process_view(django_request, _csrf_callback, _EMPTY_TUPLE, _EMPTY_DICT)
             if response is not None:
                 return _to_bolt_response(response)
 
         # Run third-party process_view hooks via sync_to_async
         for middleware in self._thirdparty_process_view:
-            response = await sync_to_async(
-                middleware.process_view, thread_sensitive=True
-            )(django_request, _csrf_callback, _EMPTY_TUPLE, _EMPTY_DICT)
+            response = await sync_to_async(middleware.process_view, thread_sensitive=True)(
+                django_request, _csrf_callback, _EMPTY_TUPLE, _EMPTY_DICT
+            )
             if response is not None:
                 return _to_bolt_response(response)
 
@@ -738,9 +721,9 @@ class DjangoMiddlewareStack:
             }
             token = _request_context.set(ctx)
             try:
-                django_response = await sync_to_async(
-                    self._call_middleware_chain, thread_sensitive=True
-                )(django_request)
+                django_response = await sync_to_async(self._call_middleware_chain, thread_sensitive=True)(
+                    django_request
+                )
             finally:
                 _request_context.reset(token)
         else:
@@ -750,9 +733,9 @@ class DjangoMiddlewareStack:
 
         # 6. Run third-party process_response hooks via sync_to_async (reverse order)
         for middleware in self._thirdparty_process_response_reversed:
-            django_response = await sync_to_async(
-                middleware.process_response, thread_sensitive=True
-            )(django_request, django_response)
+            django_response = await sync_to_async(middleware.process_response, thread_sensitive=True)(
+                django_request, django_response
+            )
 
         # 7. Run Django built-in process_response hooks DIRECTLY (reverse order)
         for middleware in self._django_process_response_reversed:
@@ -769,6 +752,7 @@ class DjangoMiddlewareStack:
 # ============================================================================
 # Module-level helper functions (shared by DjangoMiddleware and DjangoMiddlewareStack)
 # ============================================================================
+
 
 def _to_django_request(request: Request) -> HttpRequest:
     """Convert Bolt Request to Django HttpRequest.
@@ -825,9 +809,7 @@ def _to_django_request(request: Request) -> HttpRequest:
 
 def _build_meta(request: Request) -> dict:
     """Build Django META dict from Bolt request headers."""
-    query_string = "&".join(
-        f"{k}={v}" for k, v in request.query.items()
-    ) if request.query else ""
+    query_string = "&".join(f"{k}={v}" for k, v in request.query.items()) if request.query else ""
 
     meta = {
         "REQUEST_METHOD": request.method,
@@ -852,10 +834,7 @@ def _build_meta(request: Request) -> dict:
     return meta
 
 
-def _sync_request_attributes(
-    django_request: HttpRequest,
-    bolt_request: Request
-) -> None:
+def _sync_request_attributes(django_request: HttpRequest, bolt_request: Request) -> None:
     """
     Sync attributes added by Django middleware to Bolt request.
 
@@ -872,23 +851,23 @@ def _sync_request_attributes(
     to avoid double attribute lookup.
     """
     # Sync user (SimpleLazyObject) for sync access - this is a writable attribute on PyRequest
-    user = getattr(django_request, 'user', None)
+    user = getattr(django_request, "user", None)
     if user is not None:
         bolt_request.user = user
 
     # Sync auser (async callable) for async access via `await request.state["auser"]()`
-    auser = getattr(django_request, 'auser', None)
+    auser = getattr(django_request, "auser", None)
     if auser is not None:
         bolt_request.state["auser"] = auser
 
     # Sync session to state
-    session = getattr(django_request, 'session', None)
+    session = getattr(django_request, "session", None)
     if session is not None:
         bolt_request.state["session"] = session
 
     # Sync _messages for Django's messages framework
     # This enables {% for message in messages %} in templates when using MessageMiddleware
-    messages = getattr(django_request, '_messages', None)
+    messages = getattr(django_request, "_messages", None)
     if messages is not None:
         bolt_request.state["_messages"] = messages
 
@@ -898,13 +877,13 @@ def _sync_request_attributes(
     bolt_request.state["META"] = django_request.META
 
     # Sync other common middleware attributes to state (use getattr pattern)
-    csrf_processing_done = getattr(django_request, 'csrf_processing_done', None)
+    csrf_processing_done = getattr(django_request, "csrf_processing_done", None)
     if csrf_processing_done is not None:
-        bolt_request.state['csrf_processing_done'] = csrf_processing_done
+        bolt_request.state["csrf_processing_done"] = csrf_processing_done
 
-    csrf_cookie_needs_reset = getattr(django_request, 'csrf_cookie_needs_reset', None)
+    csrf_cookie_needs_reset = getattr(django_request, "csrf_cookie_needs_reset", None)
     if csrf_cookie_needs_reset is not None:
-        bolt_request.state['csrf_cookie_needs_reset'] = csrf_cookie_needs_reset
+        bolt_request.state["csrf_cookie_needs_reset"] = csrf_cookie_needs_reset
 
 
 def _to_django_response(response: Response) -> HttpResponse:
@@ -917,18 +896,18 @@ def _to_django_response(response: Response) -> HttpResponse:
         return response
 
     # Handle different response types
-    if hasattr(response, 'body'):
+    if hasattr(response, "body"):
         # MiddlewareResponse has .body
         content = response.body if isinstance(response.body, bytes) else str(response.body).encode()
-    elif hasattr(response, 'to_bytes'):
+    elif hasattr(response, "to_bytes"):
         content = response.to_bytes()
-    elif hasattr(response, 'content'):
+    elif hasattr(response, "content"):
         content = response.content if isinstance(response.content, bytes) else str(response.content).encode()
     else:
         content = b""
 
-    status_code = getattr(response, 'status_code', 200)
-    headers = getattr(response, 'headers', {})
+    status_code = getattr(response, "status_code", 200)
+    headers = getattr(response, "headers", {})
 
     django_response = HttpResponse(
         content=content,
@@ -953,11 +932,11 @@ def _to_bolt_response(django_response: HttpResponse) -> MiddlewareResponse:
     # but dict can't have duplicate keys - so we use a separate list.
     # This is critical for CSRF cookie to be set by CsrfViewMiddleware.process_response
     set_cookies = []
-    if hasattr(django_response, 'cookies') and django_response.cookies:
+    if hasattr(django_response, "cookies") and django_response.cookies:
         for cookie in django_response.cookies.values():
             # Each cookie's output() method returns the full Set-Cookie header value
             # Format: "name=value; Path=/; ..."
-            cookie_header = cookie.output(header='').strip()
+            cookie_header = cookie.output(header="").strip()
             set_cookies.append(cookie_header)
 
     return MiddlewareResponse(

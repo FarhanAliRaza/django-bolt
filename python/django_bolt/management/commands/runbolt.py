@@ -33,51 +33,31 @@ class Command(BaseCommand):
     help = "Run Django-Bolt server with autodiscovered APIs"
 
     def add_arguments(self, parser):
-        parser.add_argument(
-            "--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0)"
-        )
-        parser.add_argument(
-            "--port", type=int, default=8000, help="Port to bind to (default: 8000)"
-        )
-        parser.add_argument(
-            "--processes", type=int, default=1, help="Number of processes (default: 1)"
-        )
+        parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0)")
+        parser.add_argument("--port", type=int, default=8000, help="Port to bind to (default: 8000)")
+        parser.add_argument("--processes", type=int, default=1, help="Number of processes (default: 1)")
         parser.add_argument(
             "--no-admin",
             action="store_true",
             help="Disable Django admin integration (admin enabled by default)",
         )
+        parser.add_argument("--dev", action="store_true", help="Enable auto-reload on file changes (development mode)")
+        parser.add_argument("--backlog", type=int, default=1024, help="Socket listen backlog size (default: 1024)")
         parser.add_argument(
-            "--dev",
-            action="store_true",
-            help="Enable auto-reload on file changes (development mode)"
-        )
-        parser.add_argument(
-            "--backlog",
-            type=int,
-            default=1024,
-            help="Socket listen backlog size (default: 1024)"
-        )
-        parser.add_argument(
-            "--keep-alive",
-            type=int,
-            default=None,
-            help="HTTP keep-alive timeout in seconds (default: OS setting)"
+            "--keep-alive", type=int, default=None, help="HTTP keep-alive timeout in seconds (default: OS setting)"
         )
 
     def handle(self, *args, **options):
-        processes = options['processes']
-        dev_mode = options.get('dev', False)
+        processes = options["processes"]
+        dev_mode = options.get("dev", False)
 
         # Dev mode: force single process + enable auto-reload
         if dev_mode:
             if processes > 1:
                 self.stdout.write(
-                    self.style.WARNING(
-                        "[django-bolt] Dev mode enabled: forcing --processes=1 for auto-reload"
-                    )
+                    self.style.WARNING("[django-bolt] Dev mode enabled: forcing --processes=1 for auto-reload")
                 )
-                options['processes'] = 1
+                options["processes"] = 1
 
             self.run_with_autoreload(options)
         else:
@@ -92,14 +72,13 @@ class Command(BaseCommand):
         if autoreload is None:
             self.stdout.write(
                 self.style.ERROR(
-                    "[django-bolt] Error: Django autoreload not available. "
-                    "Upgrade Django or use --no-dev mode."
+                    "[django-bolt] Error: Django autoreload not available. Upgrade Django or use --no-dev mode."
                 )
             )
             sys.exit(1)
 
         # Print dev mode message only once (in the main reloader process)
-        if os.environ.get('RUN_MAIN') == 'true':
+        if os.environ.get("RUN_MAIN") == "true":
             self.stdout.write(
                 self.style.SUCCESS("[django-bolt] 🔥 Development mode enabled (auto-reload on file changes)")
             )
@@ -114,7 +93,7 @@ class Command(BaseCommand):
 
     def start_multiprocess(self, options):
         """Start multiple processes with SO_REUSEPORT"""
-        processes = options['processes']
+        processes = options["processes"]
         self.stdout.write(f"[django-bolt] Starting {processes} processes with SO_REUSEPORT")
 
         # Store child PIDs for cleanup
@@ -135,8 +114,8 @@ class Command(BaseCommand):
             pid = os.fork()
             if pid == 0:
                 # Child process
-                os.environ['DJANGO_BOLT_REUSE_PORT'] = '1'
-                os.environ['DJANGO_BOLT_PROCESS_ID'] = str(i)
+                os.environ["DJANGO_BOLT_REUSE_PORT"] = "1"
+                os.environ["DJANGO_BOLT_PROCESS_ID"] = str(i)
                 self.start_single_process(options, process_id=i)
                 sys.exit(0)
             else:
@@ -202,24 +181,36 @@ class Command(BaseCommand):
             merged_api._register_openapi_routes()
 
             if process_id is not None:
-                self.stdout.write(f"[django-bolt] Process {process_id}: OpenAPI docs enabled at http://{options['host']}:{options['port']}{openapi_config.path}")
+                self.stdout.write(
+                    f"[django-bolt] Process {process_id}: OpenAPI docs enabled at http://{options['host']}:{options['port']}{openapi_config.path}"
+                )
             else:
-                self.stdout.write(self.style.SUCCESS(f"[django-bolt] OpenAPI docs enabled at http://{options['host']}:{options['port']}{openapi_config.path}"))
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f"[django-bolt] OpenAPI docs enabled at http://{options['host']}:{options['port']}{openapi_config.path}"
+                    )
+                )
 
         # Register Django admin routes if not disabled
         # Admin is controlled solely by --no-admin command-line flag
-        admin_enabled = not options.get('no_admin', False)
+        admin_enabled = not options.get("no_admin", False)
 
         if admin_enabled and detect_admin_url_prefix is not None:
             # Register admin routes
-            merged_api._register_admin_routes(options['host'], options['port'])
+            merged_api._register_admin_routes(options["host"], options["port"])
 
             if merged_api._admin_routes_registered:
-                admin_prefix = detect_admin_url_prefix() or 'admin'
+                admin_prefix = detect_admin_url_prefix() or "admin"
                 if process_id is not None:
-                    self.stdout.write(f"[django-bolt] Process {process_id}: Django admin enabled at http://{options['host']}:{options['port']}/{admin_prefix}/")
+                    self.stdout.write(
+                        f"[django-bolt] Process {process_id}: Django admin enabled at http://{options['host']}:{options['port']}/{admin_prefix}/"
+                    )
                 else:
-                    self.stdout.write(self.style.SUCCESS(f"[django-bolt] Django admin enabled at http://{options['host']}:{options['port']}/{admin_prefix}/"))
+                    self.stdout.write(
+                        self.style.SUCCESS(
+                            f"[django-bolt] Django admin enabled at http://{options['host']}:{options['port']}/{admin_prefix}/"
+                        )
+                    )
 
                 # Also register static file routes for admin
                 merged_api._register_static_routes()
@@ -230,11 +221,11 @@ class Command(BaseCommand):
                         self.stdout.write("[django-bolt] Static files serving enabled")
 
         if process_id is not None:
-            self.stdout.write(f"[django-bolt] Process {process_id}: Found {len(merged_api._routes)} routes from {len(apis)} APIs")
-        else:
             self.stdout.write(
-                self.style.SUCCESS(f"[django-bolt] Found {len(merged_api._routes)} routes")
+                f"[django-bolt] Process {process_id}: Found {len(merged_api._routes)} routes from {len(apis)} APIs"
             )
+        else:
+            self.stdout.write(self.style.SUCCESS(f"[django-bolt] Found {len(merged_api._routes)} routes"))
 
         # Register routes with Rust
         rust_routes = []
@@ -265,39 +256,44 @@ class Command(BaseCommand):
 
         # Register middleware metadata if present
         if merged_api._handler_middleware:
-            middleware_data = [
-                (handler_id, meta)
-                for handler_id, meta in merged_api._handler_middleware.items()
-            ]
+            middleware_data = [(handler_id, meta) for handler_id, meta in merged_api._handler_middleware.items()]
             _core.register_middleware_metadata(middleware_data)
             if process_id is not None:
-                self.stdout.write(f"[django-bolt] Process {process_id}: Registered middleware for {len(middleware_data)} handlers")
+                self.stdout.write(
+                    f"[django-bolt] Process {process_id}: Registered middleware for {len(middleware_data)} handlers"
+                )
             else:
                 self.stdout.write(f"[django-bolt] Registered middleware for {len(middleware_data)} handlers")
 
         if process_id is not None:
-            self.stdout.write(self.style.SUCCESS(f"[django-bolt] Process {process_id}: Starting server on http://{options['host']}:{options['port']}"))
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"[django-bolt] Process {process_id}: Starting server on http://{options['host']}:{options['port']}"
+                )
+            )
         else:
-            self.stdout.write(self.style.SUCCESS(f"[django-bolt] Starting server on http://{options['host']}:{options['port']}"))
-            if options['processes'] > 1:
+            self.stdout.write(
+                self.style.SUCCESS(f"[django-bolt] Starting server on http://{options['host']}:{options['port']}")
+            )
+            if options["processes"] > 1:
                 self.stdout.write(f"[django-bolt] Processes: {options['processes']}")
         # Set environment variables for Rust
-        os.environ['DJANGO_BOLT_WORKERS'] = '1'
-        os.environ['DJANGO_BOLT_BACKLOG'] = str(options['backlog'])
-        if options.get('keep_alive') is not None:
-            os.environ['DJANGO_BOLT_KEEP_ALIVE'] = str(options['keep_alive'])
+        os.environ["DJANGO_BOLT_WORKERS"] = "1"
+        os.environ["DJANGO_BOLT_BACKLOG"] = str(options["backlog"])
+        if options.get("keep_alive") is not None:
+            os.environ["DJANGO_BOLT_KEEP_ALIVE"] = str(options["keep_alive"])
 
         # Determine compression config (server-level in Actix)
         # Priority: Django setting > first API with compression config
         compression_config = None
-        if hasattr(settings, 'BOLT_COMPRESSION'):
+        if hasattr(settings, "BOLT_COMPRESSION"):
             # Use Django setting if provided (highest priority)
             if settings.BOLT_COMPRESSION is not None and settings.BOLT_COMPRESSION is not False:
                 compression_config = settings.BOLT_COMPRESSION.to_rust_config()
         else:
             # Check if any API has compression configured
             for _api_path, api in apis:
-                if hasattr(api, 'compression') and api.compression is not None:
+                if hasattr(api, "compression") and api.compression is not None:
                     compression_config = api.compression.to_rust_config()
                     break
 
@@ -317,7 +313,7 @@ class Command(BaseCommand):
         apis = []
 
         # Check explicit settings first
-        if hasattr(settings, 'BOLT_API'):
+        if hasattr(settings, "BOLT_API"):
             for api_path in settings.BOLT_API:
                 api = self.import_api(api_path)
                 if api:
@@ -325,7 +321,7 @@ class Command(BaseCommand):
             return self._deduplicate_apis(apis)
 
         # Try project-level API first (common pattern)
-        project_name = settings.ROOT_URLCONF.split('.')[0]  # Extract project name from ROOT_URLCONF
+        project_name = settings.ROOT_URLCONF.split(".")[0]  # Extract project name from ROOT_URLCONF
         project_candidates = [
             f"{project_name}.api:api",
             f"{project_name}.bolt_api:api",
@@ -337,21 +333,21 @@ class Command(BaseCommand):
                 apis.append((candidate, api))
 
         # Track which apps we've already imported (to avoid duplicates)
-        imported_apps = {api_path.split(':')[0].split('.')[0] for api_path, _ in apis}
+        imported_apps = {api_path.split(":")[0].split(".")[0] for api_path, _ in apis}
 
         # Autodiscover from installed apps
         for app_config in apps.get_app_configs():
             # Skip django_bolt itself
-            if app_config.name == 'django_bolt':
+            if app_config.name == "django_bolt":
                 continue
 
             # Skip if we already imported this app at project level
-            app_base = app_config.name.split('.')[0]
+            app_base = app_config.name.split(".")[0]
             if app_base in imported_apps:
                 continue
 
             # Check if app config has bolt_api hint
-            if hasattr(app_config, 'bolt_api'):
+            if hasattr(app_config, "bolt_api"):
                 api = self.import_api(app_config.bolt_api)
                 if api:
                     apis.append((app_config.bolt_api, api))
@@ -392,17 +388,17 @@ class Command(BaseCommand):
 
     def import_api(self, dotted_path):
         """Import a BoltAPI instance from dotted path like 'myapp.api:api'"""
-        if ':' not in dotted_path:
+        if ":" not in dotted_path:
             return None
 
-        module_path, attr_name = dotted_path.split(':', 1)
+        module_path, attr_name = dotted_path.split(":", 1)
 
         try:
             module = importlib.import_module(module_path)
         except ModuleNotFoundError as e:
             # Check if the error is for the target module itself (optional)
             # or for a dependency within the module (fatal error)
-            if e.name == module_path or e.name == module_path.split('.')[0]:
+            if e.name == module_path or e.name == module_path.split(".")[0]:
                 # Target module doesn't exist - this is fine, api.py is optional
                 return None
             else:
@@ -449,8 +445,7 @@ class Command(BaseCommand):
 
                 if route_key in route_map:
                     raise CommandError(
-                        f"Route conflict: {route_key} defined in both "
-                        f"{route_map[route_key]} and {api_path}"
+                        f"Route conflict: {route_key} defined in both {route_map[route_key]} and {api_path}"
                     )
 
                 # CRITICAL: Assign NEW unique handler_id to avoid collisions
@@ -465,7 +460,7 @@ class Command(BaseCommand):
                 # CRITICAL: Store reference to original API for this handler
                 # For mounted sub-apps, preserve the sub-app reference (has its own middleware)
                 # Otherwise use the API that owns this route
-                if hasattr(api, '_handler_api_map') and old_handler_id in api._handler_api_map:
+                if hasattr(api, "_handler_api_map") and old_handler_id in api._handler_api_map:
                     # This route was mounted from a sub-app - preserve that reference
                     merged._handler_api_map[new_handler_id] = api._handler_api_map[old_handler_id]
                 else:
@@ -499,7 +494,7 @@ class Command(BaseCommand):
                 merged._handlers[new_ws_handler_id] = ws_handler
 
                 # Store reference to original API (or sub-app for mounted routes)
-                if hasattr(api, '_handler_api_map') and old_ws_handler_id in api._handler_api_map:
+                if hasattr(api, "_handler_api_map") and old_ws_handler_id in api._handler_api_map:
                     merged._handler_api_map[new_ws_handler_id] = api._handler_api_map[old_ws_handler_id]
                 else:
                     merged._handler_api_map[new_ws_handler_id] = api

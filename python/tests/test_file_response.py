@@ -50,19 +50,12 @@ def api():
     @api.get("/file/custom-headers")
     async def get_file_with_headers():
         """Test custom headers"""
-        return FileResponse(
-            SMALL_FILE,
-            filename="custom.txt",
-            headers={"X-Custom-Header": "test-value"}
-        )
+        return FileResponse(SMALL_FILE, filename="custom.txt", headers={"X-Custom-Header": "test-value"})
 
     @api.get("/file/custom-media-type")
     async def get_file_with_media_type():
         """Test custom media type"""
-        return FileResponse(
-            SMALL_FILE,
-            media_type="application/octet-stream"
-        )
+        return FileResponse(SMALL_FILE, media_type="application/octet-stream")
 
     return api
 
@@ -188,4 +181,4 @@ def test_file_performance_small_vs_large():
     # (This is more of a smoke test than a strict perf test)
     assert elapsed < 5.0  # Should take less than 5 seconds for 100 requests
 
-    print(f"Small file (100KB) - 100 requests: {elapsed:.3f}s ({100/elapsed:.1f} RPS)")
+    print(f"Small file (100KB) - 100 requests: {elapsed:.3f}s ({100 / elapsed:.1f} RPS)")

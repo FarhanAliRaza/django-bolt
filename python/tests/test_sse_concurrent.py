@@ -43,30 +43,36 @@ def api():
     @api.get("/sse-async-basic")
     async def sse_async_basic():
         """Basic async SSE with 5 messages."""
+
         async def gen():
             for i in range(5):
                 yield f"data: async-message-{i}\n\n"
                 await asyncio.sleep(0.01)
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     @api.get("/sse-async-sse-format")
     async def sse_async_sse_format():
         """Async SSE with proper SSE event fields."""
+
         async def gen():
             for i in range(3):
-                yield f"event: update\nid: {i}\ndata: {{\"count\": {i}}}\n\n"
+                yield f'event: update\nid: {i}\ndata: {{"count": {i}}}\n\n'
                 await asyncio.sleep(0.01)
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     @api.get("/sse-async-mixed-types")
     async def sse_async_mixed_types():
         """Async SSE with different data types."""
+
         async def gen():
             yield "data: first\n\n"
             await asyncio.sleep(0.01)
             yield b"data: bytes-message\n\n"
             await asyncio.sleep(0.01)
             yield "data: third\n\n"
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     # ==================== Sync SSE Endpoints ====================
@@ -74,19 +80,23 @@ def api():
     @api.get("/sse-sync-basic")
     async def sse_sync_basic():
         """Basic sync SSE with 5 messages."""
+
         def gen():
             for i in range(5):
                 yield f"data: sync-message-{i}\n\n"
                 time.sleep(0.01)
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     @api.get("/sse-sync-sse-format")
     async def sse_sync_sse_format():
         """Sync SSE with proper SSE event fields."""
+
         def gen():
             for i in range(3):
                 yield f"event: tick\nid: {i}\ndata: {i}\n\n"
                 time.sleep(0.01)
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     # ==================== High-frequency Endpoints ====================
@@ -94,19 +104,23 @@ def api():
     @api.get("/sse-rapid-async")
     async def sse_rapid_async():
         """High-frequency async messages (20 per second)."""
+
         async def gen():
             for i in range(20):
                 yield f"data: {i}\n\n"
                 await asyncio.sleep(0.05)  # 20 per second
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     @api.get("/sse-rapid-sync")
     async def sse_rapid_sync():
         """High-frequency sync messages (20 per second)."""
+
         def gen():
             for i in range(20):
                 yield f"data: {i}\n\n"
                 time.sleep(0.05)
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     # ==================== Endpoints with Cleanup Tracking ====================
@@ -114,6 +128,7 @@ def api():
     @api.get("/sse-async-with-tracking")
     async def sse_async_with_tracking():
         """Async SSE that yields tracking data to verify generator execution."""
+
         async def gen():
             # Send start marker
             yield "data: START\n\n"
@@ -130,6 +145,7 @@ def api():
     @api.get("/sse-sync-with-tracking")
     async def sse_sync_with_tracking():
         """Sync SSE that yields tracking data to verify generator execution."""
+
         def gen():
             # Send start marker
             yield "data: START\n\n"
@@ -246,7 +262,7 @@ def test_async_sse_event_fields(client):
     assert len(events) == 3
     assert events[0].get("event") == "update"
     assert events[0].get("id") == "0"
-    assert '0' in events[0].get("data", "")
+    assert "0" in events[0].get("data", "")
     assert events[2].get("id") == "2"
 
 
@@ -379,7 +395,6 @@ def test_concurrent_async_sse(client):
         data = parse_sse_data(content)
         assert len(data) == 5
         assert data[0] == "async-message-0"
-
 
 
 def test_concurrent_sync_sse(client):

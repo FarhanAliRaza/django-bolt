@@ -6,6 +6,7 @@ with type-safe dependency injection.
 
 Uses pytest-django for proper Django configuration.
 """
+
 import time
 
 import jwt
@@ -33,12 +34,7 @@ def test_create_jwt_for_user():
     User = get_user_model()
 
     # Create a test user
-    user = User.objects.create(
-        username="testuser",
-        email="test@example.com",
-        is_staff=True,
-        is_superuser=False
-    )
+    user = User.objects.create(username="testuser", email="test@example.com", is_staff=True, is_superuser=False)
 
     # Create JWT token
     token = create_jwt_for_user(user, secret="my-secret")
@@ -63,22 +59,13 @@ def test_create_jwt_with_extra_claims():
     """Test creating JWT tokens with custom claims."""
     User = get_user_model()
 
-    user = User.objects.create(
-        username="admin",
-        email="admin@example.com",
-        is_staff=True,
-        is_superuser=True
-    )
+    user = User.objects.create(username="admin", email="admin@example.com", is_staff=True, is_superuser=True)
 
     # Create token with extra claims
     token = create_jwt_for_user(
         user,
         secret="secret",
-        extra_claims={
-            "permissions": ["users.create", "users.delete"],
-            "role": "admin",
-            "department": "engineering"
-        }
+        extra_claims={"permissions": ["users.create", "users.delete"], "role": "admin", "department": "engineering"},
     )
 
     # Decode and verify
@@ -99,21 +86,12 @@ def test_jwt_authentication_with_django_user():
     User = get_user_model()
 
     # Create test user
-    user = User.objects.create(
-        username="jwtuser",
-        email="jwt@example.com",
-        is_staff=False,
-        is_superuser=False
-    )
+    user = User.objects.create(username="jwtuser", email="jwt@example.com", is_staff=False, is_superuser=False)
 
     # Create API with JWT auth
     api = BoltAPI()
 
-    @api.get(
-        "/protected",
-        auth=[JWTAuthentication(secret="test-secret")],
-        guards=[IsAuthenticated()]
-    )
+    @api.get("/protected", auth=[JWTAuthentication(secret="test-secret")], guards=[IsAuthenticated()])
     async def protected_endpoint(request: dict):
         context = request["context"]
         return {
@@ -136,11 +114,7 @@ def test_django_user_dependency_injection():
     # Create API with the dependency (using imported get_current_user)
     api = BoltAPI()
 
-    @api.get(
-        "/me",
-        auth=[JWTAuthentication(secret="test-secret")],
-        guards=[IsAuthenticated()]
-    )
+    @api.get("/me", auth=[JWTAuthentication(secret="test-secret")], guards=[IsAuthenticated()])
     async def get_current_user_endpoint(user=Depends(get_current_user)):
         """
         Endpoint that receives Django User instance via dependency injection.
@@ -188,13 +162,7 @@ def test_django_user_dependency_injection():
 def test_jwt_utils_extract_user_id():
     """Test extracting user_id from request context."""
     # Mock request with context
-    request = {
-        "context": {
-            "user_id": "123",
-            "is_staff": True,
-            "auth_backend": "jwt"
-        }
-    }
+    request = {"context": {"user_id": "123", "is_staff": True, "auth_backend": "jwt"}}
 
     user_id = extract_user_id_from_context(request)
     assert user_id == "123"
@@ -215,7 +183,7 @@ def test_jwt_utils_get_auth_context():
             "is_staff": False,
             "is_superuser": True,
             "auth_backend": "jwt",
-            "permissions": ["read", "write"]
+            "permissions": ["read", "write"],
         }
     }
 
@@ -233,12 +201,7 @@ def test_jwt_claims_stored_in_context():
     """Test that JWT claims are properly stored in request context."""
     User = get_user_model()
 
-    user = User.objects.create(
-        username="claimsuser",
-        email="claims@example.com",
-        is_staff=True,
-        is_superuser=False
-    )
+    user = User.objects.create(username="claimsuser", email="claims@example.com", is_staff=True, is_superuser=False)
 
     # Create token with custom claims
     token = create_jwt_for_user(
@@ -247,7 +210,7 @@ def test_jwt_claims_stored_in_context():
         extra_claims={
             "permissions": ["read", "write"],
             "tenant_id": "tenant123",
-        }
+        },
     )
 
     # Decode to verify claims are there

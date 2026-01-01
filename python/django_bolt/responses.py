@@ -26,7 +26,7 @@ def initialize_file_response_settings():
         return
 
     try:
-        if django_settings and hasattr(django_settings, 'BOLT_ALLOWED_FILE_PATHS'):
+        if django_settings and hasattr(django_settings, "BOLT_ALLOWED_FILE_PATHS"):
             allowed_paths = django_settings.BOLT_ALLOWED_FILE_PATHS
             # Resolve all paths once at startup
             _ALLOWED_FILE_PATHS_CACHE = [Path(p).resolve() for p in allowed_paths] if allowed_paths else None
@@ -60,12 +60,13 @@ class Response:
                 headers={"X-Custom-Header": "value"}
             )
     """
+
     def __init__(
         self,
         content: Any = None,
         status_code: int = 200,
         headers: dict[str, str] | None = None,
-        media_type: str = "application/json"
+        media_type: str = "application/json",
     ):
         self.content = content if content is not None else {}
         self.status_code = status_code
@@ -91,7 +92,6 @@ class JSON:
 
     def to_bytes(self) -> bytes:
         return _json.encode(self.data)
-
 
 
 class PlainText:
@@ -122,7 +122,15 @@ class Redirect:
 
 
 class File:
-    def __init__(self, path: str, *, media_type: str | None = None, filename: str | None = None, status_code: int = 200, headers: dict[str, str] | None = None):
+    def __init__(
+        self,
+        path: str,
+        *,
+        media_type: str | None = None,
+        filename: str | None = None,
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+    ):
         self.path = path
         self.media_type = media_type
         self.filename = filename
@@ -144,7 +152,6 @@ class UploadFile:
     def read(self) -> bytes:
         with open(self.path, "rb") as f:
             return f.read()
-
 
 
 class FileResponse:
@@ -199,7 +206,6 @@ class FileResponse:
         self.headers = headers or {}
 
 
-
 class StreamingResponse:
     def __init__(
         self,
@@ -209,7 +215,6 @@ class StreamingResponse:
         media_type: str | None = None,
         headers: dict[str, str] | None = None,
     ):
-
         # Validate that content is already a called generator/iterator, not a callable
         if callable(content):
             if inspect.isasyncgenfunction(content) or inspect.isgeneratorfunction(content):
@@ -233,13 +238,11 @@ class StreamingResponse:
         # This avoids repeated Python inspect calls in Rust streaming loop
         self.is_async_generator = False
 
-        if hasattr(content, '__aiter__') or hasattr(content, '__anext__'):
+        if hasattr(content, "__aiter__") or hasattr(content, "__anext__"):
             # Async generator instance
             self.is_async_generator = True
-        elif not (hasattr(content, '__iter__') or hasattr(content, '__next__')):
+        elif not (hasattr(content, "__iter__") or hasattr(content, "__next__")):
             # Not a generator/iterator
             raise TypeError(
-                f"StreamingResponse content must be a generator instance. "
-                f"Received type: {type(content).__name__}"
+                f"StreamingResponse content must be a generator instance. Received type: {type(content).__name__}"
             )
-

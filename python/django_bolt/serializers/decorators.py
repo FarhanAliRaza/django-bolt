@@ -99,10 +99,9 @@ def computed_field(
             return_type = hints.get("return", Any)
         except Exception as e:
             logger.debug(
-                "Failed to get return type hints for computed field method %s. "
-                "Using Any as return type. Error: %s",
-                method.__name__ if hasattr(method, '__name__') else str(method),
-                e
+                "Failed to get return type hints for computed field method %s. Using Any as return type. Error: %s",
+                method.__name__ if hasattr(method, "__name__") else str(method),
+                e,
             )
 
         # Store computed field metadata on the method

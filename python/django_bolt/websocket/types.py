@@ -199,11 +199,13 @@ class WebSocket:
         if self._state == WebSocketState.DISCONNECTED:
             return
 
-        await self._send({
-            "type": "websocket.close",
-            "code": code,
-            "reason": reason,
-        })
+        await self._send(
+            {
+                "type": "websocket.close",
+                "code": code,
+                "reason": reason,
+            }
+        )
         self._state = WebSocketState.DISCONNECTED
 
     async def iter_text(self):

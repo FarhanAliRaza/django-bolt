@@ -3,6 +3,7 @@ Tests for decorator syntax (@api.view and @api.viewset).
 
 This test suite verifies that the decorator pattern works correctly.
 """
+
 import msgspec
 import pytest
 
@@ -14,6 +15,7 @@ from .test_models import Article  # noqa: PLC0415
 
 # --- Fixtures ---
 
+
 @pytest.fixture
 def api():
     """Create a fresh BoltAPI instance for each test."""
@@ -21,6 +23,7 @@ def api():
 
 
 # --- Tests ---
+
 
 def test_view_decorator_syntax(api):
     """Test @api.view() decorator syntax."""
@@ -82,11 +85,7 @@ def test_viewset_decorator_syntax(api):
             return ArticleSchema(id=article.id, title=article.title)
 
     # Create test article
-    article = Article.objects.create(
-        title="Test Article",
-        content="Test content",
-        author="Test Author"
-    )
+    article = Article.objects.create(title="Test Article", content="Test content", author="Test Author")
 
     client = TestClient(api)
 
@@ -131,18 +130,8 @@ def test_viewset_decorator_with_custom_actions(api):
             return articles
 
     # Create test articles
-    Article.objects.create(
-        title="Published",
-        content="Content",
-        author="Author",
-        is_published=True
-    )
-    article2 = Article.objects.create(
-        title="Draft",
-        content="Content",
-        author="Author",
-        is_published=False
-    )
+    Article.objects.create(title="Published", content="Content", author="Author", is_published=True)
+    article2 = Article.objects.create(title="Draft", content="Content", author="Author", is_published=False)
 
     client = TestClient(api)
 
@@ -156,5 +145,3 @@ def test_viewset_decorator_with_custom_actions(api):
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2  # Both should be published now
-
-

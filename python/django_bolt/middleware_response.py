@@ -6,6 +6,7 @@ This is in a separate module to avoid circular imports:
 - middleware imports from django_adapter
 - django_adapter needs MiddlewareResponse
 """
+
 from __future__ import annotations
 
 Response = tuple[int, list[tuple[str, str]], bytes]
@@ -22,7 +23,8 @@ class MiddlewareResponse:
     Note: set_cookies is a separate list to support multiple Set-Cookie headers.
     HTTP allows multiple Set-Cookie headers, but dict can't have duplicate keys.
     """
-    __slots__ = ('status_code', 'headers', 'body', 'set_cookies')
+
+    __slots__ = ("status_code", "headers", "body", "set_cookies")
 
     def __init__(
         self,

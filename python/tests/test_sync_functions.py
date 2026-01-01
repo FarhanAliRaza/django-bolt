@@ -2,6 +2,7 @@
 Test sync function support in django-bolt.
 Tests that sync and async handlers work correctly with parameters, dependencies, middleware, and auth.
 """
+
 from __future__ import annotations
 
 import inspect  # noqa: PLC0415
@@ -232,21 +233,21 @@ class TestHandlerInspection:
 
     def test_async_handler_is_coroutine_function(self, api):
         """Async handlers should be coroutine functions."""
-        assert inspect.iscoroutinefunction(
-            api._async_handler
-        ), "Async handler should be recognized as coroutine function"
+        assert inspect.iscoroutinefunction(api._async_handler), (
+            "Async handler should be recognized as coroutine function"
+        )
 
     def test_sync_inline_handler_is_not_coroutine(self, api):
         """Sync inline handlers should NOT be coroutine functions."""
-        assert not inspect.iscoroutinefunction(
-            api._sync_inline_handler
-        ), "Sync handler should not be recognized as coroutine function"
+        assert not inspect.iscoroutinefunction(api._sync_inline_handler), (
+            "Sync handler should not be recognized as coroutine function"
+        )
 
     def test_sync_blocking_handler_is_not_coroutine(self, api):
         """Sync blocking handlers should NOT be coroutine functions."""
-        assert not inspect.iscoroutinefunction(
-            api._sync_blocking_handler
-        ), "Sync handler should not be recognized as coroutine function"
+        assert not inspect.iscoroutinefunction(api._sync_blocking_handler), (
+            "Sync handler should not be recognized as coroutine function"
+        )
 
 
 class TestAsyncHandlerExecution:
@@ -285,9 +286,7 @@ class TestSyncInlineHandlerExecution:
 
     def test_sync_inline_handler_is_actually_sync(self, api):
         """Verify handler is sync function."""
-        assert not inspect.iscoroutinefunction(
-            api._sync_inline_handler
-        ), "Handler should be sync"
+        assert not inspect.iscoroutinefunction(api._sync_inline_handler), "Handler should be sync"
 
 
 class TestSyncBlockingHandlerExecution:
@@ -310,9 +309,7 @@ class TestSyncBlockingHandlerExecution:
 
     def test_sync_blocking_handler_is_actually_sync(self, api):
         """Verify handler is sync function."""
-        assert not inspect.iscoroutinefunction(
-            api._sync_blocking_handler
-        ), "Handler should be sync"
+        assert not inspect.iscoroutinefunction(api._sync_blocking_handler), "Handler should be sync"
 
 
 class TestComparisonBetweenSyncModes:
@@ -544,7 +541,7 @@ class TestSyncMiddlewareRateLimit:
             # First 3 requests should succeed (burst)
             for i in range(3):
                 response = client.get("/sync/rate-test")
-                assert response.status_code == 200, f"Request {i+1} should succeed"
+                assert response.status_code == 200, f"Request {i + 1} should succeed"
 
             # 4th request might be rate limited
             response = client.get("/sync/rate-test")
@@ -933,10 +930,7 @@ def orm_api():
         if author:
             queryset = queryset.filter(author=author)
 
-        articles = [
-            {"id": a.id, "title": a.title, "author": a.author, "status": a.status}
-            async for a in queryset
-        ]
+        articles = [{"id": a.id, "title": a.title, "author": a.author, "status": a.status} async for a in queryset]
         return {"results": articles, "count": len(articles), "is_async": True}
 
     @api.get("/sync/articles/count")

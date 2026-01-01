@@ -4,6 +4,7 @@ Router for Django-Bolt API.
 Provides hierarchical routing with middleware inheritance.
 Routes defined on a router inherit the router's middleware, auth, and guards.
 """
+
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -110,51 +111,65 @@ class Router:
 
     def get(self, path: str, **kwargs: Any):
         """Register a GET route."""
+
         def dec(fn: Callable):
             self._add("GET", path, fn, **kwargs)
             return fn
+
         return dec
 
     def post(self, path: str, **kwargs: Any):
         """Register a POST route."""
+
         def dec(fn: Callable):
             self._add("POST", path, fn, **kwargs)
             return fn
+
         return dec
 
     def put(self, path: str, **kwargs: Any):
         """Register a PUT route."""
+
         def dec(fn: Callable):
             self._add("PUT", path, fn, **kwargs)
             return fn
+
         return dec
 
     def patch(self, path: str, **kwargs: Any):
         """Register a PATCH route."""
+
         def dec(fn: Callable):
             self._add("PATCH", path, fn, **kwargs)
             return fn
+
         return dec
 
     def delete(self, path: str, **kwargs: Any):
         """Register a DELETE route."""
+
         def dec(fn: Callable):
             self._add("DELETE", path, fn, **kwargs)
             return fn
+
         return dec
 
     def head(self, path: str, **kwargs: Any):
         """Register a HEAD route."""
+
         def dec(fn: Callable):
             self._add("HEAD", path, fn, **kwargs)
             return fn
+
         return dec
 
     def options(self, path: str, **kwargs: Any):
         """Register an OPTIONS route."""
+
         def dec(fn: Callable):
             self._add("OPTIONS", path, fn, **kwargs)
             return fn
+
         return dec
 
     def include_router(

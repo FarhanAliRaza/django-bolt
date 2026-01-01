@@ -86,8 +86,7 @@ def get_websocket_param_name(func: Callable[..., Any]) -> str | None:
 
         # Handle string annotations and actual types
         annotation_name = (
-            annotation if isinstance(annotation, str)
-            else getattr(annotation, "__name__", str(annotation))
+            annotation if isinstance(annotation, str) else getattr(annotation, "__name__", str(annotation))
         )
 
         if "WebSocket" in annotation_name:

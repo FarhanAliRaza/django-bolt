@@ -4,6 +4,7 @@ Type introspection and field definition system for parameter binding.
 Inspired by Litestar's architecture but built from scratch for Django-Bolt's
 msgspec-first, async-only design with focus on performance.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -44,14 +45,15 @@ class HandlerPattern(Enum):
     Each pattern enables a specific fast path in the argument injector,
     eliminating unnecessary checks and data access at request time.
     """
+
     REQUEST_ONLY = "request_only"  # Single request parameter
-    NO_PARAMS = "no_params"        # No parameters at all
-    PATH_ONLY = "path_only"        # Only path parameters
-    QUERY_ONLY = "query_only"      # Only query parameters
-    BODY_ONLY = "body_only"        # Single JSON body parameter
-    SIMPLE = "simple"              # Path + query combination
-    WITH_DEPS = "with_deps"        # Has dependency injection (async)
-    FULL = "full"                  # Complex: headers, cookies, form, file, or mixed
+    NO_PARAMS = "no_params"  # No parameters at all
+    PATH_ONLY = "path_only"  # Only path parameters
+    QUERY_ONLY = "query_only"  # Only query parameters
+    BODY_ONLY = "body_only"  # Single JSON body parameter
+    SIMPLE = "simple"  # Path + query combination
+    WITH_DEPS = "with_deps"  # Has dependency injection (async)
+    FULL = "full"  # Complex: headers, cookies, form, file, or mixed
 
 
 class HandlerMetadata(TypedDict, total=False):
@@ -217,12 +219,7 @@ def is_dataclass_type(annotation: Any) -> bool:
         return False
 
 
-def infer_param_source(
-    name: str,
-    annotation: Any,
-    path_params: set[str],
-    http_method: str
-) -> str:
+def infer_param_source(name: str, annotation: Any, path_params: set[str], http_method: str) -> str:
     """
     Infer parameter source based on type and context.
 
@@ -329,9 +326,7 @@ class FieldDefinition:
         """Check if parameter is optional (has default or Optional type)."""
         if self._is_optional is None:
             object.__setattr__(
-                self,
-                "_is_optional",
-                self.default is not inspect.Parameter.empty or is_optional(self.annotation)
+                self, "_is_optional", self.default is not inspect.Parameter.empty or is_optional(self.annotation)
             )
         return self._is_optional  # type: ignore
 
@@ -382,7 +377,7 @@ class FieldDefinition:
         annotation: Any,
         path_params: set[str],
         http_method: str,
-        explicit_marker: Any = None
+        explicit_marker: Any = None,
     ) -> FieldDefinition:
         """
         Create FieldDefinition from inspect.Parameter.

@@ -19,7 +19,9 @@ from ..bootstrap import ensure_django_ready
 logger = logging.getLogger(__name__)
 
 
-def actix_to_asgi_scope(request: dict[str, Any], server_host: str = "localhost", server_port: int = 8000) -> dict[str, Any]:
+def actix_to_asgi_scope(
+    request: dict[str, Any], server_host: str = "localhost", server_port: int = 8000
+) -> dict[str, Any]:
     """
     Convert django-bolt PyRequest dict to ASGI3 scope dict.
 
@@ -137,6 +139,7 @@ def create_send_callable(response_holder: dict[str, Any]):
     Returns:
         Async callable that implements ASGI send channel
     """
+
     async def send(message: dict[str, Any]):
         msg_type = message.get("type")
 
@@ -252,11 +255,7 @@ class ASGIFallbackHandler:
         except Exception as e:
             # Handle errors by returning 500 response
             error_body = f"ASGI Handler Error: {str(e)}\n\n{traceback.format_exc()}"
-            return (
-                500,
-                [("content-type", "text/plain; charset=utf-8")],
-                error_body.encode("utf-8")
-            )
+            return (500, [("content-type", "text/plain; charset=utf-8")], error_body.encode("utf-8"))
 
         # Wait for response body if streaming
         # (In case more_body was True, though Django admin typically doesn't stream)

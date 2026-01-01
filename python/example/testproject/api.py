@@ -38,12 +38,12 @@ from django_bolt.views import APIView, ViewSet
 # Example compression configurations:
 #
 # 1. Default compression (brotli with gzip fallback):
-api = BoltAPI(openapi_config=OpenAPIConfig(
-          title="My API",
-          version="1.0.0",
-          enabled=True,
-
-      )
+api = BoltAPI(
+    openapi_config=OpenAPIConfig(
+        title="My API",
+        version="1.0.0",
+        enabled=True,
+    )
 )
 #
 # 2. Custom compression with specific settings:
@@ -76,8 +76,6 @@ api = BoltAPI(openapi_config=OpenAPIConfig(
 # Using default compression configuration
 
 
-
-
 class Item(msgspec.Struct):
     name: str
     price: float
@@ -106,6 +104,7 @@ async def create_item(item: Item):
     """Create a new item."""
     return {"item": item, "created": True}
 
+
 class CustomRequest(Request, Protocol):
     """Extended Request type with custom properties"""
 
@@ -124,7 +123,7 @@ class CustomRequest(Request, Protocol):
     auth=[JWTAuthentication()],
     guards=[IsAuthenticated()],
     tags=["auth"],
-    summary="Get current authenticated user"
+    summary="Get current authenticated user",
 )
 async def get_me(request: CustomRequest):
     """
@@ -165,7 +164,7 @@ async def get_me(request: CustomRequest):
     auth=[JWTAuthentication()],
     guards=[IsAuthenticated()],
     tags=["auth"],
-    summary="Get current user via dependency injection"
+    summary="Get current user via dependency injection",
 )
 async def get_me_dependency(user=Depends(get_current_user)):
     """
@@ -253,15 +252,12 @@ async def get_no_user_access(request: Request):
 
 class TokenRequest(msgspec.Struct):
     """Request body for token generation."""
+
     username: str
     password: str
 
 
-@api.post(
-    "/auth/token",
-    tags=["auth"],
-    summary="Generate access token"
-)
+@api.post("/auth/token", tags=["auth"], summary="Generate access token")
 async def generate_token(token_req: TokenRequest):
     """
     Generate a JWT access token for a user.
@@ -331,6 +327,7 @@ async def read_root():
     """
     return {"message": "Hello World"}
 
+
 @api.get("/sync", tags=["root"], summary="summary", description="description")
 def read_root_sync():
     """
@@ -347,6 +344,7 @@ async def read_10k():
     """
     return test_data.JSON_10K
 
+
 @api.get("/1k-json")
 async def read_1k():
     """
@@ -354,6 +352,7 @@ async def read_1k():
 
     """
     return test_data.JSON_1K
+
 
 @api.get("/100k-json")
 async def read_100k():
@@ -393,7 +392,7 @@ def read_10k_sync():
 
 class UserMiniSerializer(Serializer):
     id: int
-    username:str
+    username: str
 
 
 @api.get("/sync-users", response_model=list[UserMiniSerializer])
@@ -429,7 +428,6 @@ async def read_users_async() -> list[UserMini]:
     return users
 
 
-
 @api.get("/items/{item_id}")
 async def read_item(item_id: int, q: str | None = None):
     return {"item_id": item_id, "q": q}
@@ -442,10 +440,7 @@ async def update_item(item_id: int, item: Item) -> dict:
 
 @api.get("/items100", response_model=list[Item])
 async def items100() -> list[Item]:
-    return [
-        Item(name=f"item{i}", price=float(i), is_offer=(i % 2 == 0))
-        for i in range(100)
-    ]
+    return [Item(name=f"item{i}", price=float(i), is_offer=(i % 2 == 0)) for i in range(100)]
 
 
 # ==== Benchmarks: JSON parsing/validation & slow async op ====
@@ -499,35 +494,24 @@ async def get_redirect():
 # ==== Form and File upload endpoints ====
 @api.post("/form")
 async def handle_form(
-    name: Annotated[str, Form()],
-    age: Annotated[int, Form()],
-    email: Annotated[str, Form()] = "default@example.com"
+    name: Annotated[str, Form()], age: Annotated[int, Form()], email: Annotated[str, Form()] = "default@example.com"
 ):
     return {"name": name, "age": age, "email": email}
 
 
 @api.post("/upload")
-async def handle_upload(
-    files: Annotated[list[dict], File(alias="file")]
-):
+async def handle_upload(files: Annotated[list[dict], File(alias="file")]):
     # Return file metadata
-    return {
-        "uploaded": len(files),
-        "files": [{"name": f.get("filename"), "size": f.get("size")} for f in files]
-    }
+    return {"uploaded": len(files), "files": [{"name": f.get("filename"), "size": f.get("size")} for f in files]}
 
 
 @api.post("/mixed-form")
 async def handle_mixed(
     title: Annotated[str, Form()],
     description: Annotated[str, Form()],
-    attachments: Annotated[list[dict], File(alias="file")] = None
+    attachments: Annotated[list[dict], File(alias="file")] = None,
 ):
-    result = {
-        "title": title,
-        "description": description,
-        "has_attachments": bool(attachments)
-    }
+    result = {"title": title, "description": description, "has_attachments": bool(attachments)}
     if attachments:
         result["attachment_count"] = len(attachments)
     return result
@@ -541,18 +525,21 @@ THIS_FILE = os.path.abspath(__file__)
 async def file_static():
     return FileResponse(THIS_FILE, filename="api.py")
 
+
 @api.get("/file-static-nonexistent")
 async def file_static_nonexistent():
     return FileResponse("/path/to/nonexistent/file.txt", filename="asdfasd.py")
 
+
 # ==== Streaming endpoints for benchmarks ====
-#TODO: Add proper api for streaming files
+# TODO: Add proper api for streaming files
 @api.get("/stream")
 @no_compress
 async def stream_plain():
     def gen():
         for _i in range(100):
             yield "x"
+
     return StreamingResponse(gen(), media_type="text/plain")
 
 
@@ -561,6 +548,7 @@ async def collected_plain():
     # Same data but collected into a single response
     return PlainText("x" * 100)
 
+
 @api.get("/sse")
 @no_compress
 async def sse():
@@ -568,6 +556,7 @@ async def sse():
         while True:
             await asyncio.sleep(1)
             yield f"data: {time.time()}\n\n"
+
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
@@ -575,10 +564,12 @@ async def sse():
 @no_compress
 def sse_sync():
     """Sync version: Server-Sent Events."""
+
     def gen():
         while True:
             time.sleep(1)
             yield f"data: {time.time()}\n\n"
+
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
@@ -601,10 +592,12 @@ class ChatCompletionRequest(msgspec.Struct):
 class ChatCompletionChunkDelta(msgspec.Struct):
     content: str | None = None
 
+
 class ChatCompletionChunkChoice(msgspec.Struct):
     index: int
     delta: ChatCompletionChunkDelta
     finish_reason: str | None = None
+
 
 class ChatCompletionChunk(msgspec.Struct):
     id: str
@@ -631,33 +624,17 @@ async def openai_chat_completions():
             await asyncio.sleep(0.2)
             # Reuse pre-created delta struct
             choice = ChatCompletionChunkChoice(
-                index=0,
-                delta=ChatCompletionChunkDelta(content=f"hello - {i}"),
-                finish_reason=None
+                index=0, delta=ChatCompletionChunkDelta(content=f"hello - {i}"), finish_reason=None
             )
-            chunk = ChatCompletionChunk(
-                id=chat_id,
-                created=created,
-                model=model,
-                choices=[choice]
-            )
+            chunk = ChatCompletionChunk(id=chat_id, created=created, model=model, choices=[choice])
 
             # msgspec.json.encode directly to bytes - fastest possible path
             chunk_bytes = msgspec.json.encode(chunk)
             yield b"data: " + chunk_bytes + b"\n\n"
 
         # Final chunk with stop reason
-        final_choice = ChatCompletionChunkChoice(
-            index=0,
-            delta=stop_delta,
-            finish_reason="stop"
-        )
-        final_chunk = ChatCompletionChunk(
-            id=chat_id,
-            created=created,
-            model=model,
-            choices=[final_choice]
-        )
+        final_choice = ChatCompletionChunkChoice(index=0, delta=stop_delta, finish_reason="stop")
+        final_chunk = ChatCompletionChunk(id=chat_id, created=created, model=model, choices=[final_choice])
         final_bytes = msgspec.json.encode(final_chunk)
         yield b"data: " + final_bytes + b"\n\n"
         yield b"data: [DONE]\n\n"
@@ -666,6 +643,7 @@ async def openai_chat_completions():
 
 
 # ==== Error Handling & Logging Examples ====
+
 
 # Example 1: Using specialized HTTP exceptions
 @api.get("/errors/not-found/{resource_id}")
@@ -687,10 +665,7 @@ async def error_bad_request(value: int | None = None):
 @api.get("/errors/unauthorized")
 async def error_unauthorized():
     """Example of Unauthorized exception with headers."""
-    raise Unauthorized(
-        detail="Authentication required",
-        headers={"WWW-Authenticate": "Bearer realm=\"API\""}
-    )
+    raise Unauthorized(detail="Authentication required", headers={"WWW-Authenticate": 'Bearer realm="API"'})
 
 
 # Example 2: Validation errors with field-level details
@@ -706,25 +681,31 @@ async def error_validation(user: UserCreate):
     errors = []
 
     if len(user.username) < 3:
-        errors.append({
-            "loc": ["body", "username"],
-            "msg": "Username must be at least 3 characters",
-            "type": "value_error.min_length",
-        })
+        errors.append(
+            {
+                "loc": ["body", "username"],
+                "msg": "Username must be at least 3 characters",
+                "type": "value_error.min_length",
+            }
+        )
 
     if "@" not in user.email:
-        errors.append({
-            "loc": ["body", "email"],
-            "msg": "Invalid email format",
-            "type": "value_error.email",
-        })
+        errors.append(
+            {
+                "loc": ["body", "email"],
+                "msg": "Invalid email format",
+                "type": "value_error.email",
+            }
+        )
 
     if user.age < 0 or user.age > 150:
-        errors.append({
-            "loc": ["body", "age"],
-            "msg": "Age must be between 0 and 150",
-            "type": "value_error.range",
-        })
+        errors.append(
+            {
+                "loc": ["body", "age"],
+                "msg": "Age must be between 0 and 150",
+                "type": "value_error.range",
+            }
+        )
 
     if errors:
         raise RequestValidationError(errors, body=user)
@@ -757,8 +738,8 @@ async def error_complex():
                 {"field": "username", "reason": "Username contains invalid characters"},
             ],
             "suggestion": "Please correct the highlighted fields",
-            "documentation": "https://api.example.com/docs/validation"
-        }
+            "documentation": "https://api.example.com/docs/validation",
+        },
     )
 
 
@@ -815,8 +796,8 @@ async def compression_test():
                         "key1": "value1",
                         "key2": "value2",
                         "key3": "value3",
-                    }
-                }
+                    },
+                },
             }
             for i in range(50)  # 50 items to ensure >1KB
         ],
@@ -825,7 +806,7 @@ async def compression_test():
             "step2": "Check response headers for 'Content-Encoding'",
             "step3": "Compare response size with/without compression",
             "note": "Small responses (<1KB) won't be compressed even with Accept-Encoding",
-        }
+        },
     }
 
     return large_data
@@ -835,8 +816,10 @@ async def compression_test():
 # Serializer Benchmark Endpoints
 # ============================================================================
 
+
 class BenchAuthorRaw(msgspec.Struct):
     """Raw msgspec for baseline comparison."""
+
     id: int
     name: Annotated[str, Meta(min_length=2)]
     email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
@@ -845,6 +828,7 @@ class BenchAuthorRaw(msgspec.Struct):
 
 class BenchAuthorWithValidators(Serializer):
     """Django-Bolt Serializer with custom field validators."""
+
     id: int
     name: Annotated[str, Meta(min_length=2)]
     email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
@@ -867,6 +851,7 @@ class BenchAuthorWithValidators(Serializer):
     #         raise ValidationError("Incorrect password")
     #     # MUST return the value (or transformed value)
     #     return value
+
 
 @api.post("/bench/serializer-raw")
 async def bench_serializer_raw(author: BenchAuthorRaw) -> BenchAuthorRaw:
@@ -897,6 +882,7 @@ async def bench_serializer_validated(author: BenchAuthorWithValidators) -> Bench
 # ============================================================================
 # Class-Based Views (APIView) - Using Decorator Syntax
 # ============================================================================
+
 
 @api.view("/cbv-simple")
 class SimpleAPIView(APIView):
@@ -933,16 +919,14 @@ class ItemAPIView(APIView):
 # Benchmark ViewSets - Using Decorator Syntax
 # ============================================================================
 
+
 @api.view("/cbv-items100")
 class Items100ViewSet(ViewSet):
     """ViewSet that returns 100 items (for benchmarking)."""
 
     async def get(self, request):
         """GET /cbv-items100 - Return 100 items."""
-        return [
-            {"name": f"item{i}", "price": float(i), "is_offer": (i % 2 == 0)}
-            for i in range(100)
-        ]
+        return [{"name": f"item{i}", "price": float(i), "is_offer": (i % 2 == 0)} for i in range(100)]
 
 
 @api.view("/cbv-bench-parse")
@@ -954,11 +938,10 @@ class BenchParseViewSet(ViewSet):
         return {"ok": True, "n": len(payload.items), "count": payload.count, "cbv": True}
 
 
-
-
 # ============================================================================
 # Response Type ViewSets - Using Decorator Syntax
 # ============================================================================
+
 
 @api.view("/cbv-response")
 class ResponseTypeViewSet(ViewSet):
@@ -998,6 +981,7 @@ class CookieViewSet(ViewSet):
 # Streaming ViewSets - Using Decorator Syntax
 # ============================================================================
 
+
 @api.view("/cbv-stream")
 class StreamViewSet(ViewSet):
     """ViewSet for streaming responses."""
@@ -1005,9 +989,11 @@ class StreamViewSet(ViewSet):
     @no_compress
     async def get(self, request):
         """GET /cbv-stream - Stream plain text."""
+
         def gen():
             for _i in range(100):
                 yield "x"
+
         return StreamingResponse(gen(), media_type="text/plain")
 
 
@@ -1018,15 +1004,18 @@ class SSEViewSet(ViewSet):
     @no_compress
     async def get(self, request):
         """GET /cbv-sse - Stream SSE events."""
+
         def gen():
             for i in range(3):
                 yield f"data: {i}\n\n"
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 # ============================================================================
 # WebSocket Endpoints
 # ============================================================================
+
 
 @api.websocket("/ws")
 async def websocket_load_test(websocket: WebSocket):
@@ -1078,7 +1067,6 @@ async def websocket_room(websocket: WebSocket, room_id: str):
         pass  # Client disconnected
 
 
-
 @api.view("/cbv-chat-completions")
 class ChatCompletionsViewSet(ViewSet):
     """ViewSet for OpenAI-style chat completions."""
@@ -1091,6 +1079,7 @@ class ChatCompletionsViewSet(ViewSet):
         chat_id = "chatcmpl-bolt-cbv"
 
         if payload.stream:
+
             async def agen():
                 delay = max(0, payload.delay_ms or 0) / 1000.0
                 for _i in range(max(1, payload.n_chunks)):
@@ -1098,11 +1087,11 @@ class ChatCompletionsViewSet(ViewSet):
                         id=chat_id,
                         created=created,
                         model=model,
-                        choices=[ChatCompletionChunkChoice(
-                            index=0,
-                            delta=ChatCompletionChunkDelta(content=payload.token),
-                            finish_reason=None
-                        )]
+                        choices=[
+                            ChatCompletionChunkChoice(
+                                index=0, delta=ChatCompletionChunkDelta(content=payload.token), finish_reason=None
+                            )
+                        ],
                     )
                     chunk_json = msgspec.json.encode(chunk)
                     yield b"data: " + chunk_json + b"\n\n"
@@ -1115,11 +1104,9 @@ class ChatCompletionsViewSet(ViewSet):
                     id=chat_id,
                     created=created,
                     model=model,
-                    choices=[ChatCompletionChunkChoice(
-                        index=0,
-                        delta=ChatCompletionChunkDelta(),
-                        finish_reason="stop"
-                    )]
+                    choices=[
+                        ChatCompletionChunkChoice(index=0, delta=ChatCompletionChunkDelta(), finish_reason="stop")
+                    ],
                 )
                 final_json = msgspec.json.encode(final_chunk)
                 yield b"data: " + final_json + b"\n\n"
@@ -1134,11 +1121,6 @@ class ChatCompletionsViewSet(ViewSet):
             "object": "chat.completion",
             "created": created,
             "model": model,
-            "choices": [
-                {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}
-            ],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
         }
         return response
-
-
-

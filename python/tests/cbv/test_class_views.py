@@ -9,12 +9,13 @@ Tests cover:
 - Mixins (ListMixin, RetrieveMixin, CreateMixin, etc.)
 - ViewSet
 """
+
 from typing import Any
 
 import msgspec
 import pytest
 
-from django_bolt import BoltAPI
+from django_bolt import BoltAPI, action
 from django_bolt.auth.backends import JWTAuthentication
 from django_bolt.auth.guards import IsAuthenticated  # noqa: PLC0415
 from django_bolt.exceptions import HTTPException
@@ -30,6 +31,7 @@ from django_bolt.views import (
 )
 
 # --- Test Fixtures ---
+
 
 @pytest.fixture
 def api():
@@ -55,6 +57,14 @@ def create_request(
         "method": "GET",
         "path": "/",
     }
+
+
+def get_route_meta(api, method: str, path: str):
+    """Helper to get metadata for a route by method and path."""
+    for route_method, route_path, handler_id, _ in api._routes:
+        if route_method == method and route_path == path:
+            return api._handler_meta.get(handler_id)
+    return None
 
 
 # --- Basic Tests ---
@@ -166,6 +176,7 @@ async def test_bolt_api_view_dependency_injection(api):
 
     # Check that handler has correct signature
     import inspect  # noqa: PLC0415
+
     sig = inspect.signature(handler)
     assert "current_user" in sig.parameters
 
@@ -187,6 +198,7 @@ async def test_bolt_api_view_request_body(api):
 
     # Verify handler signature includes data parameter
     import inspect  # noqa: PLC0415
+
     sig = inspect.signature(handler)
     assert "data" in sig.parameters
 
@@ -207,6 +219,7 @@ async def test_bolt_api_view_return_annotation(api):
     # Check that handler signature includes return annotation
     handler = api._routes[0][3]
     import inspect  # noqa: PLC0415
+
     sig = inspect.signature(handler)
     assert sig.return_annotation == ResponseSchema
 
@@ -354,7 +367,7 @@ async def test_create_mixin(api):
 
         @staticmethod
         async def acreate(**kwargs):
-            obj = type('MockObject', (), kwargs)()
+            obj = type("MockObject", (), kwargs)()
             obj.id = 1
             return obj
 
@@ -371,6 +384,7 @@ async def test_create_mixin(api):
     # Verify handler signature
     handler = api._routes[0][3]
     import inspect  # noqa: PLC0415
+
     sig = inspect.signature(handler)
     assert "data" in sig.parameters
 
@@ -417,14 +431,13 @@ async def test_bolt_viewset_get_object_not_found():
 # --- Edge Cases and Validation ---
 
 
-
-
 def test_bolt_api_view_non_subclass_raises():
     """Test that non-APIView classes raise TypeError."""
 
     api = BoltAPI()
 
     with pytest.raises(TypeError) as exc_info:
+
         @api.view("/bad")
         class NotAView:
             async def get(self, request):
@@ -439,6 +452,7 @@ def test_bolt_api_view_no_methods_raises():
     api = BoltAPI()
 
     with pytest.raises(ValueError) as exc_info:
+
         @api.view("/empty")
         class EmptyView(APIView):
             http_method_names = []
@@ -472,6 +486,7 @@ def test_bolt_api_view_unimplemented_method_raises(api):
     """Test requesting unimplemented method raises ValueError."""
 
     with pytest.raises(ValueError) as exc_info:
+
         @api.view("/items", methods=["POST"])
         class GetOnlyView(APIView):
             async def get(self, request) -> dict:
@@ -497,11 +512,23 @@ async def test_complete_crud_viewset(api):
     class MockQuerySet:
         def __init__(self, items):
             self.items = items
-            self.model = type('MockModel', (), {
-                'objects': type('MockManager', (), {
-                    'acreate': lambda **kw: type('MockObj', (), {**kw, 'asave': lambda: None, 'adelete': lambda: None})()
-                })()
-            })
+            self.model = type(
+                "MockModel",
+                (),
+                {
+                    "objects": type(
+                        "MockManager",
+                        (),
+                        {
+                            "acreate": lambda **kw: type(
+                                "MockObj",
+                                (),
+                                {**kw, "asave": lambda: None, "adelete": lambda: None},
+                            )()
+                        },
+                    )()
+                },
+            )
 
         def __aiter__(self):
             self.iterator = iter(self.items.values())
@@ -517,18 +544,11 @@ async def test_complete_crud_viewset(api):
             if pk not in self.items:
                 raise Exception("DoesNotExist")
             item = self.items[pk]
-            return type('MockObj', (), {**item, 'asave': lambda: None, 'adelete': lambda: None})()
+            return type("MockObj", (), {**item, "asave": lambda: None, "adelete": lambda: None})()
 
     @api.view("/items", methods=["GET"])
     @api.view("/items/{pk}", methods=["GET", "DELETE"])
-    class ItemViewSet(
-        ListMixin,
-        RetrieveMixin,
-        CreateMixin,
-        UpdateMixin,
-        DestroyMixin,
-        ViewSet
-    ):
+    class ItemViewSet(ListMixin, RetrieveMixin, CreateMixin, UpdateMixin, DestroyMixin, ViewSet):
         serializer_class = ItemSchema
 
         async def get_queryset(self):
@@ -556,3 +576,43 @@ def test_bolt_api_view_method_names_customization():
     # Only GET should be registered (POST not in http_method_names)
     assert len(api._routes) == 1
     assert api._routes[0][0] == "GET"
+
+
+def test_viewset_tags_registration(api):
+    """Test tags passed to api.viewset() are correctly registered."""
+
+    @api.viewset("/items", tags=["Items", "Public"])
+    class TaggedItemViewSet(ViewSet):
+        async def list(self, request):
+            return []
+
+        async def create(self, request, data: dict):
+            return {}
+
+    list_meta = get_route_meta(api, "GET", "/items")
+    assert list_meta is not None
+    assert list_meta.get("openapi_tags") == ["Items", "Public"]
+
+    create_meta = get_route_meta(api, "POST", "/items")
+    assert create_meta is not None
+    assert create_meta["openapi_tags"] == ["Items", "Public"]
+
+
+def test_view_tags_registration(api):
+    """Test tags passed to api.view() are correctly registered."""
+
+    @api.view("/products", tags=["Products", "Catalog"])
+    class TaggedProductView(APIView):
+        async def get(self, request) -> dict:
+            return {"products": []}
+
+        async def post(self, request) -> dict:
+            return {"created": True}
+
+    get_meta = get_route_meta(api, "GET", "/products")
+    assert get_meta is not None
+    assert get_meta.get("openapi_tags") == ["Products", "Catalog"]
+
+    post_meta = get_route_meta(api, "POST", "/products")
+    assert post_meta is not None
+    assert post_meta["openapi_tags"] == ["Products", "Catalog"]

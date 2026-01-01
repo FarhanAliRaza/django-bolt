@@ -3,6 +3,7 @@ Decorators for Django-Bolt.
 
 Provides decorators for ViewSet custom actions similar to Django REST Framework's @action decorator.
 """
+
 from collections.abc import Callable
 from typing import Any
 
@@ -28,7 +29,19 @@ class ActionHandler:
         status_code: Optional HTTP status code
     """
 
-    __slots__ = ('fn', 'methods', 'detail', 'path', 'auth', 'guards', 'response_model', 'status_code', 'tags', 'summary', 'description')
+    __slots__ = (
+        "fn",
+        "methods",
+        "detail",
+        "path",
+        "auth",
+        "guards",
+        "response_model",
+        "status_code",
+        "tags",
+        "summary",
+        "description",
+    )
 
     def __init__(
         self,
@@ -56,14 +69,13 @@ class ActionHandler:
         self.summary = summary
         self.description = description
 
-
     def __call__(self, *args, **kwargs):
         """Make the handler callable (delegates to wrapped function)."""
         return self.fn(*args, **kwargs)
 
     def __repr__(self):
-        methods_str = '|'.join(self.methods)
-        detail_str = 'detail' if self.detail else 'list'
+        methods_str = "|".join(self.methods)
+        detail_str = "detail" if self.detail else "list"
         return f"ActionHandler({methods_str}, {detail_str}, path={self.path}, fn={self.fn.__name__})"
 
 
@@ -143,16 +155,14 @@ def action(
         - Path parameters are automatically extracted from the route
         - For detail=True actions, the lookup field parameter (e.g., 'id', 'pk') is required
     """
+
     def decorator(fn: Callable) -> ActionHandler:
         """Wrap the function with ActionHandler metadata."""
         # Validate methods
-        valid_methods = {'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'}
+        valid_methods = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
         for method in methods:
             if method.upper() not in valid_methods:
-                raise ValueError(
-                    f"Invalid HTTP method '{method}'. "
-                    f"Valid methods: {', '.join(sorted(valid_methods))}"
-                )
+                raise ValueError(f"Invalid HTTP method '{method}'. Valid methods: {', '.join(sorted(valid_methods))}")
 
         # Create and return ActionHandler
         return ActionHandler(

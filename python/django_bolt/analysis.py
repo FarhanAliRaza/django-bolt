@@ -8,6 +8,7 @@ Performs AST-based analysis of handler source code to detect:
 This enables compile-time optimization decisions (e.g., running sync handlers
 with ORM usage in a thread pool) and developer warnings.
 """
+
 from __future__ import annotations
 
 import ast
@@ -25,133 +26,149 @@ __all__ = [
 
 
 # Django ORM manager attributes
-ORM_MANAGER_ATTRS = frozenset({
-    "objects",
-    "_default_manager",
-    "_base_manager",
-})
+ORM_MANAGER_ATTRS = frozenset(
+    {
+        "objects",
+        "_default_manager",
+        "_base_manager",
+    }
+)
 
 # Sync ORM methods on QuerySet/Manager (blocking)
-SYNC_ORM_METHODS = frozenset({
-    # QuerySet evaluation (blocking)
-    "all",
-    "filter",
-    "exclude",
-    "get",
-    "first",
-    "last",
-    "earliest",
-    "latest",
-    "create",
-    "get_or_create",
-    "update_or_create",
-    "bulk_create",
-    "bulk_update",
-    "update",
-    "delete",
-    "count",
-    "exists",
-    "aggregate",
-    "annotate",
-    "values",
-    "values_list",
-    "distinct",
-    "order_by",
-    "select_related",
-    "prefetch_related",
-    "only",
-    "defer",
-    "using",
-    "raw",
-    "extra",
-})
+SYNC_ORM_METHODS = frozenset(
+    {
+        # QuerySet evaluation (blocking)
+        "all",
+        "filter",
+        "exclude",
+        "get",
+        "first",
+        "last",
+        "earliest",
+        "latest",
+        "create",
+        "get_or_create",
+        "update_or_create",
+        "bulk_create",
+        "bulk_update",
+        "update",
+        "delete",
+        "count",
+        "exists",
+        "aggregate",
+        "annotate",
+        "values",
+        "values_list",
+        "distinct",
+        "order_by",
+        "select_related",
+        "prefetch_related",
+        "only",
+        "defer",
+        "using",
+        "raw",
+        "extra",
+    }
+)
 
 # Model instance methods that hit the database (blocking)
 # These are detected separately since they're called on model instances, not managers
-MODEL_INSTANCE_METHODS = frozenset({
-    "save",
-    "delete",
-    "refresh_from_db",
-    "full_clean",
-    "clean",
-    "validate_unique",
-})
+MODEL_INSTANCE_METHODS = frozenset(
+    {
+        "save",
+        "delete",
+        "refresh_from_db",
+        "full_clean",
+        "clean",
+        "validate_unique",
+    }
+)
 
 # Async model instance methods (Django 4.1+)
-ASYNC_MODEL_INSTANCE_METHODS = frozenset({
-    "asave",
-    "adelete",
-    "arefresh_from_db",
-})
+ASYNC_MODEL_INSTANCE_METHODS = frozenset(
+    {
+        "asave",
+        "adelete",
+        "arefresh_from_db",
+    }
+)
 
 # Async ORM methods on QuerySet/Manager (Django 4.1+)
-ASYNC_ORM_METHODS = frozenset({
-    "aget",
-    "afirst",
-    "alast",
-    "aearliest",
-    "alatest",
-    "acreate",
-    "aget_or_create",
-    "aupdate_or_create",
-    "abulk_create",
-    "abulk_update",
-    "aupdate",
-    "adelete",
-    "acount",
-    "aexists",
-    "aaggregate",
-    "ain_bulk",
-    "aiterator",
-    "acontains",
-    "aexplain",
-})
+ASYNC_ORM_METHODS = frozenset(
+    {
+        "aget",
+        "afirst",
+        "alast",
+        "aearliest",
+        "alatest",
+        "acreate",
+        "aget_or_create",
+        "aupdate_or_create",
+        "abulk_create",
+        "abulk_update",
+        "aupdate",
+        "adelete",
+        "acount",
+        "aexists",
+        "aaggregate",
+        "ain_bulk",
+        "aiterator",
+        "acontains",
+        "aexplain",
+    }
+)
 
 # QuerySet iteration patterns (blocking when used synchronously)
-QUERYSET_ITERATION_PATTERNS = frozenset({
-    "__iter__",
-    "__len__",
-    "__bool__",
-    "__getitem__",
-})
+QUERYSET_ITERATION_PATTERNS = frozenset(
+    {
+        "__iter__",
+        "__len__",
+        "__bool__",
+        "__getitem__",
+    }
+)
 
 # Blocking I/O operations
-BLOCKING_IO_FUNCTIONS = frozenset({
-    # File operations
-    "open",
-    "read",
-    "write",
-    "close",
-    # Network
-    "urlopen",
-    "request",
-    "get",
-    "post",
-    "put",
-    "patch",
-    "delete",
-    # Time
-    "sleep",
-    # Subprocess
-    "run",
-    "call",
-    "check_output",
-    "check_call",
-    "Popen",
-})
+BLOCKING_IO_FUNCTIONS = frozenset(
+    {
+        # File operations
+        "open",
+        "read",
+        "write",
+        "close",
+        # Network
+        "urlopen",
+        "request",
+        "get",
+        "post",
+        "put",
+        "patch",
+        "delete",
+        # Time
+        "sleep",
+        # Subprocess
+        "run",
+        "call",
+        "check_output",
+        "check_call",
+        "Popen",
+    }
+)
 
 # Blocking I/O modules
-BLOCKING_IO_MODULES = frozenset({
-    "requests",
-    "urllib",
-    "urllib3",
-    "httpx",  # sync client
-    "socket",
-    "subprocess",
-    "os",
-    "io",
-    "time",
-})
+BLOCKING_IO_MODULES = frozenset(
+    {
+        "requests",
+        "urllib",
+        "urllib3",
+        "httpx",  # sync client
+        "socket",
+        "subprocess",
+        "os",
+        "io",
+        "time",
+    }
+)
 
 
 @dataclass

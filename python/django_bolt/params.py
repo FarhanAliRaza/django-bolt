@@ -3,6 +3,7 @@ Parameter markers and validation constraints for Django-Bolt.
 
 Provides explicit parameter source annotations and validation metadata.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable

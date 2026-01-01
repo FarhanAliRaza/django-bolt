@@ -1,4 +1,3 @@
-
 import msgspec
 from users.api import UserMini
 from users.models import User
@@ -14,6 +13,7 @@ from django_bolt.types import Request
 # ============================================================================
 # Custom Middleware Example
 # ============================================================================
+
 
 class RequestIdMiddleware:
     """
@@ -110,13 +110,10 @@ api = BoltAPI()
 # Using default compression configuration
 
 
-
-
 class Item(msgspec.Struct):
     name: str
     price: float
     is_offer: bool | None = None
-
 
 
 # Create a separate API instance with middleware enabled
@@ -127,8 +124,8 @@ middleware_api = BoltAPI(
     # Add custom Python middleware (pass classes, not instances)
     middleware=[
         RequestIdMiddleware,  # Adds X-Request-ID header
-        TenantMiddleware,     # Adds tenant context (skips /health, /docs)
-        TimingMiddleware,     # Built-in: adds X-Response-Time header
+        TenantMiddleware,  # Adds tenant context (skips /health, /docs)
+        TimingMiddleware,  # Built-in: adds X-Response-Time header
     ],
 )
 
@@ -136,24 +133,30 @@ middleware_api = BoltAPI(
 @middleware_api.get("/demo")
 async def middleware_demo(request: Request):
     from django.contrib import messages  # noqa: PLC0415
+
     # Add messages using Django's messages framework
     messages.error(request, "This is an error message")
     # Access Django user
     user = await request.auser()
     # Render template that displays messages
-    return render(request, "messages_demo.html", {
-        "title": "Middleware & Messages Demo",
-        "user": user,
-        "request_id": request.state.get("request_id"),
-        "tenant_id": request.state.get("tenant_id"),
-    })
+    return render(
+        request,
+        "messages_demo.html",
+        {
+            "title": "Middleware & Messages Demo",
+            "user": user,
+            "request_id": request.state.get("request_id"),
+            "tenant_id": request.state.get("tenant_id"),
+        },
+    )
+
 
 # Mount the middleware API as a sub-application (FastAPI-style)
 api.mount("/middleware", middleware_api)
 
+
 @api.websocket("/ws/room/{room_id}")
 async def websocket_room(websocket: WebSocket, room_id: str):
-
     await websocket.accept()
     try:
         async for message in websocket.iter_text():
@@ -166,5 +169,3 @@ async def websocket_room(websocket: WebSocket, room_id: str):
 async def read_users_async() -> list[UserMini]:
     users = User.objects.all()[0:100]
     return users
-
-

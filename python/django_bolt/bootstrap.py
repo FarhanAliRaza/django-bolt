@@ -57,7 +57,7 @@ def _detect_settings_module() -> str | None:
             content = manage_py.read_text()
             if "DJANGO_SETTINGS_MODULE" in content:
                 # Extract the settings module from manage.py
-                for line in content.split('\n'):
+                for line in content.split("\n"):
                     if "DJANGO_SETTINGS_MODULE" in line and "setdefault" in line:
                         # Parse line like: os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
                         parts = line.split("'")
@@ -80,5 +80,3 @@ def _info() -> dict:
         "settings_module": os.getenv("DJANGO_SETTINGS_MODULE"),
         "base_dir": str(getattr(dj_settings, "BASE_DIR", "")),
     }
-
-

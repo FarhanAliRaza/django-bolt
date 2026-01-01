@@ -259,8 +259,17 @@ class Token:
 
             # Extract known fields
             known_fields = {
-                "exp", "sub", "iat", "iss", "aud", "jti", "nbf",
-                "is_staff", "is_superuser", "is_admin", "permissions"
+                "exp",
+                "sub",
+                "iat",
+                "iss",
+                "aud",
+                "jti",
+                "nbf",
+                "is_staff",
+                "is_superuser",
+                "is_admin",
+                "permissions",
             }
             extras = {k: v for k, v in payload.items() if k not in known_fields}
 

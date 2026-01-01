@@ -185,11 +185,11 @@ class LoggingMiddleware:
                     logging.getLogger(__name__).warning(
                         "Failed to apply sampling rate for request logging. "
                         "Logging request without sampling. Error: %s",
-                        e
+                        e,
                     )
             # Slow-only gate
             if self.config.min_duration_ms is not None:
-                duration_ms_check = (duration * 1000.0)
+                duration_ms_check = duration * 1000.0
                 if duration_ms_check < float(self.config.min_duration_ms):
                     return
 
@@ -252,9 +252,7 @@ class LoggingMiddleware:
 
         # Use custom exception handler if provided
         if self.config.exception_logging_handler:
-            self.config.exception_logging_handler(
-                self.logger, request, exc, exc_info
-            )
+            self.config.exception_logging_handler(self.logger, request, exc, exc_info)
         else:
             # Default exception logging
             log_level = getattr(logging, self.config.error_log_level.upper(), logging.ERROR)
@@ -268,9 +266,7 @@ class LoggingMiddleware:
 
 # Convenience function to create logging middleware
 def create_logging_middleware(
-    logger_name: str | None = None,
-    log_level: str | None = None,
-    **kwargs
+    logger_name: str | None = None, log_level: str | None = None, **kwargs
 ) -> LoggingMiddleware:
     """Create a logging middleware with custom configuration.
 

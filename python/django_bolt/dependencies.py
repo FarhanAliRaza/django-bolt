@@ -1,4 +1,5 @@
 """Dependency injection utilities."""
+
 from __future__ import annotations
 
 import inspect
@@ -22,7 +23,7 @@ async def resolve_dependency(
     handler_meta: dict[Callable, dict[str, Any]],
     compile_binder: Callable,
     http_method: str,
-    path: str
+    path: str,
 ) -> Any:
     """
     Resolve a dependency injection.
@@ -65,15 +66,9 @@ async def resolve_dependency(
             value = dep_fn(request)
     else:
         if is_async:
-            value = await call_dependency(
-                dep_fn, dep_meta, request, params_map,
-                query_map, headers_map, cookies_map
-            )
+            value = await call_dependency(dep_fn, dep_meta, request, params_map, query_map, headers_map, cookies_map)
         else:
-            value = call_dependency_sync(
-                dep_fn, dep_meta, request, params_map,
-                query_map, headers_map, cookies_map
-            )
+            value = call_dependency_sync(dep_fn, dep_meta, request, params_map, query_map, headers_map, cookies_map)
 
     if depends_marker.use_cache:
         dep_cache[dep_fn] = value
@@ -88,7 +83,7 @@ async def call_dependency(
     params_map: dict[str, Any],
     query_map: dict[str, Any],
     headers_map: dict[str, str],
-    cookies_map: dict[str, str]
+    cookies_map: dict[str, str],
 ) -> Any:
     """Call an async dependency function with resolved parameters."""
     dep_args: list[Any] = []
@@ -116,7 +111,7 @@ def call_dependency_sync(
     params_map: dict[str, Any],
     query_map: dict[str, Any],
     headers_map: dict[str, str],
-    cookies_map: dict[str, str]
+    cookies_map: dict[str, str],
 ) -> Any:
     """Call a sync dependency function with resolved parameters."""
     dep_args: list[Any] = []
@@ -142,7 +137,7 @@ def extract_dependency_value(
     params_map: dict[str, Any],
     query_map: dict[str, Any],
     headers_map: dict[str, str],
-    cookies_map: dict[str, str]
+    cookies_map: dict[str, str],
 ) -> Any:
     """Extract value for a dependency parameter using FieldDefinition.
 

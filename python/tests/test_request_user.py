@@ -4,6 +4,7 @@ Tests for request.user eager-loading functionality using HTTP client testing.
 Tests the eager-loading, caching, and extensibility of request.user
 for different authentication backends via actual HTTP requests.
 """
+
 from __future__ import annotations
 
 import time
@@ -52,8 +53,6 @@ def jwt_api():
             "username": user.username,
         }
 
-
-
     @api.get("/profile")
     async def get_profile(request):
         """Public endpoint - request.user should not be loaded."""
@@ -88,6 +87,7 @@ def api_key_api():
 @pytest.fixture(scope="module")
 def custom_auth_api():
     """Create API with custom auth backend that implements get_user."""
+
     class CustomAPIKeyAuth(APIKeyAuthentication):
         """Custom API key that maps keys to users."""
 
@@ -125,7 +125,6 @@ class TestJWTUserLoading:
         """Test that authenticated request with existing user returns 200."""
         # Create user in database with explicit commit
         user = User.objects.create(username="testuser")
-
 
         with TestClient(jwt_api) as client:
             # Use actual user ID from database
@@ -207,9 +206,7 @@ class TestAPIKeyUserLoading:
     def test_valid_api_key_no_user_mapping(self, api_key_api):
         """Test that valid API key works but user is not loaded (no custom mapping)."""
         with TestClient(api_key_api) as client:
-            response = client.get(
-                "/api/data", headers={"X-API-Key": "valid-key-123"}
-            )
+            response = client.get("/api/data", headers={"X-API-Key": "valid-key-123"})
 
             # Should succeed because key is valid
             assert response.status_code == 200
@@ -240,9 +237,7 @@ class TestCustomAuthBackendUserLoading:
         User.objects.create(username="admin")
 
         with TestClient(custom_auth_api) as client:
-            response = client.get(
-                "/admin/data", headers={"X-API-Key": "admin-key"}
-            )
+            response = client.get("/admin/data", headers={"X-API-Key": "admin-key"})
 
             assert response.status_code == 200
             data = response.json()
@@ -252,9 +247,7 @@ class TestCustomAuthBackendUserLoading:
     def test_custom_backend_returns_none_for_unknown_key(self, custom_auth_api):
         """Test that custom backend returns None for unknown key."""
         with TestClient(custom_auth_api) as client:
-            response = client.get(
-                "/admin/data", headers={"X-API-Key": "unknown-key"}
-            )
+            response = client.get("/admin/data", headers={"X-API-Key": "unknown-key"})
 
             # Should still be rejected (key not in valid set)
             assert response.status_code == 401
@@ -317,9 +310,7 @@ class TestRequestUserSyncHandlers:
 
         with TestClient(api) as client:
             token = create_jwt_token(user_id=str(user.id))
-            response = client.get(
-                "/sync-me", headers={"Authorization": f"Bearer {token}"}
-            )
+            response = client.get("/sync-me", headers={"Authorization": f"Bearer {token}"})
 
             assert response.status_code == 200
             assert response.json()["user_loaded"] is True
@@ -347,6 +338,7 @@ class TestSyncHandlerWithCustomBackend:
     @pytest.mark.django_db(transaction=True)
     def test_sync_handler_with_custom_backend_should_load_user(self):
         """Test that sync handler with custom backend loads user."""
+
         class CustomSyncKeyAuth(APIKeyAuthentication):
             """Custom API key that maps keys to users (async get_user)."""
 
@@ -378,20 +370,17 @@ class TestSyncHandlerWithCustomBackend:
         User.objects.create(username="testuser")
 
         with TestClient(api) as client:
-            response = client.get(
-                "/sync-custom", headers={"X-API-Key": "test-key"}
-            )
+            response = client.get("/sync-custom", headers={"X-API-Key": "test-key"})
 
             assert response.status_code == 200
             data = response.json()
-            assert data["user_loaded"] is True, (
-                "User should be loaded from custom backend in sync handler"
-            )
+            assert data["user_loaded"] is True, "User should be loaded from custom backend in sync handler"
             assert data["username"] == "testuser"
 
     @pytest.mark.django_db(transaction=True)
     def test_async_handler_with_custom_backend_works(self):
         """Test that async handler with custom backend works."""
+
         class CustomAsyncKeyAuth(APIKeyAuthentication):
             """Custom API key that maps keys to users (async get_user)."""
 
@@ -423,9 +412,7 @@ class TestSyncHandlerWithCustomBackend:
         User.objects.create(username="asyncuser")
 
         with TestClient(api) as client:
-            response = client.get(
-                "/async-custom", headers={"X-API-Key": "async-key"}
-            )
+            response = client.get("/async-custom", headers={"X-API-Key": "async-key"})
 
             # This should work because async handlers use ThreadPoolExecutor
             assert response.status_code == 200, f"Response: {response.text}"
@@ -481,9 +468,7 @@ class TestRequestUserGuardBehavior:
 
         with TestClient(api) as client:
             token = create_jwt_token(user_id=str(user.id))
-            response = client.get(
-                "/allowed", headers={"Authorization": f"Bearer {token}"}
-            )
+            response = client.get("/allowed", headers={"Authorization": f"Bearer {token}"})
             assert response.status_code == 200
             assert handler_called["called"] is True
             assert response.json()["user_loaded"] is True

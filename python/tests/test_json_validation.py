@@ -8,6 +8,7 @@ Tests cover:
 - Request body validation errors
 - Type coercion and conversion
 """
+
 import json
 
 import msgspec
@@ -21,6 +22,7 @@ from django_bolt.exceptions import HTTPException, RequestValidationError
 
 class UserCreate(msgspec.Struct):
     """Test user creation struct."""
+
     name: str
     email: str
     age: int
@@ -28,6 +30,7 @@ class UserCreate(msgspec.Struct):
 
 class UserWithDefaults(msgspec.Struct):
     """Test struct with default values."""
+
     name: str
     email: str = "user@example.com"
     is_active: bool = True
@@ -35,6 +38,7 @@ class UserWithDefaults(msgspec.Struct):
 
 class NestedAddress(msgspec.Struct):
     """Nested struct for testing."""
+
     street: str
     city: str
     zipcode: str
@@ -42,6 +46,7 @@ class NestedAddress(msgspec.Struct):
 
 class UserWithNested(msgspec.Struct):
     """Struct with nested struct."""
+
     name: str
     address: NestedAddress
 
@@ -73,7 +78,7 @@ class TestInvalidJSONParsing:
 
         # Should convert DecodeError to RequestValidationError (422)
         with pytest.raises(RequestValidationError) as exc_info:
-            extractor(b'')
+            extractor(b"")
 
         errors = exc_info.value.errors()
         assert len(errors) == 1
@@ -89,7 +94,7 @@ class TestInvalidJSONParsing:
         # Plain text instead of JSON
         # Should convert DecodeError to RequestValidationError (422)
         with pytest.raises(RequestValidationError) as exc_info:
-            extractor(b'this is not json')
+            extractor(b"this is not json")
 
         errors = exc_info.value.errors()
         assert len(errors) == 1
@@ -112,7 +117,7 @@ class TestInvalidJSONParsing:
 
         # Number instead of object
         with pytest.raises(msgspec.ValidationError):
-            extractor(b'42')
+            extractor(b"42")
 
 
 class TestMsgspecStructValidation:
@@ -163,31 +168,32 @@ class TestMsgspecStructValidation:
         extractor = create_body_extractor("user", UserWithNested)
 
         # Valid nested structure
-        valid_json = b'''{
+        valid_json = b"""{
             "name": "John",
             "address": {
                 "street": "123 Main St",
                 "city": "New York",
                 "zipcode": "10001"
             }
-        }'''
+        }"""
         result = extractor(valid_json)
         assert result.name == "John"
         assert result.address.city == "New York"
 
         # Invalid nested structure (missing city)
-        invalid_json = b'''{
+        invalid_json = b"""{
             "name": "John",
             "address": {
                 "street": "123 Main St",
                 "zipcode": "10001"
             }
-        }'''
+        }"""
         with pytest.raises(msgspec.ValidationError):
             extractor(invalid_json)
 
     def test_array_field_validation(self):
         """Test validation of array fields."""
+
         class UserWithTags(msgspec.Struct):
             name: str
             tags: list[str]
@@ -254,10 +260,8 @@ class TestProductionVsDebugMode:
         assert prod_status == 500
 
         prod_data = json.loads(prod_body)
-        assert prod_data["detail"] == "Internal Server Error", \
-            "Production should hide error details"
-        assert "extra" not in prod_data, \
-            "Production should not expose exception details"
+        assert prod_data["detail"] == "Internal Server Error", "Production should hide error details"
+        assert "extra" not in prod_data, "Production should not expose exception details"
 
         # Debug mode - should show details (HTML or JSON with traceback)
         debug_status, debug_headers, debug_body = handle_exception(exc, debug=True)
@@ -282,16 +286,8 @@ class TestRequestValidationErrorHandling:
     def test_request_validation_error_format(self):
         """Test that RequestValidationError returns proper format."""
         errors = [
-            {
-                "loc": ["body", "email"],
-                "msg": "Invalid email format",
-                "type": "value_error"
-            },
-            {
-                "loc": ["body", "age"],
-                "msg": "Must be a positive integer",
-                "type": "value_error"
-            }
+            {"loc": ["body", "email"], "msg": "Invalid email format", "type": "value_error"},
+            {"loc": ["body", "age"], "msg": "Must be a positive integer", "type": "value_error"},
         ]
 
         exc = RequestValidationError(errors)
@@ -324,6 +320,7 @@ class TestRequestValidationErrorHandling:
 
     def test_msgspec_error_to_request_validation_error(self):
         """Test that msgspec.ValidationError is converted properly."""
+
         # Create a validation error
         class TestStruct(msgspec.Struct):
             name: str
@@ -387,6 +384,7 @@ class TestTypeCoercionEdgeCases:
 
     def test_optional_fields_with_none(self):
         """Test that optional fields handle None correctly."""
+
         class UserOptional(msgspec.Struct):
             name: str
             email: str | None = None
@@ -422,6 +420,7 @@ class TestJSONParsingPerformance:
 
     def test_large_json_parsing(self):
         """Test parsing of large JSON payloads."""
+
         class LargeStruct(msgspec.Struct):
             items: list[dict]
 
@@ -437,6 +436,7 @@ class TestJSONParsingPerformance:
 
     def test_deeply_nested_json(self):
         """Test parsing of deeply nested JSON structures."""
+
         class Level3(msgspec.Struct):
             value: str
 
@@ -448,13 +448,13 @@ class TestJSONParsingPerformance:
 
         extractor = create_body_extractor("data", Level1)
 
-        nested_json = b'''{
+        nested_json = b"""{
             "level2": {
                 "level3": {
                     "value": "deep"
                 }
             }
-        }'''
+        }"""
 
         result = extractor(nested_json)
         assert result.level2.level3.value == "deep"

@@ -50,10 +50,7 @@ def test_nested_annotation():
 
     # Create with full author object
     author = AuthorSerializer(id=1, username="alice")
-    book = BookDetailSerializer(
-        title="Test Book",
-        author=author
-    )
+    book = BookDetailSerializer(title="Test Book", author=author)
 
     assert book.title == "Test Book"
     assert isinstance(book.author, AuthorSerializer)
@@ -72,10 +69,7 @@ def test_nested_with_dict():
         author: Annotated[AuthorSerializer, Nested(AuthorSerializer)]
 
     # Should accept dict and convert to serializer
-    book = BookSerializer(
-        title="Test",
-        author={"id": 123, "username": "bob"}
-    )
+    book = BookSerializer(title="Test", author={"id": 123, "username": "bob"})
 
     assert isinstance(book.author, AuthorSerializer)
     assert book.author.id == 123
@@ -90,10 +84,7 @@ def test_simple_id_reference():
         title: str
         author_id: int
 
-    book = BookListSerializer(
-        title="Test",
-        author_id=42
-    )
+    book = BookListSerializer(title="Test", author_id=42)
 
     assert book.author_id == 42
 
@@ -110,10 +101,7 @@ def test_nested_with_serializer_instance():
         author: Annotated[AuthorSerializer, Nested(AuthorSerializer)]
 
     author = AuthorSerializer(id=1, username="alice")
-    book = BookSerializer(
-        title="Test",
-        author=author
-    )
+    book = BookSerializer(title="Test", author=author)
 
     assert isinstance(book.author, AuthorSerializer)
     assert book.author.username == "alice"
@@ -136,7 +124,7 @@ def test_nested_many_with_objects():
         tags=[
             {"id": 1, "name": "python"},
             {"id": 2, "name": "django"},
-        ]
+        ],
     )
 
     assert len(book.tags) == 2
@@ -155,10 +143,7 @@ def test_nested_many_accepts_empty_list():
         title: str
         tags: Annotated[list[TagSerializer], Nested(TagSerializer, many=True)]
 
-    book = BookSerializer(
-        title="Test",
-        tags=[]
-    )
+    book = BookSerializer(title="Test", tags=[])
 
     assert book.tags == []
 
@@ -171,9 +156,6 @@ def test_list_of_ids_without_nested():
         title: str
         tag_ids: list[int]
 
-    book = BookListSerializer(
-        title="Test",
-        tag_ids=[1, 2, 3]
-    )
+    book = BookListSerializer(title="Test", tag_ids=[1, 2, 3])
 
     assert book.tag_ids == [1, 2, 3]

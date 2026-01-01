@@ -1,6 +1,7 @@
 """
 Test that JWT authentication uses Django SECRET_KEY when not specified
 """
+
 from django_bolt import BoltAPI
 from django_bolt.auth import IsAuthenticated, JWTAuthentication
 
@@ -26,7 +27,7 @@ def test_jwt_auth_explicit_secret_overrides():
     auth = JWTAuthentication(secret="custom-secret")
 
     # Should use the explicit secret, not Django's
-    assert auth.secret == 'custom-secret'
+    assert auth.secret == "custom-secret"
     assert auth.secret != settings.SECRET_KEY
     print("✓ Explicit secret overrides Django SECRET_KEY")
 
@@ -40,7 +41,7 @@ def test_route_with_django_secret():
     @api.get(
         "/protected",
         auth=[JWTAuthentication()],  # No secret - should use Django's
-        guards=[IsAuthenticated()]
+        guards=[IsAuthenticated()],
     )
     async def protected_endpoint():
         return {"message": "Protected"}
@@ -49,9 +50,9 @@ def test_route_with_django_secret():
     handler_id = 0
     if handler_id in api._handler_middleware:
         metadata = api._handler_middleware[handler_id]
-        auth_backends = metadata.get('auth_backends', [])
+        auth_backends = metadata.get("auth_backends", [])
         assert len(auth_backends) > 0
-        assert auth_backends[0]['secret'] == settings.SECRET_KEY
+        assert auth_backends[0]["secret"] == settings.SECRET_KEY
         print("✓ Route-level JWT auth uses Django SECRET_KEY")
 
 

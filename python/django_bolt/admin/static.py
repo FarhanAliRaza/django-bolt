@@ -32,7 +32,7 @@ def find_static_file(path: str) -> str | None:
     """
     try:
         # First try STATIC_ROOT (collected static files in production)
-        if hasattr(settings, 'STATIC_ROOT') and settings.STATIC_ROOT:
+        if hasattr(settings, "STATIC_ROOT") and settings.STATIC_ROOT:
             static_root = Path(settings.STATIC_ROOT)
             file_path = static_root / path
             if file_path.exists() and file_path.is_file():
@@ -45,7 +45,7 @@ def find_static_file(path: str) -> str | None:
                 return found_path
 
         # Fallback: check STATICFILES_DIRS
-        if hasattr(settings, 'STATICFILES_DIRS'):
+        if hasattr(settings, "STATICFILES_DIRS"):
             for static_dir in settings.STATICFILES_DIRS:
                 if isinstance(static_dir, tuple):
                     static_dir = static_dir[1]  # (prefix, path) tuple
@@ -76,22 +76,22 @@ def guess_content_type(file_path: str) -> str:
     # Fallback for common static file types
     ext = os.path.splitext(file_path)[1].lower()
     type_map = {
-        '.css': 'text/css',
-        '.js': 'application/javascript',
-        '.json': 'application/json',
-        '.png': 'image/png',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.gif': 'image/gif',
-        '.svg': 'image/svg+xml',
-        '.ico': 'image/x-icon',
-        '.woff': 'font/woff',
-        '.woff2': 'font/woff2',
-        '.ttf': 'font/ttf',
-        '.eot': 'application/vnd.ms-fontobject',
+        ".css": "text/css",
+        ".js": "application/javascript",
+        ".json": "application/json",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".svg": "image/svg+xml",
+        ".ico": "image/x-icon",
+        ".woff": "font/woff",
+        ".woff2": "font/woff2",
+        ".ttf": "font/ttf",
+        ".eot": "application/vnd.ms-fontobject",
     }
 
-    return type_map.get(ext, 'application/octet-stream')
+    return type_map.get(ext, "application/octet-stream")
 
 
 async def serve_static_file(path: str) -> tuple[int, list[tuple[str, str]], bytes]:
@@ -105,7 +105,7 @@ async def serve_static_file(path: str) -> tuple[int, list[tuple[str, str]], byte
         Response tuple: (status_code, headers, body)
     """
     # Security: prevent directory traversal
-    if '..' in path or path.startswith('/'):
+    if ".." in path or path.startswith("/"):
         raise HTTPException(400, "Invalid static file path")
 
     # Find the static file
@@ -118,10 +118,7 @@ async def serve_static_file(path: str) -> tuple[int, list[tuple[str, str]], byte
     content_type = guess_content_type(file_path)
 
     # Use FileResponse which returns the special file response format
-    return FileResponse(
-        file_path,
-        headers={"content-type": content_type}
-    )
+    return FileResponse(file_path, headers={"content-type": content_type})
 
 
 def register_static_routes(api, static_url: str | None = None):
@@ -133,16 +130,16 @@ def register_static_routes(api, static_url: str | None = None):
         static_url: Static URL prefix (default: from settings.STATIC_URL)
     """
     if static_url is None:
-        if not hasattr(settings, 'STATIC_URL') or not settings.STATIC_URL:
+        if not hasattr(settings, "STATIC_URL") or not settings.STATIC_URL:
             # Static files not configured
             return
-        static_url = settings.STATIC_URL.strip('/')
+        static_url = settings.STATIC_URL.strip("/")
 
     if not static_url:
-        static_url = 'static'
+        static_url = "static"
 
     # Register catch-all route for static files
-    route_pattern = f'/{static_url}/{{path:path}}'
+    route_pattern = f"/{static_url}/{{path:path}}"
 
     @api.get(route_pattern)
     async def serve_static(path: str):

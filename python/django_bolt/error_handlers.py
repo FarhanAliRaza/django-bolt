@@ -160,26 +160,32 @@ def msgspec_validation_error_to_dict(error: msgspec.ValidationError) -> list[dic
         # Extract field name from message
         match = re.search(r"`(\w+)`", error_msg)
         field = match.group(1) if match else "unknown"
-        errors.append({
-            "loc": ["body", field],
-            "msg": error_msg,
-            "type": "missing_field",
-        })
+        errors.append(
+            {
+                "loc": ["body", field],
+                "msg": error_msg,
+                "type": "missing_field",
+            }
+        )
         return errors
     else:
         # Generic error without location
-        errors.append({
-            "loc": ["body"],
-            "msg": error_msg,
-            "type": "validation_error",
-        })
+        errors.append(
+            {
+                "loc": ["body"],
+                "msg": error_msg,
+                "type": "validation_error",
+            }
+        )
         return errors
 
-    errors.append({
-        "loc": loc_parts if isinstance(loc_parts, list) else ["body"],
-        "msg": error_msg.split(" - at `")[0] if " - at `" in error_msg else error_msg,
-        "type": "validation_error",
-    })
+    errors.append(
+        {
+            "loc": loc_parts if isinstance(loc_parts, list) else ["body"],
+            "msg": error_msg.split(" - at `")[0] if " - at `" in error_msg else error_msg,
+            "type": "validation_error",
+        }
+    )
 
     return errors
 
@@ -206,11 +212,13 @@ def request_validation_error_handler(
             formatted_errors.extend(msgspec_validation_error_to_dict(error))
         else:
             # Generic error
-            formatted_errors.append({
-                "loc": ["body"],
-                "msg": str(error),
-                "type": "validation_error",
-            })
+            formatted_errors.append(
+                {
+                    "loc": ["body"],
+                    "msg": str(error),
+                    "type": "validation_error",
+                }
+            )
 
     return format_error_response(
         status_code=422,
@@ -244,11 +252,13 @@ def response_validation_error_handler(
         elif isinstance(error, msgspec.ValidationError):
             formatted_errors.extend(msgspec_validation_error_to_dict(error))
         else:
-            formatted_errors.append({
-                "loc": ["response"],
-                "msg": str(error),
-                "type": "validation_error",
-            })
+            formatted_errors.append(
+                {
+                    "loc": ["response"],
+                    "msg": str(error),
+                    "type": "validation_error",
+                }
+            )
 
     return format_error_response(
         status_code=500,
@@ -292,23 +302,17 @@ def generic_exception_handler(
                 html_content = reporter.get_traceback_html()
 
                 # Return HTML response instead of JSON
-                return (
-                    500,
-                    [("content-type", "text/html; charset=utf-8")],
-                    html_content.encode("utf-8")
-                )
+                return (500, [("content-type", "text/html; charset=utf-8")], html_content.encode("utf-8"))
         except Exception as e:
             # Fallback to standard traceback formatting in JSON
             logger.debug(
-                "Failed to generate Django ExceptionReporter HTML. "
-                "Falling back to JSON traceback format. Error: %s",
-                e
+                "Failed to generate Django ExceptionReporter HTML. Falling back to JSON traceback format. Error: %s", e
             )
 
         # Fallback to JSON with traceback
         tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
         # Split into individual lines for better JSON display, stripping trailing newlines
-        tb_formatted = [line.rstrip('\n') for line in ''.join(tb_lines).split('\n') if line.strip()]
+        tb_formatted = [line.rstrip("\n") for line in "".join(tb_lines).split("\n") if line.strip()]
         extra = {
             "exception": str(exc),
             "exception_type": type(exc).__name__,
@@ -354,9 +358,7 @@ def handle_exception(
         return response_validation_error_handler(exc)
     elif isinstance(exc, ValidationException):
         # Generic validation exception
-        return request_validation_error_handler(
-            RequestValidationError(exc.errors())
-        )
+        return request_validation_error_handler(RequestValidationError(exc.errors()))
     elif isinstance(exc, msgspec.ValidationError):
         # Direct msgspec validation error
         errors = msgspec_validation_error_to_dict(exc)

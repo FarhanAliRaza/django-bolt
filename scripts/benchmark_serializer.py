@@ -84,6 +84,7 @@ USER_DATA_WITH_NULLS = {
 # ============================================================================
 class BoltAuthorSimple(Serializer):
     """django-bolt serializer WITHOUT custom field validators."""
+
     id: int
     name: Annotated[str, Meta(min_length=2)]
     email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
@@ -92,6 +93,7 @@ class BoltAuthorSimple(Serializer):
 
 class PydanticAuthorSimple(BaseModel):
     """Pydantic model WITHOUT custom field validators."""
+
     id: int
     name: str = Field(..., min_length=2)
     email: str = Field(..., pattern=r"^[^@]+@[^@]+\.[^@]+$")
@@ -103,6 +105,7 @@ class PydanticAuthorSimple(BaseModel):
 # ============================================================================
 class BoltAuthorWithValidators(Serializer):
     """django-bolt serializer WITH custom field validators."""
+
     id: int
     name: Annotated[str, Meta(min_length=2)]
     email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
@@ -119,6 +122,7 @@ class BoltAuthorWithValidators(Serializer):
 
 class PydanticAuthorWithValidators(BaseModel):
     """Pydantic model WITH custom field validators."""
+
     id: int
     name: str = Field(..., min_length=2)
     email: str = Field(..., pattern=r"^[^@]+@[^@]+\.[^@]+$")
@@ -140,6 +144,7 @@ class PydanticAuthorWithValidators(BaseModel):
 # ============================================================================
 class BoltPasswordChange(Serializer):
     """django-bolt serializer with model validator."""
+
     old_password: str
     new_password: Annotated[str, Meta(min_length=8)]
     confirm_password: str
@@ -154,6 +159,7 @@ class BoltPasswordChange(Serializer):
 
 class PydanticPasswordChange(BaseModel):
     """Pydantic model with model validator."""
+
     old_password: str
     new_password: str = Field(..., min_length=8)
     confirm_password: str
@@ -172,6 +178,7 @@ class PydanticPasswordChange(BaseModel):
 # ============================================================================
 class BoltUserWithComputed(Serializer):
     """django-bolt serializer with computed fields."""
+
     first_name: str
     last_name: str
     email: str
@@ -187,6 +194,7 @@ class BoltUserWithComputed(Serializer):
 
 class PydanticUserWithComputed(BaseModel):
     """Pydantic model with computed fields."""
+
     first_name: str
     last_name: str
     email: str
@@ -207,6 +215,7 @@ class PydanticUserWithComputed(BaseModel):
 # ============================================================================
 class BoltUserWithFieldConfig(Serializer):
     """django-bolt serializer with field() configuration."""
+
     id: int = field(read_only=True, default=0)
     name: Annotated[str, Meta(min_length=1, max_length=100)]
     email: str
@@ -216,6 +225,7 @@ class BoltUserWithFieldConfig(Serializer):
 
 class PydanticUserWithFieldConfig(BaseModel):
     """Pydantic model with Field() configuration."""
+
     id: int = Field(default=0)  # Can't really do read_only in Pydantic
     name: str = Field(..., min_length=1, max_length=100)
     email: str
@@ -228,6 +238,7 @@ class PydanticUserWithFieldConfig(BaseModel):
 # ============================================================================
 class BoltUserDynamic(Serializer):
     """django-bolt serializer with field sets for dynamic selection."""
+
     id: int
     name: str
     email: str
@@ -246,6 +257,7 @@ class BoltUserDynamic(Serializer):
 
 class PydanticUserDynamic(BaseModel):
     """Pydantic model - note: Pydantic doesn't have built-in field_sets."""
+
     id: int
     name: str
     email: str
@@ -259,6 +271,7 @@ class PydanticUserDynamic(BaseModel):
 # ============================================================================
 class BoltUserWithTypes(Serializer):
     """django-bolt serializer using reusable validated types."""
+
     id: PositiveInt
     name: NonEmptyStr
     email: Email
@@ -267,6 +280,7 @@ class BoltUserWithTypes(Serializer):
 
 class PydanticUserWithTypes(BaseModel):
     """Pydantic model with equivalent constraints."""
+
     id: int = Field(..., gt=0)
     name: str = Field(..., min_length=1)
     email: str = Field(..., pattern=r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
@@ -278,6 +292,7 @@ class PydanticUserWithTypes(BaseModel):
 # ============================================================================
 class BoltComplexUser(Serializer):
     """django-bolt serializer with multiple field types."""
+
     id: int
     name: Annotated[str, Meta(min_length=1, max_length=100)]
     email: str
@@ -290,6 +305,7 @@ class BoltComplexUser(Serializer):
 
 class PydanticComplexUser(BaseModel):
     """Pydantic model with multiple field types."""
+
     id: int
     name: str = Field(..., min_length=1, max_length=100)
     email: str
@@ -322,30 +338,18 @@ def run_benchmarks():
 
     print("\n1. Dict -> Object Deserialization")
     print("-" * 80)
-    bolt_time = timeit.timeit(
-        lambda: msgspec.convert(SAMPLE_DATA, type=BoltAuthorSimple),
-        number=iterations
-    )
-    pydantic_time = timeit.timeit(
-        lambda: PydanticAuthorSimple(**SAMPLE_DATA),
-        number=iterations
-    )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    bolt_time = timeit.timeit(lambda: msgspec.convert(SAMPLE_DATA, type=BoltAuthorSimple), number=iterations)
+    pydantic_time = timeit.timeit(lambda: PydanticAuthorSimple(**SAMPLE_DATA), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     print("\n2. JSON -> Object Deserialization")
     print("-" * 80)
-    bolt_time = timeit.timeit(
-        lambda: msgspec.json.decode(JSON_STRING, type=BoltAuthorSimple),
-        number=iterations
-    )
-    pydantic_time = timeit.timeit(
-        lambda: PydanticAuthorSimple.model_validate_json(JSON_STRING),
-        number=iterations
-    )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    bolt_time = timeit.timeit(lambda: msgspec.json.decode(JSON_STRING, type=BoltAuthorSimple), number=iterations)
+    pydantic_time = timeit.timeit(lambda: PydanticAuthorSimple.model_validate_json(JSON_STRING), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     print("\n3. Object -> Dict Serialization (to_dict/model_dump)")
@@ -355,16 +359,16 @@ def run_benchmarks():
 
     bolt_time = timeit.timeit(lambda: bolt_obj.to_dict(), number=iterations)
     pydantic_time = timeit.timeit(lambda: pydantic_obj.model_dump(), number=iterations)
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     print("\n4. Object -> JSON Serialization")
     print("-" * 80)
     bolt_time = timeit.timeit(lambda: msgspec.json.encode(bolt_obj), number=iterations)
     pydantic_time = timeit.timeit(lambda: pydantic_obj.model_dump_json(), number=iterations)
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     # ========================================================================
@@ -376,30 +380,22 @@ def run_benchmarks():
 
     print("\n1. Dict -> Object Deserialization (with validators)")
     print("-" * 80)
-    bolt_time = timeit.timeit(
-        lambda: msgspec.convert(SAMPLE_DATA, type=BoltAuthorWithValidators),
-        number=iterations
-    )
-    pydantic_time = timeit.timeit(
-        lambda: PydanticAuthorWithValidators(**SAMPLE_DATA),
-        number=iterations
-    )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    bolt_time = timeit.timeit(lambda: msgspec.convert(SAMPLE_DATA, type=BoltAuthorWithValidators), number=iterations)
+    pydantic_time = timeit.timeit(lambda: PydanticAuthorWithValidators(**SAMPLE_DATA), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     print("\n2. JSON -> Object Deserialization (with validators)")
     print("-" * 80)
     bolt_time = timeit.timeit(
-        lambda: msgspec.json.decode(JSON_STRING, type=BoltAuthorWithValidators),
-        number=iterations
+        lambda: msgspec.json.decode(JSON_STRING, type=BoltAuthorWithValidators), number=iterations
     )
     pydantic_time = timeit.timeit(
-        lambda: PydanticAuthorWithValidators.model_validate_json(JSON_STRING),
-        number=iterations
+        lambda: PydanticAuthorWithValidators.model_validate_json(JSON_STRING), number=iterations
     )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     # ========================================================================
@@ -417,16 +413,10 @@ def run_benchmarks():
 
     print("\n1. Dict -> Object with Model Validator")
     print("-" * 80)
-    bolt_time = timeit.timeit(
-        lambda: msgspec.convert(password_data, type=BoltPasswordChange),
-        number=iterations
-    )
-    pydantic_time = timeit.timeit(
-        lambda: PydanticPasswordChange(**password_data),
-        number=iterations
-    )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    bolt_time = timeit.timeit(lambda: msgspec.convert(password_data, type=BoltPasswordChange), number=iterations)
+    pydantic_time = timeit.timeit(lambda: PydanticPasswordChange(**password_data), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     # ========================================================================
@@ -440,16 +430,10 @@ def run_benchmarks():
 
     print("\n1. Object Creation with Computed Fields")
     print("-" * 80)
-    bolt_time = timeit.timeit(
-        lambda: msgspec.convert(user_data, type=BoltUserWithComputed),
-        number=iterations
-    )
-    pydantic_time = timeit.timeit(
-        lambda: PydanticUserWithComputed(**user_data),
-        number=iterations
-    )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    bolt_time = timeit.timeit(lambda: msgspec.convert(user_data, type=BoltUserWithComputed), number=iterations)
+    pydantic_time = timeit.timeit(lambda: PydanticUserWithComputed(**user_data), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     print("\n2. Dump with Computed Fields")
@@ -459,8 +443,8 @@ def run_benchmarks():
 
     bolt_time = timeit.timeit(lambda: bolt_user.dump(), number=iterations)
     pydantic_time = timeit.timeit(lambda: pydantic_user.model_dump(), number=iterations)
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     # ========================================================================
@@ -474,16 +458,10 @@ def run_benchmarks():
 
     print("\n1. Object Creation with field() Config")
     print("-" * 80)
-    bolt_time = timeit.timeit(
-        lambda: msgspec.convert(field_data, type=BoltUserWithFieldConfig),
-        number=iterations
-    )
-    pydantic_time = timeit.timeit(
-        lambda: PydanticUserWithFieldConfig(**field_data),
-        number=iterations
-    )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    bolt_time = timeit.timeit(lambda: msgspec.convert(field_data, type=BoltUserWithFieldConfig), number=iterations)
+    pydantic_time = timeit.timeit(lambda: PydanticUserWithFieldConfig(**field_data), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     print("\n2. Dump with write_only Exclusion")
@@ -493,8 +471,8 @@ def run_benchmarks():
 
     bolt_time = timeit.timeit(lambda: bolt_field_user.dump(), number=iterations)
     pydantic_time = timeit.timeit(lambda: pydantic_field_user.model_dump(), number=iterations)
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     # ========================================================================
@@ -505,8 +483,12 @@ def run_benchmarks():
     print("=" * 80)
 
     dynamic_data = {
-        "id": 1, "name": "John", "email": "john@example.com",
-        "password": "secret", "created_at": "2024-01-15", "internal_notes": "VIP"
+        "id": 1,
+        "name": "John",
+        "email": "john@example.com",
+        "password": "secret",
+        "created_at": "2024-01-15",
+        "internal_notes": "VIP",
     }
 
     bolt_dynamic = msgspec.convert(dynamic_data, type=BoltUserDynamic)
@@ -514,47 +496,37 @@ def run_benchmarks():
 
     print("\n1. only() - Include specific fields (3 fields)")
     print("-" * 80)
-    bolt_time = timeit.timeit(
-        lambda: BoltUserDynamic.only("id", "name", "email").dump(bolt_dynamic),
-        number=iterations
-    )
+    bolt_time = timeit.timeit(lambda: BoltUserDynamic.only("id", "name", "email").dump(bolt_dynamic), number=iterations)
     # Pydantic: use include in model_dump
     pydantic_time = timeit.timeit(
-        lambda: pydantic_dynamic.model_dump(include={"id", "name", "email"}),
-        number=iterations
+        lambda: pydantic_dynamic.model_dump(include={"id", "name", "email"}), number=iterations
     )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     print("\n2. exclude() - Exclude specific fields")
     print("-" * 80)
     bolt_time = timeit.timeit(
-        lambda: BoltUserDynamic.exclude("password", "internal_notes").dump(bolt_dynamic),
-        number=iterations
+        lambda: BoltUserDynamic.exclude("password", "internal_notes").dump(bolt_dynamic), number=iterations
     )
     pydantic_time = timeit.timeit(
-        lambda: pydantic_dynamic.model_dump(exclude={"password", "internal_notes"}),
-        number=iterations
+        lambda: pydantic_dynamic.model_dump(exclude={"password", "internal_notes"}), number=iterations
     )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     print("\n3. use() - Predefined field sets")
     print("-" * 80)
     # Pre-create view for fair comparison
     list_view = BoltUserDynamic.use("list")
-    bolt_time = timeit.timeit(
-        lambda: list_view.dump(bolt_dynamic),
-        number=iterations
-    )
+    bolt_time = timeit.timeit(lambda: list_view.dump(bolt_dynamic), number=iterations)
     pydantic_time = timeit.timeit(
-        lambda: pydantic_dynamic.model_dump(include={"id", "name", "email"}),
-        number=iterations
+        lambda: pydantic_dynamic.model_dump(include={"id", "name", "email"}), number=iterations
     )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     # ========================================================================
@@ -586,30 +558,18 @@ def run_benchmarks():
 
     print("\n1. dump(exclude_none=True)")
     print("-" * 80)
-    bolt_time = timeit.timeit(
-        lambda: bolt_nullable.dump(exclude_none=True),
-        number=iterations
-    )
-    pydantic_time = timeit.timeit(
-        lambda: pydantic_nullable.model_dump(exclude_none=True),
-        number=iterations
-    )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    bolt_time = timeit.timeit(lambda: bolt_nullable.dump(exclude_none=True), number=iterations)
+    pydantic_time = timeit.timeit(lambda: pydantic_nullable.model_dump(exclude_none=True), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     print("\n2. dump(exclude_defaults=True)")
     print("-" * 80)
-    bolt_time = timeit.timeit(
-        lambda: bolt_nullable.dump(exclude_defaults=True),
-        number=iterations
-    )
-    pydantic_time = timeit.timeit(
-        lambda: pydantic_nullable.model_dump(exclude_defaults=True),
-        number=iterations
-    )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    bolt_time = timeit.timeit(lambda: bolt_nullable.dump(exclude_defaults=True), number=iterations)
+    pydantic_time = timeit.timeit(lambda: pydantic_nullable.model_dump(exclude_defaults=True), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     # ========================================================================
@@ -623,16 +583,10 @@ def run_benchmarks():
 
     print("\n1. Dict -> Object with Validated Types")
     print("-" * 80)
-    bolt_time = timeit.timeit(
-        lambda: msgspec.convert(type_data, type=BoltUserWithTypes),
-        number=iterations
-    )
-    pydantic_time = timeit.timeit(
-        lambda: PydanticUserWithTypes(**type_data),
-        number=iterations
-    )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    bolt_time = timeit.timeit(lambda: msgspec.convert(type_data, type=BoltUserWithTypes), number=iterations)
+    pydantic_time = timeit.timeit(lambda: PydanticUserWithTypes(**type_data), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     # ========================================================================
@@ -644,30 +598,18 @@ def run_benchmarks():
 
     print("\n1. Dict -> Object (Complex)")
     print("-" * 80)
-    bolt_time = timeit.timeit(
-        lambda: msgspec.convert(COMPLEX_DATA, type=BoltComplexUser),
-        number=iterations
-    )
-    pydantic_time = timeit.timeit(
-        lambda: PydanticComplexUser(**COMPLEX_DATA),
-        number=iterations
-    )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    bolt_time = timeit.timeit(lambda: msgspec.convert(COMPLEX_DATA, type=BoltComplexUser), number=iterations)
+    pydantic_time = timeit.timeit(lambda: PydanticComplexUser(**COMPLEX_DATA), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     print("\n2. JSON -> Object (Complex)")
     print("-" * 80)
-    bolt_time = timeit.timeit(
-        lambda: msgspec.json.decode(COMPLEX_JSON, type=BoltComplexUser),
-        number=iterations
-    )
-    pydantic_time = timeit.timeit(
-        lambda: PydanticComplexUser.model_validate_json(COMPLEX_JSON),
-        number=iterations
-    )
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations/pydantic_time:,.0f} ops/sec)")
+    bolt_time = timeit.timeit(lambda: msgspec.json.decode(COMPLEX_JSON, type=BoltComplexUser), number=iterations)
+    pydantic_time = timeit.timeit(lambda: PydanticComplexUser.model_validate_json(COMPLEX_JSON), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     # ========================================================================
@@ -693,8 +635,8 @@ def run_benchmarks():
 
     print(f"\nIterations: {iterations_error:,}")
     print("-" * 80)
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations_error/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations_error/pydantic_time:,.0f} ops/sec)")
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations_error / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations_error / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     # ========================================================================
@@ -711,17 +653,11 @@ def run_benchmarks():
     print("\n1. dump_many (100 instances)")
     print("-" * 80)
     iterations_bulk = 10000
-    bolt_time = timeit.timeit(
-        lambda: BoltAuthorSimple.dump_many(bolt_instances),
-        number=iterations_bulk
-    )
-    pydantic_time = timeit.timeit(
-        lambda: [p.model_dump() for p in pydantic_instances],
-        number=iterations_bulk
-    )
+    bolt_time = timeit.timeit(lambda: BoltAuthorSimple.dump_many(bolt_instances), number=iterations_bulk)
+    pydantic_time = timeit.timeit(lambda: [p.model_dump() for p in pydantic_instances], number=iterations_bulk)
     print(f"  Iterations: {iterations_bulk:,}")
-    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations_bulk/bolt_time:,.0f} ops/sec)")
-    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations_bulk/pydantic_time:,.0f} ops/sec)")
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations_bulk / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations_bulk / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     # ========================================================================
@@ -742,9 +678,9 @@ def run_benchmarks():
 def print_winner(bolt_time: float, pydantic_time: float) -> None:
     """Print the winner of a benchmark."""
     if bolt_time < pydantic_time:
-        print(f"  Winner: django-bolt ({pydantic_time/bolt_time:.2f}x faster)")
+        print(f"  Winner: django-bolt ({pydantic_time / bolt_time:.2f}x faster)")
     else:
-        print(f"  Winner: Pydantic v2 ({bolt_time/pydantic_time:.2f}x faster)")
+        print(f"  Winner: Pydantic v2 ({bolt_time / pydantic_time:.2f}x faster)")
 
 
 if __name__ == "__main__":

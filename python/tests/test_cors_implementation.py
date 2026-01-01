@@ -10,6 +10,7 @@ Tests route-level CORS decorators with TestClient use_http_layer=True mode.
 NOTE: Global Django settings (CORS_ALLOWED_ORIGINS, CORS_ALLOWED_ORIGIN_REGEXES)
 are tested in actual server integration tests, not with TestClient.
 """
+
 import warnings
 
 import pytest
@@ -32,10 +33,7 @@ class TestOriginMatching:
             return {"data": "test"}
 
         with TestClient(api, use_http_layer=True) as client:
-            response = client.get(
-                "/data",
-                headers={"Origin": "https://example.com"}
-            )
+            response = client.get("/data", headers={"Origin": "https://example.com"})
 
             assert response.status_code == 200
             # CRITICAL: Must reflect the origin
@@ -53,10 +51,7 @@ class TestOriginMatching:
             return {"data": "test"}
 
         with TestClient(api, use_http_layer=True) as client:
-            response = client.get(
-                "/data",
-                headers={"Origin": "https://evil.com"}
-            )
+            response = client.get("/data", headers={"Origin": "https://evil.com"})
 
             assert response.status_code == 200
             # CRITICAL: Must NOT have CORS headers for disallowed origin
@@ -75,10 +70,7 @@ class TestOriginMatching:
             return {"data": "public"}
 
         with TestClient(api, use_http_layer=True) as client:
-            response = client.get(
-                "/public",
-                headers={"Origin": "https://any-domain.com"}
-            )
+            response = client.get("/public", headers={"Origin": "https://any-domain.com"})
 
             assert response.status_code == 200
             # CRITICAL: Wildcard without credentials uses literal "*"
@@ -111,7 +103,8 @@ class TestWildcardCredentials:
 
             # Filter to only CORS wildcard+credentials warnings
             cors_warnings = [
-                warning for warning in w
+                warning
+                for warning in w
                 if issubclass(warning.category, RuntimeWarning)
                 and "wildcard" in str(warning.message).lower()
                 and "credentials" in str(warning.message).lower()
@@ -136,10 +129,7 @@ class TestVaryHeaders:
             return {"data": "test"}
 
         with TestClient(api, use_http_layer=True) as client:
-            response = client.get(
-                "/data",
-                headers={"Origin": "https://example.com"}
-            )
+            response = client.get("/data", headers={"Origin": "https://example.com"})
 
             # CRITICAL: Must have Vary: Origin for caching
             vary_header = response.headers.get("Vary", "")
@@ -151,9 +141,7 @@ class TestVaryHeaders:
 
         @api.post("/data")
         @cors(
-            origins=["https://example.com"],
-            methods=["GET", "POST", "PUT"],
-            headers=["Content-Type", "Authorization"]
+            origins=["https://example.com"], methods=["GET", "POST", "PUT"], headers=["Content-Type", "Authorization"]
         )
         async def post_data(data: dict):
             return {"received": data}
@@ -165,8 +153,8 @@ class TestVaryHeaders:
                 headers={
                     "Origin": "https://example.com",
                     "Access-Control-Request-Method": "POST",
-                    "Access-Control-Request-Headers": "Content-Type"
-                }
+                    "Access-Control-Request-Headers": "Content-Type",
+                },
             )
 
             # CRITICAL: Preflight must have Vary headers per CORS spec
@@ -174,7 +162,9 @@ class TestVaryHeaders:
             # Verify Vary header exists (exact content may vary by implementation)
             assert vary_header != "", f"Expected Vary header in preflight, got: {response.headers}"
             # Should include at least one of the standard preflight Vary headers
-            assert any(h in vary_header for h in ["Access-Control-Request-Method", "Access-Control-Request-Headers", "Origin"])
+            assert any(
+                h in vary_header for h in ["Access-Control-Request-Method", "Access-Control-Request-Headers", "Origin"]
+            )
 
 
 class TestPreflightRequests:
@@ -188,7 +178,7 @@ class TestPreflightRequests:
         @cors(
             origins=["https://app.example.com"],
             methods=["GET", "POST", "PUT", "DELETE"],
-            headers=["Content-Type", "Authorization", "X-Custom-Header"]
+            headers=["Content-Type", "Authorization", "X-Custom-Header"],
         )
         async def submit_data(data: dict):
             return {"success": True}
@@ -199,8 +189,8 @@ class TestPreflightRequests:
                 headers={
                     "Origin": "https://app.example.com",
                     "Access-Control-Request-Method": "POST",
-                    "Access-Control-Request-Headers": "Content-Type, Authorization"
-                }
+                    "Access-Control-Request-Headers": "Content-Type, Authorization",
+                },
             )
 
             # CRITICAL: Preflight must return 204
@@ -227,30 +217,23 @@ class TestPreflightRequests:
         with TestClient(api, use_http_layer=True) as client:
             # First verify that allowed origin works
             allowed_response = client.options(
-                "/api/submit",
-                headers={
-                    "Origin": "https://trusted.com",
-                    "Access-Control-Request-Method": "POST"
-                }
+                "/api/submit", headers={"Origin": "https://trusted.com", "Access-Control-Request-Method": "POST"}
             )
             assert allowed_response.status_code == 204
             assert allowed_response.headers.get("Access-Control-Allow-Origin") == "https://trusted.com"
 
             # Now test that disallowed origin is rejected
             response = client.options(
-                "/api/submit",
-                headers={
-                    "Origin": "https://evil.com",
-                    "Access-Control-Request-Method": "POST"
-                }
+                "/api/submit", headers={"Origin": "https://evil.com", "Access-Control-Request-Method": "POST"}
             )
 
             # CRITICAL: Preflight must be rejected (403 or no CORS headers)
             # If 403, it's rejected. If 204 but no headers, also rejected.
             if response.status_code == 204:
                 # BUG: If we get 204 with CORS headers for disallowed origin, test should fail
-                assert "Access-Control-Allow-Origin" not in response.headers, \
+                assert "Access-Control-Allow-Origin" not in response.headers, (
                     f"CORS headers should NOT be present for disallowed origin, got: {response.headers}"
+                )
             else:
                 assert response.status_code == 403
 
@@ -259,22 +242,13 @@ class TestPreflightRequests:
         api = BoltAPI()
 
         @api.post("/secure")
-        @cors(
-            origins=["https://app.example.com"],
-            credentials=True,
-            methods=["POST", "PUT"],
-            max_age=7200
-        )
+        @cors(origins=["https://app.example.com"], credentials=True, methods=["POST", "PUT"], max_age=7200)
         async def secure_endpoint(data: dict):
             return {"data": data}
 
         with TestClient(api, use_http_layer=True) as client:
             response = client.options(
-                "/secure",
-                headers={
-                    "Origin": "https://app.example.com",
-                    "Access-Control-Request-Method": "POST"
-                }
+                "/secure", headers={"Origin": "https://app.example.com", "Access-Control-Request-Method": "POST"}
             )
 
             assert response.status_code == 204
@@ -288,22 +262,14 @@ class TestPreflightRequests:
         api = BoltAPI()
 
         @api.post("/data")
-        @cors(
-            origins=["https://app.example.com"],
-            methods=["POST"],
-            max_age=86400
-        )
+        @cors(origins=["https://app.example.com"], methods=["POST"], max_age=86400)
         async def post_data(data: dict):
             return {"received": data}
 
         with TestClient(api, use_http_layer=True) as client:
             # Preflight should have Max-Age header
             preflight = client.options(
-                "/data",
-                headers={
-                    "Origin": "https://app.example.com",
-                    "Access-Control-Request-Method": "POST"
-                }
+                "/data", headers={"Origin": "https://app.example.com", "Access-Control-Request-Method": "POST"}
             )
             assert preflight.status_code == 204
             # CRITICAL: Preflight must include max-age
@@ -324,24 +290,14 @@ class TestRouteLevelVsGlobal:
             return {"data": "custom"}
 
         # Global config has different origins
-        with TestClient(
-            api,
-            use_http_layer=True,
-            cors_allowed_origins=["https://global.com"]
-        ) as client:
+        with TestClient(api, use_http_layer=True, cors_allowed_origins=["https://global.com"]) as client:
             # Route-level origin should work
-            response = client.get(
-                "/custom",
-                headers={"Origin": "https://custom.com"}
-            )
+            response = client.get("/custom", headers={"Origin": "https://custom.com"})
             assert response.status_code == 200
             assert response.headers.get("Access-Control-Allow-Origin") == "https://custom.com"
 
             # Global origin should NOT work on this route
-            response = client.get(
-                "/custom",
-                headers={"Origin": "https://global.com"}
-            )
+            response = client.get("/custom", headers={"Origin": "https://global.com"})
             assert "Access-Control-Allow-Origin" not in response.headers
 
     # NOTE: Global regex origins (CORS_ALLOWED_ORIGIN_REGEXES) and global exact origins
@@ -360,15 +316,8 @@ class TestSkipMiddleware:
         async def no_cors_endpoint():
             return {"data": "no cors"}
 
-        with TestClient(
-            api,
-            use_http_layer=True,
-            cors_allowed_origins=["https://example.com"]
-        ) as client:
-            response = client.get(
-                "/no-cors",
-                headers={"Origin": "https://example.com"}
-            )
+        with TestClient(api, use_http_layer=True, cors_allowed_origins=["https://example.com"]) as client:
+            response = client.get("/no-cors", headers={"Origin": "https://example.com"})
 
             assert response.status_code == 200
             # CRITICAL: Must NOT have CORS headers when skipped
@@ -385,10 +334,7 @@ class TestSkipMiddleware:
             return {"data": "test"}
 
         with TestClient(api, use_http_layer=True) as client:
-            response = client.get(
-                "/conflicting",
-                headers={"Origin": "https://example.com"}
-            )
+            response = client.get("/conflicting", headers={"Origin": "https://example.com"})
 
             # CRITICAL: Skip should take precedence
             assert "Access-Control-Allow-Origin" not in response.headers
@@ -407,10 +353,7 @@ class TestCorsCredentials:
             return {"data": "sensitive"}
 
         with TestClient(api, use_http_layer=True) as client:
-            response = client.get(
-                "/secure",
-                headers={"Origin": "https://app.example.com"}
-            )
+            response = client.get("/secure", headers={"Origin": "https://app.example.com"})
 
             assert response.status_code == 200
             # CRITICAL: Must have credentials header
@@ -426,10 +369,7 @@ class TestCorsCredentials:
             return {"data": "public"}
 
         with TestClient(api, use_http_layer=True) as client:
-            response = client.get(
-                "/public",
-                headers={"Origin": "https://example.com"}
-            )
+            response = client.get("/public", headers={"Origin": "https://example.com"})
 
             assert response.status_code == 200
             # CRITICAL: Must NOT have credentials header

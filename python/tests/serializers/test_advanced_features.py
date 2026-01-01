@@ -165,9 +165,7 @@ class TestDynamicFieldSelection:
             email: str
             created_at: str
 
-        user = UserSerializer(
-            id=1, name="John", email="john@example.com", created_at="2024-01-01"
-        )
+        user = UserSerializer(id=1, name="John", email="john@example.com", created_at="2024-01-01")
 
         # Only include specific fields
         result = UserSerializer.only("id", "name").dump(user)
@@ -185,9 +183,7 @@ class TestDynamicFieldSelection:
             password: str
             secret_key: str
 
-        user = UserSerializer(
-            id=1, name="John", password="secret123", secret_key="key456"
-        )
+        user = UserSerializer(id=1, name="John", password="secret123", secret_key="key456")
 
         # Exclude sensitive fields
         result = UserSerializer.exclude("password", "secret_key").dump(user)
@@ -260,9 +256,7 @@ class TestDynamicFieldSelection:
             email: str
             phone: str
 
-        user = UserSerializer(
-            id=1, name="John", email="john@example.com", phone="123-456-7890"
-        )
+        user = UserSerializer(id=1, name="John", email="john@example.com", phone="123-456-7890")
 
         # Chain only().exclude()
         view = UserSerializer.only("id", "name", "email").exclude("email")
@@ -665,6 +659,7 @@ class TestSubsetMethod:
 
         # Get type hints from the subset class
         from typing import get_type_hints  # noqa: PLC0415
+
         hints = get_type_hints(UserMini)
 
         assert hints["id"] is int
@@ -751,6 +746,7 @@ class TestFieldsMethod:
 
         assert "nonexistent" in str(exc_info.value)
         assert "not found" in str(exc_info.value)
+
 
 class TestSubsetResponseModel:
     """Test using subset serializers as response_model."""
@@ -853,7 +849,14 @@ class TestSubsetCompleteWorkflow:
         # Verify each has correct fields
         assert set(UserListSerializer.__struct_fields__) == {"id", "username"}
         assert set(UserDetailSerializer.__struct_fields__) == {"id", "username", "email", "created_at", "last_login"}
-        assert set(UserAdminSerializer.__struct_fields__) == {"id", "username", "email", "created_at", "last_login", "is_staff"}
+        assert set(UserAdminSerializer.__struct_fields__) == {
+            "id",
+            "username",
+            "email",
+            "created_at",
+            "last_login",
+            "is_staff",
+        }
         assert set(UserPublicSerializer.__struct_fields__) == {"id", "username"}
 
         # All are proper Serializer subclasses
@@ -867,8 +870,7 @@ class TestSubsetCompleteWorkflow:
         assert list_user.dump() == {"id": 1, "username": "johndoe"}
 
         detail_user = UserDetailSerializer(
-            id=1, username="johndoe", email="john@example.com",
-            created_at="2024-01-01", last_login=None
+            id=1, username="johndoe", email="john@example.com", created_at="2024-01-01", last_login=None
         )
         result = detail_user.dump()
         assert result["id"] == 1

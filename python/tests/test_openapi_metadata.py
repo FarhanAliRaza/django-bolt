@@ -1,6 +1,7 @@
 """
 Tests for OpenAPI tags, summary, and description metadata.
 """
+
 from django_bolt import BoltAPI
 from django_bolt.decorators import ActionHandler, action
 from django_bolt.openapi import OpenAPIConfig
@@ -213,6 +214,7 @@ def test_tag_collection_with_config_tags():
 
 def test_action_decorator_with_metadata():
     """Test that @action decorator accepts and stores metadata."""
+
     @action(
         methods=["POST"],
         detail=True,
@@ -232,6 +234,7 @@ def test_action_decorator_with_metadata():
 def test_action_metadata_passed_to_route():
     """Test that action metadata is passed through to the route."""
     api = BoltAPI()
+
     @api.viewset("/users")
     class UserViewSet(ViewSet):
         @action(

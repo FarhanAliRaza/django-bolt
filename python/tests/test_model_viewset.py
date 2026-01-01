@@ -4,6 +4,7 @@ Tests for ModelViewSet and ReadOnlyModelViewSet (DRF-style usage).
 This test suite verifies that ModelViewSet and ReadOnlyModelViewSet work similarly
 to Django REST Framework's ModelViewSet, where you just set queryset and serializer_class.
 """
+
 import msgspec
 import pytest
 from asgiref.sync import async_to_sync
@@ -15,8 +16,10 @@ from .test_models import Article
 
 # --- Schemas ---
 
+
 class ArticleSchema(msgspec.Struct):
     """Full article schema."""
+
     id: int
     title: str
     content: str
@@ -36,12 +39,14 @@ class ArticleSchema(msgspec.Struct):
 
 class ArticleCreateSchema(msgspec.Struct):
     """Schema for creating/updating articles."""
+
     title: str
     content: str
     author: str
 
 
 # --- Tests ---
+
 
 @pytest.mark.django_db(transaction=True)
 def test_readonly_model_viewset(api):
@@ -205,6 +210,7 @@ def test_model_viewset_with_custom_methods(api):
 @pytest.mark.django_db(transaction=True)
 def test_model_viewset_queryset_reevaluation(api):
     """Test that queryset is re-evaluated on each request (like DRF)."""
+
     @api.view("/articles", methods=["GET"])
     class ArticleViewSet(ReadOnlyModelViewSet):
         queryset = Article.objects.all()
@@ -295,7 +301,7 @@ def test_model_viewset_lookup_field(api):
     class ArticleViewSet(ReadOnlyModelViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
-        lookup_field = 'author'  # Look up by author instead of pk
+        lookup_field = "author"  # Look up by author instead of pk
 
         async def get(self, request, pk: str):  # pk will be the author name
             """Retrieve article by author."""

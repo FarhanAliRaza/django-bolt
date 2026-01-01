@@ -214,7 +214,7 @@ def get_default_permission_classes() -> list[BasePermission]:
     """
     try:
         try:
-            if hasattr(settings, 'BOLT_DEFAULT_PERMISSION_CLASSES'):
+            if hasattr(settings, "BOLT_DEFAULT_PERMISSION_CLASSES"):
                 return settings.BOLT_DEFAULT_PERMISSION_CLASSES
         except ImproperlyConfigured:
             # Settings not configured, return default

@@ -3,6 +3,7 @@ Test JWT Token class for Django-Bolt.
 
 Tests the Token dataclass for encoding/decoding JWTs with performance focus.
 """
+
 from datetime import UTC, datetime, timedelta
 
 import jwt as pyjwt
@@ -74,7 +75,7 @@ class TestTokenCreation:
                 "tenant_id": "acme-corp",
                 "role": "manager",
                 "department": "engineering",
-            }
+            },
         )
 
         assert token.extras["tenant_id"] == "acme-corp"
@@ -153,7 +154,7 @@ class TestTokenEncoding:
 
         # Should be a valid JWT string (3 parts separated by dots)
         assert isinstance(encoded, str)
-        parts = encoded.split('.')
+        parts = encoded.split(".")
         assert len(parts) == 3
 
         # Decode to verify contents
@@ -178,13 +179,7 @@ class TestTokenEncoding:
         secret = "test-secret"
         encoded = token.encode(secret=secret)
 
-        decoded = pyjwt.decode(
-            encoded,
-            secret,
-            algorithms=["HS256"],
-            audience="my-api",
-            issuer="auth-service"
-        )
+        decoded = pyjwt.decode(encoded, secret, algorithms=["HS256"], audience="my-api", issuer="auth-service")
 
         assert decoded["sub"] == "user123"
         assert decoded["is_staff"] is True
@@ -254,12 +249,7 @@ class TestTokenDecoding:
         secret = "test-secret"
         encoded = original.encode(secret=secret)
 
-        decoded = Token.decode(
-            encoded,
-            secret=secret,
-            audience="my-api",
-            issuer="auth-service"
-        )
+        decoded = Token.decode(encoded, secret=secret, audience="my-api", issuer="auth-service")
 
         assert decoded.sub == "admin123"
         assert decoded.is_staff is True
@@ -272,11 +262,7 @@ class TestTokenDecoding:
     def test_decode_with_extras(self):
         """Test decoding token with extra claims"""
         exp = datetime.now(UTC) + timedelta(hours=1)
-        original = Token(
-            sub="user123",
-            exp=exp,
-            extras={"tenant": "acme", "role": "admin", "level": 5}
-        )
+        original = Token(sub="user123", exp=exp, extras={"tenant": "acme", "role": "admin", "level": 5})
 
         secret = "test-secret"
         encoded = original.encode(secret=secret)
@@ -392,11 +378,7 @@ class TestTokenToDictConversion:
     def test_to_dict_includes_extras(self):
         """Test that extras are included in dict"""
         exp = datetime.now(UTC) + timedelta(hours=1)
-        token = Token(
-            sub="user123",
-            exp=exp,
-            extras={"custom1": "value1", "custom2": 42}
-        )
+        token = Token(sub="user123", exp=exp, extras={"custom1": "value1", "custom2": 42})
 
         d = token.to_dict()
 
@@ -418,17 +400,12 @@ class TestTokenRoundTrip:
             permissions=["read", "write", "delete"],
             aud="my-api",
             iss="auth-service",
-            extras={"tenant": "acme", "role": "manager"}
+            extras={"tenant": "acme", "role": "manager"},
         )
 
         secret = "test-secret"
         encoded = original.encode(secret=secret)
-        decoded = Token.decode(
-            encoded,
-            secret=secret,
-            audience="my-api",
-            issuer="auth-service"
-        )
+        decoded = Token.decode(encoded, secret=secret, audience="my-api", issuer="auth-service")
 
         # Compare all fields (timestamps may differ slightly due to rounding)
         assert decoded.sub == original.sub

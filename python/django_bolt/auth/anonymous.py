@@ -5,6 +5,7 @@ This module provides the auser_fallback async function that returns
 AnonymousUser, matching Django's behavior when AuthenticationMiddleware
 is not configured.
 """
+
 from __future__ import annotations
 
 from django.contrib.auth.models import AnonymousUser

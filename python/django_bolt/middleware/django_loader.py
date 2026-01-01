@@ -17,6 +17,7 @@ Usage:
         "django.contrib.auth.middleware.AuthenticationMiddleware",
     ]})
 """
+
 from __future__ import annotations
 
 import logging
@@ -78,7 +79,7 @@ def load_django_middleware(
         return []
 
     # Get the middleware list from Django settings
-    django_middleware_list = getattr(settings, 'MIDDLEWARE', [])
+    django_middleware_list = getattr(settings, "MIDDLEWARE", [])
 
     if not django_middleware_list:
         return []
@@ -114,9 +115,7 @@ def load_django_middleware(
             middleware_class = import_string(middleware_path)
             middleware_classes.append(middleware_class)
         except ImportError as e:
-            logging.getLogger("django_bolt").warning(
-                f"Could not import Django middleware '{middleware_path}': {e}"
-            )
+            logging.getLogger("django_bolt").warning(f"Could not import Django middleware '{middleware_path}': {e}")
 
     # Return a single DjangoMiddlewareStack that wraps ALL middleware
     # This is a critical performance optimization:
@@ -135,7 +134,7 @@ def get_django_middleware_setting() -> list[str]:
         List of middleware class paths from settings.MIDDLEWARE
     """
     try:
-        return list(getattr(settings, 'MIDDLEWARE', []))
+        return list(getattr(settings, "MIDDLEWARE", []))
     except Exception:
         return []
 

@@ -31,6 +31,7 @@ class AuthorSerializer(Serializer):
     def display_name(self) -> str:
         return f"{self.name} <{self.email}>"
 
+
 class TagSerializer(Serializer):
     """Simple serializer for Tag model."""
 
@@ -93,6 +94,3 @@ class ProductSerializer(Serializer):
     @computed_field
     def on_sale(self) -> bool:
         return self.discount > 0
-
-
-

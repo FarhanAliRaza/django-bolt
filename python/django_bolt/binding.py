@@ -347,6 +347,7 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
             except msgspec.ValidationError:
                 raise
 
+        extract_with_files.needs_files_map = True  # type: ignore[attr-defined]
         return extract_with_files
     else:
         # Original extractor without file support (more efficient)
@@ -370,6 +371,7 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
             except msgspec.ValidationError:
                 raise
 
+        extract.needs_files_map = False  # type: ignore[attr-defined]
         return extract
 
 

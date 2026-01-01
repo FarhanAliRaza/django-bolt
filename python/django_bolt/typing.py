@@ -20,6 +20,7 @@ import msgspec
 
 # Import Param and Depends at top level for use in from_parameter method
 # These imports must be at module top to comply with PLC0415
+from .datastructures import UploadFile
 from .params import Depends as DependsMarker
 from .params import Param
 
@@ -220,35 +221,16 @@ def is_upload_file_type(annotation: Any) -> bool:
     # Unwrap Optional first
     unwrapped = unwrap_optional(annotation)
 
-    # Direct UploadFile - check by name to handle different import paths
-    try:
-        # Verify it's our UploadFile, not some other class with the same name
-        if (
-            isinstance(unwrapped, type)
-            and unwrapped.__name__ == "UploadFile"
-            and hasattr(unwrapped, "from_file_info")
-            and hasattr(unwrapped, "file")
-        ):
-            return True
-    except (TypeError, AttributeError):
-        pass
+    # Direct UploadFile check using type identity
+    if unwrapped is UploadFile:
+        return True
 
     # list[UploadFile]
     origin = get_origin(unwrapped)
     if origin is list:
         args = get_args(unwrapped)
-        if args:
-            inner_type = args[0]
-            try:
-                if (
-                    isinstance(inner_type, type)
-                    and inner_type.__name__ == "UploadFile"
-                    and hasattr(inner_type, "from_file_info")
-                    and hasattr(inner_type, "file")
-                ):
-                    return True
-            except (TypeError, AttributeError):
-                pass
+        if args and args[0] is UploadFile:
+            return True
 
     return False
 

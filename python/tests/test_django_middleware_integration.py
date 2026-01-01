@@ -4,6 +4,7 @@ Tests for Django middleware integration with Django-Bolt.
 Tests use TestClient for full HTTP cycle testing, verifying that middleware
 actually runs and modifies requests/responses through the complete pipeline.
 """
+
 from __future__ import annotations
 
 import msgspec
@@ -24,6 +25,7 @@ from django_bolt.testing import TestClient
 # Named without "Test" prefix to avoid pytest collection
 class SampleRequestBody(msgspec.Struct):
     """Request body for body parsing tests."""
+
     name: str
     value: int
 
@@ -43,9 +45,7 @@ class TestDjangoMiddlewareAdapter:
 
     def test_django_middleware_from_string(self):
         """Test creating DjangoMiddleware from import path."""
-        middleware = DjangoMiddleware(
-            "django.contrib.sessions.middleware.SessionMiddleware"
-        )
+        middleware = DjangoMiddleware("django.contrib.sessions.middleware.SessionMiddleware")
         assert middleware.middleware_class == SessionMiddleware
 
     def test_django_middleware_repr(self):
@@ -84,9 +84,11 @@ class TestSessionMiddlewareHTTPCycle:
 
     def test_session_middleware_basic(self):
         """Test SessionMiddleware runs through HTTP cycle."""
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+            ]
+        )
 
         @api.get("/test")
         async def test_route():
@@ -99,9 +101,11 @@ class TestSessionMiddlewareHTTPCycle:
 
     def test_session_middleware_with_session_access(self):
         """Test SessionMiddleware sets session attribute on request."""
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+            ]
+        )
 
         session_accessed = {"accessed": False}
 
@@ -131,17 +135,19 @@ class TestAuthMiddlewareHTTPCycle:
 
     def test_auth_middleware_sets_user(self):
         """Test AuthenticationMiddleware sets user on request."""
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.contrib.auth.middleware.AuthenticationMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.contrib.auth.middleware.AuthenticationMiddleware",
+            ]
+        )
 
         user_set = {"has_user": False}
 
         @api.get("/test")
         async def test_route(request):
             # Django auth middleware sets request.user
-            if hasattr(request, 'user') and request.user is not None:
+            if hasattr(request, "user") and request.user is not None:
                 user_set["has_user"] = True
             return {"status": "ok"}
 
@@ -328,7 +334,7 @@ class TestMixedMiddlewareHTTPCycle:
     def test_bolt_and_django_middleware_together(self):
         """Test Bolt middleware and Django middleware work together."""
         api = BoltAPI(
-            django_middleware=['django.contrib.sessions.middleware.SessionMiddleware'],
+            django_middleware=["django.contrib.sessions.middleware.SessionMiddleware"],
             middleware=[TimingMiddleware],
         )
 
@@ -367,10 +373,12 @@ class TestMessagesFramework:
         - __getattr__ doesn't read from state dict
         - MessageMiddleware isn't working
         """
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.contrib.messages.middleware.MessageMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.contrib.messages.middleware.MessageMiddleware",
+            ]
+        )
 
         captured = {"messages_storage": None, "message_count": 0}
 
@@ -396,10 +404,12 @@ class TestMessagesFramework:
 
             # Verify messages were stored - this is the actual test
             # If _messages wasn't synced, this will be None or 0
-            assert captured["messages_storage"] is not None, \
+            assert captured["messages_storage"] is not None, (
                 "request._messages was not accessible - __getattr__ or _sync_request_attributes broken"
-            assert captured["message_count"] == 2, \
+            )
+            assert captured["message_count"] == 2, (
                 f"Expected 2 messages, got {captured['message_count']} - MessageMiddleware not working"
+            )
 
 
 # =============================================================================
@@ -491,10 +501,12 @@ class TestMiddlewareCategorization:
         assert _is_django_builtin_middleware(CommonMiddleware) is True
 
         # Test through HTTP cycle
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.middleware.common.CommonMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.middleware.common.CommonMiddleware",
+            ]
+        )
 
         @api.get("/test")
         async def test_route(request):
@@ -553,11 +565,15 @@ class TestMiddlewareCategorization:
         All three types should work together correctly.
         """
         api = BoltAPI()
-        api.middleware = [DjangoMiddlewareStack([
-            SessionMiddleware,           # Django built-in (fast path)
-            HookBasedThirdPartyMiddleware,  # Third-party hooks (safe path)
-            CallOnlyMiddleware,          # __call__-only (chain path)
-        ])]
+        api.middleware = [
+            DjangoMiddlewareStack(
+                [
+                    SessionMiddleware,  # Django built-in (fast path)
+                    HookBasedThirdPartyMiddleware,  # Third-party hooks (safe path)
+                    CallOnlyMiddleware,  # __call__-only (chain path)
+                ]
+            )
+        ]
 
         results = {}
 
@@ -634,15 +650,18 @@ class TestMiddlewareCategorizationUnit:
 
     def test_stack_categorizes_middleware_correctly(self):
         """Test DjangoMiddlewareStack correctly categorizes middleware."""
-        stack = DjangoMiddlewareStack([
-            SessionMiddleware,              # Django built-in with hooks
-            HookBasedThirdPartyMiddleware,  # Third-party with hooks
-            CallOnlyMiddleware,             # __call__-only
-        ])
+        stack = DjangoMiddlewareStack(
+            [
+                SessionMiddleware,  # Django built-in with hooks
+                HookBasedThirdPartyMiddleware,  # Third-party with hooks
+                CallOnlyMiddleware,  # __call__-only
+            ]
+        )
 
         # Trigger categorization by creating instances
         def dummy(r):
             pass
+
         stack._create_middleware_instance(dummy)
 
         # Verify categorization
@@ -652,13 +671,16 @@ class TestMiddlewareCategorizationUnit:
 
     def test_stack_no_call_only_middleware(self):
         """Test stack without __call__-only middleware has no chain."""
-        stack = DjangoMiddlewareStack([
-            SessionMiddleware,              # Django built-in with hooks
-            HookBasedThirdPartyMiddleware,  # Third-party with hooks
-        ])
+        stack = DjangoMiddlewareStack(
+            [
+                SessionMiddleware,  # Django built-in with hooks
+                HookBasedThirdPartyMiddleware,  # Third-party with hooks
+            ]
+        )
 
         def dummy(r):
             pass
+
         stack._create_middleware_instance(dummy)
 
         # Verify no chain created (fast path)
@@ -670,9 +692,11 @@ class TestRequestConversion:
 
     def test_query_params_available(self):
         """Test query params are available in handler."""
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+            ]
+        )
 
         received_params = {}
 
@@ -690,9 +714,11 @@ class TestRequestConversion:
 
     def test_cookies_available(self):
         """Test cookies are available in handler."""
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+            ]
+        )
 
         @api.get("/test")
         async def test_route(request):
@@ -705,9 +731,11 @@ class TestRequestConversion:
 
     def test_headers_available(self):
         """Test headers are available in handler."""
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+            ]
+        )
 
         received_header = {"value": None}
 
@@ -723,9 +751,11 @@ class TestRequestConversion:
 
     def test_body_available(self):
         """Test body is available in handler."""
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+            ]
+        )
 
         @api.post("/test")
         async def test_route(body: SampleRequestBody):
@@ -755,10 +785,12 @@ class TestLoginRequiredBehavior:
         """
         from django.contrib.auth.decorators import login_required
 
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.contrib.auth.middleware.AuthenticationMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.contrib.auth.middleware.AuthenticationMiddleware",
+            ]
+        )
 
         handler_called = {"called": False}
 
@@ -781,10 +813,12 @@ class TestLoginRequiredBehavior:
         These methods are needed for Django decorators like @login_required
         to work correctly.
         """
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.contrib.auth.middleware.AuthenticationMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.contrib.auth.middleware.AuthenticationMiddleware",
+            ]
+        )
 
         captured = {"get_full_path": None, "build_absolute_uri": None}
 
@@ -816,10 +850,12 @@ class TestPermissionDenied:
         """
         from django.core.exceptions import PermissionDenied
 
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.contrib.auth.middleware.AuthenticationMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.contrib.auth.middleware.AuthenticationMiddleware",
+            ]
+        )
 
         @api.get("/admin-only")
         async def admin_only_route(request):
@@ -839,10 +875,12 @@ class TestPermissionDenied:
         This verifies Django's AuthenticationMiddleware sets request.user
         to AnonymousUser for unauthenticated requests.
         """
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.contrib.auth.middleware.AuthenticationMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.contrib.auth.middleware.AuthenticationMiddleware",
+            ]
+        )
 
         user_info = {"is_authenticated": None, "is_anonymous": None}
 
@@ -881,10 +919,12 @@ class TestCSRFMiddleware:
         GET requests should always be allowed through.
         """
 
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.middleware.csrf.CsrfViewMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.middleware.csrf.CsrfViewMiddleware",
+            ]
+        )
 
         @api.get("/test")
         async def test_route():
@@ -902,10 +942,12 @@ class TestCSRFMiddleware:
         When CsrfViewMiddleware is enabled and a POST request doesn't include
         a valid CSRF token, it should return 403 Forbidden.
         """
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.middleware.csrf.CsrfViewMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.middleware.csrf.CsrfViewMiddleware",
+            ]
+        )
 
         handler_called = {"called": False}
 
@@ -933,10 +975,12 @@ class TestCSRFMiddleware:
         """
         from django.views.decorators.csrf import csrf_exempt
 
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.middleware.csrf.CsrfViewMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.middleware.csrf.CsrfViewMiddleware",
+            ]
+        )
 
         handler_called = {"called": False}
 
@@ -958,10 +1002,12 @@ class TestCSRFMiddleware:
         """
         Test that HEAD requests work without CSRF token (safe method).
         """
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.middleware.csrf.CsrfViewMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.middleware.csrf.CsrfViewMiddleware",
+            ]
+        )
 
         @api.head("/test")
         async def test_route():
@@ -975,10 +1021,12 @@ class TestCSRFMiddleware:
         """
         Test that OPTIONS requests work without CSRF token (safe method).
         """
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.middleware.csrf.CsrfViewMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.middleware.csrf.CsrfViewMiddleware",
+            ]
+        )
 
         @api.options("/test")
         async def test_route():
@@ -1069,16 +1117,13 @@ class TestMultipleCookieHeaders:
             all_cookies = "\n".join(set_cookie_headers)
 
             assert "session_id=abc123" in all_cookies, (
-                f"session_id cookie missing from response. "
-                f"Set-Cookie headers: {set_cookie_headers}"
+                f"session_id cookie missing from response. Set-Cookie headers: {set_cookie_headers}"
             )
             assert "user_pref=dark_mode" in all_cookies, (
-                f"user_pref cookie missing from response. "
-                f"Set-Cookie headers: {set_cookie_headers}"
+                f"user_pref cookie missing from response. Set-Cookie headers: {set_cookie_headers}"
             )
             assert "tracking_consent=accepted" in all_cookies, (
-                f"tracking_consent cookie missing from response. "
-                f"Set-Cookie headers: {set_cookie_headers}"
+                f"tracking_consent cookie missing from response. Set-Cookie headers: {set_cookie_headers}"
             )
 
     def test_cookies_have_correct_attributes(self):
@@ -1109,18 +1154,14 @@ class TestMultipleCookieHeaders:
 
             # Check session_id has HttpOnly
             # Find the session_id cookie line
-            session_cookie = next(
-                (c for c in set_cookie_headers if "session_id=" in c), None
-            )
+            session_cookie = next((c for c in set_cookie_headers if "session_id=" in c), None)
             assert session_cookie is not None, "session_id cookie not found"
             assert "httponly" in session_cookie.lower(), (
                 f"session_id cookie missing HttpOnly attribute: {session_cookie}"
             )
 
             # Check tracking_consent has Secure and SameSite=Strict
-            tracking_cookie = next(
-                (c for c in set_cookie_headers if "tracking_consent=" in c), None
-            )
+            tracking_cookie = next((c for c in set_cookie_headers if "tracking_consent=" in c), None)
             assert tracking_cookie is not None, "tracking_consent cookie not found"
             assert "secure" in tracking_cookie.lower(), (
                 f"tracking_consent cookie missing Secure attribute: {tracking_cookie}"
@@ -1149,15 +1190,10 @@ class TestMultipleCookieHeaders:
             assert response.status_code == 200
 
             # Count Set-Cookie headers
-            cookie_count = sum(
-                1 for key, _ in response.headers.multi_items()
-                if key.lower() == "set-cookie"
-            )
+            cookie_count = sum(1 for key, _ in response.headers.multi_items() if key.lower() == "set-cookie")
 
             # Middleware sets 3 cookies
-            assert cookie_count >= 3, (
-                f"Expected at least 3 cookies from middleware, got {cookie_count}"
-            )
+            assert cookie_count >= 3, f"Expected at least 3 cookies from middleware, got {cookie_count}"
 
     def test_no_cookies_when_middleware_doesnt_set_them(self):
         """
@@ -1178,12 +1214,7 @@ class TestMultipleCookieHeaders:
             assert response.status_code == 200
 
             # Count Set-Cookie headers
-            cookie_count = sum(
-                1 for key, _ in response.headers.multi_items()
-                if key.lower() == "set-cookie"
-            )
+            cookie_count = sum(1 for key, _ in response.headers.multi_items() if key.lower() == "set-cookie")
 
             # Should have no cookies (HeaderAddingMiddleware doesn't set cookies)
-            assert cookie_count == 0, (
-                f"Expected no Set-Cookie headers, got {cookie_count}"
-            )
+            assert cookie_count == 0, f"Expected no Set-Cookie headers, got {cookie_count}"

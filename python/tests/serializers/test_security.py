@@ -7,6 +7,7 @@ Tests cover:
 - Circular reference detection in from_model()
 - Performance optimizations
 """
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -113,10 +114,7 @@ class TestNestedListSizeLimits:
             author: Annotated[AuthorSerializer, Nested(AuthorSerializer)]
 
         # Single nested object should work fine
-        book = BookSerializer(
-            title="Test",
-            author={"id": 1, "name": "Alice"}
-        )
+        book = BookSerializer(title="Test", author={"id": 1, "name": "Alice"})
         assert book.author.name == "Alice"
 
 
@@ -145,6 +143,7 @@ class TestNestedTypeSafety:
 
         class NotASerializer:
             """This is not a Serializer subclass."""
+
             id: int
             name: str
 
@@ -172,6 +171,7 @@ class TestNestedTypeSafety:
 
         class PlainStruct(msgspec.Struct):
             """This is a msgspec.Struct but not a Serializer."""
+
             id: int
             name: str
 
@@ -212,8 +212,6 @@ class TestRecursionPrevention:
         error_msg = str(exc_info.value)
         assert "Too many items" in error_msg
         assert "10000" in error_msg
-
-
 
 
 class TestTypeHintResolutionEdgeCases:

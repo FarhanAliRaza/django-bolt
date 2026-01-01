@@ -4,6 +4,7 @@ OpenAPI route registration for BoltAPI.
 This module handles the registration of OpenAPI documentation routes
 (JSON, YAML, and UI plugins) separately from the main BoltAPI class.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -118,11 +119,7 @@ class OpenAPIRouteRegistrar:
             try:
                 schema = self._get_schema()
                 rendered = json_plugin.render(schema, "")
-                return JSON(
-                    rendered,
-                    status_code=200,
-                    headers={"content-type": json_plugin.media_type}
-                )
+                return JSON(rendered, status_code=200, headers={"content-type": json_plugin.media_type})
             except Exception as e:
                 raise Exception(f"Failed to generate OpenAPI JSON schema: {type(e).__name__}: {str(e)}") from e
 
@@ -136,11 +133,7 @@ class OpenAPIRouteRegistrar:
             """Serve OpenAPI schema as YAML."""
             schema = self._get_schema()
             rendered = yaml_plugin.render(schema, "")
-            return PlainText(
-                rendered,
-                status_code=200,
-                headers={"content-type": yaml_plugin.media_type}
-            )
+            return PlainText(rendered, status_code=200, headers={"content-type": yaml_plugin.media_type})
 
         openapi_yaml_handler = self._apply_django_auth(openapi_yaml_handler)
         docs_api.get(f"{route_prefix}/openapi.yaml", guards=guards, auth=auth)(openapi_yaml_handler)
@@ -149,11 +142,7 @@ class OpenAPIRouteRegistrar:
             """Serve OpenAPI schema as YAML (alternative extension)."""
             schema = self._get_schema()
             rendered = yaml_plugin.render(schema, "")
-            return PlainText(
-                rendered,
-                status_code=200,
-                headers={"content-type": yaml_plugin.media_type}
-            )
+            return PlainText(rendered, status_code=200, headers={"content-type": yaml_plugin.media_type})
 
         openapi_yml_handler = self._apply_django_auth(openapi_yml_handler)
         docs_api.get(f"{route_prefix}/openapi.yml", guards=guards, auth=auth)(openapi_yml_handler)
@@ -201,16 +190,13 @@ class OpenAPIRouteRegistrar:
                         try:
                             schema = self._get_schema()
                             rendered = p.render(schema, schema_url)
-                            return HTML(
-                                rendered,
-                                status_code=200,
-                                headers={"content-type": p.media_type}
-                            )
+                            return HTML(rendered, status_code=200, headers={"content-type": p.media_type})
                         except Exception as e:
                             raise Exception(
                                 f"Failed to render OpenAPI UI plugin {p.__class__.__name__}: "
                                 f"{type(e).__name__}: {str(e)}"
                             ) from e
+
                     return ui_handler
 
                 handler = make_handler(plugin)
@@ -244,15 +230,10 @@ class OpenAPIRouteRegistrar:
                     try:
                         schema = self._get_schema()
                         rendered = p.render(schema, url)
-                        return HTML(
-                            rendered,
-                            status_code=200,
-                            headers={"content-type": p.media_type}
-                        )
+                        return HTML(rendered, status_code=200, headers={"content-type": p.media_type})
                     except Exception as e:
-                        raise Exception(
-                            f"Failed to render OpenAPI UI: {type(e).__name__}: {str(e)}"
-                        ) from e
+                        raise Exception(f"Failed to render OpenAPI UI: {type(e).__name__}: {str(e)}") from e
+
                 return openapi_root_handler
 
             handler = make_root_handler(plugin, schema_url)

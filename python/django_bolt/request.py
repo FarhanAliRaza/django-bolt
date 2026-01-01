@@ -5,6 +5,7 @@ Defines the interface for request objects. At runtime, handlers receive
 PyRequest from Rust (src/request.rs). This Protocol provides type hints
 and IDE autocomplete.
 """
+
 from typing import (
     Any,
     Protocol,
@@ -62,8 +63,7 @@ class Request(Protocol):
         ...
 
     @user.setter
-    def user(self, value: Any) -> None:
-        ...
+    def user(self, value: Any) -> None: ...
 
     @property
     def context(self) -> Any:
@@ -83,5 +83,4 @@ class Request(Protocol):
 
 __all__ = [
     "Request",
-
 ]

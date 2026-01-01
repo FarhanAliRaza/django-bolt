@@ -12,6 +12,7 @@ def is_non_string_sequence(value: Any) -> bool:
     """Check if value is a sequence but not a string."""
     return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
 
+
 if TYPE_CHECKING:
     from typing import Protocol
 
@@ -23,7 +24,9 @@ if TYPE_CHECKING:
 
     class DataclassProtocol(Protocol):
         """Simple dataclass protocol."""
+
         __dataclass_fields__: Any
+
 
 __all__ = ("Schema", "SchemaDataContainer")
 

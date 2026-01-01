@@ -17,18 +17,19 @@ from django_bolt.testing import TestClient
 def test_admin_root_redirect():
     """Test /admin/ returns content (redirect or login page) via TestClient."""
     from django_bolt.admin.admin_detection import should_enable_admin  # noqa: PLC0415
+
     if not should_enable_admin():
         pytest.skip("Django admin not enabled")
 
     api = BoltAPI()
-    api._register_admin_routes('127.0.0.1', 8000)
+    api._register_admin_routes("127.0.0.1", 8000)
 
     @api.get("/test")
     async def test_route():
         return {"test": "ok"}
 
     # Check if admin routes were registered
-    admin_routes = [r for r in api._routes if '/admin' in r[1]]
+    admin_routes = [r for r in api._routes if "/admin" in r[1]]
     if not admin_routes:
         pytest.skip("Admin routes were not registered")
 
@@ -45,25 +46,28 @@ def test_admin_root_redirect():
         assert response.status_code in (200, 301, 302), f"Expected valid response, got {response.status_code}"
 
         # CRITICAL: Body should NOT be empty
-        assert len(response.content) > 0, f"Response body is EMPTY! Got {len(response.content)} bytes. ASGI bridge is BROKEN!"
+        assert len(response.content) > 0, (
+            f"Response body is EMPTY! Got {len(response.content)} bytes. ASGI bridge is BROKEN!"
+        )
 
 
 @pytest.mark.django_db(transaction=True)
 def test_admin_login_page():
     """Test /admin/login/ returns HTML page (not empty body) via TestClient."""
     from django_bolt.admin.admin_detection import should_enable_admin  # noqa: PLC0415
+
     if not should_enable_admin():
         pytest.skip("Django admin not enabled")
 
     api = BoltAPI()
-    api._register_admin_routes('127.0.0.1', 8000)
+    api._register_admin_routes("127.0.0.1", 8000)
 
     @api.get("/test")
     async def test_route():
         return {"test": "ok"}
 
     # Check if admin routes were registered
-    admin_routes = [r for r in api._routes if '/admin' in r[1]]
+    admin_routes = [r for r in api._routes if "/admin" in r[1]]
     if not admin_routes:
         pytest.skip("Admin routes were not registered")
 
@@ -80,15 +84,17 @@ def test_admin_login_page():
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
 
         # CRITICAL: Body should NOT be empty - THIS IS THE BUG
-        assert len(response.content) > 0, f"Admin login page body is EMPTY! Got {len(response.content)} bytes. ASGI bridge is BROKEN!"
+        assert len(response.content) > 0, (
+            f"Admin login page body is EMPTY! Got {len(response.content)} bytes. ASGI bridge is BROKEN!"
+        )
 
         # Should be HTML
-        content_type = response.headers.get('content-type', '')
-        assert 'html' in content_type.lower(), f"Expected HTML, got {content_type}"
+        content_type = response.headers.get("content-type", "")
+        assert "html" in content_type.lower(), f"Expected HTML, got {content_type}"
 
         # Should contain login form
         body_text = response.text.lower()
-        assert 'login' in body_text or 'django' in body_text, f"Expected login content, got: {body_text[:200]}"
+        assert "login" in body_text or "django" in body_text, f"Expected login content, got: {body_text[:200]}"
 
 
 @pytest.mark.django_db
@@ -128,9 +134,9 @@ def test_asgi_bridge_direct_with_real_django():
     assert len(body) > 0, f"ASGI bridge returned EMPTY body! Expected HTML content. Body length: {len(body)}"
 
     # Should be HTML content
-    body_text = body.decode('utf-8', errors='ignore')
-    assert 'html' in body_text.lower(), f"Expected HTML content, got: {body_text[:100]}"
-    assert 'django' in body_text.lower() or 'login' in body_text.lower(), "Expected Django admin content"
+    body_text = body.decode("utf-8", errors="ignore")
+    assert "html" in body_text.lower(), f"Expected HTML content, got: {body_text[:100]}"
+    assert "django" in body_text.lower() or "login" in body_text.lower(), "Expected Django admin content"
 
 
 @pytest.mark.django_db
@@ -157,12 +163,12 @@ def test_asgi_bridge_admin_root():
     # Should have location header
     location = None
     for name, value in headers:
-        if name.lower() == 'location':
+        if name.lower() == "location":
             location = value
             break
 
     assert location is not None, "Redirect should have Location header"
-    assert '/admin/login/' in location, f"Should redirect to login, got {location}"
+    assert "/admin/login/" in location, f"Should redirect to login, got {location}"
 
 
 @pytest.mark.django_db
@@ -273,7 +279,7 @@ def test_asgi_bridge_with_cookies():
     # Should set CSRF token cookie
     has_csrf = False
     for name, value in headers:
-        if name.lower() == 'set-cookie' and 'csrftoken' in value:
+        if name.lower() == "set-cookie" and "csrftoken" in value:
             has_csrf = True
             break
 
@@ -296,14 +302,14 @@ class TestStaticRouteMetadata:
         """
         api = BoltAPI()
         # First register admin routes (required before static routes)
-        api._register_admin_routes('127.0.0.1', 8000)
+        api._register_admin_routes("127.0.0.1", 8000)
         # Then register static routes
         api._register_static_routes()
 
         # Find the static handler
         static_handler = None
         for _method, path, _handler_id, handler in api._routes:
-            if '/static/' in path and '{path:path}' in path:
+            if "/static/" in path and "{path:path}" in path:
                 static_handler = handler
                 break
 
@@ -333,13 +339,13 @@ class TestStaticRouteMetadata:
     def test_static_injector_extracts_path(self):
         """Test that the static injector correctly extracts the path parameter."""
         api = BoltAPI()
-        api._register_admin_routes('127.0.0.1', 8000)
+        api._register_admin_routes("127.0.0.1", 8000)
         api._register_static_routes()
 
         # Find the static handler
         static_handler = None
         for _method, path, _handler_id, handler in api._routes:
-            if '/static/' in path and '{path:path}' in path:
+            if "/static/" in path and "{path:path}" in path:
                 static_handler = handler
                 break
 
@@ -371,13 +377,13 @@ class TestStaticRouteMetadata:
     def test_static_injector_handles_empty_path(self):
         """Test that the static injector handles missing path gracefully."""
         api = BoltAPI()
-        api._register_admin_routes('127.0.0.1', 8000)
+        api._register_admin_routes("127.0.0.1", 8000)
         api._register_static_routes()
 
         # Find the static handler
         static_handler = None
         for _method, path, _handler_id, handler in api._routes:
-            if '/static/' in path and '{path:path}' in path:
+            if "/static/" in path and "{path:path}" in path:
                 static_handler = handler
                 break
 

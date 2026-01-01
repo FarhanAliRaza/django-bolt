@@ -253,4 +253,4 @@ __all__ = [
     "CloseCode",
 ]
 
-default_app_config = 'django_bolt.apps.DjangoBoltConfig'
+default_app_config = "django_bolt.apps.DjangoBoltConfig"

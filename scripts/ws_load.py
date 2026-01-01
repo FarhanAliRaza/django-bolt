@@ -3,6 +3,7 @@
 WebSocket Load Test Script
 Measures real WebSocket performance with concurrent clients.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -136,15 +137,15 @@ class WebSocketLoadTest:
 
     async def run(self) -> None:
         """Run the load test"""
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("WebSocket Load Test")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print(f"URL: {self.url}")
         print(f"Concurrent Clients: {self.num_clients}")
         print(f"Duration per Client: {self.duration}s")
         print(f"Message Interval: {self.message_interval}s")
         print(f"Start Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"{'='*70}\n")
+        print(f"{'=' * 70}\n")
 
         self.start_time = time.time()
 
@@ -187,23 +188,21 @@ class WebSocketLoadTest:
         successful = [r for r in self.results if r["status"] == "success"]
         failed = [r for r in self.results if r["status"] == "failed"]
 
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print("RESULTS")
-        print(f"{'='*70}\n")
+        print(f"{'=' * 70}\n")
 
         # Summary
         print(f"Total Clients: {self.num_clients}")
-        print(
-            f"Successful: {len(successful)} ({len(successful)/self.num_clients*100:.1f}%)"
-        )
-        print(f"Failed: {len(failed)} ({len(failed)/self.num_clients*100:.1f}%)")
+        print(f"Successful: {len(successful)} ({len(successful) / self.num_clients * 100:.1f}%)")
+        print(f"Failed: {len(failed)} ({len(failed) / self.num_clients * 100:.1f}%)")
 
         if failed:
             print("\nFailure Details:")
             for r in failed[:5]:  # Show first 5 failures
                 print(f"  Client {r['client_id']}: {r['error']}")
             if len(failed) > 5:
-                print(f"  ... and {len(failed)-5} more failures")
+                print(f"  ... and {len(failed) - 5} more failures")
 
         print()
 
@@ -230,12 +229,12 @@ class WebSocketLoadTest:
 
             print("\nData Transfer:")
             total_bytes = sum(bytes_sent_list) + sum(bytes_recv_list)
-            print(f"  Total Bytes: {total_bytes:,} ({total_bytes/1024/1024:.2f} MB)")
+            print(f"  Total Bytes: {total_bytes:,} ({total_bytes / 1024 / 1024:.2f} MB)")
             print(f"  Bytes Sent: {sum(bytes_sent_list):,}")
             print(f"  Bytes Received: {sum(bytes_recv_list):,}")
             avg_duration = mean(duration_list)
             if avg_duration > 0:
-                print(f"  Throughput: {total_bytes/avg_duration/1024:.2f} KB/s")
+                print(f"  Throughput: {total_bytes / avg_duration / 1024:.2f} KB/s")
 
             if all_latencies:
                 print("\nLatency (round-trip):")
@@ -262,7 +261,7 @@ class WebSocketLoadTest:
             print("\nMessaging Rate:")
             avg_rate = mean([s / d for s, d in zip(sent_list, duration_list, strict=True)])
             print(f"  Avg Messages/sec/client: {avg_rate:.2f}")
-            print(f"  Total Messages/sec: {sum(sent_list)/mean(duration_list):.2f}")
+            print(f"  Total Messages/sec: {sum(sent_list) / mean(duration_list):.2f}")
 
         print()
 
@@ -274,20 +273,15 @@ class WebSocketLoadTest:
         print(f"  CPU (current): {sys_stats['cpu_percent']:.1f}%")
         if self.cpu_samples:
             print(f"  CPU (avg during test): {avg_cpu:.1f}%")
-            print(
-                f"  CPU (min/max during test): {min(self.cpu_samples):.1f}% / "
-                f"{max(self.cpu_samples):.1f}%"
-            )
+            print(f"  CPU (min/max during test): {min(self.cpu_samples):.1f}% / {max(self.cpu_samples):.1f}%")
 
         print()
-        print(f"{'='*70}\n")
+        print(f"{'=' * 70}\n")
 
 
 async def main() -> None:
     """Main entry point"""
-    parser = argparse.ArgumentParser(
-        description="WebSocket Load Test - Measures concurrent WebSocket performance"
-    )
+    parser = argparse.ArgumentParser(description="WebSocket Load Test - Measures concurrent WebSocket performance")
     parser.add_argument(
         "url",
         nargs="?",
@@ -331,9 +325,7 @@ async def main() -> None:
 
     # Validate URL
     if not args.url.startswith("ws"):
-        print(
-            f"Error: Invalid URL '{args.url}'. Must start with ws:// or wss://"
-        )
+        print(f"Error: Invalid URL '{args.url}'. Must start with ws:// or wss://")
         sys.exit(1)
 
     # Run test

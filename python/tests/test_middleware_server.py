@@ -1,6 +1,7 @@
 """
 Integration test for middleware with TestClient
 """
+
 import time
 
 import django
@@ -21,30 +22,23 @@ def api():
     if not settings.configured:
         settings.configure(
             DEBUG=True,
-            SECRET_KEY='test-secret-key-for-middleware',
+            SECRET_KEY="test-secret-key-for-middleware",
             INSTALLED_APPS=[
-                'django.contrib.contenttypes',
-                'django.contrib.auth',
-                'django_bolt',
+                "django.contrib.contenttypes",
+                "django.contrib.auth",
+                "django_bolt",
             ],
             DATABASES={
-                'default': {
-                    'ENGINE': 'django.db.backends.sqlite3',
-                    'NAME': ':memory:',
+                "default": {
+                    "ENGINE": "django.db.backends.sqlite3",
+                    "NAME": ":memory:",
                 }
             },
             USE_TZ=True,
         )
         django.setup()
 
-    api = BoltAPI(
-        middleware_config={
-            'cors': {
-                'origins': ['http://localhost:3000'],
-                'credentials': True
-            }
-        }
-    )
+    api = BoltAPI(middleware_config={"cors": {"origins": ["http://localhost:3000"], "credentials": True}})
 
     @api.get("/")
     async def root():
@@ -60,39 +54,29 @@ def api():
     async def cors_endpoint():
         return {"cors": "enabled"}
 
-    @api.get(
-        "/protected-jwt",
-        auth=[JWTAuthentication(secret="test-secret")],
-        guards=[IsAuthenticated()]
-    )
+    @api.get("/protected-jwt", auth=[JWTAuthentication(secret="test-secret")], guards=[IsAuthenticated()])
     async def jwt_protected():
         return {"message": "JWT protected content"}
 
     @api.get(
         "/protected-api-key",
-        auth=[APIKeyAuthentication(
-            api_keys={"test-key-123", "test-key-456"},
-            header="authorization"
-        )],
-        guards=[IsAuthenticated()]
+        auth=[APIKeyAuthentication(api_keys={"test-key-123", "test-key-456"}, header="authorization")],
+        guards=[IsAuthenticated()],
     )
     async def api_key_protected():
         return {"message": "API key protected content"}
 
     @api.get(
         "/context-test",
-        auth=[APIKeyAuthentication(
-            api_keys={"test-key"},
-            header="authorization"
-        )],
-        guards=[IsAuthenticated()]
+        auth=[APIKeyAuthentication(api_keys={"test-key"}, header="authorization")],
+        guards=[IsAuthenticated()],
     )
     async def context_endpoint(request: dict):
         """Test that middleware context is available"""
         context = request.get("context")
         return {
             "has_context": context is not None,
-            "context_keys": list(context.keys()) if context and hasattr(context, 'keys') else []
+            "context_keys": list(context.keys()) if context and hasattr(context, "keys") else [],
         }
 
     return api
@@ -135,7 +119,7 @@ def test_rate_limiting(http_client):
     # First 10 requests should succeed (burst)
     for i in range(10):
         response = http_client.get("/rate-limited")
-        assert response.status_code == 200, f"Request {i+1} failed"
+        assert response.status_code == 200, f"Request {i + 1} failed"
 
     # Next request should be rate limited
     response = http_client.get("/rate-limited")
@@ -160,8 +144,8 @@ def test_cors_preflight(http_client):
         headers={
             "Origin": "http://localhost:3000",
             "Access-Control-Request-Method": "GET",
-            "Access-Control-Request-Headers": "Content-Type"
-        }
+            "Access-Control-Request-Headers": "Content-Type",
+        },
     )
     # Preflight should return 204
     assert response.status_code == 204
@@ -179,11 +163,7 @@ def test_jwt_auth_without_token(client):
 
 def test_jwt_auth_with_valid_token(client):
     """Test JWT authentication with valid token"""
-    token = jwt.encode(
-        {"sub": "user123", "exp": int(time.time()) + 3600},
-        "test-secret",
-        algorithm="HS256"
-    )
+    token = jwt.encode({"sub": "user123", "exp": int(time.time()) + 3600}, "test-secret", algorithm="HS256")
     response = client.get("/protected-jwt", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     assert response.json() == {"message": "JWT protected content"}
@@ -191,11 +171,7 @@ def test_jwt_auth_with_valid_token(client):
 
 def test_jwt_auth_with_expired_token(client):
     """Test JWT authentication with expired token"""
-    expired_token = jwt.encode(
-        {"sub": "user123", "exp": int(time.time()) - 3600},
-        "test-secret",
-        algorithm="HS256"
-    )
+    expired_token = jwt.encode({"sub": "user123", "exp": int(time.time()) - 3600}, "test-secret", algorithm="HS256")
     response = client.get("/protected-jwt", headers={"Authorization": f"Bearer {expired_token}"})
     assert response.status_code == 401
 

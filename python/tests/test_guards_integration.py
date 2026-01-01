@@ -3,6 +3,7 @@ Integration tests for guards and authentication with TestClient.
 
 Tests the full request flow including Rust-side authentication and guard evaluation.
 """
+
 import time
 
 import django
@@ -33,7 +34,7 @@ def create_token(user_id="user123", is_staff=False, is_superuser=False, permissi
         "iat": int(time.time()),
         "is_staff": is_staff,
         "is_superuser": is_superuser,
-        "permissions": permissions or []
+        "permissions": permissions or [],
     }
     return jwt.encode(payload, "test-secret", algorithm="HS256")
 
@@ -45,23 +46,23 @@ def api():
     if not settings.configured:
         settings.configure(
             DEBUG=True,
-            SECRET_KEY='test-secret-key-for-guards',
+            SECRET_KEY="test-secret-key-for-guards",
             INSTALLED_APPS=[
-                'django.contrib.contenttypes',
-                'django.contrib.auth',
-                'django_bolt',
+                "django.contrib.contenttypes",
+                "django.contrib.auth",
+                "django_bolt",
             ],
             DATABASES={
-                'default': {
-                    'ENGINE': 'django.db.backends.sqlite3',
-                    'NAME': ':memory:',
+                "default": {
+                    "ENGINE": "django.db.backends.sqlite3",
+                    "NAME": ":memory:",
                 }
             },
             USE_TZ=True,
         )
         django.setup()
         # Run migrations to create tables
-        call_command('migrate', '--run-syncdb', verbosity=0)
+        call_command("migrate", "--run-syncdb", verbosity=0)
 
     api = BoltAPI()
 
@@ -71,11 +72,7 @@ def api():
         return {"message": "public", "auth": "not required"}
 
     # Protected endpoint requiring authentication
-    @api.get(
-        "/protected",
-        auth=[JWTAuthentication(secret="test-secret")],
-        guards=[IsAuthenticated()]
-    )
+    @api.get("/protected", auth=[JWTAuthentication(secret="test-secret")], guards=[IsAuthenticated()])
     async def protected_endpoint(request: dict):
         context = request.get("context", {})
         return {
@@ -86,11 +83,7 @@ def api():
         }
 
     # Admin-only endpoint
-    @api.get(
-        "/admin",
-        auth=[JWTAuthentication(secret="test-secret")],
-        guards=[IsAdminUser()]
-    )
+    @api.get("/admin", auth=[JWTAuthentication(secret="test-secret")], guards=[IsAdminUser()])
     async def admin_endpoint(request: dict):
         context = request["context"]
         return {
@@ -100,11 +93,7 @@ def api():
         }
 
     # Staff-only endpoint
-    @api.get(
-        "/staff",
-        auth=[JWTAuthentication(secret="test-secret")],
-        guards=[IsStaff()]
-    )
+    @api.get("/staff", auth=[JWTAuthentication(secret="test-secret")], guards=[IsStaff()])
     async def staff_endpoint(request: dict):
         return {
             "message": "staff area",
@@ -112,11 +101,7 @@ def api():
         }
 
     # Permission-required endpoint
-    @api.get(
-        "/delete-users",
-        auth=[JWTAuthentication(secret="test-secret")],
-        guards=[HasPermission("users.delete")]
-    )
+    @api.get("/delete-users", auth=[JWTAuthentication(secret="test-secret")], guards=[HasPermission("users.delete")])
     async def delete_users_endpoint():
         return {"message": "deleting users"}
 
@@ -124,7 +109,7 @@ def api():
     @api.get(
         "/moderate",
         auth=[JWTAuthentication(secret="test-secret")],
-        guards=[HasAnyPermission("users.moderate", "posts.moderate")]
+        guards=[HasAnyPermission("users.moderate", "posts.moderate")],
     )
     async def moderate_endpoint():
         return {"message": "moderating content"}
@@ -133,7 +118,7 @@ def api():
     @api.get(
         "/api-endpoint",
         auth=[APIKeyAuthentication(api_keys={"valid-key-123", "valid-key-456"})],
-        guards=[IsAuthenticated()]
+        guards=[IsAuthenticated()],
     )
     async def api_key_endpoint(request: dict):
         return {
@@ -143,15 +128,11 @@ def api():
         }
 
     # Full context inspection endpoint
-    @api.get(
-        "/context",
-        auth=[JWTAuthentication(secret="test-secret")],
-        guards=[IsAuthenticated()]
-    )
+    @api.get("/context", auth=[JWTAuthentication(secret="test-secret")], guards=[IsAuthenticated()])
     async def context_endpoint(request: dict):
         context = request.get("context", {})
         return {
-            "context_keys": list(context.keys()) if hasattr(context, 'keys') else [],
+            "context_keys": list(context.keys()) if hasattr(context, "keys") else [],
             "user_id": context.get("user_id"),
             "is_staff": context.get("is_staff"),
             "is_superuser": context.get("is_superuser"),
@@ -292,7 +273,7 @@ def test_invalid_jwt_signature(client):
     token = jwt.encode(
         {"sub": "user123", "exp": int(time.time()) + 3600},
         "wrong-secret",  # Different secret
-        algorithm="HS256"
+        algorithm="HS256",
     )
     response = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 401
@@ -303,7 +284,7 @@ def test_expired_jwt_token(client):
     token = jwt.encode(
         {"sub": "user123", "exp": int(time.time()) - 3600},  # Expired
         "test-secret",
-        algorithm="HS256"
+        algorithm="HS256",
     )
     response = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 401

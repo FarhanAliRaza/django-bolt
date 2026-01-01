@@ -60,10 +60,9 @@ __all__ = [
     "BaseAuthentication",
     "JWTAuthentication",
     "APIKeyAuthentication",
-    "SessionAuthentication", # Session authentication is not implemented
+    "SessionAuthentication",  # Session authentication is not implemented
     "AuthContext",
     "get_default_authentication_classes",
-
     # Guards/Permissions
     "BasePermission",
     "AllowAny",
@@ -74,21 +73,18 @@ __all__ = [
     "HasAnyPermission",
     "HasAllPermissions",
     "get_default_permission_classes",
-
     # JWT
     "Token",
     "create_jwt_for_user",
     "get_current_user",
     "extract_user_id_from_context",
     "get_auth_context",
-
     # Revocation (optional)
     "RevocationStore",
     "InMemoryRevocation",
     "DjangoCacheRevocation",
     "DjangoORMRevocation",
     "create_revocation_handler",
-
     # User loading
     "register_auth_backend",
     "get_registered_backend",

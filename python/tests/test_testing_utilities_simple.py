@@ -3,6 +3,7 @@
 Tests the new TestClient in a single comprehensive test to avoid
 router re-initialization issues (the Rust global router can only be set once).
 """
+
 from typing import Annotated
 
 import msgspec

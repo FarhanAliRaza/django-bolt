@@ -92,12 +92,8 @@ class TestSingleNestedForeignKey:
     @pytest.mark.django_db
     def test_from_model_without_select_related(self):
         """Test that unselected FK returns ID only."""
-        author = Author.objects.create(
-            name="Alice Smith", email="alice@example.com", bio="Author bio"
-        )
-        post = BlogPost.objects.create(
-            title="Test Post", content="Content", author=author
-        )
+        author = Author.objects.create(name="Alice Smith", email="alice@example.com", bio="Author bio")
+        post = BlogPost.objects.create(title="Test Post", content="Content", author=author)
 
         # Fetch without select_related
         post = BlogPost.objects.get(id=post.id)
@@ -106,19 +102,13 @@ class TestSingleNestedForeignKey:
         serializer = BlogPostSerializer.from_model(post)
 
         # Author should be the ID (not an AuthorSerializer)
-        assert serializer.author == author.id or isinstance(
-            serializer.author, AuthorSerializer
-        )
+        assert serializer.author == author.id or isinstance(serializer.author, AuthorSerializer)
 
     @pytest.mark.django_db
     def test_from_model_with_select_related(self):
         """Test that selected FK returns full author object."""
-        author = Author.objects.create(
-            name="Bob Jones", email="bob@example.com", bio="Bio"
-        )
-        post = BlogPost.objects.create(
-            title="Test Post", content="Content", author=author
-        )
+        author = Author.objects.create(name="Bob Jones", email="bob@example.com", bio="Bio")
+        post = BlogPost.objects.create(title="Test Post", content="Content", author=author)
 
         # Fetch WITH select_related
         post = BlogPost.objects.select_related("author").get(id=post.id)
@@ -196,15 +186,11 @@ class TestNestedManyToMany:
     @pytest.mark.django_db
     def test_from_model_without_prefetch_related(self):
         """Test that unprefetched M2M returns IDs only."""
-        author = Author.objects.create(
-            name="Eve", email="eve@example.com"
-        )
+        author = Author.objects.create(name="Eve", email="eve@example.com")
         tag1 = Tag.objects.create(name="python", description="Python tag")
         tag2 = Tag.objects.create(name="django", description="Django tag")
 
-        post = BlogPost.objects.create(
-            title="Post", content="Content", author=author
-        )
+        post = BlogPost.objects.create(title="Post", content="Content", author=author)
         post.tags.add(tag1, tag2)
 
         # Fetch without prefetch_related
@@ -219,23 +205,15 @@ class TestNestedManyToMany:
     @pytest.mark.django_db
     def test_from_model_with_prefetch_related(self):
         """Test that prefetched M2M returns full tag objects."""
-        author = Author.objects.create(
-            name="Frank", email="frank@example.com"
-        )
+        author = Author.objects.create(name="Frank", email="frank@example.com")
         tag1 = Tag.objects.create(name="python")
         tag2 = Tag.objects.create(name="django")
 
-        post = BlogPost.objects.create(
-            title="Post", content="Content", author=author
-        )
+        post = BlogPost.objects.create(title="Post", content="Content", author=author)
         post.tags.add(tag1, tag2)
 
         # Fetch WITH prefetch_related
-        post = (
-            BlogPost.objects.select_related("author")
-            .prefetch_related("tags")
-            .get(id=post.id)
-        )
+        post = BlogPost.objects.select_related("author").prefetch_related("tags").get(id=post.id)
 
         serializer = BlogPostSerializer.from_model(post)
 
@@ -303,27 +281,14 @@ class TestNestedWithinNested:
     @pytest.mark.django_db
     def test_from_model_with_full_nesting(self):
         """Test fully nested structure with comments and authors."""
-        author = Author.objects.create(
-            name="Grace", email="grace@example.com"
-        )
-        post = BlogPost.objects.create(
-            title="Post", content="Content", author=author
-        )
+        author = Author.objects.create(name="Grace", email="grace@example.com")
+        post = BlogPost.objects.create(title="Post", content="Content", author=author)
 
-        commenter = Author.objects.create(
-            name="Henry", email="henry@example.com"
-        )
-        Comment.objects.create(
-            post=post, author=commenter, text="Great post!"
-        )
+        commenter = Author.objects.create(name="Henry", email="henry@example.com")
+        Comment.objects.create(post=post, author=commenter, text="Great post!")
 
         # Fetch with full prefetch
-        post = (
-            BlogPost.objects
-            .select_related("author")
-            .prefetch_related("tags", "comments__author")
-            .get(id=post.id)
-        )
+        post = BlogPost.objects.select_related("author").prefetch_related("tags", "comments__author").get(id=post.id)
 
         serializer = BlogPostDetailedSerializer.from_model(post)
 
@@ -380,16 +345,12 @@ class TestQueryOptimization:
     @pytest.mark.django_db
     def test_list_without_prefetch(self):
         """Test listing posts without any prefetch (IDs only)."""
-        author = Author.objects.create(
-            name="Iris", email="iris@example.com"
-        )
+        author = Author.objects.create(name="Iris", email="iris@example.com")
         tag = Tag.objects.create(name="test")
 
         post_ids = []
         for i in range(3):
-            post = BlogPost.objects.create(
-                title=f"Post {i}", content="Content", author=author
-            )
+            post = BlogPost.objects.create(title=f"Post {i}", content="Content", author=author)
             post.tags.add(tag)
             post_ids.append(post.id)
 
@@ -407,15 +368,11 @@ class TestQueryOptimization:
     @pytest.mark.django_db
     def test_list_with_select_related(self):
         """Test listing posts with select_related."""
-        author = Author.objects.create(
-            name="Jack", email="jack@example.com"
-        )
+        author = Author.objects.create(name="Jack", email="jack@example.com")
 
         post_ids = []
         for i in range(2):
-            post = BlogPost.objects.create(
-                title=f"Post {i}", content="Content", author=author
-            )
+            post = BlogPost.objects.create(title=f"Post {i}", content="Content", author=author)
             post_ids.append(post.id)
 
         # Fetch only the posts we created with select_related
@@ -431,26 +388,18 @@ class TestQueryOptimization:
     @pytest.mark.django_db
     def test_list_with_prefetch_related(self):
         """Test listing posts with prefetch_related."""
-        author = Author.objects.create(
-            name="Kate", email="kate@example.com"
-        )
+        author = Author.objects.create(name="Kate", email="kate@example.com")
         tag1 = Tag.objects.create(name="tag1")
         tag2 = Tag.objects.create(name="tag2")
 
         post_ids = []
         for i in range(2):
-            post = BlogPost.objects.create(
-                title=f"Post {i}", content="Content", author=author
-            )
+            post = BlogPost.objects.create(title=f"Post {i}", content="Content", author=author)
             post.tags.add(tag1, tag2)
             post_ids.append(post.id)
 
         # Fetch only the posts we created with prefetch_related
-        all_posts = (
-            BlogPost.objects.filter(id__in=post_ids)
-            .select_related("author")
-            .prefetch_related("tags")
-        )
+        all_posts = BlogPost.objects.filter(id__in=post_ids).select_related("author").prefetch_related("tags")
         serializers = [BlogPostSerializer.from_model(p) for p in all_posts]
 
         assert len(serializers) == 2
@@ -464,28 +413,18 @@ class TestQueryOptimization:
     @pytest.mark.django_db
     def test_list_with_full_prefetch(self):
         """Test listing with all relationships prefetched."""
-        author = Author.objects.create(
-            name="Liam", email="liam@example.com"
-        )
+        author = Author.objects.create(name="Liam", email="liam@example.com")
         tag = Tag.objects.create(name="featured")
 
-        post = BlogPost.objects.create(
-            title="Featured Post", content="Content", author=author
-        )
+        post = BlogPost.objects.create(title="Featured Post", content="Content", author=author)
         post.tags.add(tag)
 
-        commenter = Author.objects.create(
-            name="Mia", email="mia@example.com"
-        )
-        Comment.objects.create(
-            post=post, author=commenter, text="Nice!"
-        )
+        commenter = Author.objects.create(name="Mia", email="mia@example.com")
+        Comment.objects.create(post=post, author=commenter, text="Nice!")
 
         # Fetch only the post we created with complete prefetch
         all_posts = (
-            BlogPost.objects.filter(id=post.id)
-            .select_related("author")
-            .prefetch_related("tags", "comments__author")
+            BlogPost.objects.filter(id=post.id).select_related("author").prefetch_related("tags", "comments__author")
         )
         serializers = [BlogPostDetailedSerializer.from_model(p) for p in all_posts]
 
@@ -568,11 +507,7 @@ class TestNestedFieldValidation:
     def test_nested_author_with_valid_email(self):
         """Test creating post with valid author email."""
         # Create directly with AuthorSerializer to test field validation
-        author = AuthorSerializer(
-            id=1,
-            name="Alice",
-            email="alice@example.com"
-        )
+        author = AuthorSerializer(id=1, name="Alice", email="alice@example.com")
         serializer = BlogPostSerializer(
             id=1,
             title="Post",
@@ -589,10 +524,7 @@ class TestNestedFieldValidation:
         """Test that email without @ sign raises validation error (via msgspec.convert)."""
         # Meta constraints are enforced during deserialization - msgspec.ValidationError
         with pytest.raises(msgspec.ValidationError) as exc_info:
-            msgspec.convert(
-                {"id": 1, "name": "Bob", "email": "bobexample.com"},
-                type=AuthorSerializer
-            )
+            msgspec.convert({"id": 1, "name": "Bob", "email": "bobexample.com"}, type=AuthorSerializer)
 
         error_msg = str(exc_info.value)
         assert "email" in error_msg.lower()
@@ -601,10 +533,7 @@ class TestNestedFieldValidation:
         """Test that email without domain extension raises validation error (via msgspec.convert)."""
         # Meta constraints are enforced during deserialization - msgspec.ValidationError
         with pytest.raises(msgspec.ValidationError) as exc_info:
-            msgspec.convert(
-                {"id": 1, "name": "Charlie", "email": "charlie@example"},
-                type=AuthorSerializer
-            )
+            msgspec.convert({"id": 1, "name": "Charlie", "email": "charlie@example"}, type=AuthorSerializer)
 
         error_msg = str(exc_info.value)
         assert "email" in error_msg.lower()
@@ -614,10 +543,7 @@ class TestNestedFieldValidation:
 
         # Meta constraints are enforced during deserialization - msgspec.ValidationError
         with pytest.raises(msgspec.ValidationError) as exc_info:
-            msgspec.convert(
-                {"id": 1, "name": "A", "email": "a@example.com"},
-                type=AuthorSerializer
-            )
+            msgspec.convert({"id": 1, "name": "A", "email": "a@example.com"}, type=AuthorSerializer)
 
         error_msg = str(exc_info.value)
         assert "name" in error_msg.lower()
@@ -627,10 +553,7 @@ class TestNestedFieldValidation:
 
         # Meta constraints are enforced during deserialization - msgspec.ValidationError
         with pytest.raises(msgspec.ValidationError) as exc_info:
-            msgspec.convert(
-                {"id": 1, "name": "", "email": "test@example.com"},
-                type=AuthorSerializer
-            )
+            msgspec.convert({"id": 1, "name": "", "email": "test@example.com"}, type=AuthorSerializer)
 
         error_msg = str(exc_info.value)
         assert "name" in error_msg.lower()
@@ -640,7 +563,7 @@ class TestNestedFieldValidation:
         author = AuthorSerializer(
             id=1,
             name="  David  ",  # Whitespace around
-            email="david@example.com"
+            email="david@example.com",
         )
 
         assert author.name == "David"
@@ -650,23 +573,15 @@ class TestNestedFieldValidation:
         author = AuthorSerializer(
             id=1,
             name="Eve",
-            email="Eve@EXAMPLE.COM"  # Mixed case
+            email="Eve@EXAMPLE.COM",  # Mixed case
         )
 
         assert author.email == "eve@example.com"
 
     def test_multiple_valid_authors(self):
         """Test multiple valid authors in nested structure."""
-        author1 = AuthorSerializer(
-            id=1,
-            name="Frank",
-            email="frank@example.com"
-        )
-        author2 = AuthorSerializer(
-            id=2,
-            name="Grace",
-            email="grace@example.com"
-        )
+        author1 = AuthorSerializer(id=1, name="Frank", email="frank@example.com")
+        author2 = AuthorSerializer(id=2, name="Grace", email="grace@example.com")
 
         # Both should validate successfully
         assert author1.name == "Frank"
@@ -678,7 +593,7 @@ class TestNestedFieldValidation:
         with pytest.raises(TypeError):  # Missing required parameter
             AuthorSerializer(
                 id=1,
-                name="Henry"
+                name="Henry",
                 # Missing email field
             )
 
@@ -687,10 +602,7 @@ class TestNestedFieldValidation:
 
         # Meta constraints are enforced during deserialization - msgspec.ValidationError
         with pytest.raises(msgspec.ValidationError) as exc_info:
-            msgspec.convert(
-                {"id": 2, "name": "J", "email": "j@example.com"},
-                type=AuthorSerializer
-            )
+            msgspec.convert({"id": 2, "name": "J", "email": "j@example.com"}, type=AuthorSerializer)
 
         error_msg = str(exc_info.value)
         # Should mention the field that failed validation
@@ -698,12 +610,7 @@ class TestNestedFieldValidation:
 
     def test_validation_with_valid_author_and_tags(self):
         """Test successful validation with valid author and tags."""
-        author = AuthorSerializer(
-            id=1,
-            name="Jack",
-            email="jack@example.com",
-            bio="Author bio"
-        )
+        author = AuthorSerializer(id=1, name="Jack", email="jack@example.com", bio="Author bio")
 
         # All validation should pass
         assert author.name == "Jack"
@@ -714,39 +621,21 @@ class TestNestedFieldValidation:
     def test_from_model_with_valid_author(self):
         """Test that from_model extracts author data correctly."""
         # Create author with valid data
-        author = Author.objects.create(
-            name="Karen",
-            email="karen@example.com",
-            bio="Test author"
-        )
-        post = BlogPost.objects.create(
-            title="Post",
-            content="Content",
-            author=author
-        )
+        author = Author.objects.create(name="Karen", email="karen@example.com", bio="Test author")
+        post = BlogPost.objects.create(title="Post", content="Content", author=author)
 
         # Fetch and convert
         post = BlogPost.objects.select_related("author").get(id=post.id)
         serializer = BlogPostSerializer.from_model(post)
 
         # Author should be extracted as ID or object
-        assert serializer.author == author.id or isinstance(
-            serializer.author, AuthorSerializer
-        )
+        assert serializer.author == author.id or isinstance(serializer.author, AuthorSerializer)
 
     def test_valid_author_in_nested_comment(self):
         """Test validation of valid author in nested comment."""
-        author = AuthorSerializer(
-            id=1,
-            name="Mike",
-            email="mike@example.com"
-        )
+        author = AuthorSerializer(id=1, name="Mike", email="mike@example.com")
 
-        comment = CommentSerializer(
-            id=1,
-            text="Comment",
-            author=author
-        )
+        comment = CommentSerializer(id=1, text="Comment", author=author)
 
         assert comment.author.name == "Mike"
 
@@ -755,10 +644,7 @@ class TestNestedFieldValidation:
 
         # Meta constraints are enforced during deserialization - msgspec.ValidationError
         with pytest.raises(msgspec.ValidationError) as exc_info:
-            msgspec.convert(
-                {"id": 1, "name": "X", "email": "x@example.com"},
-                type=AuthorSerializer
-            )
+            msgspec.convert({"id": 1, "name": "X", "email": "x@example.com"}, type=AuthorSerializer)
 
         error_msg = str(exc_info.value)
         # Error message should indicate which field failed
@@ -771,29 +657,16 @@ class TestEdgeCases:
     @pytest.mark.django_db
     def test_empty_related_lists(self):
         """Test post with no tags or comments."""
-        author = Author.objects.create(
-            name="Noah", email="noah@example.com"
-        )
-        post = BlogPost.objects.create(
-            title="Post", content="Content", author=author
-        )
+        author = Author.objects.create(name="Noah", email="noah@example.com")
+        post = BlogPost.objects.create(title="Post", content="Content", author=author)
 
-        post = (
-            BlogPost.objects
-            .select_related("author")
-            .prefetch_related("tags", "comments")
-            .get(id=post.id)
-        )
+        post = BlogPost.objects.select_related("author").prefetch_related("tags", "comments").get(id=post.id)
 
         serializer = BlogPostDetailedSerializer.from_model(post)
 
         # Empty lists should be valid
-        assert serializer.tags == [] or all(
-            isinstance(t, (TagSerializer, int)) for t in serializer.tags
-        )
-        assert serializer.comments == [] or all(
-            isinstance(c, (CommentSerializer, int)) for c in serializer.comments
-        )
+        assert serializer.tags == [] or all(isinstance(t, (TagSerializer, int)) for t in serializer.tags)
+        assert serializer.comments == [] or all(isinstance(c, (CommentSerializer, int)) for c in serializer.comments)
 
     def test_optional_nested_field(self):
         """Test optional nested field with None."""
@@ -846,10 +719,7 @@ class TestAuthorSerializerValidation:
         """Test that valid email passes Meta pattern validation via msgspec.convert."""
 
         # Valid emails should pass
-        author = msgspec.convert(
-            {"id": 1, "name": "Test User", "email": "test@example.com"},
-            type=AuthorSerializer
-        )
+        author = msgspec.convert({"id": 1, "name": "Test User", "email": "test@example.com"}, type=AuthorSerializer)
         assert author.email == "test@example.com"
         assert author.name == "Test User"
 
@@ -858,10 +728,7 @@ class TestAuthorSerializerValidation:
 
         # Email without @ should fail - msgspec.ValidationError from Meta constraint
         with pytest.raises(msgspec.ValidationError) as exc_info:
-            msgspec.convert(
-                {"id": 1, "name": "Test", "email": "testexample.com"},
-                type=AuthorSerializer
-            )
+            msgspec.convert({"id": 1, "name": "Test", "email": "testexample.com"}, type=AuthorSerializer)
 
         error_msg = str(exc_info.value)
         assert "email" in error_msg.lower()
@@ -871,10 +738,7 @@ class TestAuthorSerializerValidation:
 
         # Email without TLD (.com, .org, etc) should fail - msgspec.ValidationError
         with pytest.raises(msgspec.ValidationError) as exc_info:
-            msgspec.convert(
-                {"id": 1, "name": "Test", "email": "test@example"},
-                type=AuthorSerializer
-            )
+            msgspec.convert({"id": 1, "name": "Test", "email": "test@example"}, type=AuthorSerializer)
 
         error_msg = str(exc_info.value)
         assert "email" in error_msg.lower()
@@ -883,17 +747,11 @@ class TestAuthorSerializerValidation:
         """Test that name with 2+ characters passes Meta min_length validation."""
 
         # Exactly 2 characters should pass
-        author = msgspec.convert(
-            {"id": 1, "name": "AB", "email": "test@example.com"},
-            type=AuthorSerializer
-        )
+        author = msgspec.convert({"id": 1, "name": "AB", "email": "test@example.com"}, type=AuthorSerializer)
         assert author.name == "AB"
 
         # More than 2 characters should pass
-        author2 = msgspec.convert(
-            {"id": 2, "name": "Alice", "email": "alice@example.com"},
-            type=AuthorSerializer
-        )
+        author2 = msgspec.convert({"id": 2, "name": "Alice", "email": "alice@example.com"}, type=AuthorSerializer)
         assert author2.name == "Alice"
 
     def test_meta_name_min_length_invalid(self):
@@ -901,20 +759,14 @@ class TestAuthorSerializerValidation:
 
         # Single character should fail - msgspec.ValidationError from Meta constraint
         with pytest.raises(msgspec.ValidationError) as exc_info:
-            msgspec.convert(
-                {"id": 1, "name": "A", "email": "test@example.com"},
-                type=AuthorSerializer
-            )
+            msgspec.convert({"id": 1, "name": "A", "email": "test@example.com"}, type=AuthorSerializer)
 
         error_msg = str(exc_info.value)
         assert "name" in error_msg.lower()
 
         # Empty string should fail - msgspec.ValidationError from Meta constraint
         with pytest.raises(msgspec.ValidationError) as exc_info:
-            msgspec.convert(
-                {"id": 2, "name": "", "email": "test@example.com"},
-                type=AuthorSerializer
-            )
+            msgspec.convert({"id": 2, "name": "", "email": "test@example.com"}, type=AuthorSerializer)
 
         error_msg = str(exc_info.value)
         assert "name" in error_msg.lower()
@@ -922,45 +774,28 @@ class TestAuthorSerializerValidation:
     def test_field_validator_name_strip(self):
         """Test that @field_validator strips whitespace from name."""
         # Direct instantiation - field validators ALWAYS run
-        author = AuthorSerializer(
-            id=1,
-            name="  Alice Smith  ",
-            email="alice@example.com"
-        )
+        author = AuthorSerializer(id=1, name="  Alice Smith  ", email="alice@example.com")
         assert author.name == "Alice Smith"
 
         # Via msgspec.convert - field validators run after Meta validation
-        author2 = msgspec.convert(
-            {"id": 2, "name": "  Bob Jones  ", "email": "bob@example.com"},
-            type=AuthorSerializer
-        )
+        author2 = msgspec.convert({"id": 2, "name": "  Bob Jones  ", "email": "bob@example.com"}, type=AuthorSerializer)
         assert author2.name == "Bob Jones"
 
     def test_field_validator_email_lowercase(self):
         """Test that @field_validator converts email to lowercase."""
         # Direct instantiation - field validators ALWAYS run
-        author = AuthorSerializer(
-            id=1,
-            name="Test User",
-            email="TEST@EXAMPLE.COM"
-        )
+        author = AuthorSerializer(id=1, name="Test User", email="TEST@EXAMPLE.COM")
         assert author.email == "test@example.com"
 
         # Via msgspec.convert - field validators run after Meta validation
-        author2 = msgspec.convert(
-            {"id": 2, "name": "Another User", "email": "MiXeD@CaSe.COM"},
-            type=AuthorSerializer
-        )
+        author2 = msgspec.convert({"id": 2, "name": "Another User", "email": "MiXeD@CaSe.COM"}, type=AuthorSerializer)
         assert author2.email == "mixed@case.com"
 
     def test_combined_meta_and_field_validators(self):
         """Test that both Meta validation and field validators work together."""
 
         # Valid data with transformations
-        author = msgspec.convert(
-            {"id": 1, "name": "  Valid Name  ", "email": "VALID@EMAIL.COM"},
-            type=AuthorSerializer
-        )
+        author = msgspec.convert({"id": 1, "name": "  Valid Name  ", "email": "VALID@EMAIL.COM"}, type=AuthorSerializer)
         # Field validators should have transformed the data
         assert author.name == "Valid Name"  # Stripped
         assert author.email == "valid@email.com"  # Lowercased
@@ -971,10 +806,7 @@ class TestAuthorSerializerValidation:
         # Even though field validator would strip whitespace,
         # Meta validation sees the original value first during deserialization
         # Note: This test demonstrates the order of operations
-        author = msgspec.convert(
-            {"id": 1, "name": "  AB  ", "email": "test@example.com"},
-            type=AuthorSerializer
-        )
+        author = msgspec.convert({"id": 1, "name": "  AB  ", "email": "test@example.com"}, type=AuthorSerializer)
         # Meta validation passed (min_length=2 on "  AB  " which is 6 chars)
         # Then field validator stripped it to "AB"
         assert author.name == "AB"

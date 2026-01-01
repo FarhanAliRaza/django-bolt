@@ -24,9 +24,7 @@ class Mission(models.Model):
 class Astronaut(models.Model):
     name = models.CharField(max_length=100)
     role = models.CharField(max_length=50)
-    mission = models.ForeignKey(
-        Mission, on_delete=models.CASCADE, related_name="astronauts"
-    )
+    mission = models.ForeignKey(Mission, on_delete=models.CASCADE, related_name="astronauts")
 
     def __str__(self):
         return f"{self.name} ({self.role})"

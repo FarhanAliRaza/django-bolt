@@ -25,6 +25,7 @@ from .test_models import Article
 # Schemas
 # ============================================================================
 
+
 class ArticleSchema(msgspec.Struct):
     id: int
     title: str
@@ -42,6 +43,7 @@ class ArticleListSchema(msgspec.Struct):
 # ============================================================================
 # Test Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def sample_articles(db):
@@ -61,6 +63,7 @@ def sample_articles(db):
 # ============================================================================
 # PageNumberPagination Tests
 # ============================================================================
+
 
 @pytest.mark.django_db(transaction=True)
 def test_page_number_pagination_first_page(sample_articles):
@@ -245,6 +248,7 @@ def test_page_number_pagination_with_ordering(sample_articles):
 # ============================================================================
 # LimitOffsetPagination Tests
 # ============================================================================
+
 
 @pytest.mark.django_db(transaction=True)
 def test_limit_offset_pagination_basic(sample_articles):
@@ -446,6 +450,7 @@ def test_limit_offset_pagination_offset_beyond_total(sample_articles):
 # ============================================================================
 # CursorPagination Tests
 # ============================================================================
+
 
 @pytest.mark.django_db(transaction=True)
 def test_cursor_pagination_first_page(sample_articles):
@@ -743,6 +748,7 @@ def test_cursor_pagination_multiple_pages_continuity(sample_articles):
 # ViewSet Integration Tests
 # ============================================================================
 
+
 @pytest.mark.django_db(transaction=True)
 def test_viewset_with_pagination(sample_articles):
     """Test ViewSet with @paginate decorator"""
@@ -836,11 +842,7 @@ def test_viewset_without_pagination(sample_articles):
 
             articles = []
             async for article in result:
-                articles.append(ArticleListSchema(
-                    id=article.id,
-                    title=article.title,
-                    author=article.author
-                ))
+                articles.append(ArticleListSchema(id=article.id, title=article.title, author=article.author))
             return articles
 
     with TestClient(api) as client:
@@ -875,6 +877,7 @@ def test_modelviewset_basic_list(sample_articles):
 # ============================================================================
 # Edge Cases and Validation
 # ============================================================================
+
 
 @pytest.mark.django_db(transaction=True)
 def test_pagination_max_page_size_enforcement(sample_articles):
@@ -1009,6 +1012,7 @@ def test_pagination_with_query_optimization(sample_articles):
 # ============================================================================
 # Advanced Integration & Edge Cases
 # ============================================================================
+
 
 @pytest.mark.django_db(transaction=True)
 def test_pagination_with_select_related(sample_articles):

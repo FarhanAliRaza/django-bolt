@@ -3,6 +3,7 @@ Test guards and authentication system for Django-Bolt.
 
 Tests the new DRF-inspired guards and authentication classes.
 """
+
 import time
 
 import django
@@ -47,7 +48,7 @@ class TestAuthenticationClasses:
             algorithms=["HS256", "HS384"],
             header="x-auth-token",
             audience="my-app",
-            issuer="auth-server"
+            issuer="auth-server",
         )
 
         metadata = auth.to_metadata()
@@ -59,10 +60,7 @@ class TestAuthenticationClasses:
 
     def test_api_key_authentication(self):
         """Test API key authentication class"""
-        auth = APIKeyAuthentication(
-            api_keys={"key1", "key2", "key3"},
-            header="x-api-key"
-        )
+        auth = APIKeyAuthentication(api_keys={"key1", "key2", "key3"}, header="x-api-key")
 
         assert auth.scheme_name == "api_key"
         metadata = auth.to_metadata()
@@ -74,10 +72,7 @@ class TestAuthenticationClasses:
         """Test API key authentication with permission mapping"""
         auth = APIKeyAuthentication(
             api_keys={"admin-key", "read-key"},
-            key_permissions={
-                "admin-key": ["users.create", "users.delete"],
-                "read-key": ["users.view"]
-            }
+            key_permissions={"admin-key": ["users.create", "users.delete"], "read-key": ["users.view"]},
         )
 
         metadata = auth.to_metadata()
@@ -213,11 +208,7 @@ class TestRouteDecoratorAPI:
         """Test route with custom auth backend"""
         api = BoltAPI()
 
-        @api.get(
-            "/api-only",
-            auth=[APIKeyAuthentication(api_keys={"key1"})],
-            guards=[IsAuthenticated()]
-        )
+        @api.get("/api-only", auth=[APIKeyAuthentication(api_keys={"key1"})], guards=[IsAuthenticated()])
         async def api_endpoint():
             return {"message": "API key only"}
 
@@ -235,11 +226,7 @@ class TestRouteDecoratorAPI:
         """Test route with multiple guards"""
         api = BoltAPI()
 
-        @api.get("/restricted", guards=[
-            IsAuthenticated(),
-            IsStaff(),
-            HasPermission("users.delete")
-        ])
+        @api.get("/restricted", guards=[IsAuthenticated(), IsStaff(), HasPermission("users.delete")])
         async def restricted_endpoint():
             return {"message": "highly restricted"}
 
@@ -274,10 +261,8 @@ class TestMetadataCompilation:
         if not settings.configured:
             settings.configure(
                 SECRET_KEY="test-key",
-                BOLT_AUTHENTICATION_CLASSES=[
-                    JWTAuthentication(secret="global-secret")
-                ],
-                BOLT_DEFAULT_PERMISSION_CLASSES=[IsAuthenticated()]
+                BOLT_AUTHENTICATION_CLASSES=[JWTAuthentication(secret="global-secret")],
+                BOLT_DEFAULT_PERMISSION_CLASSES=[IsAuthenticated()],
             )
             django.setup()
 
@@ -298,11 +283,7 @@ class TestMetadataCompilation:
         """Test that per-route auth/guards override global defaults"""
         api = BoltAPI()
 
-        @api.get(
-            "/override",
-            auth=[APIKeyAuthentication(api_keys={"key1"})],
-            guards=[AllowAny()]
-        )
+        @api.get("/override", auth=[APIKeyAuthentication(api_keys={"key1"})], guards=[AllowAny()])
         async def override_endpoint():
             return {"message": "overrides global"}
 
@@ -326,7 +307,7 @@ class TestJWTTokenHandling:
             "iat": int(time.time()),
             "is_staff": True,
             "is_superuser": False,
-            "permissions": ["users.view", "users.create"]
+            "permissions": ["users.view", "users.create"],
         }
 
         token = jwt.encode(payload, secret, algorithm="HS256")
@@ -379,7 +360,7 @@ class TestContextPopulation:
                 "exp": 1234567890,
                 "iat": 1234567800,
                 # ... other JWT claims
-            }
+            },
         }
 
         # Verify structure

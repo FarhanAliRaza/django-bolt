@@ -145,12 +145,7 @@ async def get_post_simple(post_id: int):
     Query with select_related to include the author as a nested object.
     Uses async ORM (.aget) with prefetch_related to demonstrate async query support.
     """
-    post = await (
-        BlogPost.objects
-        .select_related("author")
-        .prefetch_related("tags")
-        .aget(id=post_id)
-    )
+    post = await BlogPost.objects.select_related("author").prefetch_related("tags").aget(id=post_id)
     return BlogPostSerializer.from_model(post)
 
 
@@ -172,12 +167,7 @@ async def create_post_simple(data: BlogPostInputSerializer):
     )
 
     # Refetch with relationships for serialization
-    post = await (
-        BlogPost.objects
-        .select_related("author")
-        .prefetch_related("tags")
-        .aget(id=created_post.id)
-    )
+    post = await BlogPost.objects.select_related("author").prefetch_related("tags").aget(id=created_post.id)
     return BlogPostSerializer.from_model(post)
 
 
@@ -196,11 +186,7 @@ def get_post_with_tags(post_id: int):
 
     Uses prefetch_related to load tags efficiently.
     """
-    post = (
-        BlogPost.objects.select_related("author")
-        .prefetch_related("tags")
-        .get(id=post_id)
-    )
+    post = BlogPost.objects.select_related("author").prefetch_related("tags").get(id=post_id)
     return BlogPostSerializer.from_model(post)
 
 
@@ -244,12 +230,7 @@ def get_post_full(post_id: int):
     Includes author, tags, and comments with their authors.
     This demonstrates deeply nested structures (comments -> authors).
     """
-    post = (
-        BlogPost.objects
-        .select_related("author")
-        .prefetch_related("tags", "comments__author")
-        .get(id=post_id)
-    )
+    post = BlogPost.objects.select_related("author").prefetch_related("tags", "comments__author").get(id=post_id)
     return BlogPostDetailedSerializer.from_model(post)
 
 
@@ -278,7 +259,9 @@ def create_post_full(data: BlogPostDetailedInputSerializer):
 
     # Add comments
     for comment_data in data.comments:
-        comment_author_id = comment_data.author.id if isinstance(comment_data.author, AuthorSerializer) else comment_data.author
+        comment_author_id = (
+            comment_data.author.id if isinstance(comment_data.author, AuthorSerializer) else comment_data.author
+        )
 
         Comment.objects.create(
             post=post,
@@ -358,11 +341,7 @@ def get_post_and_validate(post_id: int):
     Demonstrates that the response is properly serialized and can be
     re-validated through the same serializer.
     """
-    post = (
-        BlogPost.objects.select_related("author")
-        .prefetch_related("tags")
-        .get(id=post_id)
-    )
+    post = BlogPost.objects.select_related("author").prefetch_related("tags").get(id=post_id)
 
     # Get the response data
     response_data = BlogPostSerializer.from_model(post)
@@ -423,9 +402,7 @@ class TestAPI1SimpleNestedFK:
         """Test getting a post with author loaded via select_related."""
         # Create test data
         author = Author.objects.create(name="Alice", email="alice@example.com")
-        post = BlogPost.objects.create(
-            title="Test Post", content="This is test content", author=author
-        )
+        post = BlogPost.objects.create(title="Test Post", content="This is test content", author=author)
 
         # Make HTTP request
         response = client_api_1.get(f"/posts/{post.id}")
@@ -493,9 +470,7 @@ class TestAPI2NestedM2M:
         """Test getting a post with tags loaded via prefetch_related."""
         # Create test data
         author = Author.objects.create(name="Dave", email="dave@example.com")
-        post = BlogPost.objects.create(
-            title="Tagged Post", content="Post content", author=author
-        )
+        post = BlogPost.objects.create(title="Tagged Post", content="Post content", author=author)
 
         # Create and add tags
         tag1 = Tag.objects.create(name="python")
@@ -585,17 +560,13 @@ class TestAPI3DeeplyNested:
         commenter = Author.objects.create(name="Henry", email="henry@example.com")
 
         # Create post with tags
-        post = BlogPost.objects.create(
-            title="Complex Post", content="Complex post content", author=post_author
-        )
+        post = BlogPost.objects.create(title="Complex Post", content="Complex post content", author=post_author)
 
         tag = Tag.objects.create(name="complex")
         post.tags.add(tag)
 
         # Create comments
-        Comment.objects.create(
-            post=post, author=commenter, text="Great post!"
-        )
+        Comment.objects.create(post=post, author=commenter, text="Great post!")
 
         # Make HTTP request
         response = client_api_3.get(f"/posts/{post.id}/full")
@@ -763,9 +734,7 @@ class TestAPI4MixedValidation:
         """Test that response can be re-validated through the serializer."""
         # Create test data
         author = Author.objects.create(name="Olivia", email="olivia@example.com")
-        post = BlogPost.objects.create(
-            title="Roundtrip Post", content="Testing roundtrip validation", author=author
-        )
+        post = BlogPost.objects.create(title="Roundtrip Post", content="Testing roundtrip validation", author=author)
 
         tag = Tag.objects.create(name="roundtrip")
         post.tags.add(tag)
@@ -788,6 +757,7 @@ class TestAPI4MixedValidation:
 # User Authentication Serializers
 class UserSerializer(Serializer):
     """Serializer for User model - OUTPUT."""
+
     id: int
     username: str
     email: str
@@ -797,6 +767,7 @@ class UserSerializer(Serializer):
 
 class UserSignupSerializer(Serializer):
     """Serializer for user registration with password confirmation validation."""
+
     username: Annotated[str, Meta(min_length=3, max_length=150)]
     email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
     password: Annotated[str, Meta(min_length=8)]
@@ -819,6 +790,7 @@ class UserSignupSerializer(Serializer):
 
 class UserLoginSerializer(Serializer):
     """Serializer for user login - accepts username or email."""
+
     username: str
     password: str
 
@@ -829,6 +801,7 @@ class UserLoginSerializer(Serializer):
 
 class UserProfileSerializer(Serializer):
     """Serializer for user profile with nested user data - OUTPUT."""
+
     id: int
     user: Annotated[UserSerializer, Nested(UserSerializer)]
     bio: Annotated[str, Meta(max_length=500)] = ""
@@ -920,9 +893,7 @@ class TestAPI5UserRegistration:
         """Test that signup fails when username already exists."""
         # Create existing user
         User.objects.create(
-            username="existinguser",
-            email="existing@example.com",
-            password_hash=hash_password("password123")
+            username="existinguser", email="existing@example.com", password_hash=hash_password("password123")
         )
 
         # Try to sign up with same username
@@ -944,9 +915,7 @@ class TestAPI5UserRegistration:
         """Test that signup fails when email already exists."""
         # Create existing user
         User.objects.create(
-            username="existinguser",
-            email="existing@example.com",
-            password_hash=hash_password("password123")
+            username="existinguser", email="existing@example.com", password_hash=hash_password("password123")
         )
 
         # Try to sign up with same email
@@ -997,7 +966,7 @@ class TestAPI5UserRegistration:
         assert response.status_code in [400, 422]
         data = response.json()
         detail_str = str(data["detail"]).lower()
-        assert ("username" in detail_str or "length" in detail_str or ">= 3" in detail_str)
+        assert "username" in detail_str or "length" in detail_str or ">= 3" in detail_str
         assert not User.objects.filter(username="ab").exists()
 
     @pytest.mark.django_db(transaction=True)
@@ -1015,7 +984,7 @@ class TestAPI5UserRegistration:
         assert response.status_code in [400, 422]
         data = response.json()
         detail_str = str(data["detail"]).lower()
-        assert ("password" in detail_str or "length" in detail_str or ">= 8" in detail_str)
+        assert "password" in detail_str or "length" in detail_str or ">= 8" in detail_str
         assert not User.objects.filter(username="testuser").exists()
 
     @pytest.mark.django_db(transaction=True)
@@ -1045,6 +1014,7 @@ class TestAPI5UserRegistration:
 
 class AdvancedAuthorSerializer(Serializer):
     """Author serializer with computed fields and validators."""
+
     id: int
     name: NonEmptyStr
     email: Email
@@ -1077,6 +1047,7 @@ class AdvancedAuthorSerializer(Serializer):
 
 class AdvancedTagSerializer(Serializer):
     """Tag serializer with computed fields."""
+
     id: int
     name: str
     description: str = ""
@@ -1088,6 +1059,7 @@ class AdvancedTagSerializer(Serializer):
 
 class AdvancedCommentSerializer(Serializer):
     """Comment serializer with nested author and computed fields."""
+
     id: int
     text: str
     author: Annotated[AdvancedAuthorSerializer, Nested(AdvancedAuthorSerializer)]
@@ -1104,6 +1076,7 @@ class AdvancedCommentSerializer(Serializer):
 
 class AdvancedBlogPostSerializer(Serializer):
     """BlogPost serializer with all advanced features."""
+
     id: int
     title: NonEmptyStr
     content: str
@@ -1117,8 +1090,32 @@ class AdvancedBlogPostSerializer(Serializer):
     class Config:
         field_sets = {
             "list": ["id", "title", "published", "created_at", "tag_count"],
-            "detail": ["id", "title", "content", "author", "tags", "published", "created_at", "updated_at", "tag_names", "comment_count"],
-            "admin": ["id", "title", "content", "author", "tags", "comments", "published", "created_at", "updated_at", "tag_names", "comment_count", "content_preview"],
+            "detail": [
+                "id",
+                "title",
+                "content",
+                "author",
+                "tags",
+                "published",
+                "created_at",
+                "updated_at",
+                "tag_names",
+                "comment_count",
+            ],
+            "admin": [
+                "id",
+                "title",
+                "content",
+                "author",
+                "tags",
+                "comments",
+                "published",
+                "created_at",
+                "updated_at",
+                "tag_names",
+                "comment_count",
+                "content_preview",
+            ],
         }
 
     @field_validator("title")
@@ -1144,6 +1141,7 @@ class AdvancedBlogPostSerializer(Serializer):
 
 class AdvancedBlogPostInputSerializer(Serializer):
     """Input serializer for creating/updating blog posts."""
+
     title: Annotated[str, Meta(min_length=3, max_length=300)]
     content: Annotated[str, Meta(min_length=10)]
     author: Annotated[AdvancedAuthorSerializer, Nested(AdvancedAuthorSerializer)]
@@ -1176,12 +1174,7 @@ async def list_posts():
 @api_6_advanced.get("/posts/{post_id}")
 async def get_post_detail(post_id: int):
     """Get post with detail view fields."""
-    post = await (
-        BlogPost.objects
-        .select_related("author")
-        .prefetch_related("tags", "comments__author")
-        .aget(id=post_id)
-    )
+    post = await BlogPost.objects.select_related("author").prefetch_related("tags", "comments__author").aget(id=post_id)
     serializer = AdvancedBlogPostSerializer.from_model(post)
     return AdvancedBlogPostSerializer.use("detail").dump(serializer)
 
@@ -1189,12 +1182,7 @@ async def get_post_detail(post_id: int):
 @api_6_advanced.get("/posts/{post_id}/admin")
 async def get_post_admin(post_id: int):
     """Get post with admin view fields (includes comments)."""
-    post = await (
-        BlogPost.objects
-        .select_related("author")
-        .prefetch_related("tags", "comments__author")
-        .aget(id=post_id)
-    )
+    post = await BlogPost.objects.select_related("author").prefetch_related("tags", "comments__author").aget(id=post_id)
     serializer = AdvancedBlogPostSerializer.from_model(post)
     return AdvancedBlogPostSerializer.use("admin").dump(serializer)
 
@@ -1202,12 +1190,7 @@ async def get_post_admin(post_id: int):
 @api_6_advanced.get("/posts/{post_id}/full")
 async def get_post_full_unfiltered(post_id: int):
     """Get post with all fields (no field_set filtering)."""
-    post = await (
-        BlogPost.objects
-        .select_related("author")
-        .prefetch_related("tags", "comments__author")
-        .aget(id=post_id)
-    )
+    post = await BlogPost.objects.select_related("author").prefetch_related("tags", "comments__author").aget(id=post_id)
     return AdvancedBlogPostSerializer.from_model(post)
 
 
@@ -1228,10 +1211,7 @@ async def create_post_advanced(data: AdvancedBlogPostInputSerializer):
 
     # Refetch with relationships
     post = await (
-        BlogPost.objects
-        .select_related("author")
-        .prefetch_related("tags", "comments__author")
-        .aget(id=created_post.id)
+        BlogPost.objects.select_related("author").prefetch_related("tags", "comments__author").aget(id=created_post.id)
     )
     return AdvancedBlogPostSerializer.from_model(post)
 
@@ -1268,7 +1248,7 @@ class TestAPI6AdvancedSerializerFeatures:
         author = Author.objects.create(
             name="  jane doe  ",  # Will be transformed to "Jane Doe"
             email="JANE@EXAMPLE.COM",  # Will be lowercased
-            bio="A passionate writer about technology and life."
+            bio="A passionate writer about technology and life.",
         )
         tag1 = Tag.objects.create(name="Python", description="Python programming language")
         tag2 = Tag.objects.create(name="Django Framework", description="Web framework")
@@ -1283,7 +1263,7 @@ class TestAPI6AdvancedSerializerFeatures:
         Comment.objects.create(
             post=post,
             author=commenter,
-            text="This is a great post! I really enjoyed reading it and learned a lot from it."
+            text="This is a great post! I really enjoyed reading it and learned a lot from it.",
         )
 
         # Make request
@@ -1384,7 +1364,18 @@ class TestAPI6AdvancedSerializerFeatures:
         data = response.json()
 
         # Detail view should have these fields
-        expected_keys = {"id", "title", "content", "author", "tags", "published", "created_at", "updated_at", "tag_names", "comment_count"}
+        expected_keys = {
+            "id",
+            "title",
+            "content",
+            "author",
+            "tags",
+            "published",
+            "created_at",
+            "updated_at",
+            "tag_names",
+            "comment_count",
+        }
         assert set(data.keys()) == expected_keys
 
         # Should have computed fields
@@ -1419,7 +1410,20 @@ class TestAPI6AdvancedSerializerFeatures:
         data = response.json()
 
         # Admin view should have ALL fields including comments
-        expected_keys = {"id", "title", "content", "author", "tags", "comments", "published", "created_at", "updated_at", "tag_names", "comment_count", "content_preview"}
+        expected_keys = {
+            "id",
+            "title",
+            "content",
+            "author",
+            "tags",
+            "comments",
+            "published",
+            "created_at",
+            "updated_at",
+            "tag_names",
+            "comment_count",
+            "content_preview",
+        }
         assert set(data.keys()) == expected_keys
 
         # Should have comments (admin-only)
@@ -1434,9 +1438,7 @@ class TestAPI6AdvancedSerializerFeatures:
     def test_author_write_only_field_excluded(self, client_api_6):
         """Test that write_only fields are excluded from response."""
         author = Author.objects.create(
-            name="Secret Author",
-            email="secret@example.com",
-            bio="This bio should be hidden in detail view"
+            name="Secret Author", email="secret@example.com", bio="This bio should be hidden in detail view"
         )
 
         # Detail view should not include bio (write_only)
@@ -1454,11 +1456,7 @@ class TestAPI6AdvancedSerializerFeatures:
     @pytest.mark.django_db(transaction=True)
     def test_author_admin_view_includes_all(self, client_api_6):
         """Test admin view includes email_domain but bio is still write_only."""
-        author = Author.objects.create(
-            name="Full Author",
-            email="full@company.org",
-            bio="Full bio text here"
-        )
+        author = Author.objects.create(name="Full Author", email="full@company.org", bio="Full bio text here")
 
         response = client_api_6.get(f"/authors/{author.id}/admin")
 
@@ -1550,7 +1548,7 @@ class TestAPI6AdvancedSerializerFeatures:
         """Test that computed fields work correctly through nested serializers."""
         author = Author.objects.create(
             name="  nested author  ",  # Will be "Nested Author"
-            email="NESTED@EXAMPLE.COM"  # Will be "nested@example.com"
+            email="NESTED@EXAMPLE.COM",  # Will be "nested@example.com"
         )
         tag = Tag.objects.create(name="Nested Tag")  # slug: "nested-tag"
         post = BlogPost.objects.create(
@@ -1563,7 +1561,7 @@ class TestAPI6AdvancedSerializerFeatures:
         Comment.objects.create(
             post=post,
             author=author,
-            text="This is a longer comment to test word count"  # 9 words
+            text="This is a longer comment to test word count",  # 9 words
         )
 
         response = client_api_6.get(f"/posts/{post.id}/full")

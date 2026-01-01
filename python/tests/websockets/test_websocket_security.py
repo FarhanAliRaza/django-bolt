@@ -5,6 +5,7 @@ Tests security features that use the same infrastructure as HTTP:
 - Rate limiting (reuses HTTP rate limit decorator)
 - Authentication/Guards (already tested in test_websocket.py)
 """
+
 from __future__ import annotations
 
 import pytest
@@ -14,6 +15,7 @@ from django_bolt.middleware import rate_limit
 from django_bolt.testing import WebSocketTestClient
 
 # --- Origin Validation Tests ---
+
 
 @pytest.mark.asyncio
 async def test_websocket_origin_allowed():
@@ -152,6 +154,7 @@ async def test_websocket_no_cors_config_allows_same_origin():
 
 
 # --- Rate Limiting Tests ---
+
 
 @pytest.mark.asyncio
 async def test_websocket_rate_limit_exceeded():

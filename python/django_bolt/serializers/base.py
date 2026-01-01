@@ -42,10 +42,7 @@ def _is_serializer_type(field_type: Any) -> bool:
     try:
         # Check if it's a class and subclass of msgspec.Struct with __is_bolt_serializer__
         if isinstance(field_type, type):
-            return (
-                issubclass(field_type, msgspec.Struct)
-                and getattr(field_type, "__is_bolt_serializer__", False)
-            )
+            return issubclass(field_type, msgspec.Struct) and getattr(field_type, "__is_bolt_serializer__", False)
     except TypeError:
         pass
     return False
@@ -178,8 +175,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
 
         # Pre-compute validators as tuple for faster iteration (no dict overhead)
         cls.__field_validators_tuple__ = tuple(
-            (field_name, tuple(validators))
-            for field_name, validators in cls.__field_validators__.items()
+            (field_name, tuple(validators)) for field_name, validators in cls.__field_validators__.items()
         )
 
         # Collect configuration from Meta class (read_only, write_only, field_sets)
@@ -197,9 +193,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
 
         # Skip all validation if there's nothing to validate
         cls.__skip_validation__ = not (
-            cls.__has_nested_or_literal__
-            or cls.__has_field_validators__
-            or cls.__has_model_validators__
+            cls.__has_nested_or_literal__ or cls.__has_field_validators__ or cls.__has_model_validators__
         )
 
         # Note: default values map is cached lazily on first dump(exclude_defaults=True)
@@ -431,9 +425,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 else:
                     # field() was used without a default, and user didn't provide value
                     # This shouldn't normally happen since msgspec requires the field
-                    raise MsgspecValidationError(
-                        f"Field '{field_name}' is required but was not provided"
-                    )
+                    raise MsgspecValidationError(f"Field '{field_name}' is required but was not provided")
 
     @classmethod
     def _lazy_collect_field_configs(cls) -> None:
@@ -523,11 +515,13 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
 
                 except (ValueError, TypeError) as e:
                     # Collect error instead of raising immediately
-                    errors.append({
-                        "loc": ["body", field_name],
-                        "msg": str(e),
-                        "type": "value_error",
-                    })
+                    errors.append(
+                        {
+                            "loc": ["body", field_name],
+                            "msg": str(e),
+                            "type": "value_error",
+                        }
+                    )
 
         return errors
 
@@ -551,29 +545,31 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         for field_name, nested_config in self.__nested_fields__.items():
             try:
                 current_value = getattr(self, field_name)
-                validated_value = validate_nested_field(
-                    current_value, nested_config, field_name
-                )
+                validated_value = validate_nested_field(current_value, nested_config, field_name)
 
                 # Update the field if validation changed it
                 if validated_value is not current_value:
                     _setattr(self, field_name, validated_value)
             except (ValueError, TypeError) as e:
-                errors.append({
-                    "loc": ["body", field_name],
-                    "msg": str(e),
-                    "type": "value_error",
-                })
+                errors.append(
+                    {
+                        "loc": ["body", field_name],
+                        "msg": str(e),
+                        "type": "value_error",
+                    }
+                )
 
         # Validate literal (choice) fields (now with O(1) frozenset lookup - optimization #3)
         for field_name, allowed_values in self.__literal_fields__.items():
             current_value = getattr(self, field_name)
             if current_value not in allowed_values:
-                errors.append({
-                    "loc": ["body", field_name],
-                    "msg": f"invalid value {current_value!r}. Expected one of: {', '.join(repr(v) for v in allowed_values)}",
-                    "type": "value_error",
-                })
+                errors.append(
+                    {
+                        "loc": ["body", field_name],
+                        "msg": f"invalid value {current_value!r}. Expected one of: {', '.join(repr(v) for v in allowed_values)}",
+                        "type": "value_error",
+                    }
+                )
 
         return errors
 
@@ -594,11 +590,13 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                     # This shouldn't happen with proper usage, but handle it gracefully
                     pass
             except (ValueError, TypeError) as e:
-                errors.append({
-                    "loc": ["body"],
-                    "msg": str(e),
-                    "type": "value_error",
-                })
+                errors.append(
+                    {
+                        "loc": ["body"],
+                        "msg": str(e),
+                        "type": "value_error",
+                    }
+                )
 
         return errors
 
@@ -627,9 +625,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         return msgspec.convert(data, type=self.__class__)
 
     @classmethod
-    def _collect_msgspec_errors(
-        cls: type[T], data: dict[str, Any]
-    ) -> list[dict[str, Any]]:
+    def _collect_msgspec_errors(cls: type[T], data: dict[str, Any]) -> list[dict[str, Any]]:
         """
         Collect all msgspec validation errors by validating each field individually.
 
@@ -666,11 +662,13 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 else:
                     loc = ["body", field_name]
 
-                errors.append({
-                    "loc": tuple(loc),
-                    "msg": error_msg,
-                    "type": "validation_error",
-                })
+                errors.append(
+                    {
+                        "loc": tuple(loc),
+                        "msg": error_msg,
+                        "type": "validation_error",
+                    }
+                )
 
         return errors
 
@@ -1075,8 +1073,10 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         # Copy Config with adjusted field_sets (only include subsets of our fields)
         parent_meta = getattr(cls, "Config", None)
         if parent_meta:
+
             class Config:
                 pass
+
             # Copy relevant Config attributes
             if hasattr(parent_meta, "model"):
                 Config.model = parent_meta.model  # type: ignore
@@ -1286,13 +1286,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         # FAST PATH: If no special handling is needed, use msgspec.structs.asdict directly
         # This is significantly faster than iterating through fields in Python
         cls = self.__class__
-        if (
-            cls.__dump_fast_path__
-            and not exclude_none
-            and not exclude_defaults
-            and not exclude_unset
-            and not by_alias
-        ):
+        if cls.__dump_fast_path__ and not exclude_none and not exclude_defaults and not exclude_unset and not by_alias:
             return msgspec_structs.asdict(self)
 
         # SLOW PATH: Need special handling
@@ -1474,13 +1468,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         """
         # FAST PATH: If no special handling is needed, use msgspec.structs.asdict directly
         # This is significantly faster than iterating through fields in Python
-        if (
-            cls.__dump_fast_path__
-            and not exclude_none
-            and not exclude_defaults
-            and not exclude_unset
-            and not by_alias
-        ):
+        if cls.__dump_fast_path__ and not exclude_none and not exclude_defaults and not exclude_unset and not by_alias:
             # Use msgspec's optimized asdict - much faster than Python iteration
             _asdict = msgspec_structs.asdict
             return [_asdict(instance) for instance in instances]

@@ -8,6 +8,7 @@ This test suite verifies that the new unified ViewSet pattern works correctly:
 - Different serializers for list vs detail (list_serializer_class)
 - Type-driven serialization
 """
+
 import msgspec
 import pytest
 from asgiref.sync import async_to_sync  # noqa: PLC0415
@@ -18,8 +19,10 @@ from tests.test_models import Article
 
 # --- Schemas ---
 
+
 class ArticleFullSchema(msgspec.Struct):
     """Full article schema for detail views."""
+
     id: int
     title: str
     content: str
@@ -39,6 +42,7 @@ class ArticleFullSchema(msgspec.Struct):
 
 class ArticleMiniSchema(msgspec.Struct):
     """Minimal article schema for list views."""
+
     id: int
     title: str
 
@@ -49,6 +53,7 @@ class ArticleMiniSchema(msgspec.Struct):
 
 class ArticleCreateSchema(msgspec.Struct):
     """Schema for creating articles."""
+
     title: str
     content: str
     author: str
@@ -56,6 +61,7 @@ class ArticleCreateSchema(msgspec.Struct):
 
 class ArticleUpdateSchema(msgspec.Struct):
     """Schema for updating articles."""
+
     title: str | None = None
     content: str | None = None
     author: str | None = None
@@ -63,16 +69,18 @@ class ArticleUpdateSchema(msgspec.Struct):
 
 # --- Tests ---
 
+
 @pytest.mark.django_db(transaction=True)
 def test_unified_viewset_basic_crud(api):
     """Test unified ViewSet with basic CRUD operations."""
 
     class ArticleViewSet(ViewSet):
         """Unified ViewSet for articles."""
+
         queryset = Article.objects.all()
         serializer_class = ArticleFullSchema
         list_serializer_class = ArticleMiniSchema
-        lookup_field = 'pk'
+        lookup_field = "pk"
 
         async def list(self, request):
             """List articles."""
@@ -202,9 +210,10 @@ def test_unified_viewset_custom_lookup_field(api):
 
     class ArticleViewSet(ViewSet):
         """Unified ViewSet with custom lookup field."""
+
         queryset = Article.objects.all()
         serializer_class = ArticleFullSchema
-        lookup_field = 'author'  # Use author as lookup field
+        lookup_field = "author"  # Use author as lookup field
 
         async def retrieve(self, request, author: str):
             """Retrieve article by author."""
@@ -245,6 +254,7 @@ def test_unified_viewset_with_custom_actions(api):
 
     class ArticleViewSet(ViewSet):
         """Unified ViewSet with custom actions."""
+
         queryset = Article.objects.all()
         serializer_class = ArticleFullSchema
         list_serializer_class = ArticleMiniSchema
@@ -307,6 +317,7 @@ def test_unified_viewset_partial_implementation(api):
 
     class ReadOnlyArticleViewSet(ViewSet):
         """Read-only ViewSet (only list and retrieve)."""
+
         queryset = Article.objects.all()
         serializer_class = ArticleFullSchema
 

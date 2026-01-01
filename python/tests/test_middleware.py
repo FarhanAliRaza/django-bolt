@@ -5,6 +5,7 @@ Note: CORS and rate limiting are handled in Rust for performance.
 The @cors() and @rate_limit() decorators attach metadata that Rust parses.
 Python middleware classes (TimingMiddleware, etc.) run for custom logic only.
 """
+
 import asyncio
 import json
 import time
@@ -53,13 +54,13 @@ class TestMiddlewareDecorators:
 
         # Check that middleware metadata was attached
         handler = api._handlers[0]
-        assert hasattr(handler, '__bolt_middleware__')
+        assert hasattr(handler, "__bolt_middleware__")
         middleware = handler.__bolt_middleware__
         assert len(middleware) > 0
-        assert middleware[0]['type'] == 'rate_limit'
-        assert middleware[0]['rps'] == 50
-        assert middleware[0]['burst'] == 100
-        assert middleware[0]['key'] == 'ip'
+        assert middleware[0]["type"] == "rate_limit"
+        assert middleware[0]["rps"] == 50
+        assert middleware[0]["burst"] == 100
+        assert middleware[0]["key"] == "ip"
 
     def test_cors_decorator(self):
         """Test CORS decorator attaches metadata"""
@@ -71,13 +72,13 @@ class TestMiddlewareDecorators:
             return {"status": "ok"}
 
         handler = api._handlers[0]
-        assert hasattr(handler, '__bolt_middleware__')
+        assert hasattr(handler, "__bolt_middleware__")
         middleware = handler.__bolt_middleware__
         assert len(middleware) > 0
-        assert middleware[0]['type'] == 'cors'
-        assert middleware[0]['origins'] == ["http://localhost:3000"]
-        assert middleware[0]['credentials']
-        assert middleware[0]['max_age'] == 7200
+        assert middleware[0]["type"] == "cors"
+        assert middleware[0]["origins"] == ["http://localhost:3000"]
+        assert middleware[0]["credentials"]
+        assert middleware[0]["max_age"] == 7200
 
     def test_auth_via_guards(self):
         """Test authentication via guards parameter"""
@@ -86,7 +87,7 @@ class TestMiddlewareDecorators:
         @api.get(
             "/protected",
             auth=[JWTAuthentication(secret="test-secret", algorithms=["HS256", "HS384"])],
-            guards=[IsAuthenticated()]
+            guards=[IsAuthenticated()],
         )
         async def protected_endpoint():
             return {"status": "ok"}
@@ -95,11 +96,11 @@ class TestMiddlewareDecorators:
         handler_id = 0
         assert handler_id in api._handler_middleware
         meta = api._handler_middleware[handler_id]
-        assert 'auth_backends' in meta
-        assert len(meta['auth_backends']) > 0
-        assert meta['auth_backends'][0]['type'] == 'jwt'
-        assert meta['auth_backends'][0]['secret'] == 'test-secret'
-        assert meta['auth_backends'][0]['algorithms'] == ["HS256", "HS384"]
+        assert "auth_backends" in meta
+        assert len(meta["auth_backends"]) > 0
+        assert meta["auth_backends"][0]["type"] == "jwt"
+        assert meta["auth_backends"][0]["secret"] == "test-secret"
+        assert meta["auth_backends"][0]["algorithms"] == ["HS256", "HS384"]
 
     def test_skip_middleware_decorator(self):
         """Test skip middleware decorator"""
@@ -111,7 +112,7 @@ class TestMiddlewareDecorators:
             return {"status": "ok"}
 
         handler = api._handlers[0]
-        assert hasattr(handler, '__bolt_skip_middleware__')
+        assert hasattr(handler, "__bolt_skip_middleware__")
         skip = handler.__bolt_skip_middleware__
         assert "cors" in skip
         assert "rate_limit" in skip
@@ -120,11 +121,7 @@ class TestMiddlewareDecorators:
         """Test multiple middleware decorators on same route"""
         api = BoltAPI()
 
-        @api.post(
-            "/secure",
-            auth=[APIKeyAuthentication(api_keys={"key1", "key2"})],
-            guards=[IsAuthenticated()]
-        )
+        @api.post("/secure", auth=[APIKeyAuthentication(api_keys={"key1", "key2"})], guards=[IsAuthenticated()])
         @rate_limit(rps=10)
         @cors(origins=["https://app.example.com"])
         async def secure_endpoint(data: dict):
@@ -135,14 +132,14 @@ class TestMiddlewareDecorators:
         assert len(middleware) == 2  # rate_limit and cors
 
         # Check they're all there
-        types = [m['type'] for m in middleware]
-        assert 'rate_limit' in types
-        assert 'cors' in types
+        types = [m["type"] for m in middleware]
+        assert "rate_limit" in types
+        assert "cors" in types
 
         # Check auth is in metadata
         meta = api._handler_middleware[0]
-        assert 'auth_backends' in meta
-        assert len(meta['auth_backends']) > 0
+        assert "auth_backends" in meta
+        assert len(meta["auth_backends"]) > 0
 
 
 class TestGlobalMiddleware:
@@ -152,22 +149,15 @@ class TestGlobalMiddleware:
         """Test setting global middleware via BoltAPI constructor"""
         api = BoltAPI(
             middleware_config={
-                'cors': {
-                    'origins': ['*'],
-                    'credentials': False
-                },
-                'rate_limit': {
-                    'rps': 1000,
-                    'burst': 2000,
-                    'key': 'ip'
-                }
+                "cors": {"origins": ["*"], "credentials": False},
+                "rate_limit": {"rps": 1000, "burst": 2000, "key": "ip"},
             }
         )
 
-        assert 'cors' in api.middleware_config
-        assert 'rate_limit' in api.middleware_config
-        assert api.middleware_config['cors']['origins'] == ['*']
-        assert api.middleware_config['rate_limit']['rps'] == 1000
+        assert "cors" in api.middleware_config
+        assert "rate_limit" in api.middleware_config
+        assert api.middleware_config["cors"]["origins"] == ["*"]
+        assert api.middleware_config["rate_limit"]["rps"] == 1000
 
     def test_global_middleware_instances(self):
         """Test setting global middleware instances (Python middleware)"""
@@ -185,11 +175,7 @@ class TestMiddlewareMetadata:
 
     def test_middleware_metadata_compilation(self):
         """Test that middleware metadata is compiled correctly"""
-        api = BoltAPI(
-            middleware_config={
-                'cors': {'origins': ['*']}
-            }
-        )
+        api = BoltAPI(middleware_config={"cors": {"origins": ["*"]}})
 
         @api.get("/test")
         @rate_limit(rps=100)
@@ -201,22 +187,17 @@ class TestMiddlewareMetadata:
         handler_id = 0
         meta = api._handler_middleware[handler_id]
 
-        assert 'middleware' in meta
-        assert len(meta['middleware']) == 2  # Global CORS + route rate_limit
+        assert "middleware" in meta
+        assert len(meta["middleware"]) == 2  # Global CORS + route rate_limit
 
         # Check types
-        types = [m['type'] for m in meta['middleware']]
-        assert 'cors' in types
-        assert 'rate_limit' in types
+        types = [m["type"] for m in meta["middleware"]]
+        assert "cors" in types
+        assert "rate_limit" in types
 
     def test_skip_global_middleware(self):
         """Test skipping global middleware on specific routes"""
-        api = BoltAPI(
-            middleware_config={
-                'cors': {'origins': ['*']},
-                'rate_limit': {'rps': 100}
-            }
-        )
+        api = BoltAPI(middleware_config={"cors": {"origins": ["*"]}, "rate_limit": {"rps": 100}})
 
         @api.get("/no-cors")
         @skip_middleware("cors")
@@ -227,9 +208,9 @@ class TestMiddlewareMetadata:
         meta = api._handler_middleware[handler_id]
 
         # Should only have rate_limit, not cors
-        assert len(meta['middleware']) == 1
-        assert meta['middleware'][0]['type'] == 'rate_limit'
-        assert 'cors' in meta['skip']
+        assert len(meta["middleware"]) == 1
+        assert meta["middleware"][0]["type"] == "rate_limit"
+        assert "cors" in meta["skip"]
 
 
 class TestMiddlewareExecution:
@@ -245,10 +226,7 @@ class TestMiddlewareExecution:
         async def test_endpoint(request: dict):
             # Access context
             context = request.get("context")
-            return {
-                "has_context": context is not None,
-                "context_type": type(context).__name__ if context else None
-            }
+            return {"has_context": context is not None, "context_type": type(context).__name__ if context else None}
 
         # Create test request
         test_request = {
@@ -259,7 +237,7 @@ class TestMiddlewareExecution:
             "query": {},
             "headers": {},
             "cookies": {},
-            "context": None  # Will be populated by middleware
+            "context": None,  # Will be populated by middleware
         }
 
         # Get handler and handler_id
@@ -306,7 +284,7 @@ class TestMiddlewareExecution:
             "query": {},
             "headers": {"content-type": "application/json"},
             "cookies": {},
-            "context": None
+            "context": None,
         }
 
         handler_id = 0  # First registered handler
@@ -330,7 +308,7 @@ class TestAuthTokenGeneration:
             "sub": "user123",
             "exp": int(time.time()) + 3600,  # 1 hour from now
             "iat": int(time.time()),
-            "custom_claim": "test_value"
+            "custom_claim": "test_value",
         }
 
         token = jwt.encode(payload, secret, algorithm="HS256")
@@ -347,7 +325,7 @@ class TestAuthTokenGeneration:
         payload = {
             "sub": "user123",
             "exp": int(time.time()) - 3600,  # 1 hour ago
-            "iat": int(time.time()) - 7200
+            "iat": int(time.time()) - 7200,
         }
 
         token = jwt.encode(payload, secret, algorithm="HS256")
@@ -360,10 +338,7 @@ class TestAuthTokenGeneration:
         """Generate a JWT with wrong signature"""
         secret = "test-secret"
         wrong_secret = "wrong-secret"
-        payload = {
-            "sub": "user123",
-            "exp": int(time.time()) + 3600
-        }
+        payload = {"sub": "user123", "exp": int(time.time()) + 3600}
 
         token = jwt.encode(payload, wrong_secret, algorithm="HS256")
 
@@ -394,11 +369,11 @@ class TestMiddlewareIntegration:
         # Check middleware metadata
         assert handler_id in api._handler_middleware
         meta = api._handler_middleware[handler_id]
-        assert len(meta['middleware']) == 2
+        assert len(meta["middleware"]) == 2
 
-        types = [m['type'] for m in meta['middleware']]
-        assert 'rate_limit' in types
-        assert 'cors' in types
+        types = [m["type"] for m in meta["middleware"]]
+        assert "rate_limit" in types
+        assert "cors" in types
 
     def test_preflight_route(self):
         """Test OPTIONS preflight handling"""
@@ -410,7 +385,7 @@ class TestMiddlewareIntegration:
             methods=["GET", "POST", "PUT"],
             headers=["Content-Type", "Authorization", "X-Custom"],
             credentials=True,
-            max_age=7200
+            max_age=7200,
         )
         async def get_data():
             return {"data": [1, 2, 3]}
@@ -418,13 +393,13 @@ class TestMiddlewareIntegration:
         # The preflight will be handled by Rust middleware
         # Here we just verify the metadata is correct
         meta = api._handler_middleware[0]
-        cors_config = next(m for m in meta['middleware'] if m['type'] == 'cors')
+        cors_config = next(m for m in meta["middleware"] if m["type"] == "cors")
 
-        assert cors_config['origins'] == ["http://localhost:3000", "https://app.example.com"]
-        assert cors_config['methods'] == ["GET", "POST", "PUT"]
-        assert cors_config['headers'] == ["Content-Type", "Authorization", "X-Custom"]
-        assert cors_config['credentials']
-        assert cors_config['max_age'] == 7200
+        assert cors_config["origins"] == ["http://localhost:3000", "https://app.example.com"]
+        assert cors_config["methods"] == ["GET", "POST", "PUT"]
+        assert cors_config["headers"] == ["Content-Type", "Authorization", "X-Custom"]
+        assert cors_config["credentials"]
+        assert cors_config["max_age"] == 7200
 
 
 if __name__ == "__main__":

@@ -3,37 +3,26 @@ Test models for Django ORM integration tests.
 
 These models are used to verify that ViewSets work with real Django ORM operations.
 """
+
 from django.db import models
 
 
 class Article(models.Model):
     """Test model for ViewSet/Mixin Django ORM integration tests."""
 
-    statuses = (
-        (
-            "draft",
-            "draft"
-        ),
-        (
-            "published",
-            "published"
-
-        )
-    )
+    statuses = (("draft", "draft"), ("published", "published"))
 
     title = models.CharField(max_length=200)
     content = models.TextField()
-    status = models.CharField(
-        choices=statuses, default="draft", max_length=100
-    )
+    status = models.CharField(choices=statuses, default="draft", max_length=100)
     author = models.CharField(max_length=100)
     is_published = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        app_label = 'django_bolt'
-        ordering = ['-created_at']
+        app_label = "django_bolt"
+        ordering = ["-created_at"]
 
     def __str__(self):
         return self.title
@@ -48,7 +37,7 @@ class Author(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        app_label = 'django_bolt'
+        app_label = "django_bolt"
 
     def __str__(self):
         return self.name
@@ -61,7 +50,7 @@ class Tag(models.Model):
     description = models.TextField(blank=True)
 
     class Meta:
-        app_label = 'django_bolt'
+        app_label = "django_bolt"
 
     def __str__(self):
         return self.name
@@ -72,15 +61,15 @@ class BlogPost(models.Model):
 
     title = models.CharField(max_length=300)
     content = models.TextField()
-    author = models.ForeignKey(Author, on_delete=models.CASCADE, related_name='posts')
-    tags = models.ManyToManyField(Tag, related_name='posts')
+    author = models.ForeignKey(Author, on_delete=models.CASCADE, related_name="posts")
+    tags = models.ManyToManyField(Tag, related_name="posts")
     published = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        app_label = 'django_bolt'
-        ordering = ['-created_at']
+        app_label = "django_bolt"
+        ordering = ["-created_at"]
 
     def __str__(self):
         return self.title
@@ -89,14 +78,14 @@ class BlogPost(models.Model):
 class Comment(models.Model):
     """Comment model with ForeignKey to both Author and BlogPost."""
 
-    post = models.ForeignKey(BlogPost, on_delete=models.CASCADE, related_name='comments')
-    author = models.ForeignKey(Author, on_delete=models.CASCADE, related_name='comments')
+    post = models.ForeignKey(BlogPost, on_delete=models.CASCADE, related_name="comments")
+    author = models.ForeignKey(Author, on_delete=models.CASCADE, related_name="comments")
     text = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        app_label = 'django_bolt'
-        ordering = ['created_at']
+        app_label = "django_bolt"
+        ordering = ["created_at"]
 
     def __str__(self):
         return f"Comment by {self.author.name} on {self.post.title}"
@@ -114,8 +103,8 @@ class User(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        app_label = 'django_bolt'
-        ordering = ['-created_at']
+        app_label = "django_bolt"
+        ordering = ["-created_at"]
 
     def __str__(self):
         return self.username
@@ -124,7 +113,7 @@ class User(models.Model):
 class UserProfile(models.Model):
     """User profile with one-to-one relationship to User."""
 
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
     bio = models.TextField(max_length=500, blank=True)
     avatar_url = models.URLField(blank=True)
     phone = models.CharField(max_length=20, blank=True)
@@ -134,7 +123,7 @@ class UserProfile(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        app_label = 'django_bolt'
+        app_label = "django_bolt"
 
     def __str__(self):
         return f"Profile for {self.user.username}"

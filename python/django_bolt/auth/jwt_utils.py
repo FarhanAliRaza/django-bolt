@@ -4,6 +4,7 @@ JWT utility functions for Django-Bolt.
 Provides helper functions to create JWT tokens for Django users and
 extract user information from request context.
 """
+
 from __future__ import annotations
 
 import time
@@ -21,7 +22,7 @@ def create_jwt_for_user(
     secret: str | None = None,
     algorithm: str = "HS256",
     expires_in: int = 3600,
-    extra_claims: dict[str, Any] | None = None
+    extra_claims: dict[str, Any] | None = None,
 ) -> str:
     """
     Create a JWT token for a Django User.
@@ -84,13 +85,13 @@ def create_jwt_for_user(
     }
 
     # Add email if available
-    if hasattr(user, 'email') and user.email:
+    if hasattr(user, "email") and user.email:
         payload["email"] = user.email
 
     # Add first/last name if available
-    if hasattr(user, 'first_name') and user.first_name:
+    if hasattr(user, "first_name") and user.first_name:
         payload["first_name"] = user.first_name
-    if hasattr(user, 'last_name') and user.last_name:
+    if hasattr(user, "last_name") and user.last_name:
         payload["last_name"] = user.last_name
 
     # Merge extra claims

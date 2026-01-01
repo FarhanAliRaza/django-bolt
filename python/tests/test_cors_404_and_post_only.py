@@ -53,12 +53,14 @@ class TestCorsPreflightOn404Routes:
             )
 
             # CRITICAL: Must be 204, not 404
-            assert response.status_code == 204, \
+            assert response.status_code == 204, (
                 f"Preflight to non-existent route should return 204, got {response.status_code}"
+            )
 
             # CRITICAL: Must have CORS headers
-            assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com", \
+            assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com", (
                 f"Missing or wrong Access-Control-Allow-Origin header: {response.headers}"
+            )
 
     def test_preflight_to_nonexistent_route_has_cors_headers(self):
         """
@@ -118,8 +120,9 @@ class TestCorsPreflightOn404Routes:
             assert response.status_code == 404
 
             # CRITICAL: Must have CORS headers so browser can read error
-            assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com", \
+            assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com", (
                 f"404 response missing CORS headers: {response.headers}"
+            )
 
 
 class TestCorsPreflightOnPostOnlyRoutes:
@@ -159,12 +162,14 @@ class TestCorsPreflightOnPostOnlyRoutes:
             )
 
             # Should be 204
-            assert response.status_code == 204, \
+            assert response.status_code == 204, (
                 f"Preflight to POST-only route should return 204, got {response.status_code}"
+            )
 
             # CRITICAL: Must have CORS headers from route-level config
-            assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com", \
+            assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com", (
                 f"POST-only route preflight missing CORS headers: {response.headers}"
+            )
 
             # Should have methods including POST
             methods = response.headers.get("Access-Control-Allow-Methods", "")
@@ -354,8 +359,10 @@ class TestCorsOriginSchemeRequired:
 
             assert response.status_code == 200
             # Should NOT have CORS header for disallowed origin
-            assert "Access-Control-Allow-Origin" not in response.headers or \
-                   response.headers.get("Access-Control-Allow-Origin") != "https://evil.com"
+            assert (
+                "Access-Control-Allow-Origin" not in response.headers
+                or response.headers.get("Access-Control-Allow-Origin") != "https://evil.com"
+            )
 
 
 class TestCorsOnErrorResponses:
@@ -399,12 +406,12 @@ class TestCorsOnErrorResponses:
             )
 
             # Should be 401
-            assert response.status_code == 401, \
-                f"Expected 401, got {response.status_code}"
+            assert response.status_code == 401, f"Expected 401, got {response.status_code}"
 
             # CRITICAL: Must have CORS headers so browser can read error
-            assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com", \
+            assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com", (
                 f"401 response missing CORS headers: {dict(response.headers)}"
+            )
 
     def test_403_forbidden_has_cors_headers_with_global_cors(self):
         """
@@ -453,12 +460,12 @@ class TestCorsOnErrorResponses:
             )
 
             # Should be 403 (authenticated but not admin)
-            assert response.status_code == 403, \
-                f"Expected 403, got {response.status_code}"
+            assert response.status_code == 403, f"Expected 403, got {response.status_code}"
 
             # CRITICAL: Must have CORS headers so browser can read error
-            assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com", \
+            assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com", (
                 f"403 response missing CORS headers: {dict(response.headers)}"
+            )
 
     def test_401_has_cors_with_route_level_cors(self):
         """
@@ -486,8 +493,9 @@ class TestCorsOnErrorResponses:
             assert response.status_code == 401
 
             # Should use route-level CORS config
-            assert response.headers.get("Access-Control-Allow-Origin") == "https://route-level.com", \
+            assert response.headers.get("Access-Control-Allow-Origin") == "https://route-level.com", (
                 f"401 should use route-level CORS: {dict(response.headers)}"
+            )
 
     def test_403_has_cors_with_route_level_cors(self):
         """
@@ -532,8 +540,9 @@ class TestCorsOnErrorResponses:
             assert response.status_code == 403
 
             # Should use route-level CORS config
-            assert response.headers.get("Access-Control-Allow-Origin") == "https://route-level.com", \
+            assert response.headers.get("Access-Control-Allow-Origin") == "https://route-level.com", (
                 f"403 should use route-level CORS: {dict(response.headers)}"
+            )
 
     def test_disallowed_origin_no_cors_on_401(self):
         """
@@ -563,8 +572,7 @@ class TestCorsOnErrorResponses:
 
             # Should NOT have CORS header for disallowed origin
             cors_header = response.headers.get("Access-Control-Allow-Origin")
-            assert cors_header != "https://evil.com", \
-                f"Should not allow evil.com origin: {cors_header}"
+            assert cors_header != "https://evil.com", f"Should not allow evil.com origin: {cors_header}"
 
 
 if __name__ == "__main__":

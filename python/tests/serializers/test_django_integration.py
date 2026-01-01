@@ -451,7 +451,9 @@ class TestFieldValidatorsWithDjango:
 
     def test_field_validator_on_parse(self):
         """Test field validators run during JSON parsing."""
-        json_data = b'{"username": "TestUser", "email": "TEST@EXAMPLE.COM", "password": "secret", "password_confirm": "secret"}'
+        json_data = (
+            b'{"username": "TestUser", "email": "TEST@EXAMPLE.COM", "password": "secret", "password_confirm": "secret"}'
+        )
 
         user_create = UserCreateSerializer.model_validate_json(json_data)
 
@@ -784,16 +786,12 @@ class TestValidatedTypesWithDjango:
             email: Email
 
         # Valid email
-        author = StrictAuthorSerializer.model_validate_json(
-            b'{"name": "Test", "email": "valid@example.com"}'
-        )
+        author = StrictAuthorSerializer.model_validate_json(b'{"name": "Test", "email": "valid@example.com"}')
         assert author.email == "valid@example.com"
 
         # Invalid email - Meta pattern validation in msgspec
         with pytest.raises(RequestValidationError):
-            StrictAuthorSerializer.model_validate_json(
-                b'{"name": "Test", "email": "invalid-email"}'
-            )
+            StrictAuthorSerializer.model_validate_json(b'{"name": "Test", "email": "invalid-email"}')
 
     def test_positive_int_validation(self):
         """Test PositiveInt type validates correctly."""
@@ -817,23 +815,17 @@ class TestValidatedTypesWithDjango:
     def test_geographic_types_validation(self):
         """Test Latitude and Longitude types."""
         # Valid location
-        loc = LocationSerializer.model_validate_json(
-            b'{"name": "NYC", "latitude": 40.7128, "longitude": -74.0060}'
-        )
+        loc = LocationSerializer.model_validate_json(b'{"name": "NYC", "latitude": 40.7128, "longitude": -74.0060}')
         assert loc.latitude == 40.7128
         assert loc.longitude == -74.0060
 
         # Invalid latitude (> 90) - Meta constraint in msgspec
         with pytest.raises(RequestValidationError):
-            LocationSerializer.model_validate_json(
-                b'{"name": "Invalid", "latitude": 91.0, "longitude": 0}'
-            )
+            LocationSerializer.model_validate_json(b'{"name": "Invalid", "latitude": 91.0, "longitude": 0}')
 
         # Invalid longitude (> 180) - Meta constraint in msgspec
         with pytest.raises(RequestValidationError):
-            LocationSerializer.model_validate_json(
-                b'{"name": "Invalid", "latitude": 0, "longitude": 181.0}'
-            )
+            LocationSerializer.model_validate_json(b'{"name": "Invalid", "latitude": 0, "longitude": 181.0}')
 
     def test_validated_types_in_subset(self):
         """Test validated types are preserved in subset."""
@@ -985,11 +977,7 @@ class TestNestedSerializersWithDjango:
         post = BlogPost.objects.create(title="Deep Nesting", content="Content", author=author1)
         Comment.objects.create(post=post, author=author2, text="A comment")
 
-        post = (
-            BlogPost.objects.select_related("author")
-            .prefetch_related("tags", "comments__author")
-            .get(id=post.id)
-        )
+        post = BlogPost.objects.select_related("author").prefetch_related("tags", "comments__author").get(id=post.id)
 
         author_serializer = AuthorSerializer.from_model(post.author)
         comment_serializers = [
@@ -1234,11 +1222,7 @@ class TestComplexDjangoScenarios:
         Comment.objects.create(post=post, author=author, text="Self comment")
 
         # Detail view needs full data
-        post = (
-            BlogPost.objects.select_related("author")
-            .prefetch_related("tags", "comments__author")
-            .get(id=post.id)
-        )
+        post = BlogPost.objects.select_related("author").prefetch_related("tags", "comments__author").get(id=post.id)
 
         # Build full serializer
         author_serializer = AuthorSerializer.from_model(post.author)
@@ -1420,9 +1404,7 @@ class ComprehensiveProductSerializer(Serializer):
     # -------------------------------------------------------------------------
     # 13. Nested serializer with many=True (ManyToMany equivalent)
     # -------------------------------------------------------------------------
-    related_tags: Annotated[list[TagSerializer], Nested(TagSerializer, many=True)] = field(
-        default_factory=list
-    )
+    related_tags: Annotated[list[TagSerializer], Nested(TagSerializer, many=True)] = field(default_factory=list)
 
     # -------------------------------------------------------------------------
     # Config class configuration
@@ -1438,17 +1420,42 @@ class ComprehensiveProductSerializer(Serializer):
         field_sets = {
             "list": ["id", "name", "sku", "price", "is_active"],
             "detail": [
-                "id", "name", "sku", "description", "price", "quantity",
-                "discount_percent", "website", "is_active", "is_featured",
-                "created_at", "updated_at"
+                "id",
+                "name",
+                "sku",
+                "description",
+                "price",
+                "quantity",
+                "discount_percent",
+                "website",
+                "is_active",
+                "is_featured",
+                "created_at",
+                "updated_at",
             ],
             "admin": [
-                "id", "name", "sku", "description", "price", "quantity",
-                "discount_percent", "internal_cost", "category_name",
-                "tags_list", "website", "manufacturer_email", "is_active",
-                "is_featured", "supplier", "related_tags", "created_at", "updated_at",
+                "id",
+                "name",
+                "sku",
+                "description",
+                "price",
+                "quantity",
+                "discount_percent",
+                "internal_cost",
+                "category_name",
+                "tags_list",
+                "website",
+                "manufacturer_email",
+                "is_active",
+                "is_featured",
+                "supplier",
+                "related_tags",
+                "created_at",
+                "updated_at",
                 # Include computed fields explicitly
-                "display_price", "is_on_sale", "tag_count"
+                "display_price",
+                "is_on_sale",
+                "tag_count",
             ],
             "export": ["id", "name", "sku", "price", "quantity", "is_active"],
         }
@@ -1781,9 +1788,17 @@ class TestComprehensiveSerializer:
         )
 
         result = ComprehensiveProductSerializer.exclude(
-            "created_at", "updated_at", "supplier", "related_tags",
-            "tags_list", "category_name", "website", "manufacturer_email",
-            "is_featured", "discount_percent", "internal_cost"
+            "created_at",
+            "updated_at",
+            "supplier",
+            "related_tags",
+            "tags_list",
+            "category_name",
+            "website",
+            "manufacturer_email",
+            "is_featured",
+            "discount_percent",
+            "internal_cost",
         ).dump(product)
 
         assert "id" in result
@@ -1830,9 +1845,18 @@ class TestComprehensiveSerializer:
         result = ComprehensiveProductSerializer.use("detail").dump(product)
 
         expected_keys = {
-            "id", "name", "sku", "description", "price", "quantity",
-            "discount_percent", "website", "is_active", "is_featured",
-            "created_at", "updated_at"
+            "id",
+            "name",
+            "sku",
+            "description",
+            "price",
+            "quantity",
+            "discount_percent",
+            "website",
+            "is_active",
+            "is_featured",
+            "created_at",
+            "updated_at",
         }
         assert set(result.keys()) == expected_keys
 
@@ -2054,13 +2078,13 @@ class TestComprehensiveSerializer:
         so the SKU must already match the pattern in the JSON input.
         The field validator then uppercases it (though already uppercase).
         """
-        json_data = b'''{
+        json_data = b"""{
             "id": 1,
             "name": "  json parsed  ",
             "sku": "JP-1234",
             "price": 99.99,
             "quantity": 10
-        }'''
+        }"""
 
         product = ComprehensiveProductSerializer.model_validate_json(json_data)
 
@@ -2070,13 +2094,13 @@ class TestComprehensiveSerializer:
 
     def test_model_validate_json_fails_on_invalid_sku(self):
         """Test model_validate_json rejects invalid SKU pattern."""
-        json_data = b'''{
+        json_data = b"""{
             "id": 1,
             "name": "Bad SKU",
             "sku": "invalid-format",
             "price": 10.0,
             "quantity": 1
-        }'''
+        }"""
 
         # Meta pattern validation in msgspec
         with pytest.raises(RequestValidationError):
@@ -2157,28 +2181,28 @@ class TestComprehensiveSerializer:
     # -------------------------------------------------------------------------
     def test_validated_type_email_valid(self):
         """Test Email type accepts valid email via JSON parsing."""
-        json_data = b'''{
+        json_data = b"""{
             "id": 1,
             "name": "Email Test",
             "sku": "ET-0001",
             "price": 10.0,
             "quantity": 1,
             "manufacturer_email": "VALID@EXAMPLE.COM"
-        }'''
+        }"""
 
         product = ComprehensiveProductSerializer.model_validate_json(json_data)
         assert product.manufacturer_email == "valid@example.com"  # Lowercased
 
     def test_validated_type_email_invalid(self):
         """Test Email type rejects invalid email via JSON parsing."""
-        json_data = b'''{
+        json_data = b"""{
             "id": 1,
             "name": "Bad Email",
             "sku": "BE-0001",
             "price": 10.0,
             "quantity": 1,
             "manufacturer_email": "not-an-email"
-        }'''
+        }"""
 
         # Meta pattern validation in msgspec
         with pytest.raises(RequestValidationError):
@@ -2186,27 +2210,27 @@ class TestComprehensiveSerializer:
 
     def test_validated_type_url_valid(self):
         """Test URL type accepts valid URL via JSON parsing."""
-        json_data = b'''{
+        json_data = b"""{
             "id": 1,
             "name": "URL Test",
             "sku": "UT-0001",
             "price": 10.0,
             "quantity": 1,
             "website": "https://example.com/product"
-        }'''
+        }"""
 
         product = ComprehensiveProductSerializer.model_validate_json(json_data)
         assert product.website == "https://example.com/product"
 
     def test_validated_type_positive_int_invalid(self):
         """Test PositiveInt rejects zero/negative via JSON parsing."""
-        json_data = b'''{
+        json_data = b"""{
             "id": 1,
             "name": "Zero Qty",
             "sku": "ZQ-0001",
             "price": 10.0,
             "quantity": 0
-        }'''
+        }"""
 
         # Meta constraint validation in msgspec
         with pytest.raises(RequestValidationError):
@@ -2268,9 +2292,9 @@ class TestComprehensiveSerializer:
         assert admin_result["tag_count"] == 2
 
         # Use only() for public view (runtime field selection)
-        public_result = ComprehensiveProductSerializer.only(
-            "id", "name", "price", "display_price", "is_on_sale"
-        ).dump(product)
+        public_result = ComprehensiveProductSerializer.only("id", "name", "price", "display_price", "is_on_sale").dump(
+            product
+        )
         assert set(public_result.keys()) == {"id", "name", "price", "display_price", "is_on_sale"}
 
     # -------------------------------------------------------------------------
@@ -2280,10 +2304,7 @@ class TestComprehensiveSerializer:
     def test_bulk_operations_with_django(self):
         """Test bulk operations with Django model data."""
         # Create multiple authors as suppliers
-        suppliers = [
-            Author.objects.create(name=f"Supplier {i}", email=f"s{i}@test.com")
-            for i in range(3)
-        ]
+        suppliers = [Author.objects.create(name=f"Supplier {i}", email=f"s{i}@test.com") for i in range(3)]
 
         # Create products with suppliers
         products = [

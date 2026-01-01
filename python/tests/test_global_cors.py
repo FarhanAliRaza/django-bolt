@@ -20,10 +20,7 @@ def test_cors_uses_global_origins_when_no_route_config():
     global_origins = ["https://example.com", "https://trusted.com"]
 
     with TestClient(api, use_http_layer=True, cors_allowed_origins=global_origins) as client:
-        response = client.get(
-            "/no-cors-config",
-            headers={"Origin": "https://example.com"}
-        )
+        response = client.get("/no-cors-config", headers={"Origin": "https://example.com"})
         assert response.status_code == 200
         assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com"
 
@@ -42,10 +39,7 @@ def test_cors_route_config_overrides_global():
     global_origins = ["https://example.com", "https://trusted.com"]
 
     with TestClient(api, use_http_layer=True, cors_allowed_origins=global_origins) as client:
-        response = client.get(
-            "/with-cors-config",
-            headers={"Origin": "https://custom.com"}
-        )
+        response = client.get("/with-cors-config", headers={"Origin": "https://custom.com"})
         assert response.status_code == 200
         assert response.headers.get("Access-Control-Allow-Origin") == "https://custom.com"
 
@@ -62,10 +56,7 @@ def test_cors_rejects_unlisted_origin_with_global_config():
     global_origins = ["https://example.com", "https://trusted.com"]
 
     with TestClient(api, use_http_layer=True, cors_allowed_origins=global_origins) as client:
-        response = client.get(
-            "/no-cors-config",
-            headers={"Origin": "https://evil.com"}
-        )
+        response = client.get("/no-cors-config", headers={"Origin": "https://evil.com"})
         # Should not have CORS headers for unlisted origin
         assert "Access-Control-Allow-Origin" not in response.headers
 
@@ -83,10 +74,7 @@ def test_cors_allows_wildcard_in_global_config():
     global_origins = ["*"]
 
     with TestClient(api, use_http_layer=True, cors_allowed_origins=global_origins) as client:
-        response = client.get(
-            "/no-cors-config",
-            headers={"Origin": "https://any-domain.com"}
-        )
+        response = client.get("/no-cors-config", headers={"Origin": "https://any-domain.com"})
         assert response.status_code == 200
         assert response.headers.get("Access-Control-Allow-Origin") == "*"
 
@@ -101,10 +89,7 @@ def test_cors_empty_global_config_no_headers():
 
     # Empty global origins, no route middleware
     with TestClient(api, use_http_layer=True, cors_allowed_origins=[]) as client:
-        response = client.get(
-            "/no-cors-config",
-            headers={"Origin": "https://example.com"}
-        )
+        response = client.get("/no-cors-config", headers={"Origin": "https://example.com"})
         assert "Access-Control-Allow-Origin" not in response.headers
 
 
@@ -113,6 +98,7 @@ def test_cors_decorator_requires_origins():
     api = BoltAPI()
 
     with pytest.raises(ValueError, match="@cors\\(\\) requires 'origins' argument"):
+
         @api.get("/test")
         @cors()  # Empty @cors() should raise error
         async def endpoint():
@@ -136,8 +122,8 @@ def test_preflight_uses_global_origins():
             headers={
                 "Origin": "https://example.com",
                 "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "Content-Type"
-            }
+                "Access-Control-Request-Headers": "Content-Type",
+            },
         )
         # Preflight is intercepted by CORS middleware and returns 204
         assert response.status_code == 204

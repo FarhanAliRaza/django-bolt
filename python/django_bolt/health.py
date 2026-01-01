@@ -83,6 +83,7 @@ async def check_database() -> tuple[bool, str]:
 
 # Health endpoint handlers
 
+
 async def health_handler() -> dict[str, str]:
     """Simple liveness check.
 

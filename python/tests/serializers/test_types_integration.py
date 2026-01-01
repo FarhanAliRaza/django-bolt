@@ -130,6 +130,7 @@ api = BoltAPI()
 
 # --- User endpoints ---
 
+
 @api.post("/users")
 async def create_user(data: UserInputSerializer):
     """Create user with validated email and username."""
@@ -154,6 +155,7 @@ async def get_user(user_id: int):
 
 # --- Contact endpoints ---
 
+
 @api.post("/contacts")
 async def create_contact(data: ContactSerializer):
     """Create contact with phone validation."""
@@ -161,6 +163,7 @@ async def create_contact(data: ContactSerializer):
 
 
 # --- Location endpoints ---
+
 
 @api.post("/locations")
 async def create_location(data: LocationSerializer):
@@ -170,6 +173,7 @@ async def create_location(data: LocationSerializer):
 
 # --- Server config endpoints ---
 
+
 @api.post("/servers")
 async def create_server(data: ServerConfigSerializer):
     """Create server config with IP/port validation."""
@@ -177,6 +181,7 @@ async def create_server(data: ServerConfigSerializer):
 
 
 # --- Theme endpoints ---
+
 
 @api.post("/themes")
 async def create_theme(data: ThemeSerializer):
@@ -186,6 +191,7 @@ async def create_theme(data: ThemeSerializer):
 
 # --- Progress endpoints ---
 
+
 @api.post("/progress")
 async def update_progress(data: ProgressSerializer):
     """Update progress with percentage validation."""
@@ -193,6 +199,7 @@ async def update_progress(data: ProgressSerializer):
 
 
 # --- Entity endpoints ---
+
 
 @api.post("/entities")
 async def create_entity(data: EntitySerializer):
@@ -202,6 +209,7 @@ async def create_entity(data: EntitySerializer):
 
 # --- Blog post endpoints ---
 
+
 @api.post("/posts")
 async def create_post(data: BlogPostSerializer):
     """Create blog post with slug and URL validation."""
@@ -209,6 +217,7 @@ async def create_post(data: BlogPostSerializer):
 
 
 # --- Pagination endpoints ---
+
 
 @api.post("/paginate")
 async def paginate(data: PaginationSerializer):

@@ -76,12 +76,14 @@ async def list_missions(filters: Annotated[MissionFilters, Query()]):
     if filters.status:
         queryset = queryset.filter(status=filters.status)
     missions = []
-    async for mission in queryset[:filters.limit]:
-        missions.append({
-            "id": mission.id,
-            "name": mission.name,
-            "status": mission.status,
-        })
+    async for mission in queryset[: filters.limit]:
+        missions.append(
+            {
+                "id": mission.id,
+                "name": mission.name,
+                "status": mission.status,
+            }
+        )
     return {"missions": missions, "count": len(missions)}
 
 
@@ -183,11 +185,13 @@ async def list_astronauts(mission_id: int):
 
     astronauts = []
     async for astronaut in Astronaut.objects.filter(mission=mission):
-        astronauts.append({
-            "id": astronaut.id,
-            "name": astronaut.name,
-            "role": astronaut.role,
-        })
+        astronauts.append(
+            {
+                "id": astronaut.id,
+                "name": astronaut.name,
+                "role": astronaut.role,
+            }
+        )
     return {"mission": mission.name, "astronauts": astronauts}
 
 
@@ -218,11 +222,13 @@ async def upload_document(
 
     uploaded = []
     for f in files:
-        uploaded.append({
-            "filename": f.get("filename"),
-            "content_type": f.get("content_type"),
-            "size": f.get("size"),
-        })
+        uploaded.append(
+            {
+                "filename": f.get("filename"),
+                "content_type": f.get("content_type"),
+                "size": f.get("size"),
+            }
+        )
 
     return {
         "mission": mission.name,

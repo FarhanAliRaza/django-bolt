@@ -3,6 +3,7 @@ Tests for compression middleware in Django-Bolt.
 
 Tests both global compression configuration and per-route skip functionality.
 """
+
 import pytest
 
 from django_bolt import BoltAPI
@@ -103,7 +104,7 @@ def test_compression_custom_config():
         compression=CompressionConfig(
             backend="gzip",
             minimum_size=1000,  # Larger threshold
-            gzip_fallback=True
+            gzip_fallback=True,
         )
     )
 
@@ -130,12 +131,7 @@ def test_compression_custom_config():
 
 def test_compression_brotli_config():
     """Test brotli compression configuration."""
-    api = BoltAPI(
-        compression=CompressionConfig(
-            backend="brotli",
-            minimum_size=500
-        )
-    )
+    api = BoltAPI(compression=CompressionConfig(backend="brotli", minimum_size=500))
 
     @api.get("/data")
     async def get_data():
@@ -151,13 +147,7 @@ def test_compression_brotli_config():
 
 def test_compression_zstd_config():
     """Test zstd compression configuration."""
-    api = BoltAPI(
-        compression=CompressionConfig(
-            backend="zstd",
-            minimum_size=500,
-            gzip_fallback=True
-        )
-    )
+    api = BoltAPI(compression=CompressionConfig(backend="zstd", minimum_size=500, gzip_fallback=True))
 
     @api.get("/data")
     async def get_data():

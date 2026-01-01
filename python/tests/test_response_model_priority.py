@@ -8,6 +8,7 @@ This test suite verifies that:
 4. Works with Serializer subclasses (django-bolt's enhanced msgspec.Struct)
 5. Works with both sync and async handlers
 """
+
 from __future__ import annotations
 
 import inspect  # noqa: PLC0415
@@ -22,12 +23,14 @@ from django_bolt.typing import is_msgspec_struct
 # Test serializers
 class UserMini(Serializer):
     """Minimal user serializer for testing."""
+
     id: int
     username: str
 
 
 class UserFull(Serializer):
     """Full user serializer for testing."""
+
     id: int
     username: str
     email: str
@@ -37,6 +40,7 @@ class UserFull(Serializer):
 
 class PlainStruct(msgspec.Struct):
     """Plain msgspec.Struct for comparison."""
+
     id: int
     name: str
 
@@ -44,6 +48,7 @@ class PlainStruct(msgspec.Struct):
 # ============================================================================
 # Test 1: response_model parameter takes precedence over return annotation
 # ============================================================================
+
 
 def test_response_model_overrides_annotation():
     """Test that response_model parameter takes precedence over return annotation."""
@@ -87,6 +92,7 @@ def test_response_model_overrides_annotation_async():
 # Test 2: Return annotation works as fallback when no response_model
 # ============================================================================
 
+
 def test_return_annotation_fallback():
     """Test that return annotation is used when response_model not provided."""
     api = BoltAPI()
@@ -127,6 +133,7 @@ def test_return_annotation_fallback_async():
 # ============================================================================
 # Test 3: Both syntaxes produce identical metadata
 # ============================================================================
+
 
 def test_both_syntaxes_produce_same_metadata():
     """Test that response_model and return annotation produce identical metadata."""
@@ -182,6 +189,7 @@ def test_both_syntaxes_produce_same_metadata_async():
 # Test 4: Works with Serializer subclasses
 # ============================================================================
 
+
 def test_serializer_subclass_recognized():
     """Test that Serializer subclasses are recognized as msgspec.Struct."""
     # Verify Serializer is a proper msgspec.Struct subclass
@@ -202,7 +210,6 @@ def test_serializer_field_extraction():
     _method, _path, handler_id, _handler = api._routes[0]
     meta = api._handler_meta[handler_id]
 
-
     # Verify all UserFull fields extracted
     assert "response_field_names" in meta
     expected_fields = {"id", "username", "email", "first_name", "last_name"}
@@ -221,7 +228,6 @@ def test_plain_msgspec_struct_field_extraction():
     _method, _path, handler_id, _handler = api._routes[0]
     meta = api._handler_meta[handler_id]
 
-
     # Verify PlainStruct fields extracted
     assert "response_field_names" in meta
     assert set(meta["response_field_names"]) == {"id", "name"}
@@ -230,6 +236,7 @@ def test_plain_msgspec_struct_field_extraction():
 # ============================================================================
 # Test 5: Edge cases and validation
 # ============================================================================
+
 
 def test_no_response_type_specified():
     """Test when neither response_model nor return annotation provided."""
@@ -242,7 +249,6 @@ def test_no_response_type_specified():
     # Get handler function name from previous decorator
     _method, _path, handler_id, _handler = api._routes[0]
     meta = api._handler_meta[handler_id]
-
 
     # Should not have response_type or field names
     assert "response_type" not in meta
@@ -260,7 +266,6 @@ def test_non_list_response_type():
     # Get handler function name from previous decorator
     _method, _path, handler_id, _handler = api._routes[0]
     meta = api._handler_meta[handler_id]
-
 
     # Should have response_type but NOT field names (optimization only for list[Struct])
     assert meta["response_type"] == UserMini
@@ -295,6 +300,7 @@ def test_non_struct_response_type():
 # ============================================================================
 # Test 6: Metadata extraction happens at registration time
 # ============================================================================
+
 
 def test_metadata_extraction_at_registration():
     """Test that field extraction happens once at route registration, not per-request."""
@@ -333,6 +339,7 @@ def test_metadata_extraction_at_registration():
 # Test 7: Integration with different HTTP methods
 # ============================================================================
 
+
 def test_response_model_with_post():
     """Test response_model with POST endpoint."""
     api = BoltAPI()
@@ -344,7 +351,6 @@ def test_response_model_with_post():
     # Get handler function name from previous decorator
     _method, _path, handler_id, _handler = api._routes[0]
     meta = api._handler_meta[handler_id]
-
 
     assert meta["response_type"] == UserMini
     assert meta["http_method"] == "POST"
@@ -362,7 +368,6 @@ def test_response_model_with_put():
     _method, _path, handler_id, _handler = api._routes[0]
     meta = api._handler_meta[handler_id]
 
-
     assert meta["response_type"] == UserMini
     assert meta["http_method"] == "PUT"
 
@@ -378,7 +383,6 @@ def test_response_model_with_patch():
     # Get handler function name from previous decorator
     _method, _path, handler_id, _handler = api._routes[0]
     meta = api._handler_meta[handler_id]
-
 
     assert meta["response_type"] == UserMini
     assert meta["http_method"] == "PATCH"
@@ -396,7 +400,6 @@ def test_response_model_with_delete():
     _method, _path, handler_id, _handler = api._routes[0]
     meta = api._handler_meta[handler_id]
 
-
     assert meta["response_type"] is dict
     assert meta["http_method"] == "DELETE"
 
@@ -404,6 +407,7 @@ def test_response_model_with_delete():
 # ============================================================================
 # Test 8: Verify _compile_binder() no longer handles response logic
 # ============================================================================
+
 
 def test_compile_binder_focused_on_parameters():
     """Test that _compile_binder() only handles parameter binding, not response logic."""
@@ -416,7 +420,6 @@ def test_compile_binder_focused_on_parameters():
     # Get handler function name from previous decorator
     _method, _path, handler_id, _handler = api._routes[0]
     meta = api._handler_meta[handler_id]
-
 
     # Verify parameter fields extracted correctly
     assert "fields" in meta
@@ -436,6 +439,7 @@ def test_compile_binder_focused_on_parameters():
 # Test 9: Complex nested scenarios
 # ============================================================================
 
+
 def test_nested_list_extraction():
     """Test field extraction from nested list types."""
     api = BoltAPI()
@@ -448,7 +452,6 @@ def test_nested_list_extraction():
     _method, _path, handler_id, _handler = api._routes[0]
     meta = api._handler_meta[handler_id]
 
-
     # Should work with typing.List as well
     assert "response_field_names" in meta
     assert set(meta["response_field_names"]) == {"id", "username"}
@@ -457,6 +460,7 @@ def test_nested_list_extraction():
 # ============================================================================
 # Test 10: Verify signature preservation
 # ============================================================================
+
 
 def test_signature_preserved_with_response_model():
     """Test that function signature is preserved when using response_model."""
@@ -470,7 +474,6 @@ def test_signature_preserved_with_response_model():
     # Get handler function name from previous decorator
     _method, _path, handler_id, _handler = api._routes[0]
     meta = api._handler_meta[handler_id]
-
 
     # Verify signature preserved
     sig = meta["sig"]
@@ -496,7 +499,6 @@ def test_signature_preserved_with_annotation():
     # Get handler function name from previous decorator
     _method, _path, handler_id, _handler = api._routes[0]
     meta = api._handler_meta[handler_id]
-
 
     # Verify signature preserved
     sig = meta["sig"]

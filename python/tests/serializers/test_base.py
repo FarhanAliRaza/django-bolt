@@ -354,11 +354,7 @@ class TestMultiErrorCollection:
 
         # Email is invalid AND passwords don't match
         with pytest.raises(RequestValidationError) as exc_info:
-            PasswordSerializer(
-                email="invalid",
-                password="secret123",
-                password_confirm="different"
-            )
+            PasswordSerializer(email="invalid", password="secret123", password_confirm="different")
 
         # Should contain both field error and model error
         errors = exc_info.value.errors()

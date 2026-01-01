@@ -3,6 +3,7 @@
 SSE Load Test Script
 Measures real SSE streaming performance with concurrent clients.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -79,7 +80,10 @@ class SSELoadTest:
 
         elapsed = time.time() - client_start
         status = "failed" if error else "success"
-        print(f"    Client {client_id}: {status} ({messages} msgs, {elapsed:.1f}s){f' - {error}' if error else ''}", flush=True)
+        print(
+            f"    Client {client_id}: {status} ({messages} msgs, {elapsed:.1f}s){f' - {error}' if error else ''}",
+            flush=True,
+        )
 
         return {
             "client_id": client_id,
@@ -111,14 +115,14 @@ class SSELoadTest:
 
     async def run(self) -> None:
         """Run the load test"""
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("SSE Load Test")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print(f"URL: {self.url}")
         print(f"Concurrent Clients: {self.num_clients}")
         print(f"Duration per Client: {self.duration}s")
         print(f"Start Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"{'='*70}\n")
+        print(f"{'=' * 70}\n")
 
         self.start_time = time.time()
 
@@ -141,7 +145,9 @@ class SSELoadTest:
 
             elapsed = time.time() - self.start_time
             sys_stats = self.get_system_stats()
-            print(f"  Batch complete ({elapsed:.1f}s, {sys_stats['memory_mb']:.1f}MB, CPU: {sys_stats['cpu_percent']:.1f}%)\n")
+            print(
+                f"  Batch complete ({elapsed:.1f}s, {sys_stats['memory_mb']:.1f}MB, CPU: {sys_stats['cpu_percent']:.1f}%)\n"
+            )
 
         total_time = time.time() - self.start_time
         print(f"\nTest completed in {total_time:.2f}s")
@@ -155,21 +161,21 @@ class SSELoadTest:
         successful = [r for r in self.results if r["status"] == "success"]
         failed = [r for r in self.results if r["status"] == "failed"]
 
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print("RESULTS")
-        print(f"{'='*70}\n")
+        print(f"{'=' * 70}\n")
 
         # Summary
         print(f"Total Clients: {self.num_clients}")
-        print(f"Successful: {len(successful)} ({len(successful)/self.num_clients*100:.1f}%)")
-        print(f"Failed: {len(failed)} ({len(failed)/self.num_clients*100:.1f}%)")
+        print(f"Successful: {len(successful)} ({len(successful) / self.num_clients * 100:.1f}%)")
+        print(f"Failed: {len(failed)} ({len(failed) / self.num_clients * 100:.1f}%)")
 
         if failed:
             print("\nFailure Details:")
             for r in failed[:5]:  # Show first 5 failures
                 print(f"  Client {r['client_id']}: {r['error']}")
             if len(failed) > 5:
-                print(f"  ... and {len(failed)-5} more failures")
+                print(f"  ... and {len(failed) - 5} more failures")
 
         print()
 
@@ -187,11 +193,11 @@ class SSELoadTest:
             print(f"  Min/Max: {min(messages_list)}/{max(messages_list)}")
 
             print("\nData Transfer:")
-            print(f"  Total Bytes: {sum(bytes_list):,} ({sum(bytes_list)/1024/1024:.2f} MB)")
+            print(f"  Total Bytes: {sum(bytes_list):,} ({sum(bytes_list) / 1024 / 1024:.2f} MB)")
             print(f"  Avg Bytes/Client: {mean(bytes_list):,.0f}")
             total_duration = sum(duration_list)
             if total_duration > 0:
-                print(f"  Throughput: {sum(bytes_list)/total_duration/1024/1024:.2f} MB/s")
+                print(f"  Throughput: {sum(bytes_list) / total_duration / 1024 / 1024:.2f} MB/s")
 
             print("\nConnection Duration:")
             print(f"  Avg Duration: {mean(duration_list):.2f}s")
@@ -202,7 +208,7 @@ class SSELoadTest:
             print("\nMessaging Rate:")
             avg_rate = mean([m / d for m, d in zip(messages_list, duration_list, strict=True)])
             print(f"  Avg Messages/sec/client: {avg_rate:.2f}")
-            print(f"  Total Messages/sec: {sum(messages_list)/mean(duration_list):.2f}")
+            print(f"  Total Messages/sec: {sum(messages_list) / mean(duration_list):.2f}")
 
         print()
 
@@ -217,37 +223,22 @@ class SSELoadTest:
             print(f"  CPU (min/max during test): {min(self.cpu_samples):.1f}% / {max(self.cpu_samples):.1f}%")
 
         print()
-        print(f"{'='*70}\n")
+        print(f"{'=' * 70}\n")
 
 
 async def main() -> None:
     """Main entry point"""
-    parser = argparse.ArgumentParser(
-        description="SSE Load Test - Measures concurrent SSE streaming performance"
-    )
+    parser = argparse.ArgumentParser(description="SSE Load Test - Measures concurrent SSE streaming performance")
     parser.add_argument(
         "url",
         nargs="?",
         default="http://127.0.0.1:8000/sse",
-        help="URL of SSE endpoint (default: http://127.0.0.1:8000/sse)"
+        help="URL of SSE endpoint (default: http://127.0.0.1:8000/sse)",
     )
+    parser.add_argument("-c", "--clients", type=int, default=50, help="Number of concurrent clients (default: 50)")
+    parser.add_argument("-d", "--duration", type=int, default=30, help="Duration per client in seconds (default: 30)")
     parser.add_argument(
-        "-c", "--clients",
-        type=int,
-        default=50,
-        help="Number of concurrent clients (default: 50)"
-    )
-    parser.add_argument(
-        "-d", "--duration",
-        type=int,
-        default=30,
-        help="Duration per client in seconds (default: 30)"
-    )
-    parser.add_argument(
-        "-b", "--batch-size",
-        type=int,
-        default=10,
-        help="Launch batch size (default: 10, use -1 for all at once)"
+        "-b", "--batch-size", type=int, default=10, help="Launch batch size (default: 10, use -1 for all at once)"
     )
 
     args = parser.parse_args()
@@ -262,12 +253,7 @@ async def main() -> None:
         sys.exit(1)
 
     # Run test
-    test = SSELoadTest(
-        args.url,
-        num_clients=args.clients,
-        duration=args.duration,
-        batch_size=args.batch_size
-    )
+    test = SSELoadTest(args.url, num_clients=args.clients, duration=args.duration, batch_size=args.batch_size)
     await test.run()
 
 

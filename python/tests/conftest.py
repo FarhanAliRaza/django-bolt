@@ -4,6 +4,7 @@ Pytest configuration for Django-Bolt tests.
 Ensures Django settings are properly reset between tests.
 Provides utilities for subprocess-based testing.
 """
+
 import builtins
 import contextlib
 import logging
@@ -35,60 +36,60 @@ def pytest_configure(config):
         # The admin apps don't significantly impact non-admin tests
         settings.configure(
             DEBUG=True,
-            SECRET_KEY='test-secret-key-global',
-            ALLOWED_HOSTS=['*'],
+            SECRET_KEY="test-secret-key-global",
+            ALLOWED_HOSTS=["*"],
             INSTALLED_APPS=[
-                'django.contrib.admin',
-                'django.contrib.auth',
-                'django.contrib.contenttypes',
-                'django.contrib.sessions',
-                'django.contrib.messages',
-                'django.contrib.staticfiles',
-                'django_bolt',
+                "django.contrib.admin",
+                "django.contrib.auth",
+                "django.contrib.contenttypes",
+                "django.contrib.sessions",
+                "django.contrib.messages",
+                "django.contrib.staticfiles",
+                "django_bolt",
             ],
             MIDDLEWARE=[
-                'django.middleware.security.SecurityMiddleware',
-                'django.contrib.sessions.middleware.SessionMiddleware',
-                'django.middleware.common.CommonMiddleware',
-                'django.middleware.csrf.CsrfViewMiddleware',
-                'django.contrib.auth.middleware.AuthenticationMiddleware',
-                'django.contrib.messages.middleware.MessageMiddleware',
-                'django.middleware.clickjacking.XFrameOptionsMiddleware',
+                "django.middleware.security.SecurityMiddleware",
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.middleware.common.CommonMiddleware",
+                "django.middleware.csrf.CsrfViewMiddleware",
+                "django.contrib.auth.middleware.AuthenticationMiddleware",
+                "django.contrib.messages.middleware.MessageMiddleware",
+                "django.middleware.clickjacking.XFrameOptionsMiddleware",
             ],
-            ROOT_URLCONF='tests.admin_tests.urls',
+            ROOT_URLCONF="tests.admin_tests.urls",
             TEMPLATES=[
                 {
-                    'BACKEND': 'django.template.backends.django.DjangoTemplates',
-                    'DIRS': [],
-                    'APP_DIRS': True,
-                    'OPTIONS': {
-                        'context_processors': [
-                            'django.template.context_processors.debug',
-                            'django.template.context_processors.request',
-                            'django.contrib.auth.context_processors.auth',
-                            'django.contrib.messages.context_processors.messages',
+                    "BACKEND": "django.template.backends.django.DjangoTemplates",
+                    "DIRS": [],
+                    "APP_DIRS": True,
+                    "OPTIONS": {
+                        "context_processors": [
+                            "django.template.context_processors.debug",
+                            "django.template.context_processors.request",
+                            "django.contrib.auth.context_processors.auth",
+                            "django.contrib.messages.context_processors.messages",
                         ],
                     },
                 },
             ],
             DATABASES={
-                'default': {
-                    'ENGINE': 'django.db.backends.sqlite3',
-                    'NAME': '/tmp/django_bolt_test.sqlite3',  # File-based for better thread isolation
+                "default": {
+                    "ENGINE": "django.db.backends.sqlite3",
+                    "NAME": "/tmp/django_bolt_test.sqlite3",  # File-based for better thread isolation
                 }
             },
             USE_TZ=True,
-            LANGUAGE_CODE='en-us',
-            TIME_ZONE='UTC',
+            LANGUAGE_CODE="en-us",
+            TIME_ZONE="UTC",
             USE_I18N=True,
-            STATIC_URL='/static/',
-            DEFAULT_AUTO_FIELD='django.db.models.BigAutoField',
+            STATIC_URL="/static/",
+            DEFAULT_AUTO_FIELD="django.db.models.BigAutoField",
         )
         # Setup Django apps so ExceptionReporter works
         django.setup()
 
 
-@pytest.fixture(scope='session')
+@pytest.fixture(scope="session")
 def django_db_setup(django_db_blocker):
     """
     Ensure database migrations are run before any tests that use the database.
@@ -105,14 +106,14 @@ def django_db_setup(django_db_blocker):
 
     with django_db_blocker.unblock():
         # Ensure test database directory exists
-        db_path = settings.DATABASES['default']['NAME']
-        if db_path and db_path != ':memory:':
+        db_path = settings.DATABASES["default"]["NAME"]
+        if db_path and db_path != ":memory:":
             db_dir = os.path.dirname(db_path)
             if db_dir:
                 os.makedirs(db_dir, exist_ok=True)
 
         # Run migrations to create all necessary tables
-        call_command('migrate', '--run-syncdb', verbosity=0)
+        call_command("migrate", "--run-syncdb", verbosity=0)
 
         # Create test model tables manually since they're not in migrations
         # But only if they don't already exist (for persistent file-based databases)
@@ -134,15 +135,10 @@ def spawn_process(command):
             shell=True,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stderr=subprocess.PIPE,
         )
     else:
-        process = subprocess.Popen(
-            command,
-            preexec_fn=os.setsid,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
+        process = subprocess.Popen(command, preexec_fn=os.setsid, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return process
 
 

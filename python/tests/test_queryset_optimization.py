@@ -3,6 +3,7 @@ Tests for QuerySet serialization optimization.
 
 These tests verify that field names are pre-computed at route registration time.
 """
+
 from typing import get_origin
 
 import msgspec
@@ -92,6 +93,7 @@ def test_precomputed_fields_match_struct():
 
     This test will FAIL if field pre-computation logic is wrong.
     """
+
     class DetailedSchema(msgspec.Struct):
         id: int
         name: str
@@ -112,8 +114,7 @@ def test_precomputed_fields_match_struct():
     precomputed = set(meta["response_field_names"])
     expected = set(DetailedSchema.__annotations__.keys())
 
-    assert precomputed == expected, \
-        f"Pre-computed fields {precomputed} don't match struct {expected}"
+    assert precomputed == expected, f"Pre-computed fields {precomputed} don't match struct {expected}"
 
 
 def test_field_order_preserved():
@@ -122,6 +123,7 @@ def test_field_order_preserved():
 
     This is important for QuerySet.values() to work correctly.
     """
+
     class OrderedSchema(msgspec.Struct):
         # Order matters!
         z_field: str

@@ -10,6 +10,7 @@ Performance is the utmost priority - the middleware system is designed for zero 
 - Lazy evaluation and minimal allocations
 - Pattern matching compiled once at startup
 """
+
 from __future__ import annotations
 
 import logging
@@ -89,11 +90,9 @@ class MiddlewareProtocol(Protocol):
     - Add data to request.state for downstream handlers
     """
 
-    def __init__(self, get_response: GetResponse) -> None:
-        ...
+    def __init__(self, get_response: GetResponse) -> None: ...
 
-    async def __call__(self, request: Request) -> Response:
-        ...
+    async def __call__(self, request: Request) -> Response: ...
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -266,8 +265,9 @@ def middleware(*args, **kwargs):
         async def upload_file(request: Request) -> dict:
             return {"uploaded": True}
     """
+
     def decorator(func):
-        if not hasattr(func, '__bolt_middleware__'):
+        if not hasattr(func, "__bolt_middleware__"):
             func.__bolt_middleware__ = []
 
         for arg in args:
@@ -306,16 +306,13 @@ def rate_limit(rps: int = 100, burst: int | None = None, key: str = "ip"):
         async def get_data(request: Request) -> dict:
             return {"data": [...]}
     """
+
     def decorator(func):
-        if not hasattr(func, '__bolt_middleware__'):
+        if not hasattr(func, "__bolt_middleware__"):
             func.__bolt_middleware__ = []
-        func.__bolt_middleware__.append({
-            'type': 'rate_limit',
-            'rps': rps,
-            'burst': burst or rps * 2,
-            'key': key
-        })
+        func.__bolt_middleware__.append({"type": "rate_limit", "rps": rps, "burst": burst or rps * 2, "key": key})
         return func
+
     return decorator
 
 
@@ -324,7 +321,7 @@ def cors(
     methods: list[str] = None,
     headers: list[str] = None,
     credentials: bool = False,
-    max_age: int = 3600
+    max_age: int = 3600,
 ):
     """
     CORS configuration decorator (Rust-accelerated).
@@ -353,6 +350,7 @@ def cors(
     Raises:
         ValueError: If origins is not specified (empty @cors() is not allowed)
     """
+
     def decorator(func):
         # SECURITY: Require explicit origins - empty @cors() is a common mistake
         if origins is None:
@@ -365,7 +363,7 @@ def cors(
                 "simply remove the @cors decorator - global config applies automatically."
             )
 
-        if not hasattr(func, '__bolt_middleware__'):
+        if not hasattr(func, "__bolt_middleware__"):
             func.__bolt_middleware__ = []
 
         # Parse origins
@@ -377,18 +375,21 @@ def cors(
                 "CORS misconfiguration: Cannot use wildcard '*' with credentials=True. "
                 "This violates the CORS specification. Please specify explicit origins.",
                 RuntimeWarning,
-                stacklevel=2
+                stacklevel=2,
             )
 
-        func.__bolt_middleware__.append({
-            'type': 'cors',
-            'origins': origin_list,
-            'methods': methods or ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-            'headers': headers,
-            'credentials': credentials,
-            'max_age': max_age
-        })
+        func.__bolt_middleware__.append(
+            {
+                "type": "cors",
+                "origins": origin_list,
+                "methods": methods or ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+                "headers": headers,
+                "credentials": credentials,
+                "max_age": max_age,
+            }
+        )
         return func
+
     return decorator
 
 
@@ -415,11 +416,13 @@ def skip_middleware(*middleware_names: str):
         async def minimal():
             return {"fast": True}
     """
+
     def decorator(func):
-        if not hasattr(func, '__bolt_skip_middleware__'):
+        if not hasattr(func, "__bolt_skip_middleware__"):
             func.__bolt_skip_middleware__ = set()
         func.__bolt_skip_middleware__.update(middleware_names)
         return func
+
     return decorator
 
 
@@ -499,7 +502,7 @@ class LoggingMiddleware(BaseMiddleware):
         logger: logging.Logger | None = None,
         log_body: bool = False,
         log_headers: bool = False,
-        log_level: int = logging.INFO
+        log_level: int = logging.INFO,
     ):
         super().__init__(get_response)
         self.logger = logger or logging.getLogger("django_bolt.requests")
@@ -529,8 +532,7 @@ class LoggingMiddleware(BaseMiddleware):
 
         # Log response
         self.logger.log(
-            self.log_level,
-            f"Response: {response.status_code} for {request.method} {request.path} ({elapsed:.4f}s)"
+            self.log_level, f"Response: {response.status_code} for {request.method} {request.path} ({elapsed:.4f}s)"
         )
 
         return response
@@ -563,8 +565,6 @@ class ErrorHandlerMiddleware(BaseMiddleware):
             detail = traceback.format_exc() if self.debug else "Internal Server Error"
 
             raise HTTPException(500, detail) from None
-
-
 
 
 __all__ = [

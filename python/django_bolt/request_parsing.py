@@ -1,4 +1,5 @@
 """Request parsing utilities for form and multipart data."""
+
 import logging
 import traceback
 from io import BytesIO
@@ -24,7 +25,11 @@ def get_max_upload_size() -> int:
     global _MAX_UPLOAD_SIZE
     if _MAX_UPLOAD_SIZE is None:
         try:
-            _MAX_UPLOAD_SIZE = getattr(django_settings, 'BOLT_MAX_UPLOAD_SIZE', 1 * 1024 * 1024) if django_settings else 1 * 1024 * 1024  # 1MB default
+            _MAX_UPLOAD_SIZE = (
+                getattr(django_settings, "BOLT_MAX_UPLOAD_SIZE", 1 * 1024 * 1024)
+                if django_settings
+                else 1 * 1024 * 1024
+            )  # 1MB default
         except (ImportError, AttributeError):
             _MAX_UPLOAD_SIZE = 1 * 1024 * 1024
     return _MAX_UPLOAD_SIZE
@@ -66,10 +71,10 @@ def parse_multipart_data(request: dict[str, Any], content_type: str) -> tuple[di
     # Parse content-type header to get boundary
     content_type_parsed, content_type_options = multipart.parse_options_header(content_type)
 
-    if content_type_parsed != 'multipart/form-data':
+    if content_type_parsed != "multipart/form-data":
         return form_map, files_map
 
-    boundary = content_type_options.get('boundary')
+    boundary = content_type_options.get("boundary")
     if not boundary:
         return form_map, files_map
 
@@ -84,10 +89,7 @@ def parse_multipart_data(request: dict[str, Any], content_type: str) -> tuple[di
 
     # SECURITY: Check body size before parsing
     if len(body_bytes) > max_size:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Upload size {len(body_bytes)} exceeds maximum {max_size} bytes"
-        )
+        raise HTTPException(status_code=413, detail=f"Upload size {len(body_bytes)} exceeds maximum {max_size} bytes")
 
     # Create a file-like object from bytes
     body_file = BytesIO(body_bytes)
@@ -100,7 +102,7 @@ def parse_multipart_data(request: dict[str, Any], content_type: str) -> tuple[di
             content_length=len(body_bytes),
             memory_limit=max_size,
             disk_limit=max_size,  # Allow disk spooling up to max upload size
-            part_limit=100  # Limit number of parts
+            part_limit=100,  # Limit number of parts
         )
 
         # Iterate through parts
@@ -119,7 +121,7 @@ def parse_multipart_data(request: dict[str, Any], content_type: str) -> tuple[di
                     "filename": part.filename,
                     "content": content,
                     "content_type": part.content_type,
-                    "size": len(content)
+                    "size": len(content),
                 }
 
                 if name in files_map:

@@ -19,7 +19,7 @@ def is_admin_installed() -> bool:
         True if admin is in INSTALLED_APPS, False otherwise
     """
     try:
-        return 'django.contrib.admin' in settings.INSTALLED_APPS
+        return "django.contrib.admin" in settings.INSTALLED_APPS
     except Exception:
         return False
 
@@ -36,41 +36,45 @@ def detect_admin_url_prefix() -> str | None:
 
     try:
         # Get root URL resolver
-        resolver = get_resolver(getattr(settings, 'ROOT_URLCONF', None))
+        resolver = get_resolver(getattr(settings, "ROOT_URLCONF", None))
 
         # Search for admin patterns
         for url_pattern in resolver.url_patterns:
             # Check if this is admin.site.urls
-            if hasattr(url_pattern, 'app_name') and url_pattern.app_name == 'admin':
+            if hasattr(url_pattern, "app_name") and url_pattern.app_name == "admin":
                 # Extract the pattern prefix
                 pattern_str = str(url_pattern.pattern)
                 # Remove trailing slash and special regex chars
-                prefix = pattern_str.rstrip('/^$')
-                return prefix if prefix else 'admin'
+                prefix = pattern_str.rstrip("/^$")
+                return prefix if prefix else "admin"
 
             # Also check URLResolver with admin urlconf
-            if hasattr(url_pattern, 'urlconf_name'):
+            if hasattr(url_pattern, "urlconf_name"):
                 urlconf = url_pattern.urlconf_name
                 # Check if urlconf module contains admin.site
-                if hasattr(urlconf, '__name__') and 'admin' in str(urlconf.__name__):
+                if hasattr(urlconf, "__name__") and "admin" in str(urlconf.__name__):
                     pattern_str = str(url_pattern.pattern)
-                    prefix = pattern_str.rstrip('/^$')
-                    return prefix if prefix else 'admin'
+                    prefix = pattern_str.rstrip("/^$")
+                    return prefix if prefix else "admin"
 
                 # Check if urlconf is a list containing admin patterns
                 if isinstance(urlconf, (list, tuple)):
                     for sub_pattern in urlconf:
-                        if hasattr(sub_pattern, 'callback') and hasattr(sub_pattern.callback, '__module__') and 'admin' in sub_pattern.callback.__module__:
+                        if (
+                            hasattr(sub_pattern, "callback")
+                            and hasattr(sub_pattern.callback, "__module__")
+                            and "admin" in sub_pattern.callback.__module__
+                        ):
                             pattern_str = str(url_pattern.pattern)
-                            prefix = pattern_str.rstrip('/^$')
-                            return prefix if prefix else 'admin'
+                            prefix = pattern_str.rstrip("/^$")
+                            return prefix if prefix else "admin"
 
     except Exception as e:
         # If detection fails, log warning and return default
         print(f"[django-bolt] Warning: Could not auto-detect admin URL prefix: {e}", file=sys.stderr)
 
     # Default fallback
-    return 'admin'
+    return "admin"
 
 
 def get_admin_route_patterns() -> list[tuple[str, list[str]]]:
@@ -91,18 +95,18 @@ def get_admin_route_patterns() -> list[tuple[str, list[str]]]:
 
     # Build catch-all pattern for admin routes
     # Use {path:path} syntax for catch-all parameter
-    admin_pattern = f'/{admin_prefix}/{{path:path}}'
+    admin_pattern = f"/{admin_prefix}/{{path:path}}"
 
     # Admin needs to handle common HTTP methods
     # Only use methods supported by django-bolt's router (GET, POST, PUT, PATCH, DELETE)
-    methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
+    methods = ["GET", "POST", "PUT", "DELETE", "PATCH"]
 
     # Also add exact /admin route (without trailing slash)
     # NOTE: NormalizePath::trim() in Rust strips trailing slashes from incoming requests,
     # so we register routes WITHOUT trailing slashes to match the normalized paths.
     # However, for TestClient with use_http_layer=True, we also need the trailing slash version.
-    admin_root = f'/{admin_prefix}'
-    admin_root_slash = f'/{admin_prefix}/'
+    admin_root = f"/{admin_prefix}"
+    admin_root_slash = f"/{admin_prefix}/"
 
     return [
         (admin_root, methods),
@@ -119,15 +123,13 @@ def get_static_url_prefix() -> str | None:
         Static URL prefix (e.g., 'static') or None if not configured
     """
     try:
-        if hasattr(settings, 'STATIC_URL') and settings.STATIC_URL:
+        if hasattr(settings, "STATIC_URL") and settings.STATIC_URL:
             static_url = settings.STATIC_URL
             # Remove leading/trailing slashes
-            return static_url.strip('/')
+            return static_url.strip("/")
     except Exception as e:
         logger.warning(
-            "Failed to get STATIC_URL from Django settings. "
-            "Static file serving may not work correctly. Error: %s",
-            e
+            "Failed to get STATIC_URL from Django settings. Static file serving may not work correctly. Error: %s", e
         )
 
     return None
@@ -146,9 +148,9 @@ def should_enable_admin() -> bool:
     # Check if required dependencies are installed
     try:
         required_apps = [
-            'django.contrib.auth',
-            'django.contrib.contenttypes',
-            'django.contrib.sessions',
+            "django.contrib.auth",
+            "django.contrib.contenttypes",
+            "django.contrib.sessions",
         ]
 
         for app in required_apps:
@@ -156,7 +158,7 @@ def should_enable_admin() -> bool:
                 print(
                     f"[django-bolt] Warning: Django admin is installed but {app} is missing. "
                     f"Admin integration disabled.",
-                    file=sys.stderr
+                    file=sys.stderr,
                 )
                 return False
 
@@ -175,8 +177,8 @@ def get_admin_info() -> dict:
         Dict with admin configuration details
     """
     return {
-        'installed': is_admin_installed(),
-        'enabled': should_enable_admin(),
-        'url_prefix': detect_admin_url_prefix(),
-        'static_url': get_static_url_prefix(),
+        "installed": is_admin_installed(),
+        "enabled": should_enable_admin(),
+        "url_prefix": detect_admin_url_prefix(),
+        "static_url": get_static_url_prefix(),
     }

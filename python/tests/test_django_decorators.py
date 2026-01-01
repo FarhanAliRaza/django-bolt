@@ -4,6 +4,7 @@ Test Django decorator compatibility with Django-Bolt.
 Tests that Django decorators like @login_required return Django HttpResponse types
 that are properly handled by the serialization layer.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -49,11 +50,7 @@ def api():
     @api.get("/django-response")
     async def django_response_endpoint():
         """Returns a generic Django HttpResponse."""
-        response = HttpResponse(
-            content="Hello from Django",
-            status=200,
-            content_type="text/plain"
-        )
+        response = HttpResponse(content="Hello from Django", status=200, content_type="text/plain")
         response["X-Custom-Header"] = "custom-value"
         return response
 
@@ -116,10 +113,7 @@ class TestCSRFHandling:
 
     def test_csrf_success_with_token(self, client):
         """Test that request with CSRF token succeeds."""
-        response = client.post(
-            "/csrf-protected",
-            headers={"x-csrftoken": "valid-token"}
-        )
+        response = client.post("/csrf-protected", headers={"x-csrftoken": "valid-token"})
 
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}

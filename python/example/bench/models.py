@@ -3,6 +3,7 @@ from django.db import models
 
 class BenchItem(models.Model):
     """Simple model for benchmarking CRUD operations without unique constraints."""
+
     name = models.CharField(max_length=100)
     value = models.IntegerField(default=0)
     description = models.TextField(blank=True, default="")

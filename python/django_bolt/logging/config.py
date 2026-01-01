@@ -39,24 +39,18 @@ class LoggingConfig:
     logger_name: str = "django.server"
 
     # Request logging fields
-    request_log_fields: set[str] = field(default_factory=lambda: {
-        "method", "path", "status_code"
-    })
+    request_log_fields: set[str] = field(default_factory=lambda: {"method", "path", "status_code"})
 
     # Response logging fields
-    response_log_fields: set[str] = field(default_factory=lambda: {
-        "status_code"
-    })
+    response_log_fields: set[str] = field(default_factory=lambda: {"status_code"})
 
     # Headers to obfuscate in logs (for security)
-    obfuscate_headers: set[str] = field(default_factory=lambda: {
-        "authorization", "cookie", "x-api-key", "x-auth-token"
-    })
+    obfuscate_headers: set[str] = field(
+        default_factory=lambda: {"authorization", "cookie", "x-api-key", "x-auth-token"}
+    )
 
     # Cookies to obfuscate in logs
-    obfuscate_cookies: set[str] = field(default_factory=lambda: {
-        "sessionid", "csrftoken"
-    })
+    obfuscate_cookies: set[str] = field(default_factory=lambda: {"sessionid", "csrftoken"})
 
     # Log request body (be careful with sensitive data)
     log_request_body: bool = False
@@ -90,9 +84,7 @@ class LoggingConfig:
     exception_logging_handler: Callable | None = None
 
     # Skip logging for specific paths (e.g., health checks)
-    skip_paths: set[str] = field(default_factory=lambda: {
-        "/health", "/ready", "/metrics"
-    })
+    skip_paths: set[str] = field(default_factory=lambda: {"/health", "/ready", "/metrics"})
 
     # Skip logging for specific status codes
     skip_status_codes: set[int] = field(default_factory=set)
@@ -199,9 +191,7 @@ def get_default_logging_config() -> LoggingConfig:
     except (AttributeError, Exception) as e:
         # Django not available or not configured, use default
         logging.getLogger(__name__).debug(
-            "Failed to read Django settings for logging configuration. "
-            "Using default log level. Error: %s",
-            e
+            "Failed to read Django settings for logging configuration. Using default log level. Error: %s", e
         )
 
     # Choose log level: Django settings override > default determined by DEBUG
@@ -268,15 +258,17 @@ def _ensure_queue_logging(base_level: str) -> QueueHandler:
         def _cleanup_listener():
             """Safely stop the listener, handling already-stopped case."""
             try:
-                if _QUEUE_LISTENER is not None and hasattr(_QUEUE_LISTENER, '_thread') and _QUEUE_LISTENER._thread is not None:
+                if (
+                    _QUEUE_LISTENER is not None
+                    and hasattr(_QUEUE_LISTENER, "_thread")
+                    and _QUEUE_LISTENER._thread is not None
+                ):
                     _QUEUE_LISTENER.stop()
             except Exception as e:
                 # Listener may already be stopped or in an invalid state
                 # This can happen during normal shutdown, so log as debug
                 logging.getLogger(__name__).debug(
-                    "Failed to stop queue listener during cleanup. "
-                    "Listener may already be stopped. Error: %s",
-                    e
+                    "Failed to stop queue listener during cleanup. Listener may already be stopped. Error: %s", e
                 )
 
         atexit.register(_cleanup_listener)
@@ -320,10 +312,10 @@ def setup_django_logging(force: bool = False) -> None:
         try:
             # Try to import the actual settings module to check if LOGGING is defined
             settings_module = importlib.import_module(settings.SETTINGS_MODULE)
-            has_explicit_logging = hasattr(settings_module, 'LOGGING')
+            has_explicit_logging = hasattr(settings_module, "LOGGING")
         except (AttributeError, ImportError):
             # Fall back to checking settings object
-            has_explicit_logging = hasattr(settings, 'LOGGING') and settings.LOGGING
+            has_explicit_logging = hasattr(settings, "LOGGING") and settings.LOGGING
 
         if has_explicit_logging:
             # User has explicitly configured logging, respect it
@@ -355,6 +347,6 @@ def setup_django_logging(force: bool = False) -> None:
         # If Django not available or configuration fails, use basic config
         logging.basicConfig(
             level=logging.INFO,
-            format='%(levelname)s - %(asctime)s - %(name)s - %(message)s',
+            format="%(levelname)s - %(asctime)s - %(name)s - %(message)s",
         )
         _LOGGING_CONFIGURED = True

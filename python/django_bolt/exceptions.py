@@ -157,94 +157,114 @@ class ResponseValidationError(ValidationException):
 
 # HTTP 4xx Client Error Exceptions
 
+
 class ClientException(HTTPException):
     """Base class for 4xx client errors."""
+
     status_code: int = 400
 
 
 class BadRequest(ClientException):
     """400 Bad Request - Invalid request data."""
+
     status_code = 400
 
 
 class Unauthorized(ClientException):
     """401 Unauthorized - Authentication required or failed."""
+
     status_code = 401
 
 
 class Forbidden(ClientException):
     """403 Forbidden - Insufficient permissions."""
+
     status_code = 403
 
 
 class NotFound(ClientException):
     """404 Not Found - Resource not found."""
+
     status_code = 404
 
 
 class MethodNotAllowed(ClientException):
     """405 Method Not Allowed - HTTP method not supported for this endpoint."""
+
     status_code = 405
 
 
 class NotAcceptable(ClientException):
     """406 Not Acceptable - Cannot produce response in requested format."""
+
     status_code = 406
 
 
 class Conflict(ClientException):
     """409 Conflict - Request conflicts with current state."""
+
     status_code = 409
 
 
 class Gone(ClientException):
     """410 Gone - Resource permanently deleted."""
+
     status_code = 410
 
 
 class UnprocessableEntity(ClientException):
     """422 Unprocessable Entity - Semantic validation error."""
+
     status_code = 422
 
 
 class TooManyRequests(ClientException):
     """429 Too Many Requests - Rate limit exceeded."""
+
     status_code = 429
 
 
 # HTTP 5xx Server Error Exceptions
 
+
 class ServerException(HTTPException):
     """Base class for 5xx server errors."""
+
     status_code: int = 500
 
 
 class InternalServerError(ServerException):
     """500 Internal Server Error - Unexpected server error."""
+
     status_code = 500
 
 
 class NotImplemented(ServerException):
     """501 Not Implemented - Endpoint not implemented."""
+
     status_code = 501
 
 
 class BadGateway(ServerException):
     """502 Bad Gateway - Invalid response from upstream server."""
+
     status_code = 502
 
 
 class ServiceUnavailable(ServerException):
     """503 Service Unavailable - Server temporarily unavailable."""
+
     status_code = 503
 
 
 class GatewayTimeout(ServerException):
     """504 Gateway Timeout - Upstream server timeout."""
+
     status_code = 504
 
 
 # Helper functions for better error messages
+
 
 def parse_msgspec_decode_error(error: Exception, body_bytes: bytes) -> dict[str, Any]:
     """Parse msgspec.DecodeError to extract line/column information.
@@ -260,13 +280,13 @@ def parse_msgspec_decode_error(error: Exception, body_bytes: bytes) -> dict[str,
 
     # Try to extract byte position from error message
     # Format: "JSON is malformed: invalid character (byte 78)"
-    match = re.search(r'byte (\d+)', error_msg)
+    match = re.search(r"byte (\d+)", error_msg)
 
     if match:
         byte_pos = int(match.group(1))
 
         # Calculate line and column from byte position
-        lines = body_bytes.split(b'\n')
+        lines = body_bytes.split(b"\n")
         current_pos = 0
         line_num = 1
         col_num = 0
@@ -277,7 +297,7 @@ def parse_msgspec_decode_error(error: Exception, body_bytes: bytes) -> dict[str,
             if current_pos + line_len > byte_pos:
                 line_num = i
                 col_num = byte_pos - current_pos + 1  # +1 for human-readable column (1-indexed)
-                error_line_content = line.decode('utf-8', errors='replace')
+                error_line_content = line.decode("utf-8", errors="replace")
                 break
             current_pos += line_len
 
@@ -296,7 +316,7 @@ def parse_msgspec_decode_error(error: Exception, body_bytes: bytes) -> dict[str,
                 "column": col_num,
                 "byte_position": byte_pos,
                 "error": error_msg,
-            }
+            },
         }
 
     # Fallback if we can't parse the byte position
@@ -306,5 +326,3 @@ def parse_msgspec_decode_error(error: Exception, body_bytes: bytes) -> dict[str,
         "msg": error_msg,
         "input": body_bytes.decode("utf-8", errors="replace")[:100] if body_bytes else "",
     }
-
-

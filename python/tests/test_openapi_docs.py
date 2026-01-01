@@ -14,6 +14,7 @@ from django_bolt.testing import TestClient
 
 class Item(msgspec.Struct):
     """Model for OpenAPI schema generation."""
+
     id: int
     name: str
     price: float
@@ -24,11 +25,7 @@ def test_openapi_json_endpoint():
     """Test that /docs/openapi.json returns valid JSON without errors."""
     # Create API with OpenAPI enabled (default path is /docs)
     api = BoltAPI(
-        openapi_config=OpenAPIConfig(
-            title="Test API",
-            version="1.0.0",
-            description="Test API for OpenAPI docs"
-        )
+        openapi_config=OpenAPIConfig(title="Test API", version="1.0.0", description="Test API for OpenAPI docs")
     )
 
     # Add some test routes with various parameter types
@@ -72,11 +69,7 @@ def test_swagger_ui_endpoint():
     """Test that /docs/swagger (Swagger UI) loads without internal errors."""
     # Create API with Swagger UI enabled (default path is /docs)
     api = BoltAPI(
-        openapi_config=OpenAPIConfig(
-            title="Test API",
-            version="1.0.0",
-            render_plugins=[SwaggerRenderPlugin()]
-        )
+        openapi_config=OpenAPIConfig(title="Test API", version="1.0.0", render_plugins=[SwaggerRenderPlugin()])
     )
 
     # Add a simple route
@@ -117,10 +110,7 @@ def test_openapi_root_path_serves_ui_directly():
     """
     api = BoltAPI(
         openapi_config=OpenAPIConfig(
-            title="Test API",
-            version="1.0.0",
-            path="/docs",
-            render_plugins=[SwaggerRenderPlugin(path="/")]
+            title="Test API", version="1.0.0", path="/docs", render_plugins=[SwaggerRenderPlugin(path="/")]
         )
     )
 
@@ -137,12 +127,12 @@ def test_openapi_root_path_serves_ui_directly():
         # in production with NormalizePath::trim() middleware.
         # TestClient doesn't have NormalizePath, so redirect would "work" here,
         # but in production: /docs -> redirect /docs/ -> trim to /docs -> loop
-        assert len(response.history) == 0, \
+        assert len(response.history) == 0, (
             f"/docs should serve UI directly without redirect, but got redirects: {response.history}"
+        )
 
         # Should return 200 with HTML content directly
-        assert response.status_code == 200, \
-            f"Expected 200, got {response.status_code}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
 
         # Should be HTML content (Swagger UI)
         content_type = response.headers.get("content-type", "")
@@ -159,7 +149,7 @@ def test_openapi_disabled_returns_404():
         openapi_config=OpenAPIConfig(
             title="Test API",
             version="1.0.0",
-            enabled=False  # Explicitly disabled
+            enabled=False,  # Explicitly disabled
         )
     )
 
@@ -173,12 +163,10 @@ def test_openapi_disabled_returns_404():
     with TestClient(api) as client:
         # All doc routes should return 404
         response = client.get("/docs/openapi.json")
-        assert response.status_code == 404, \
-            f"Disabled docs should return 404, got {response.status_code}"
+        assert response.status_code == 404, f"Disabled docs should return 404, got {response.status_code}"
 
         response = client.get("/docs")
-        assert response.status_code == 404, \
-            f"Disabled docs UI should return 404, got {response.status_code}"
+        assert response.status_code == 404, f"Disabled docs UI should return 404, got {response.status_code}"
 
 
 def test_openapi_protected_without_auth_returns_401():
@@ -190,7 +178,7 @@ def test_openapi_protected_without_auth_returns_401():
             title="Test API",
             version="1.0.0",
             auth=[JWTAuthentication(secret="test-secret")],
-            guards=[IsAuthenticated()]
+            guards=[IsAuthenticated()],
         )
     )
 
@@ -203,12 +191,12 @@ def test_openapi_protected_without_auth_returns_401():
     with TestClient(api) as client:
         # Without token, should get 401
         response = client.get("/docs/openapi.json")
-        assert response.status_code == 401, \
-            f"Protected docs without auth should return 401, got {response.status_code}"
+        assert response.status_code == 401, f"Protected docs without auth should return 401, got {response.status_code}"
 
         response = client.get("/docs")
-        assert response.status_code == 401, \
+        assert response.status_code == 401, (
             f"Protected docs UI without auth should return 401, got {response.status_code}"
+        )
 
 
 def test_openapi_protected_with_valid_auth():
@@ -224,7 +212,7 @@ def test_openapi_protected_with_valid_auth():
             title="Test API",
             version="1.0.0",
             auth=[JWTAuthentication(secret="test-secret")],
-            guards=[IsAuthenticated()]
+            guards=[IsAuthenticated()],
         )
     )
 
@@ -235,19 +223,16 @@ def test_openapi_protected_with_valid_auth():
     api._register_openapi_routes()
 
     # Create valid token
-    token = jwt.encode(
-        {"sub": "user123", "exp": int(time.time()) + 3600},
-        "test-secret",
-        algorithm="HS256"
-    )
+    token = jwt.encode({"sub": "user123", "exp": int(time.time()) + 3600}, "test-secret", algorithm="HS256")
 
     with TestClient(api) as client:
         headers = {"Authorization": f"Bearer {token}"}
 
         # With valid token, should get 200
         response = client.get("/docs/openapi.json", headers=headers)
-        assert response.status_code == 200, \
+        assert response.status_code == 200, (
             f"Protected docs with valid auth should return 200, got {response.status_code}"
+        )
 
         # Verify it returns valid JSON schema
         data = response.json()
@@ -256,8 +241,9 @@ def test_openapi_protected_with_valid_auth():
 
         # UI should also work
         response = client.get("/docs", headers=headers)
-        assert response.status_code == 200, \
+        assert response.status_code == 200, (
             f"Protected docs UI with valid auth should return 200, got {response.status_code}"
+        )
 
 
 def test_openapi_all_routes_protected():
@@ -271,7 +257,7 @@ def test_openapi_all_routes_protected():
             path="/docs",
             auth=[JWTAuthentication(secret="test-secret")],
             guards=[IsAuthenticated()],
-            render_plugins=[SwaggerRenderPlugin()]
+            render_plugins=[SwaggerRenderPlugin()],
         )
     )
 
@@ -293,20 +279,13 @@ def test_openapi_all_routes_protected():
 
         for route in routes_to_test:
             response = client.get(route)
-            assert response.status_code == 401, \
-                f"Route {route} should be protected (401), got {response.status_code}"
+            assert response.status_code == 401, f"Route {route} should be protected (401), got {response.status_code}"
 
 
 def test_openapi_django_auth_redirects_to_login():
     """Test that django_auth=True redirects unauthenticated users to login."""
 
-    api = BoltAPI(
-        openapi_config=OpenAPIConfig(
-            title="Test API",
-            version="1.0.0",
-            django_auth=True
-        )
-    )
+    api = BoltAPI(openapi_config=OpenAPIConfig(title="Test API", version="1.0.0", django_auth=True))
 
     @api.get("/test")
     async def test_endpoint():
@@ -319,26 +298,18 @@ def test_openapi_django_auth_redirects_to_login():
         response = client.get("/docs", follow_redirects=False)
 
         # Django's login_required returns 302 redirect to login page
-        assert response.status_code == 302, \
-            f"Expected 302 redirect, got {response.status_code}"
+        assert response.status_code == 302, f"Expected 302 redirect, got {response.status_code}"
 
         # Should redirect to login URL (contains 'login' or 'accounts/login')
         location = response.headers.get("location", "")
-        assert "login" in location.lower(), \
-            f"Should redirect to login page, got: {location}"
+        assert "login" in location.lower(), f"Should redirect to login page, got: {location}"
 
 
 def test_openapi_django_auth_with_staff_member_required():
     """Test that staff_member_required decorator redirects non-staff to admin login."""
     from django.contrib.admin.views.decorators import staff_member_required
 
-    api = BoltAPI(
-        openapi_config=OpenAPIConfig(
-            title="Test API",
-            version="1.0.0",
-            django_auth=staff_member_required
-        )
-    )
+    api = BoltAPI(openapi_config=OpenAPIConfig(title="Test API", version="1.0.0", django_auth=staff_member_required))
 
     @api.get("/test")
     async def test_endpoint():
@@ -349,24 +320,20 @@ def test_openapi_django_auth_with_staff_member_required():
     with TestClient(api) as client:
         # staff_member_required redirects to admin login
         response = client.get("/docs", follow_redirects=False)
-        assert response.status_code == 302, \
-            f"Expected 302 redirect, got {response.status_code}"
+        assert response.status_code == 302, f"Expected 302 redirect, got {response.status_code}"
 
         # Should redirect to admin login
         location = response.headers.get("location", "")
-        assert "admin" in location.lower() or "login" in location.lower(), \
+        assert "admin" in location.lower() or "login" in location.lower(), (
             f"Should redirect to admin login, got: {location}"
+        )
 
 
 def test_openapi_django_auth_all_routes_protected():
     """Test that all OpenAPI routes are protected when django_auth is set."""
     api = BoltAPI(
         openapi_config=OpenAPIConfig(
-            title="Test API",
-            version="1.0.0",
-            path="/docs",
-            django_auth=True,
-            render_plugins=[SwaggerRenderPlugin()]
+            title="Test API", version="1.0.0", path="/docs", django_auth=True, render_plugins=[SwaggerRenderPlugin()]
         )
     )
 
@@ -388,5 +355,6 @@ def test_openapi_django_auth_all_routes_protected():
 
         for route in routes_to_test:
             response = client.get(route, follow_redirects=False)
-            assert response.status_code == 302, \
+            assert response.status_code == 302, (
                 f"Route {route} should redirect to login (302), got {response.status_code}"
+            )

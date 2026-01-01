@@ -9,6 +9,7 @@ Includes:
 - Type aliases for common authentication patterns (JWTClaims, APIKeyAuth, etc.)
 - Request type aliases (AuthenticatedRequest, PublicRequest, etc.)
 """
+
 from __future__ import annotations
 
 from typing import (
@@ -23,8 +24,6 @@ from typing import (
 
 if TYPE_CHECKING:
     pass
-
-
 
 
 @runtime_checkable
@@ -49,13 +48,25 @@ class DjangoModel(Protocol):
     """
 
     # ORM methods
-    def save(self, force_insert: bool = False, force_update: bool = False, using: str | None = None, update_fields: list[str] | None = None) -> None: ...
+    def save(
+        self,
+        force_insert: bool = False,
+        force_update: bool = False,
+        using: str | None = None,
+        update_fields: list[str] | None = None,
+    ) -> None: ...
     def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]: ...
     def refresh_from_db(self, using: str | None = None, fields: list[str] | None = None) -> None: ...
     def full_clean(self, exclude: list[str] | None = None, validate_unique: bool = True) -> None: ...
 
     # Async ORM methods
-    async def asave(self, force_insert: bool = False, force_update: bool = False, using: str | None = None, update_fields: list[str] | None = None) -> None: ...
+    async def asave(
+        self,
+        force_insert: bool = False,
+        force_update: bool = False,
+        using: str | None = None,
+        update_fields: list[str] | None = None,
+    ) -> None: ...
     async def adelete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]: ...
     async def arefresh_from_db(self, using: str | None = None, fields: list[str] | None = None) -> None: ...
 
@@ -458,14 +469,15 @@ class JWTClaims(TypedDict, total=False):
             exp = request.auth["exp"]       # IDE knows this is int
             return {"user_id": user_id}
     """
+
     # Registered claims (RFC 7519)
-    sub: str                    # Subject (typically user ID)
-    exp: int                    # Expiration time (Unix timestamp)
-    iat: int                    # Issued at (Unix timestamp)
-    nbf: int                    # Not before (Unix timestamp)
-    iss: str                    # Issuer
-    aud: str                    # Audience
-    jti: str                    # JWT ID (unique identifier)
+    sub: str  # Subject (typically user ID)
+    exp: int  # Expiration time (Unix timestamp)
+    iat: int  # Issued at (Unix timestamp)
+    nbf: int  # Not before (Unix timestamp)
+    iss: str  # Issuer
+    aud: str  # Audience
+    jti: str  # JWT ID (unique identifier)
 
     # Common custom claims
     user_id: int
@@ -490,6 +502,7 @@ class APIKeyAuth(TypedDict, total=False):
             permissions = request.auth.get("permissions", [])
             return {"key": key_id}
     """
+
     key_id: str
     key_name: str
     permissions: list[str]
@@ -509,6 +522,7 @@ class SessionAuth(TypedDict, total=False):
             session_key = request.auth["session_key"]
             return {"session": session_key}
     """
+
     session_key: str
     user_id: int
     created_at: str
@@ -531,6 +545,7 @@ class TimingState(TypedDict, total=False):
             start = request.state.start_time
             return {"request_id": request_id}
     """
+
     start_time: float
     request_id: str
 
@@ -545,6 +560,7 @@ class TracingState(TypedDict, total=False):
             trace_id = request.state.trace_id
             return {"trace_id": trace_id}
     """
+
     trace_id: str
     span_id: str
     parent_span_id: NotRequired[str]
@@ -565,6 +581,7 @@ class MiddlewareResponse(TypedDict, total=False):
     Note: set_cookies is a list to support multiple Set-Cookie headers.
     HTTP allows multiple Set-Cookie headers, but dict can't have duplicate keys.
     """
+
     body: bytes
     status_code: int
     headers: dict[str, str]

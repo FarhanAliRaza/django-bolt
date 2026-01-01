@@ -56,7 +56,6 @@ DEFAULT_TYPE_ENCODERS: dict[type, Callable[[Any], Any]] = {
     IPv6Network: str,
     # UUID
     UUID: str,
-
 }
 
 
@@ -170,5 +169,3 @@ def decode_typed[T](
 
 
 __all__ = ["encode", "decode", "decode_typed", "DEFAULT_TYPE_ENCODERS", "default_serializer"]
-
-

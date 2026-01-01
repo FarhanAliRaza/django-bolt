@@ -21,6 +21,7 @@ api = BoltAPI(prefix="/users")
 # Schemas
 # ============================================================================
 
+
 class UserFull(msgspec.Struct):
     id: int
     username: str
@@ -53,6 +54,7 @@ class UserUpdate(msgspec.Struct):
 # Function-Based Views (Original, for benchmarking)
 # ============================================================================
 
+
 @api.get("/")
 async def users_root():
     return {"ok": True}
@@ -79,7 +81,6 @@ def list_mini_10_sync() -> list[UserMini]:
     return users
 
 
-
 @api.get("/mini10")
 async def list_mini_10() -> list[UserMini]:
     # Already optimized: only() fetches just id and username
@@ -99,7 +100,7 @@ async def seed_users(count: int = 1000) -> dict:
             email=f"user{i}@example.com",
             first_name=f"First{i}",
             last_name=f"Last{i}",
-            is_active=True
+            is_active=True,
         )
         for i in range(count)
     ]
@@ -115,13 +116,14 @@ async def delete_all_users() -> dict:
     return {"deleted": count}
 
 
-
 # ============================================================================
 # Serializer Benchmark Endpoints - Raw msgspec
 # ============================================================================
 
+
 class BenchUser(msgspec.Struct):
     """Benchmark user with msgspec only (no custom validators)."""
+
     id: int
     username: Annotated[str, Meta(min_length=2, max_length=150)]
     email: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
@@ -163,13 +165,23 @@ class UserFull10ViewSet(APIView):
         users = []
         print("get", dir(request), request)
         async for user in User.objects.only("id", "username", "email", "first_name", "last_name", "is_active")[:10]:
-            users.append(UserFull(id=user.id, username=user.username, email=user.email, first_name=user.first_name, last_name=user.last_name, is_active=user.is_active))
+            users.append(
+                UserFull(
+                    id=user.id,
+                    username=user.username,
+                    email=user.email,
+                    first_name=user.first_name,
+                    last_name=user.last_name,
+                    is_active=user.is_active,
+                )
+            )
         return users
 
 
 # ============================================================================
 # Pagination Examples
 # ============================================================================
+
 
 # 1. Functional View with PageNumberPagination
 @api.get("/paginated")
@@ -222,6 +234,7 @@ async def list_users_cursor(request) -> list[UserMini]:
 # 4. Custom Pagination Class
 class SmallPagePagination(PageNumberPagination):
     """Custom pagination with smaller page size"""
+
     page_size = 10
     max_page_size = 50
 
@@ -264,12 +277,9 @@ class UserPaginatedViewSet(ViewSet):
 
         # If pagination is disabled, we'd need to manually convert queryset
         # But with pagination enabled, we get PaginatedResponse with items
-        if hasattr(paginated, 'items'):
+        if hasattr(paginated, "items"):
             # Convert items to UserMini schema
-            paginated.items = [
-                UserMini(id=user.id, username=user.username)
-                async for user in paginated.items
-            ]
+            paginated.items = [UserMini(id=user.id, username=user.username) async for user in paginated.items]
 
         return paginated
 

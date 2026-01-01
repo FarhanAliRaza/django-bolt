@@ -1,4 +1,3 @@
-
 from typing import Annotated
 
 from django.contrib import messages  # noqa: PLC0415
@@ -74,10 +73,11 @@ middleware_api = BoltAPI(
     # Add custom Python middleware (pass classes, not instances)
     middleware=[
         RequestIdMiddleware,  # Adds X-Request-ID header
-        TenantMiddleware,     # Adds tenant context (skips /health, /docs)
-        TimingMiddleware,     # Built-in: adds X-Response-Time header
+        TenantMiddleware,  # Adds tenant context (skips /health, /docs)
+        TimingMiddleware,  # Built-in: adds X-Response-Time header
     ],
 )
+
 
 @middleware_api.get("/demo")
 async def middleware_demo(request: Request):
@@ -100,12 +100,16 @@ async def middleware_demo(request: Request):
     # user = await request.auser()
 
     # Render template that displays messages
-    return render(request, "messages_demo.html", {
-        "title": "Middleware & Messages Demo",
-        # "user": user,
-        "request_id": request.state.get("request_id"),
-        "tenant_id": request.state.get("tenant_id"),
-    })
+    return render(
+        request,
+        "messages_demo.html",
+        {
+            "title": "Middleware & Messages Demo",
+            # "user": user,
+            "request_id": request.state.get("request_id"),
+            "tenant_id": request.state.get("tenant_id"),
+        },
+    )
 
 
 @middleware_api.post("/demo")
@@ -134,9 +138,13 @@ async def middleware_demo(request: Request, test: Annotated[str, Form("test")]):
     # user = await request.auser()
 
     # Render template that displays messages
-    return render(request, "messages_demo.html", {
-        "title": "Middleware & Messages Demo",
-        # "user": user,
-        "request_id": request.state.get("request_id"),
-        "tenant_id": request.state.get("tenant_id"),
-    })
+    return render(
+        request,
+        "messages_demo.html",
+        {
+            "title": "Middleware & Messages Demo",
+            # "user": user,
+            "request_id": request.state.get("request_id"),
+            "tenant_id": request.state.get("tenant_id"),
+        },
+    )

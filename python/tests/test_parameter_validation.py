@@ -1,6 +1,7 @@
 """
 Test parameter validation and inference system.
 """
+
 import msgspec
 import pytest
 
@@ -18,6 +19,7 @@ def test_get_with_body_param_raises_error():
     api = BoltAPI()
 
     with pytest.raises(TypeError) as exc_info:
+
         @api.get("/users")
         async def create_user(user: UserCreate):
             return {"id": 1}
@@ -40,6 +42,7 @@ def test_delete_with_body_param_raises_error():
     api = BoltAPI()
 
     with pytest.raises(TypeError) as exc_info:
+
         @api.delete("/users/{user_id}")
         async def delete_user(user_id: int, data: UserCreate):
             return {"deleted": True}
@@ -164,6 +167,7 @@ def test_error_message_clarity():
     api = BoltAPI()
 
     with pytest.raises(TypeError) as exc_info:
+
         @api.get("/items")
         async def bad_handler(item: UserCreate):
             pass

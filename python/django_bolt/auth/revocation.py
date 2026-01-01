@@ -137,7 +137,7 @@ class DjangoCacheRevocation(RevocationStore):
         ```
     """
 
-    def __init__(self, cache_alias: str = 'default', key_prefix: str = 'revoked:'):
+    def __init__(self, cache_alias: str = "default", key_prefix: str = "revoked:"):
         """
         Initialize Django cache-based revocation.
 
@@ -236,7 +236,7 @@ class DjangoORMRevocation(RevocationStore):
     def model(self):
         """Lazy-load model to avoid import issues."""
         if self._model is None:
-            app_label, model_name = self.model_path.split('.')
+            app_label, model_name = self.model_path.split(".")
             self._model = apps.get_model(app_label, model_name)
         return self._model
 
@@ -246,10 +246,7 @@ class DjangoORMRevocation(RevocationStore):
     async def revoke(self, jti: str, ttl: int | None = None) -> None:
         expires_at = datetime.now(UTC) + timedelta(seconds=ttl or 86400 * 30)
 
-        await self.model.objects.aupdate_or_create(
-            jti=jti,
-            defaults={'expires_at': expires_at}
-        )
+        await self.model.objects.aupdate_or_create(jti=jti, defaults={"expires_at": expires_at})
 
 
 def create_revocation_handler(store: RevocationStore):
@@ -278,6 +275,7 @@ def create_revocation_handler(store: RevocationStore):
         )
         ```
     """
+
     async def handler(jti: str) -> bool:
         return await store.is_revoked(jti)
 

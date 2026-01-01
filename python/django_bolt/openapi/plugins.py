@@ -64,7 +64,7 @@ class OpenAPIRenderPlugin(ABC):
         Returns:
             The rendered JSON as string.
         """
-        return _json.encode(openapi_schema).decode('utf-8')
+        return _json.encode(openapi_schema).decode("utf-8")
 
     @abstractmethod
     def render(self, openapi_schema: dict[str, Any], schema_url: str) -> str:
@@ -378,6 +378,7 @@ class RapidocRenderPlugin(OpenAPIRenderPlugin):
             </html>
         """
 
+
 class StoplightRenderPlugin(OpenAPIRenderPlugin):
     """Render an OpenAPI schema using StopLight Elements."""
 
@@ -444,6 +445,3 @@ class StoplightRenderPlugin(OpenAPIRenderPlugin):
                 {body}
             </html>
         """
-
-
-

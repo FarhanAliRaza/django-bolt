@@ -2,6 +2,7 @@
 
 This file tests the TestClient (V2) that routes through Rust with per-instance state.
 """
+
 from typing import Annotated
 
 import msgspec

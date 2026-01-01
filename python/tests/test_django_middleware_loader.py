@@ -4,6 +4,7 @@ Tests for Django middleware loader.
 Tests verify the middleware loader API works correctly with actual HTTP requests
 to ensure middleware runs and affects request/response behavior.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -64,9 +65,11 @@ class TestLoadDjangoMiddleware:
 
     def test_returns_middleware_stack_for_list(self):
         """Test that list config returns a DjangoMiddlewareStack."""
-        result = load_django_middleware([
-            'django.contrib.sessions.middleware.SessionMiddleware',
-        ])
+        result = load_django_middleware(
+            [
+                "django.contrib.sessions.middleware.SessionMiddleware",
+            ]
+        )
         assert len(result) == 1
         assert isinstance(result[0], DjangoMiddlewareStack)
 
@@ -81,13 +84,15 @@ class TestLoadDjangoMiddleware:
 
     def test_exclude_config_filters_middleware(self):
         """Test that exclude configuration filters out middleware."""
-        result = load_django_middleware({
-            "include": [
-                'django.contrib.sessions.middleware.SessionMiddleware',
-                'django.middleware.common.CommonMiddleware',
-            ],
-            "exclude": ['django.middleware.common.CommonMiddleware']
-        })
+        result = load_django_middleware(
+            {
+                "include": [
+                    "django.contrib.sessions.middleware.SessionMiddleware",
+                    "django.middleware.common.CommonMiddleware",
+                ],
+                "exclude": ["django.middleware.common.CommonMiddleware"],
+            }
+        )
 
         # Only SessionMiddleware should be loaded (as a stack)
         assert len(result) == 1
@@ -98,10 +103,12 @@ class TestLoadDjangoMiddleware:
     def test_handles_invalid_middleware_gracefully(self):
         """Test that invalid middleware paths are skipped gracefully."""
         # load_django_middleware should skip invalid paths and not crash
-        result = load_django_middleware([
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'nonexistent.middleware.BrokenMiddleware',
-        ])
+        result = load_django_middleware(
+            [
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "nonexistent.middleware.BrokenMiddleware",
+            ]
+        )
 
         # Only valid middleware should be loaded (as a stack)
         assert len(result) == 1
@@ -144,9 +151,11 @@ class TestBoltAPIIntegration:
 
     def test_boltapi_django_middleware_list_creates_stack(self):
         """Test BoltAPI with middleware list creates DjangoMiddlewareStack."""
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+            ]
+        )
 
         assert len(api.middleware) == 1
         assert isinstance(api.middleware[0], DjangoMiddlewareStack)
@@ -154,7 +163,7 @@ class TestBoltAPIIntegration:
     def test_boltapi_combines_django_and_custom_middleware(self):
         """Test BoltAPI stores both Django and custom middleware."""
         api = BoltAPI(
-            django_middleware=['django.contrib.sessions.middleware.SessionMiddleware'],
+            django_middleware=["django.contrib.sessions.middleware.SessionMiddleware"],
             middleware=[TimingMiddleware],
         )
 
@@ -206,9 +215,11 @@ class TestMiddlewareHTTPCycle:
 
     def test_session_middleware_runs_and_sets_session(self):
         """Test SessionMiddleware actually runs and sets session on request."""
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+            ]
+        )
 
         session_available = {"has_session": False}
 
@@ -228,9 +239,11 @@ class TestMiddlewareHTTPCycle:
 
     def test_common_middleware_adds_content_length(self):
         """Test CommonMiddleware runs and adds Content-Length header."""
-        api = BoltAPI(django_middleware=[
-            'django.middleware.common.CommonMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.middleware.common.CommonMiddleware",
+            ]
+        )
 
         @api.get("/test")
         async def test_route():
@@ -275,10 +288,12 @@ class TestMiddlewareHTTPCycle:
 
     def test_multiple_django_middleware_all_run(self):
         """Test multiple Django middleware all execute in order."""
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.middleware.common.CommonMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.middleware.common.CommonMiddleware",
+            ]
+        )
 
         checks = {"has_session": False, "has_content_length": False}
 
@@ -300,7 +315,7 @@ class TestMiddlewareHTTPCycle:
     def test_combined_django_and_bolt_middleware(self):
         """Test Django middleware and Bolt middleware work together."""
         api = BoltAPI(
-            django_middleware=['django.contrib.sessions.middleware.SessionMiddleware'],
+            django_middleware=["django.contrib.sessions.middleware.SessionMiddleware"],
             middleware=[TimingMiddleware],
         )
 
@@ -362,9 +377,11 @@ class TestRealDjangoMiddleware:
 
     def test_csrf_middleware_runs(self):
         """Test CSRF middleware runs (verifies by checking it doesn't break requests)."""
-        api = BoltAPI(django_middleware=[
-            'django.middleware.csrf.CsrfViewMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.middleware.csrf.CsrfViewMiddleware",
+            ]
+        )
 
         @api.get("/test")
         async def test_route():
@@ -381,9 +398,9 @@ class TestRealDjangoMiddleware:
         """Test SecurityMiddleware runs and adds security headers."""
         api = BoltAPI(
             django_middleware=[
-            'django.middleware.security.SecurityMiddleware',
-        ]
-            )
+                "django.middleware.security.SecurityMiddleware",
+            ]
+        )
 
         @api.get("/test")
         async def test_route():
@@ -396,17 +413,19 @@ class TestRealDjangoMiddleware:
             # Check for at least one security header (case-insensitive)
             headers_lower = {k.lower(): v for k, v in response.headers.items()}
             has_security_header = (
-                "x-content-type-options" in headers_lower or
-                "x-xss-protection" in headers_lower or
-                "strict-transport-security" in headers_lower
+                "x-content-type-options" in headers_lower
+                or "x-xss-protection" in headers_lower
+                or "strict-transport-security" in headers_lower
             )
             assert has_security_header, "SecurityMiddleware should add security headers"
 
     def test_clickjacking_middleware_adds_xframe_header(self):
         """Test XFrameOptionsMiddleware runs and adds X-Frame-Options header."""
-        api = BoltAPI(django_middleware=[
-            'django.middleware.clickjacking.XFrameOptionsMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.middleware.clickjacking.XFrameOptionsMiddleware",
+            ]
+        )
 
         @api.get("/test")
         async def test_route():
@@ -422,9 +441,11 @@ class TestRealDjangoMiddleware:
 
     def test_gzip_middleware_compresses_response(self):
         """Test GZipMiddleware runs and compresses responses."""
-        api = BoltAPI(django_middleware=[
-            'django.middleware.gzip.GZipMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.middleware.gzip.GZipMiddleware",
+            ]
+        )
 
         @api.get("/test")
         async def test_route():
@@ -443,10 +464,12 @@ class TestRealDjangoMiddleware:
 
     def test_messages_middleware_enables_messages_framework(self):
         """Test MessageMiddleware runs and enables Django messages framework."""
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.contrib.messages.middleware.MessageMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.contrib.messages.middleware.MessageMiddleware",
+            ]
+        )
 
         message_added = {"success": False}
 
@@ -470,17 +493,19 @@ class TestRealDjangoMiddleware:
 
     def test_authentication_middleware_sets_user(self):
         """Test AuthenticationMiddleware runs and sets user on request."""
-        api = BoltAPI(django_middleware=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.contrib.auth.middleware.AuthenticationMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.contrib.auth.middleware.AuthenticationMiddleware",
+            ]
+        )
 
         user_info = {"has_user": False, "is_anonymous": False}
 
         @api.get("/test")
         async def test_route(request):
             # AuthenticationMiddleware should set request.user
-            if hasattr(request, 'user'):
+            if hasattr(request, "user"):
                 user_info["has_user"] = True
                 user_info["is_anonymous"] = request.user.is_anonymous
             return {"status": "ok"}
@@ -494,9 +519,11 @@ class TestRealDjangoMiddleware:
 
     def test_locale_middleware_processes_language(self):
         """Test LocaleMiddleware runs and processes Accept-Language header."""
-        api = BoltAPI(django_middleware=[
-            'django.middleware.locale.LocaleMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.middleware.locale.LocaleMiddleware",
+            ]
+        )
 
         @api.get("/test")
         async def test_route():
@@ -510,14 +537,16 @@ class TestRealDjangoMiddleware:
 
     def test_multiple_real_django_middleware_stack(self):
         """Test multiple real Django middleware all run together."""
-        api = BoltAPI(django_middleware=[
-            'django.middleware.security.SecurityMiddleware',
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.middleware.common.CommonMiddleware',
-            'django.middleware.csrf.CsrfViewMiddleware',
-            'django.contrib.auth.middleware.AuthenticationMiddleware',
-            'django.middleware.clickjacking.XFrameOptionsMiddleware',
-        ])
+        api = BoltAPI(
+            django_middleware=[
+                "django.middleware.security.SecurityMiddleware",
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.middleware.common.CommonMiddleware",
+                "django.middleware.csrf.CsrfViewMiddleware",
+                "django.contrib.auth.middleware.AuthenticationMiddleware",
+                "django.middleware.clickjacking.XFrameOptionsMiddleware",
+            ]
+        )
 
         checks = {
             "has_session": False,
@@ -531,7 +560,7 @@ class TestRealDjangoMiddleware:
             # Check various middleware effects
             if request.state.get("session") is not None:
                 checks["has_session"] = True
-            if hasattr(request, 'user'):
+            if hasattr(request, "user"):
                 checks["has_user"] = True
             return {"status": "ok"}
 

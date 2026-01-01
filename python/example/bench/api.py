@@ -13,6 +13,7 @@ api = BoltAPI(prefix="/bench")
 # Schemas
 # ============================================================================
 
+
 class BenchItemSchema(msgspec.Struct):
     id: int
     name: str
@@ -39,6 +40,7 @@ class BenchItemUpdate(msgspec.Struct):
 # Unified ViewSet for Benchmark Items
 # ============================================================================
 
+
 @api.viewset("/items")
 class BenchItemViewSet(ViewSet):
     """
@@ -61,7 +63,7 @@ class BenchItemViewSet(ViewSet):
 
     queryset = BenchItem.objects.all()
     serializer_class = BenchItemSchema
-    lookup_field = 'id'
+    lookup_field = "id"
 
     async def list(self, request, active: bool | None = None, limit: int = 100):
         """GET /bench/items - List items with optional filtering."""
@@ -74,13 +76,11 @@ class BenchItemViewSet(ViewSet):
 
         items = []
         async for item in queryset:
-            items.append(BenchItemSchema(
-                id=item.id,
-                name=item.name,
-                value=item.value,
-                description=item.description,
-                is_active=item.is_active
-            ))
+            items.append(
+                BenchItemSchema(
+                    id=item.id, name=item.name, value=item.value, description=item.description, is_active=item.is_active
+                )
+            )
 
         return {"count": len(items), "items": items}
 
@@ -89,11 +89,7 @@ class BenchItemViewSet(ViewSet):
         try:
             item = await BenchItem.objects.aget(id=id)
             return BenchItemSchema(
-                id=item.id,
-                name=item.name,
-                value=item.value,
-                description=item.description,
-                is_active=item.is_active
+                id=item.id, name=item.name, value=item.value, description=item.description, is_active=item.is_active
             )
         except BenchItem.DoesNotExist:
             raise NotFound(detail=f"BenchItem {id} not found") from None
@@ -102,20 +98,11 @@ class BenchItemViewSet(ViewSet):
         """POST /bench/items - Create a new item."""
         print("create", item)
         item = await BenchItem.objects.acreate(
-            name=item.name,
-            value=item.value,
-            description=item.description,
-            is_active=item.is_active
+            name=item.name, value=item.value, description=item.description, is_active=item.is_active
         )
 
-
-
         return BenchItemSchema(
-            id=item.id,
-            name=item.name,
-            value=item.value,
-            description=item.description,
-            is_active=item.is_active
+            id=item.id, name=item.name, value=item.value, description=item.description, is_active=item.is_active
         )
 
     async def update(self, request, id: int, data: BenchItemUpdate) -> BenchItemSchema:
@@ -138,11 +125,7 @@ class BenchItemViewSet(ViewSet):
         await item.asave()
 
         return BenchItemSchema(
-            id=item.id,
-            name=item.name,
-            value=item.value,
-            description=item.description,
-            is_active=item.is_active
+            id=item.id, name=item.name, value=item.value, description=item.description, is_active=item.is_active
         )
 
     async def partial_update(self, request, id: int, data: BenchItemUpdate) -> BenchItemSchema:
@@ -165,11 +148,7 @@ class BenchItemViewSet(ViewSet):
         await item.asave()
 
         return BenchItemSchema(
-            id=item.id,
-            name=item.name,
-            value=item.value,
-            description=item.description,
-            is_active=item.is_active
+            id=item.id, name=item.name, value=item.value, description=item.description, is_active=item.is_active
         )
 
     async def destroy(self, request, id: int):
@@ -212,13 +191,11 @@ class BenchItemViewSet(ViewSet):
         """GET /bench/items/search?query=xxx - Search items by name."""
         items = []
         async for item in BenchItem.objects.filter(name__icontains=query)[:10]:
-            items.append(BenchItemSchema(
-                id=item.id,
-                name=item.name,
-                value=item.value,
-                description=item.description,
-                is_active=item.is_active
-            ))
+            items.append(
+                BenchItemSchema(
+                    id=item.id, name=item.name, value=item.value, description=item.description, is_active=item.is_active
+                )
+            )
         return {"query": query, "count": len(items), "results": items}
 
     @action(methods=["GET"], detail=False)
@@ -226,11 +203,9 @@ class BenchItemViewSet(ViewSet):
         """GET /bench/items/active - Get all active items."""
         items = []
         async for item in BenchItem.objects.filter(is_active=True)[:100]:
-            items.append(BenchItemSchema(
-                id=item.id,
-                name=item.name,
-                value=item.value,
-                description=item.description,
-                is_active=item.is_active
-            ))
+            items.append(
+                BenchItemSchema(
+                    id=item.id, name=item.name, value=item.value, description=item.description, is_active=item.is_active
+                )
+            )
         return {"count": len(items), "items": items}

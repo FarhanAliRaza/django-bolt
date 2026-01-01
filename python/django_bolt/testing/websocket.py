@@ -18,6 +18,7 @@ Usage:
         response = await ws.receive_text()
         assert response == "Echo: hello"
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -45,8 +46,8 @@ def _read_cors_settings_from_django() -> dict | None:
     """
     try:
         # Check if any CORS setting is defined
-        has_origins = hasattr(settings, 'CORS_ALLOWED_ORIGINS')
-        has_all_origins = hasattr(settings, 'CORS_ALLOW_ALL_ORIGINS') and settings.CORS_ALLOW_ALL_ORIGINS
+        has_origins = hasattr(settings, "CORS_ALLOWED_ORIGINS")
+        has_all_origins = hasattr(settings, "CORS_ALLOW_ALL_ORIGINS") and settings.CORS_ALLOW_ALL_ORIGINS
 
         if not has_origins and not has_all_origins:
             return None
@@ -56,40 +57,40 @@ def _read_cors_settings_from_django() -> dict | None:
 
         # Origins
         if has_all_origins:
-            cors_config['origins'] = ["*"]
+            cors_config["origins"] = ["*"]
         elif has_origins:
             origins = settings.CORS_ALLOWED_ORIGINS
             if isinstance(origins, (list, tuple)):
-                cors_config['origins'] = list(origins)
+                cors_config["origins"] = list(origins)
             else:
-                cors_config['origins'] = []
+                cors_config["origins"] = []
         else:
-            cors_config['origins'] = []
+            cors_config["origins"] = []
 
         # Credentials
-        cors_config['credentials'] = getattr(settings, 'CORS_ALLOW_CREDENTIALS', False)
+        cors_config["credentials"] = getattr(settings, "CORS_ALLOW_CREDENTIALS", False)
 
         # Methods
-        if hasattr(settings, 'CORS_ALLOW_METHODS'):
+        if hasattr(settings, "CORS_ALLOW_METHODS"):
             methods = settings.CORS_ALLOW_METHODS
             if isinstance(methods, (list, tuple)):
-                cors_config['methods'] = list(methods)
+                cors_config["methods"] = list(methods)
 
         # Headers
-        if hasattr(settings, 'CORS_ALLOW_HEADERS'):
+        if hasattr(settings, "CORS_ALLOW_HEADERS"):
             headers = settings.CORS_ALLOW_HEADERS
             if isinstance(headers, (list, tuple)):
-                cors_config['headers'] = list(headers)
+                cors_config["headers"] = list(headers)
 
         # Expose headers
-        if hasattr(settings, 'CORS_EXPOSE_HEADERS'):
+        if hasattr(settings, "CORS_EXPOSE_HEADERS"):
             expose = settings.CORS_EXPOSE_HEADERS
             if isinstance(expose, (list, tuple)):
-                cors_config['expose_headers'] = list(expose)
+                cors_config["expose_headers"] = list(expose)
 
         # Max age
-        if hasattr(settings, 'CORS_PREFLIGHT_MAX_AGE'):
-            cors_config['max_age'] = settings.CORS_PREFLIGHT_MAX_AGE
+        if hasattr(settings, "CORS_PREFLIGHT_MAX_AGE"):
+            cors_config["max_age"] = settings.CORS_PREFLIGHT_MAX_AGE
 
         return cors_config
     except (ImportError, AttributeError):
@@ -149,7 +150,7 @@ class WebSocketTestClient:
         self._cors_config: dict | None = None
         if cors_allowed_origins is not None:
             # Explicit origins provided - create minimal config
-            self._cors_config = {'origins': cors_allowed_origins}
+            self._cors_config = {"origins": cors_allowed_origins}
         elif read_django_settings:
             # Read full CORS config from Django settings (same as production server)
             self._cors_config = _read_cors_settings_from_django()
@@ -190,10 +191,7 @@ class WebSocketTestClient:
 
         # Register middleware metadata for guards/auth
         if self.api._handler_middleware:
-            middleware_data = [
-                (handler_id, meta)
-                for handler_id, meta in self.api._handler_middleware.items()
-            ]
+            middleware_data = [(handler_id, meta) for handler_id, meta in self.api._handler_middleware.items()]
             _core.register_test_middleware_metadata(self._app_id, middleware_data)
 
         return self._app_id
@@ -313,10 +311,12 @@ class WebSocketTestClient:
                 self._handler_exception = e
                 # Send disconnect on error
                 if not self._closed:
-                    await self._server_to_client.put({
-                        "type": "websocket.close",
-                        "code": CloseCode.INTERNAL_ERROR,
-                    })
+                    await self._server_to_client.put(
+                        {
+                            "type": "websocket.close",
+                            "code": CloseCode.INTERNAL_ERROR,
+                        }
+                    )
                     self._closed = True
                     self._close_code = CloseCode.INTERNAL_ERROR
 
@@ -331,10 +331,12 @@ class WebSocketTestClient:
         """Exit async context - close connection and cleanup."""
         if not self._closed:
             # Send disconnect to handler
-            await self._client_to_server.put({
-                "type": "websocket.disconnect",
-                "code": CloseCode.NORMAL,
-            })
+            await self._client_to_server.put(
+                {
+                    "type": "websocket.disconnect",
+                    "code": CloseCode.NORMAL,
+                }
+            )
             self._closed = True
 
         # Cancel handler task if still running
@@ -374,10 +376,12 @@ class WebSocketTestClient:
         """Send a text message to the server."""
         if self._closed:
             raise RuntimeError("WebSocket is closed")
-        await self._client_to_server.put({
-            "type": "websocket.receive",
-            "text": data,
-        })
+        await self._client_to_server.put(
+            {
+                "type": "websocket.receive",
+                "text": data,
+            }
+        )
         # Give handler time to process
         await asyncio.sleep(0)
 
@@ -385,10 +389,12 @@ class WebSocketTestClient:
         """Send a binary message to the server."""
         if self._closed:
             raise RuntimeError("WebSocket is closed")
-        await self._client_to_server.put({
-            "type": "websocket.receive",
-            "bytes": data,
-        })
+        await self._client_to_server.put(
+            {
+                "type": "websocket.receive",
+                "bytes": data,
+            }
+        )
         await asyncio.sleep(0)
 
     async def send_json(self, data: Any, mode: str = "text") -> None:
@@ -402,10 +408,7 @@ class WebSocketTestClient:
     async def receive(self, timeout: float = 5.0) -> dict[str, Any]:
         """Receive a raw message from the server."""
         try:
-            return await asyncio.wait_for(
-                self._server_to_client.get(),
-                timeout=timeout
-            )
+            return await asyncio.wait_for(self._server_to_client.get(), timeout=timeout)
         except TimeoutError as e:
             raise TimeoutError(f"No message received within {timeout}s") from e
 
@@ -463,10 +466,12 @@ class WebSocketTestClient:
     async def close(self, code: int = CloseCode.NORMAL) -> None:
         """Close the WebSocket connection."""
         if not self._closed:
-            await self._client_to_server.put({
-                "type": "websocket.disconnect",
-                "code": code,
-            })
+            await self._client_to_server.put(
+                {
+                    "type": "websocket.disconnect",
+                    "code": code,
+                }
+            )
             self._closed = True
             self._close_code = code
 

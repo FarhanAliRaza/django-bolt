@@ -44,8 +44,7 @@ class NestedConfig:
 
     def __repr__(self) -> str:
         return (
-            f"NestedConfig(serializer={self.serializer_class.__name__}, "
-            f"many={self.many}, max_items={self.max_items})"
+            f"NestedConfig(serializer={self.serializer_class.__name__}, many={self.many}, max_items={self.max_items})"
         )
 
 
@@ -171,9 +170,7 @@ def _validate_single_nested(
         try:
             return serializer_class(**value)
         except Exception as e:
-            raise ValueError(
-                f"{field_name}: Failed to validate nested {serializer_class.__name__}: {e}"
-            ) from e
+            raise ValueError(f"{field_name}: Failed to validate nested {serializer_class.__name__}: {e}") from e
 
     # If it's already a Serializer instance, validate it
     if isinstance(value, serializer_class):
@@ -195,9 +192,7 @@ def _validate_many_nested(
 ) -> Any:
     """Validate a list of nested objects (no ID fallback)."""
     if not isinstance(value, list):
-        raise ValueError(
-            f"{field_name}: Expected list for many=True relationship, got {type(value).__name__}"
-        )
+        raise ValueError(f"{field_name}: Expected list for many=True relationship, got {type(value).__name__}")
 
     # Security: Check list size to prevent DoS attacks
     if config.max_items is not None and len(value) > config.max_items:

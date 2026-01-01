@@ -102,6 +102,7 @@ class TestDatabaseCheck:
         # This test requires Django to be configured
         try:
             from django.conf import settings  # noqa: PLC0415
+
             if not settings.configured:
                 pytest.skip("Django not configured")
 
@@ -166,6 +167,7 @@ class TestHealthIntegration:
 
     def test_add_health_check_global(self):
         """Test adding global health check."""
+
         async def custom_check():
             return True, "Custom check OK"
 

@@ -3,6 +3,7 @@ Integration tests for parameter validation with real-world use cases.
 
 Tests the complete flow from route registration to request handling.
 """
+
 import re
 
 import msgspec
@@ -38,6 +39,7 @@ class SearchFilters(msgspec.Struct):
 # ============================================================================
 # Use Case 1: CRUD Operations with Proper HTTP Methods
 # ============================================================================
+
 
 def test_crud_operations_validation():
     """Test that CRUD operations use correct HTTP methods and parameters."""
@@ -94,14 +96,13 @@ def test_crud_operations_validation():
             body_fields = [f for f in meta["fields"] if f.source == "body"]
             if "POST" in method or "PUT" in method or "PATCH" in method:
                 # At least one body field expected
-                assert len(body_fields) >= 1 or any(
-                    f.source == "path" for f in meta["fields"]
-                )
+                assert len(body_fields) >= 1 or any(f.source == "path" for f in meta["fields"])
 
 
 # ============================================================================
 # Use Case 2: Search/Filter Endpoints
 # ============================================================================
+
 
 def test_search_endpoints_with_complex_filters():
     """Test search endpoints with multiple query parameters."""
@@ -119,7 +120,7 @@ def test_search_endpoints_with_complex_filters():
         category: str = Query(default="all"),
         min_price: float = Query(ge=0, default=0),
         max_price: float = Query(le=10000, default=10000),
-        page: int = Query(ge=1, default=1)
+        page: int = Query(ge=1, default=1),
     ):
         return {"results": []}
 
@@ -135,6 +136,7 @@ def test_search_endpoints_with_complex_filters():
 # Use Case 3: Authentication/Authorization Headers
 # ============================================================================
 
+
 def test_authentication_headers():
     """Test endpoints with authentication headers."""
     api = BoltAPI()
@@ -142,14 +144,12 @@ def test_authentication_headers():
     @api.get("/protected")
     async def protected_endpoint(
         authorization: str = Header(alias="Authorization"),
-        user_agent: str = Header(alias="User-Agent", default="unknown")
+        user_agent: str = Header(alias="User-Agent", default="unknown"),
     ):
         return {"authenticated": True}
 
     @api.get("/api-key")
-    async def api_key_endpoint(
-        api_key: str = Header(alias="X-API-Key")
-    ):
+    async def api_key_endpoint(api_key: str = Header(alias="X-API-Key")):
         return {"valid": True}
 
     assert len(api._routes) == 2
@@ -165,22 +165,17 @@ def test_authentication_headers():
 # Use Case 4: File Upload Endpoints
 # ============================================================================
 
+
 def test_file_upload_endpoints():
     """Test file upload with form data."""
     api = BoltAPI()
 
     @api.post("/upload")
-    async def upload_file(
-        file: bytes = File(),
-        description: str = Form(default="")
-    ):
+    async def upload_file(file: bytes = File(), description: str = Form(default="")):
         return {"uploaded": True, "size": len(file)}
 
     @api.post("/upload/multiple")
-    async def upload_multiple(
-        files: list[bytes] = File(),
-        category: str = Form()
-    ):
+    async def upload_multiple(files: list[bytes] = File(), category: str = Form()):
         return {"uploaded": len(files)}
 
     assert len(api._routes) == 2
@@ -190,16 +185,17 @@ def test_file_upload_endpoints():
 # Use Case 5: Mixed Parameter Sources
 # ============================================================================
 
+
 def test_mixed_parameter_sources():
     """Test endpoints with parameters from multiple sources."""
     api = BoltAPI()
 
     @api.get("/items/{item_id}")
     async def get_item_with_options(
-        item_id: int,                                    # Path
-        include_details: bool = False,                   # Query (inferred)
+        item_id: int,  # Path
+        include_details: bool = False,  # Query (inferred)
         user_agent: str = Header(alias="User-Agent", default="unknown"),  # Header
-        session_id: str = Cookie(default="")             # Cookie
+        session_id: str = Cookie(default=""),  # Cookie
     ):
         return {"item_id": item_id, "details": include_details}
 
@@ -217,11 +213,13 @@ def test_mixed_parameter_sources():
 # Use Case 6: Validation Error Cases
 # ============================================================================
 
+
 def test_invalid_get_with_body():
     """Test that GET with body parameter is rejected."""
     api = BoltAPI()
 
     with pytest.raises(TypeError) as exc_info:
+
         @api.get("/invalid")
         async def invalid_get(data: UserCreate):
             return {"error": "should not register"}
@@ -235,6 +233,7 @@ def test_invalid_delete_with_body():
     api = BoltAPI()
 
     with pytest.raises(TypeError) as exc_info:
+
         @api.delete("/items/{item_id}")
         async def invalid_delete(item_id: int, data: UserCreate):
             return {"deleted": True}
@@ -246,6 +245,7 @@ def test_invalid_delete_with_body():
 # ============================================================================
 # Use Case 7: Nested Routes with Path Parameters
 # ============================================================================
+
 
 def test_nested_resources_with_path_params():
     """Test nested resource routes with multiple path parameters."""
@@ -265,7 +265,7 @@ def test_nested_resources_with_path_params():
         path_fields = [f for f in meta["fields"] if f.source == "path"]
 
         # Count expected path params
-        expected_params = len(re.findall(r'\{(\w+)\}', path))
+        expected_params = len(re.findall(r"\{(\w+)\}", path))
         assert len(path_fields) == expected_params
 
 
@@ -273,16 +273,17 @@ def test_nested_resources_with_path_params():
 # Use Case 8: Optional vs Required Parameters
 # ============================================================================
 
+
 def test_optional_and_required_parameters():
     """Test proper handling of optional and required parameters."""
     api = BoltAPI()
 
     @api.get("/items")
     async def list_items(
-        category: str,                    # Required (no default)
-        min_price: float = 0,            # Optional (has default)
+        category: str,  # Required (no default)
+        min_price: float = 0,  # Optional (has default)
         max_price: float | None = None,  # Optional (nullable)
-        tags: list[str] = None             # Optional (default empty list)
+        tags: list[str] = None,  # Optional (default empty list)
     ):
         if tags is None:
             tags = []
@@ -305,6 +306,7 @@ def test_optional_and_required_parameters():
 # Use Case 9: Explicit Path() Marker (Edge Case)
 # ============================================================================
 
+
 def test_explicit_path_marker():
     """Test explicit Path() marker (rarely needed but supported)."""
     api = BoltAPI()
@@ -322,6 +324,7 @@ def test_explicit_path_marker():
 # ============================================================================
 # Use Case 10: Complex Real-World API
 # ============================================================================
+
 
 def test_real_world_api_structure():
     """Test a realistic API with multiple endpoint types."""
@@ -369,11 +372,13 @@ def test_real_world_api_structure():
 # Use Case 11: Error Messages Quality
 # ============================================================================
 
+
 def test_error_message_includes_all_solutions():
     """Verify error messages provide all necessary information."""
     api = BoltAPI()
 
     with pytest.raises(TypeError) as exc_info:
+
         @api.get("/bad-endpoint")
         async def bad_handler(complex_data: User):
             return {"data": complex_data}

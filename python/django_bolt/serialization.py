@@ -1,4 +1,5 @@
 """Response serialization utilities."""
+
 from __future__ import annotations
 
 import mimetypes
@@ -236,7 +237,9 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
         )
 
 
-async def serialize_generic_response(result: ResponseClass, response_tp: Any | None, meta: HandlerMetadata | None = None) -> ResponseTuple:
+async def serialize_generic_response(
+    result: ResponseClass, response_tp: Any | None, meta: HandlerMetadata | None = None
+) -> ResponseTuple:
     """Serialize generic Response object with custom headers."""
     # Check if content-type is already provided in custom headers
     has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
@@ -263,7 +266,9 @@ async def serialize_generic_response(result: ResponseClass, response_tp: Any | N
     return int(result.status_code), headers, data_bytes
 
 
-async def serialize_json_response(result: JSON, response_tp: Any | None, meta: HandlerMetadata | None = None) -> ResponseTuple:
+async def serialize_json_response(
+    result: JSON, response_tp: Any | None, meta: HandlerMetadata | None = None
+) -> ResponseTuple:
     """Serialize JSON response object."""
     # Check if content-type is already provided in custom headers
     has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
@@ -359,7 +364,7 @@ def serialize_file_response(result: File) -> ResponseTuple:
     headers = [("content-type", ctype)]
 
     if result.filename:
-        headers.append(("content-disposition", f"attachment; filename=\"{result.filename}\""))
+        headers.append(("content-disposition", f'attachment; filename="{result.filename}"'))
     if result.headers:
         headers.extend([(k.lower(), v) for k, v in result.headers.items()])
 
@@ -372,7 +377,7 @@ def serialize_file_streaming_response(result: FileResponse) -> ResponseTuple:
     headers = [("x-bolt-file-path", result.path), ("content-type", ctype)]
 
     if result.filename:
-        headers.append(("content-disposition", f"attachment; filename=\"{result.filename}\""))
+        headers.append(("content-disposition", f'attachment; filename="{result.filename}"'))
     if result.headers:
         headers.extend([(k.lower(), v) for k, v in result.headers.items()])
 

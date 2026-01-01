@@ -4,12 +4,25 @@ Static file serving utilities for Django-Bolt.
 Provides static file serving for Django admin and other static assets.
 """
 
+from __future__ import annotations
+
+import mimetypes
 import os
+import sys
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict, Any, Union
+
+from django.conf import settings
+
+try:
+    from django.contrib.staticfiles.finders import find
+except ImportError:
+    find = None
+
+from ..exceptions import HTTPException
+from ..responses import FileResponse
 
 
-def find_static_file(path: Union[str, Path]) -> Optional[str]:
+def find_static_file(path: str | Path) -> str | None:
     """
     Find a static file using Django's static file finders.
 
@@ -19,29 +32,23 @@ def find_static_file(path: Union[str, Path]) -> Optional[str]:
     Returns:
         Absolute path to file if found, None otherwise
     """
+    path = str(path)  # Normalize Path to str at the start
     try:
-        from django.conf import settings
-
         # First try STATIC_ROOT (collected static files in production)
-        if hasattr(settings, 'STATIC_ROOT') and settings.STATIC_ROOT:
-            path = str(path)  # Normalize for Django finders
+        if hasattr(settings, "STATIC_ROOT") and settings.STATIC_ROOT:
             static_root = Path(settings.STATIC_ROOT)
             file_path = static_root / path
             if file_path.exists() and file_path.is_file():
                 return str(file_path)
 
         # Try using Django's static file finders (development mode)
-        try:
-            from django.contrib.staticfiles.finders import find
+        if find is not None:
             found_path = find(path)
             if found_path:
                 return found_path
-        except ImportError:
-            # staticfiles not installed
-            pass
 
         # Fallback: check STATICFILES_DIRS
-        if hasattr(settings, 'STATICFILES_DIRS'):
+        if hasattr(settings, "STATICFILES_DIRS"):
             for static_dir in settings.STATICFILES_DIRS:
                 if isinstance(static_dir, tuple):
                     static_dir = static_dir[1]  # (prefix, path) tuple
@@ -50,7 +57,6 @@ def find_static_file(path: Union[str, Path]) -> Optional[str]:
                     return str(file_path)
 
     except Exception as e:
-        import sys
         print(f"[django-bolt] Warning: Error finding static file {path}: {e}", file=sys.stderr)
 
     return None
@@ -66,8 +72,6 @@ def guess_content_type(file_path: str) -> str:
     Returns:
         MIME type string
     """
-    import mimetypes
-
     content_type, _ = mimetypes.guess_type(file_path)
     if content_type:
         return content_type
@@ -75,25 +79,25 @@ def guess_content_type(file_path: str) -> str:
     # Fallback for common static file types
     ext = os.path.splitext(file_path)[1].lower()
     type_map = {
-        '.css': 'text/css',
-        '.js': 'application/javascript',
-        '.json': 'application/json',
-        '.png': 'image/png',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.gif': 'image/gif',
-        '.svg': 'image/svg+xml',
-        '.ico': 'image/x-icon',
-        '.woff': 'font/woff',
-        '.woff2': 'font/woff2',
-        '.ttf': 'font/ttf',
-        '.eot': 'application/vnd.ms-fontobject',
+        ".css": "text/css",
+        ".js": "application/javascript",
+        ".json": "application/json",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".svg": "image/svg+xml",
+        ".ico": "image/x-icon",
+        ".woff": "font/woff",
+        ".woff2": "font/woff2",
+        ".ttf": "font/ttf",
+        ".eot": "application/vnd.ms-fontobject",
     }
 
-    return type_map.get(ext, 'application/octet-stream')
+    return type_map.get(ext, "application/octet-stream")
 
 
-async def serve_static_file(path: str) -> Tuple[int, List[Tuple[str, str]], bytes]:
+async def serve_static_file(path: str) -> tuple[int, list[tuple[str, str]], bytes]:
     """
     Serve a static file using Django's static file system.
 
@@ -103,10 +107,8 @@ async def serve_static_file(path: str) -> Tuple[int, List[Tuple[str, str]], byte
     Returns:
         Response tuple: (status_code, headers, body)
     """
-    from ..exceptions import HTTPException
-
     # Security: prevent directory traversal
-    if '..' in path or path.startswith('/'):
+    if ".." in path or path.startswith("/"):
         raise HTTPException(400, "Invalid static file path")
 
     # Find the static file
@@ -116,17 +118,13 @@ async def serve_static_file(path: str) -> Tuple[int, List[Tuple[str, str]], byte
         raise HTTPException(404, f"Static file not found: {path}")
 
     # Return FileResponse (Rust will handle streaming)
-    from ..responses import FileResponse
     content_type = guess_content_type(file_path)
 
     # Use FileResponse which returns the special file response format
-    return FileResponse(
-        file_path,
-        headers={"content-type": content_type}
-    )
+    return FileResponse(file_path, headers={"content-type": content_type})
 
 
-def register_static_routes(api, static_url: Optional[str] = None):
+def register_static_routes(api, static_url: str | None = None):
     """
     Register static file serving routes on a BoltAPI instance.
 
@@ -134,19 +132,17 @@ def register_static_routes(api, static_url: Optional[str] = None):
         api: BoltAPI instance
         static_url: Static URL prefix (default: from settings.STATIC_URL)
     """
-    from django.conf import settings
-
     if static_url is None:
-        if not hasattr(settings, 'STATIC_URL') or not settings.STATIC_URL:
+        if not hasattr(settings, "STATIC_URL") or not settings.STATIC_URL:
             # Static files not configured
             return
-        static_url = settings.STATIC_URL.strip('/')
+        static_url = settings.STATIC_URL.strip("/")
 
     if not static_url:
-        static_url = 'static'
+        static_url = "static"
 
     # Register catch-all route for static files
-    route_pattern = f'/{static_url}/{{path:path}}'
+    route_pattern = f"/{static_url}/{{path:path}}"
 
     @api.get(route_pattern)
     async def serve_static(path: str):

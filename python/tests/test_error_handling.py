@@ -1,28 +1,34 @@
 """Tests for Django-Bolt error handling system."""
 
-import pytest
+import json
+from unittest.mock import patch
+
+import django
 import msgspec
-from django_bolt.exceptions import (
-    HTTPException,
-    BadRequest,
-    Unauthorized,
-    Forbidden,
-    NotFound,
-    UnprocessableEntity,
-    TooManyRequests,
-    InternalServerError,
-    ServiceUnavailable,
-    RequestValidationError,
-    ResponseValidationError,
-)
+import pytest
+from django.conf import settings  # noqa: PLC0415
+
 from django_bolt.error_handlers import (
     format_error_response,
-    http_exception_handler,
-    request_validation_error_handler,
-    response_validation_error_handler,
-    msgspec_validation_error_to_dict,
     generic_exception_handler,
     handle_exception,
+    http_exception_handler,
+    msgspec_validation_error_to_dict,
+    request_validation_error_handler,
+    response_validation_error_handler,
+)
+from django_bolt.exceptions import (
+    BadRequest,
+    Forbidden,
+    HTTPException,
+    InternalServerError,
+    NotFound,
+    RequestValidationError,
+    ResponseValidationError,
+    ServiceUnavailable,
+    TooManyRequests,
+    Unauthorized,
+    UnprocessableEntity,
 )
 
 
@@ -39,21 +45,13 @@ class TestExceptions:
 
     def test_http_exception_with_headers(self):
         """Test HTTPException with custom headers."""
-        exc = HTTPException(
-            status_code=401,
-            detail="Unauthorized",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
+        exc = HTTPException(status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": "Bearer"})
         assert exc.status_code == 401
         assert exc.headers == {"WWW-Authenticate": "Bearer"}
 
     def test_http_exception_with_extra(self):
         """Test HTTPException with extra data."""
-        exc = HTTPException(
-            status_code=422,
-            detail="Validation failed",
-            extra={"errors": ["field1", "field2"]}
-        )
+        exc = HTTPException(status_code=422, detail="Validation failed", extra={"errors": ["field1", "field2"]})
         assert exc.extra == {"errors": ["field1", "field2"]}
 
     def test_http_exception_default_message(self):
@@ -81,9 +79,7 @@ class TestExceptions:
 
     def test_validation_exception(self):
         """Test ValidationException."""
-        errors = [
-            {"loc": ["body", "name"], "msg": "Field required", "type": "missing"}
-        ]
+        errors = [{"loc": ["body", "name"], "msg": "Field required", "type": "missing"}]
         exc = RequestValidationError(errors)
         assert exc.errors() == errors
 
@@ -100,27 +96,20 @@ class TestErrorHandlers:
 
     def test_format_error_response_simple(self):
         """Test simple error response formatting."""
-        status, headers, body = format_error_response(
-            status_code=404,
-            detail="Not found"
-        )
+        status, headers, body = format_error_response(status_code=404, detail="Not found")
         assert status == 404
         assert ("content-type", "application/json") in headers
 
         # Decode and check JSON
-        import json
         data = json.loads(body)
         assert data["detail"] == "Not found"
 
     def test_format_error_response_with_extra(self):
         """Test error response with extra data."""
         status, headers, body = format_error_response(
-            status_code=422,
-            detail="Validation failed",
-            extra={"errors": ["field1"]}
+            status_code=422, detail="Validation failed", extra={"errors": ["field1"]}
         )
 
-        import json
         data = json.loads(body)
         assert data["detail"] == "Validation failed"
         assert data["extra"] == {"errors": ["field1"]}
@@ -131,16 +120,12 @@ class TestErrorHandlers:
         status, headers, body = http_exception_handler(exc)
 
         assert status == 404
-        import json
         data = json.loads(body)
         assert data["detail"] == "User not found"
 
     def test_http_exception_handler_with_headers(self):
         """Test HTTPException handler preserves custom headers."""
-        exc = Unauthorized(
-            detail="Auth required",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
+        exc = Unauthorized(detail="Auth required", headers={"WWW-Authenticate": "Bearer"})
         status, headers, body = http_exception_handler(exc)
 
         assert status == 401
@@ -148,18 +133,11 @@ class TestErrorHandlers:
 
     def test_request_validation_error_handler(self):
         """Test request validation error handler."""
-        errors = [
-            {
-                "loc": ["body", "email"],
-                "msg": "Invalid email",
-                "type": "value_error"
-            }
-        ]
+        errors = [{"loc": ["body", "email"], "msg": "Invalid email", "type": "value_error"}]
         exc = RequestValidationError(errors)
         status, headers, body = request_validation_error_handler(exc)
 
         assert status == 422
-        import json
         data = json.loads(body)
         assert isinstance(data["detail"], list)
         assert len(data["detail"]) == 1
@@ -167,18 +145,11 @@ class TestErrorHandlers:
 
     def test_response_validation_error_handler(self):
         """Test response validation error handler."""
-        errors = [
-            {
-                "loc": ["response", "id"],
-                "msg": "Field required",
-                "type": "missing"
-            }
-        ]
+        errors = [{"loc": ["response", "id"], "msg": "Field required", "type": "missing"}]
         exc = ResponseValidationError(errors)
         status, headers, body = response_validation_error_handler(exc)
 
         assert status == 500
-        import json
         data = json.loads(body)
         assert data["detail"] == "Response validation error"
         assert "validation_errors" in data["extra"]
@@ -189,7 +160,6 @@ class TestErrorHandlers:
         status, headers, body = generic_exception_handler(exc, debug=False)
 
         assert status == 500
-        import json
         data = json.loads(body)
         assert data["detail"] == "Internal Server Error"
         # Should not expose details in production
@@ -198,53 +168,44 @@ class TestErrorHandlers:
     def test_generic_exception_handler_debug(self):
         """Test generic exception handler in debug mode returns HTML."""
         # Configure Django settings for ExceptionReporter
-        import django
-        from django.conf import settings
         if not settings.configured:
             settings.configure(
                 DEBUG=True,
-                SECRET_KEY='test-secret-key',
+                SECRET_KEY="test-secret-key",
                 INSTALLED_APPS=[],
-                ROOT_URLCONF='',
+                ROOT_URLCONF="",
             )
             django.setup()
 
         exc = ValueError("Something went wrong")
 
         # Create a mock request dict
-        request_dict = {
-            "method": "GET",
-            "path": "/test",
-            "headers": {"user-agent": "test"},
-            "query_params": {}
-        }
+        request_dict = {"method": "GET", "path": "/test", "headers": {"user-agent": "test"}, "query_params": {}}
 
         status, headers, body = generic_exception_handler(exc, debug=True, request=request_dict)
 
         assert status == 500, "Debug exception must return 500 status"
         # Should return HTML in debug mode
         headers_dict = dict(headers)
-        assert headers_dict.get("content-type") == "text/html; charset=utf-8", \
+        assert headers_dict.get("content-type") == "text/html; charset=utf-8", (
             "Debug mode must return HTML content type"
+        )
         # Verify it's HTML content
         html_content = body.decode("utf-8")
-        assert "<!DOCTYPE html>" in html_content or "<html>" in html_content, \
+        assert "<!DOCTYPE html>" in html_content or "<html>" in html_content, (
             "Debug mode must return valid HTML document"
-        assert "ValueError" in html_content, \
-            "HTML must contain exception type"
-        assert "Something went wrong" in html_content, \
-            "HTML must contain exception message"
+        )
+        assert "ValueError" in html_content, "HTML must contain exception type"
+        assert "Something went wrong" in html_content, "HTML must contain exception message"
 
     def test_generic_exception_handler_debug_without_request(self):
         """Test generic exception handler in debug mode works without request."""
-        import django
-        from django.conf import settings
         if not settings.configured:
             settings.configure(
                 DEBUG=True,
-                SECRET_KEY='test-secret-key',
+                SECRET_KEY="test-secret-key",
                 INSTALLED_APPS=[],
-                ROOT_URLCONF='',
+                ROOT_URLCONF="",
             )
             django.setup()
 
@@ -263,34 +224,27 @@ class TestErrorHandlers:
     def test_generic_exception_handler_debug_fallback_to_json(self):
         """Test generic exception handler falls back to JSON if HTML generation fails."""
         # Mock ExceptionReporter to raise an exception
-        from unittest.mock import patch
-
         exc = ValueError("Test exception")
 
-        # Mock the import inside generic_exception_handler
-        with patch('django.views.debug.ExceptionReporter', side_effect=Exception("HTML failed")):
+        # Mock the ExceptionReporter where it's used (in error_handlers module)
+        with patch("django_bolt.error_handlers.ExceptionReporter", side_effect=Exception("HTML failed")):
             status, headers, body = generic_exception_handler(exc, debug=True, request=None)
 
         assert status == 500, "Fallback must return 500 status"
         headers_dict = dict(headers)
-        assert headers_dict.get("content-type") == "application/json", \
-            "Fallback must return JSON content type"
+        assert headers_dict.get("content-type") == "application/json", "Fallback must return JSON content type"
 
         # Should fall back to JSON with traceback
-        import json
         data = json.loads(body)
-        assert "ValueError" in data["detail"], \
-            "Fallback JSON must contain exception type in detail"
-        assert "extra" in data, \
-            "Fallback JSON must include extra field"
-        assert "traceback" in data["extra"], \
-            "Fallback JSON must include traceback"
-        assert "exception_type" in data["extra"], \
-            "Fallback JSON must include exception_type"
+        assert "ValueError" in data["detail"], "Fallback JSON must contain exception type in detail"
+        assert "extra" in data, "Fallback JSON must include extra field"
+        assert "traceback" in data["extra"], "Fallback JSON must include traceback"
+        assert "exception_type" in data["extra"], "Fallback JSON must include exception_type"
         assert data["extra"]["exception_type"] == "ValueError"
 
     def test_generic_exception_handler_preserves_traceback(self):
         """Test that exception traceback is properly preserved and formatted."""
+
         def inner_function():
             raise ValueError("Inner error")
 
@@ -307,18 +261,16 @@ class TestErrorHandlers:
             if headers_dict.get("content-type") == "text/html; charset=utf-8":
                 html_content = body.decode("utf-8")
                 # HTML should contain traceback info
-                assert "inner_function" in html_content or "outer_function" in html_content, \
+                assert "inner_function" in html_content or "outer_function" in html_content, (
                     "HTML traceback must show function names"
+                )
             else:
                 # Fallback JSON path
-                import json
                 data = json.loads(body)
                 traceback_lines = data["extra"]["traceback"]
                 traceback_str = "".join(traceback_lines)
-                assert "inner_function" in traceback_str, \
-                    "JSON traceback must contain inner_function"
-                assert "outer_function" in traceback_str, \
-                    "JSON traceback must contain outer_function"
+                assert "inner_function" in traceback_str, "JSON traceback must contain inner_function"
+                assert "outer_function" in traceback_str, "JSON traceback must contain outer_function"
 
     def test_handle_exception_http_exception(self):
         """Test main exception handler with HTTPException."""
@@ -326,7 +278,6 @@ class TestErrorHandlers:
         status, headers, body = handle_exception(exc)
 
         assert status == 404
-        import json
         data = json.loads(body)
         assert data["detail"] == "Resource not found"
 
@@ -337,7 +288,6 @@ class TestErrorHandlers:
         status, headers, body = handle_exception(exc)
 
         assert status == 422
-        import json
         data = json.loads(body)
         assert isinstance(data["detail"], list)
 
@@ -347,20 +297,17 @@ class TestErrorHandlers:
         status, headers, body = handle_exception(exc, debug=False)
 
         assert status == 500
-        import json
         data = json.loads(body)
         assert data["detail"] == "Internal Server Error"
 
     def test_handle_exception_with_request_parameter(self):
         """Test that handle_exception properly passes request to generic_exception_handler."""
-        import django
-        from django.conf import settings
         if not settings.configured:
             settings.configure(
                 DEBUG=True,
-                SECRET_KEY='test-secret-key',
+                SECRET_KEY="test-secret-key",
                 INSTALLED_APPS=[],
-                ROOT_URLCONF='',
+                ROOT_URLCONF="",
             )
             django.setup()
 
@@ -376,16 +323,15 @@ class TestErrorHandlers:
         assert status == 500, "Exception with request must return 500"
         # Should return HTML in debug mode
         headers_dict = dict(headers)
-        assert headers_dict.get("content-type") == "text/html; charset=utf-8", \
+        assert headers_dict.get("content-type") == "text/html; charset=utf-8", (
             "Debug mode with request must return HTML"
+        )
         html_content = body.decode("utf-8")
         assert "ValueError" in html_content
         assert "Test with request" in html_content
 
     def test_handle_exception_respects_django_debug_setting(self):
         """Test that handle_exception uses Django DEBUG setting when debug param is not provided."""
-        from django.conf import settings
-
         # Store original DEBUG setting
         original_debug = settings.DEBUG
 
@@ -400,8 +346,9 @@ class TestErrorHandlers:
 
             # Since Django DEBUG=True, should return HTML
             headers_dict = dict(headers)
-            assert headers_dict.get("content-type") == "text/html; charset=utf-8", \
+            assert headers_dict.get("content-type") == "text/html; charset=utf-8", (
                 "Should use Django DEBUG=True setting when debug param is not provided"
+            )
             assert status == 500
         finally:
             # Restore original setting
@@ -419,6 +366,7 @@ class TestErrorHandlers:
 
     def test_msgspec_validation_error_conversion(self):
         """Test msgspec ValidationError to dict conversion."""
+
         # Create a msgspec validation error
         class TestStruct(msgspec.Struct):
             name: str
@@ -449,13 +397,9 @@ class TestExceptionIntegration:
 
     def test_exception_context_preservation(self):
         """Test that exception context is preserved."""
-        exc = BadRequest(
-            detail="Invalid input",
-            extra={"field": "email", "value": "invalid@"}
-        )
+        exc = BadRequest(detail="Invalid input", extra={"field": "email", "value": "invalid@"})
 
         status, headers, body = http_exception_handler(exc)
-        import json
         data = json.loads(body)
 
         assert data["detail"] == "Invalid input"
@@ -472,7 +416,6 @@ class TestExceptionIntegration:
         exc = RequestValidationError(errors)
         status, headers, body = request_validation_error_handler(exc)
 
-        import json
         data = json.loads(body)
         assert len(data["detail"]) == 3
 

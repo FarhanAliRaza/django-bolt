@@ -8,15 +8,21 @@ Tests cover:
 - Request body validation errors
 - Type coercion and conversion
 """
-import pytest
+
+import json
+
 import msgspec
+import pytest
+
 from django_bolt import BoltAPI
-from django_bolt.exceptions import RequestValidationError
-from django_bolt.error_handlers import handle_exception
+from django_bolt.binding import _DECODER_CACHE, convert_primitive, create_body_extractor, get_msgspec_decoder
+from django_bolt.error_handlers import handle_exception, msgspec_validation_error_to_dict
+from django_bolt.exceptions import HTTPException, RequestValidationError
 
 
 class UserCreate(msgspec.Struct):
     """Test user creation struct."""
+
     name: str
     email: str
     age: int
@@ -24,6 +30,7 @@ class UserCreate(msgspec.Struct):
 
 class UserWithDefaults(msgspec.Struct):
     """Test struct with default values."""
+
     name: str
     email: str = "user@example.com"
     is_active: bool = True
@@ -31,6 +38,7 @@ class UserWithDefaults(msgspec.Struct):
 
 class NestedAddress(msgspec.Struct):
     """Nested struct for testing."""
+
     street: str
     city: str
     zipcode: str
@@ -38,6 +46,7 @@ class NestedAddress(msgspec.Struct):
 
 class UserWithNested(msgspec.Struct):
     """Struct with nested struct."""
+
     name: str
     address: NestedAddress
 
@@ -47,8 +56,6 @@ class TestInvalidJSONParsing:
 
     def test_invalid_json_syntax_returns_422(self):
         """Test that malformed JSON returns 422 with proper error."""
-        from django_bolt.binding import create_body_extractor
-
         extractor = create_body_extractor("user", UserCreate)
 
         # Invalid JSON syntax
@@ -67,13 +74,11 @@ class TestInvalidJSONParsing:
 
     def test_empty_json_body_returns_422(self):
         """Test that empty JSON body returns 422."""
-        from django_bolt.binding import create_body_extractor
-
         extractor = create_body_extractor("user", UserCreate)
 
         # Should convert DecodeError to RequestValidationError (422)
         with pytest.raises(RequestValidationError) as exc_info:
-            extractor(b'')
+            extractor(b"")
 
         errors = exc_info.value.errors()
         assert len(errors) == 1
@@ -84,14 +89,12 @@ class TestInvalidJSONParsing:
 
     def test_non_json_content_returns_422(self):
         """Test that non-JSON content returns 422."""
-        from django_bolt.binding import create_body_extractor
-
         extractor = create_body_extractor("user", UserCreate)
 
         # Plain text instead of JSON
         # Should convert DecodeError to RequestValidationError (422)
         with pytest.raises(RequestValidationError) as exc_info:
-            extractor(b'this is not json')
+            extractor(b"this is not json")
 
         errors = exc_info.value.errors()
         assert len(errors) == 1
@@ -102,8 +105,6 @@ class TestInvalidJSONParsing:
 
     def test_invalid_json_object_type(self):
         """Test that JSON with wrong root type fails validation."""
-        from django_bolt.binding import create_body_extractor
-
         extractor = create_body_extractor("user", UserCreate)
 
         # Array instead of object
@@ -116,7 +117,7 @@ class TestInvalidJSONParsing:
 
         # Number instead of object
         with pytest.raises(msgspec.ValidationError):
-            extractor(b'42')
+            extractor(b"42")
 
 
 class TestMsgspecStructValidation:
@@ -124,8 +125,6 @@ class TestMsgspecStructValidation:
 
     def test_missing_required_field(self):
         """Test that missing required field raises ValidationError."""
-        from django_bolt.binding import create_body_extractor
-
         extractor = create_body_extractor("user", UserCreate)
 
         # Missing 'age' field
@@ -137,8 +136,6 @@ class TestMsgspecStructValidation:
 
     def test_wrong_field_type(self):
         """Test that wrong field type raises ValidationError."""
-        from django_bolt.binding import create_body_extractor
-
         extractor = create_body_extractor("user", UserCreate)
 
         # age should be int, not string
@@ -151,8 +148,6 @@ class TestMsgspecStructValidation:
 
     def test_null_for_required_field(self):
         """Test that null for required field raises ValidationError."""
-        from django_bolt.binding import create_body_extractor
-
         extractor = create_body_extractor("user", UserCreate)
 
         with pytest.raises(msgspec.ValidationError):
@@ -160,8 +155,6 @@ class TestMsgspecStructValidation:
 
     def test_extra_fields_allowed_by_default(self):
         """Test that extra fields are allowed by default in msgspec."""
-        from django_bolt.binding import create_body_extractor
-
         extractor = create_body_extractor("user", UserCreate)
 
         # Should succeed even with extra field
@@ -172,41 +165,39 @@ class TestMsgspecStructValidation:
 
     def test_nested_struct_validation(self):
         """Test validation of nested structs."""
-        from django_bolt.binding import create_body_extractor
-
         extractor = create_body_extractor("user", UserWithNested)
 
         # Valid nested structure
-        valid_json = b'''{
+        valid_json = b"""{
             "name": "John",
             "address": {
                 "street": "123 Main St",
                 "city": "New York",
                 "zipcode": "10001"
             }
-        }'''
+        }"""
         result = extractor(valid_json)
         assert result.name == "John"
         assert result.address.city == "New York"
 
         # Invalid nested structure (missing city)
-        invalid_json = b'''{
+        invalid_json = b"""{
             "name": "John",
             "address": {
                 "street": "123 Main St",
                 "zipcode": "10001"
             }
-        }'''
+        }"""
         with pytest.raises(msgspec.ValidationError):
             extractor(invalid_json)
 
     def test_array_field_validation(self):
         """Test validation of array fields."""
+
         class UserWithTags(msgspec.Struct):
             name: str
             tags: list[str]
 
-        from django_bolt.binding import create_body_extractor
         extractor = create_body_extractor("user", UserWithTags)
 
         # Valid array
@@ -236,7 +227,6 @@ class TestProductionVsDebugMode:
         assert status == 422, "Validation error must return 422"
 
         # Parse response
-        import json
         data = json.loads(body)
 
         # Should have validation errors
@@ -269,12 +259,9 @@ class TestProductionVsDebugMode:
         prod_status, prod_headers, prod_body = handle_exception(exc, debug=False)
         assert prod_status == 500
 
-        import json
         prod_data = json.loads(prod_body)
-        assert prod_data["detail"] == "Internal Server Error", \
-            "Production should hide error details"
-        assert "extra" not in prod_data, \
-            "Production should not expose exception details"
+        assert prod_data["detail"] == "Internal Server Error", "Production should hide error details"
+        assert "extra" not in prod_data, "Production should not expose exception details"
 
         # Debug mode - should show details (HTML or JSON with traceback)
         debug_status, debug_headers, debug_body = handle_exception(exc, debug=True)
@@ -299,16 +286,8 @@ class TestRequestValidationErrorHandling:
     def test_request_validation_error_format(self):
         """Test that RequestValidationError returns proper format."""
         errors = [
-            {
-                "loc": ["body", "email"],
-                "msg": "Invalid email format",
-                "type": "value_error"
-            },
-            {
-                "loc": ["body", "age"],
-                "msg": "Must be a positive integer",
-                "type": "value_error"
-            }
+            {"loc": ["body", "email"], "msg": "Invalid email format", "type": "value_error"},
+            {"loc": ["body", "age"], "msg": "Must be a positive integer", "type": "value_error"},
         ]
 
         exc = RequestValidationError(errors)
@@ -316,7 +295,6 @@ class TestRequestValidationErrorHandling:
 
         assert status == 422
 
-        import json
         data = json.loads(body)
 
         # Should return errors in detail field
@@ -342,7 +320,6 @@ class TestRequestValidationErrorHandling:
 
     def test_msgspec_error_to_request_validation_error(self):
         """Test that msgspec.ValidationError is converted properly."""
-        from django_bolt.error_handlers import msgspec_validation_error_to_dict
 
         # Create a validation error
         class TestStruct(msgspec.Struct):
@@ -369,8 +346,6 @@ class TestTypeCoercionEdgeCases:
 
     def test_boolean_coercion_from_string(self):
         """Test boolean coercion from string query params."""
-        from django_bolt.binding import convert_primitive
-
         # True values
         assert convert_primitive("true", bool) is True
         assert convert_primitive("True", bool) is True
@@ -387,9 +362,6 @@ class TestTypeCoercionEdgeCases:
 
     def test_number_coercion_errors(self):
         """Test that invalid number strings raise errors."""
-        from django_bolt.binding import convert_primitive
-        from django_bolt.exceptions import HTTPException
-
         # Invalid int - now raises HTTPException(422) instead of ValueError
         with pytest.raises(HTTPException) as exc_info:
             convert_primitive("not_a_number", int)
@@ -402,9 +374,6 @@ class TestTypeCoercionEdgeCases:
 
     def test_empty_string_coercion(self):
         """Test coercion of empty strings."""
-        from django_bolt.binding import convert_primitive
-        from django_bolt.exceptions import HTTPException
-
         # Empty string for string type should be empty string
         assert convert_primitive("", str) == ""
 
@@ -415,11 +384,11 @@ class TestTypeCoercionEdgeCases:
 
     def test_optional_fields_with_none(self):
         """Test that optional fields handle None correctly."""
+
         class UserOptional(msgspec.Struct):
             name: str
             email: str | None = None
 
-        from django_bolt.binding import create_body_extractor
         extractor = create_body_extractor("user", UserOptional)
 
         # Explicit null
@@ -438,8 +407,6 @@ class TestJSONParsingPerformance:
 
     def test_decoder_caching(self):
         """Test that msgspec decoders are cached for performance."""
-        from django_bolt.binding import get_msgspec_decoder, _DECODER_CACHE
-
         # Clear cache
         _DECODER_CACHE.clear()
 
@@ -453,7 +420,6 @@ class TestJSONParsingPerformance:
 
     def test_large_json_parsing(self):
         """Test parsing of large JSON payloads."""
-        from django_bolt.binding import create_body_extractor
 
         class LargeStruct(msgspec.Struct):
             items: list[dict]
@@ -462,7 +428,6 @@ class TestJSONParsingPerformance:
 
         # Create large JSON with 1000 items
         items = [{"id": i, "name": f"item_{i}"} for i in range(1000)]
-        import json
         large_json = json.dumps({"items": items}).encode()
 
         # Should parse successfully
@@ -471,6 +436,7 @@ class TestJSONParsingPerformance:
 
     def test_deeply_nested_json(self):
         """Test parsing of deeply nested JSON structures."""
+
         class Level3(msgspec.Struct):
             value: str
 
@@ -480,16 +446,15 @@ class TestJSONParsingPerformance:
         class Level1(msgspec.Struct):
             level2: Level2
 
-        from django_bolt.binding import create_body_extractor
         extractor = create_body_extractor("data", Level1)
 
-        nested_json = b'''{
+        nested_json = b"""{
             "level2": {
                 "level3": {
                     "value": "deep"
                 }
             }
-        }'''
+        }"""
 
         result = extractor(nested_json)
         assert result.level2.level3.value == "deep"
@@ -526,7 +491,6 @@ class TestIntegrationWithBoltAPI:
         status, headers, body = handle_exception(exc, debug=False)
         assert status == 422
 
-        import json
         data = json.loads(body)
         assert len(data["detail"]) == 1
         assert data["detail"][0]["loc"] == ["body", "age"]

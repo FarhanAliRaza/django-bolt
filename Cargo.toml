@@ -1,6 +1,6 @@
 [package]
 name = "django-bolt"
-version = "0.3.1"
+version = "0.4.7"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -9,22 +9,20 @@ name = "django_bolt"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.26", features = ["extension-module", "abi3-py310"] }
-pyo3-async-runtimes = { version = "0.26", features = ["tokio-runtime"] }
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py312"] }
+pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"] }
 actix-web = { version = "4", features = ["compress-gzip", "compress-brotli", "compress-zstd"] }
 actix-http = "3"
 actix-cors = "0.7"
-# io-uring only works on Linux with glibc, not musl
-actix-files = { version = "0.6" }
-actix-multipart = "0.6"
+actix-web-actors = "4"  # WebSocket support
+actix = "0.13"  # Actor framework for WebSocket
+actix-files = "0.6"
 tokio = { version = "1", features = ["full"] }
-socket2 = { version = "0.5", features = ["all"] }
-matchit = "0.8"
+socket2 = { version = "0.6", features = ["all"] }
+matchit = "0.9"
 # Middleware dependencies
-governor = "0.6"  # Rate limiting
-nonzero_ext = "0.3"  # For governor NonZero types
+governor = "0.10"  # Rate limiting
 jsonwebtoken = "9"  # JWT authentication
-chrono = "0.4"  # For JWT exp claims
 dashmap = "6"  # Fast concurrent hashmap for rate limiting
 parking_lot = "0.12"  # Fast RwLock for shared state
 serde = { version = "1", features = ["derive"] }
@@ -32,12 +30,8 @@ serde_json = "1"
 ahash = "0.8"
 mimalloc = { version = "0.1", default-features = false }
 urlencoding = "2"
-num_cpus = "1"
 once_cell = "1"
 futures-util = "0.3"
 bytes = "1"
-mime = "0.3"
-url = "2"
-tempfile = "3"
-multer = "3"
 regex = "1"
+phf = { version = "0.11", features = ["macros"] }

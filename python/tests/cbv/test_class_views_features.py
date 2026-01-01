@@ -14,20 +14,27 @@ class-based views (APIView, ViewSet, ModelViewSet):
 - Streaming responses
 - File uploads/downloads
 """
-import pytest
-import msgspec
-from typing import Annotated
-from django_bolt import BoltAPI
-from django_bolt.testing import TestClient
-from django_bolt.views import APIView, ViewSet, ModelViewSet
-from django_bolt.params import Query, Path, Body, Header, Cookie, Form, File, Depends
-from django_bolt.exceptions import HTTPException
-from django_bolt.responses import StreamingResponse, FileResponse
-from django_bolt.auth import JWTAuthentication, APIKeyAuthentication
-from django_bolt.auth.guards import IsAuthenticated, IsAdminUser, IsStaff, HasPermission
 
+from typing import Annotated
+
+import msgspec
+import pytest
+from django.contrib.auth.models import Permission, User
+from django.contrib.contenttypes.models import ContentType
+
+from django_bolt import BoltAPI, action
+from django_bolt.auth import APIKeyAuthentication, IsAuthenticated, JWTAuthentication
+from django_bolt.auth.guards import HasPermission, IsAdminUser
+from django_bolt.auth.jwt_utils import create_jwt_for_user, get_current_user
+from django_bolt.exceptions import HTTPException
+from django_bolt.middleware import cors, rate_limit, skip_middleware
+from django_bolt.params import Body, Cookie, Depends, Header, Path, Query
+from django_bolt.responses import StreamingResponse
+from django_bolt.testing import TestClient
+from django_bolt.views import APIView, ModelViewSet, ViewSet
 
 # --- Fixtures ---
+
 
 @pytest.fixture
 def api():
@@ -37,8 +44,10 @@ def api():
 
 # --- Schemas ---
 
+
 class UserSchema(msgspec.Struct):
     """User response schema."""
+
     id: int
     username: str
     email: str
@@ -46,6 +55,7 @@ class UserSchema(msgspec.Struct):
 
 class UserCreateSchema(msgspec.Struct):
     """User creation schema."""
+
     username: str
     email: str
     password: str
@@ -53,6 +63,7 @@ class UserCreateSchema(msgspec.Struct):
 
 class ErrorResponse(msgspec.Struct):
     """Error response schema."""
+
     detail: str
     code: str | None = None
 
@@ -60,6 +71,7 @@ class ErrorResponse(msgspec.Struct):
 # ============================================================================
 # Request Validation Tests
 # ============================================================================
+
 
 def test_request_body_validation_error(api):
     """Test that invalid request body returns proper validation error."""
@@ -81,11 +93,14 @@ def test_request_body_validation_error(api):
         assert any("email" in str(err.get("loc", [])) or "email" in err.get("msg", "") for err in errors)
 
         # Invalid type
-        response = client.post("/users", json={
-            "username": 123,  # Should be string
-            "email": "test@example.com",
-            "password": "secret"
-        })
+        response = client.post(
+            "/users",
+            json={
+                "username": 123,  # Should be string
+                "email": "test@example.com",
+                "password": "secret",
+            },
+        )
         assert response.status_code == 422  # Validation error returns 422
 
 
@@ -98,10 +113,9 @@ def test_query_parameter_validation(api):
 
     @api.view("/search", methods=["GET"])
     class SearchView(APIView):
-        async def get(self,
-                     request,
-                     page: Annotated[int, Query(ge=1)] = 1,
-                     limit: Annotated[int, Query(ge=1, le=100)] = 10):
+        async def get(
+            self, request, page: Annotated[int, Query(ge=1)] = 1, limit: Annotated[int, Query(ge=1, le=100)] = 10
+        ):
             return {"page": page, "limit": limit}
 
     with TestClient(api) as client:
@@ -145,25 +159,24 @@ def test_header_parameter_extraction(api):
 
     @api.view("/protected", methods=["GET"])
     class APIView_WithHeader(APIView):
-        async def get(self,
-                     request,
-                     api_key: Annotated[str, Header(alias="X-API-Key")],
-                     user_agent: Annotated[str, Header(alias="User-Agent")] = "unknown"):
+        async def get(
+            self,
+            request,
+            api_key: Annotated[str, Header(alias="X-API-Key")],
+            user_agent: Annotated[str, Header(alias="User-Agent")] = "unknown",
+        ):
             return {"api_key": api_key, "user_agent": user_agent}
 
     with TestClient(api) as client:
         # With headers
-        response = client.get("/protected", headers={
-            "X-API-Key": "secret123",
-            "User-Agent": "TestClient/1.0"
-        })
+        response = client.get("/protected", headers={"X-API-Key": "secret123", "User-Agent": "TestClient/1.0"})
         assert response.status_code == 200
         assert response.json()["api_key"] == "secret123"
         assert response.json()["user_agent"] == "TestClient/1.0"
 
         # Missing required header
         response = client.get("/protected")
-        assert response.status_code == 400  # Missing required header returns 400
+        assert response.status_code == 422  # Missing required header returns 422
 
 
 def test_cookie_parameter_extraction(api):
@@ -171,25 +184,24 @@ def test_cookie_parameter_extraction(api):
 
     @api.view("/session", methods=["GET"])
     class SessionView(APIView):
-        async def get(self,
-                     request,
-                     session_id: Annotated[str, Cookie(alias="session")],
-                     theme: Annotated[str, Cookie(alias="theme")] = "light"):
+        async def get(
+            self,
+            request,
+            session_id: Annotated[str, Cookie(alias="session")],
+            theme: Annotated[str, Cookie(alias="theme")] = "light",
+        ):
             return {"session_id": session_id, "theme": theme}
 
     with TestClient(api) as client:
         # With cookies
-        response = client.get("/session", cookies={
-            "session": "abc123",
-            "theme": "dark"
-        })
+        response = client.get("/session", cookies={"session": "abc123", "theme": "dark"})
         assert response.status_code == 200
         assert response.json()["session_id"] == "abc123"
         assert response.json()["theme"] == "dark"
 
         # Missing required cookie
         response = client.get("/session")
-        assert response.status_code == 400  # Missing required cookie returns 400
+        assert response.status_code == 422  # Missing required cookie returns 422
 
 
 def test_mixed_parameter_sources(api):
@@ -197,27 +209,26 @@ def test_mixed_parameter_sources(api):
 
     @api.view("/users/{user_id}/update", methods=["POST"])
     class ComplexView(APIView):
-        async def post(self,
-                      request,
-                      user_id: int,  # Path
-                      include_details: bool = False,  # Query
-                      api_key: Annotated[str, Header(alias="X-API-Key")] = "",  # Header
-                      data: UserCreateSchema = Body()):  # Body
+        async def post(
+            self,
+            request,
+            user_id: int,  # Path
+            include_details: bool = False,  # Query
+            api_key: Annotated[str, Header(alias="X-API-Key")] = "",  # Header
+            data: UserCreateSchema = Body(),
+        ):  # Body
             return {
                 "user_id": user_id,
                 "include_details": include_details,
                 "api_key": api_key,
-                "data": {
-                    "username": data.username,
-                    "email": data.email
-                }
+                "data": {"username": data.username, "email": data.email},
             }
 
     with TestClient(api) as client:
         response = client.post(
             "/users/123/update?include_details=true",
             json={"username": "john", "email": "john@example.com", "password": "secret"},
-            headers={"X-API-Key": "key123"}
+            headers={"X-API-Key": "key123"},
         )
         assert response.status_code == 200
         data = response.json()
@@ -231,6 +242,7 @@ def test_mixed_parameter_sources(api):
 # Response Validation Tests
 # ============================================================================
 
+
 def test_response_model_validation(api):
     """Test that response is validated against response_model."""
 
@@ -238,11 +250,7 @@ def test_response_model_validation(api):
     class UserView(APIView):
         async def get(self, request) -> UserSchema:
             # Return dict, should be validated
-            return {
-                "id": 1,
-                "username": "john",
-                "email": "john@example.com"
-            }
+            return {"id": 1, "username": "john", "email": "john@example.com"}
 
     with TestClient(api) as client:
         response = client.get("/user")
@@ -261,7 +269,7 @@ def test_response_list_validation(api):
         async def get(self, request) -> list[UserSchema]:
             return [
                 {"id": 1, "username": "john", "email": "john@example.com"},
-                {"id": 2, "username": "jane", "email": "jane@example.com"}
+                {"id": 2, "username": "jane", "email": "jane@example.com"},
             ]
 
     with TestClient(api) as client:
@@ -277,6 +285,7 @@ def test_response_list_validation(api):
 # Authentication Tests
 # ============================================================================
 
+
 @pytest.mark.django_db
 def test_jwt_authentication_with_class_view(api):
     """Test JWT authentication with class-based views.
@@ -284,8 +293,6 @@ def test_jwt_authentication_with_class_view(api):
     NOTE: JWT authentication runs in Rust middleware, so we need to use
     use_http_layer=True to test it properly.
     """
-    from django.contrib.auth.models import User
-    from django_bolt.auth.jwt_utils import create_jwt_for_user
 
     # Create test user
     user = User.objects.create(username="testuser", email="test@example.com")
@@ -306,9 +313,7 @@ def test_jwt_authentication_with_class_view(api):
         assert response.status_code == 401
 
         # With valid token - should work
-        response = client.get("/protected", headers={
-            "Authorization": f"Bearer {token}"
-        })
+        response = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
         assert response.status_code == 200
         # user_id is returned as string from JWT
         assert response.json()["user_id"] == str(user.id)
@@ -331,16 +336,12 @@ def test_api_key_authentication_with_class_view(api):
         assert response.status_code == 401
 
         # With valid API key - should work
-        response = client.get("/protected", headers={
-            "X-API-Key": "secret-key-123"
-        })
+        response = client.get("/protected", headers={"X-API-Key": "secret-key-123"})
         assert response.status_code == 200
         assert response.json()["authenticated"] is True
 
         # With invalid API key - should fail
-        response = client.get("/protected", headers={
-            "X-API-Key": "invalid-key"
-        })
+        response = client.get("/protected", headers={"X-API-Key": "invalid-key"})
         assert response.status_code == 401
 
 
@@ -348,11 +349,10 @@ def test_api_key_authentication_with_class_view(api):
 # Guards/Permissions Tests
 # ============================================================================
 
+
 @pytest.mark.django_db
 def test_is_authenticated_guard_with_class_view(api):
     """Test IsAuthenticated guard with class-based views."""
-    from django.contrib.auth.models import User
-    from django_bolt.auth.jwt_utils import create_jwt_for_user
 
     user = User.objects.create(username="testuser")
     token = create_jwt_for_user(user, secret="test-secret")
@@ -371,17 +371,13 @@ def test_is_authenticated_guard_with_class_view(api):
         assert response.status_code == 401
 
         # Authenticated
-        response = client.get("/protected", headers={
-            "Authorization": f"Bearer {token}"
-        })
+        response = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
         assert response.status_code == 200
 
 
 @pytest.mark.django_db
 def test_is_admin_guard_with_class_view(api):
     """Test IsAdminUser guard with class-based views."""
-    from django.contrib.auth.models import User
-    from django_bolt.auth.jwt_utils import create_jwt_for_user
 
     # Regular user
     user = User.objects.create(username="regular", is_staff=False, is_superuser=False)
@@ -401,31 +397,23 @@ def test_is_admin_guard_with_class_view(api):
 
     with TestClient(api, use_http_layer=True) as client:
         # Regular user - should fail
-        response = client.get("/admin", headers={
-            "Authorization": f"Bearer {user_token}"
-        })
+        response = client.get("/admin", headers={"Authorization": f"Bearer {user_token}"})
         assert response.status_code == 403
 
         # Admin user - should work
-        response = client.get("/admin", headers={
-            "Authorization": f"Bearer {admin_token}"
-        })
+        response = client.get("/admin", headers={"Authorization": f"Bearer {admin_token}"})
         assert response.status_code == 200
 
 
 @pytest.mark.django_db
 def test_has_permission_guard_with_class_view(api):
     """Test HasPermission guard with class-based views."""
-    from django.contrib.auth.models import User, Permission
-    from django.contrib.contenttypes.models import ContentType
-    from django_bolt.auth.jwt_utils import create_jwt_for_user
+    from django_bolt.auth.jwt_utils import create_jwt_for_user  # noqa: PLC0415
 
     # Create permission
     content_type = ContentType.objects.get_for_model(User)
     permission = Permission.objects.create(
-        codename="can_delete_user",
-        name="Can delete user",
-        content_type=content_type
+        codename="can_delete_user", name="Can delete user", content_type=content_type
     )
 
     # User without permission
@@ -436,11 +424,7 @@ def test_has_permission_guard_with_class_view(api):
     user2 = User.objects.create(username="user2")
     user2.user_permissions.add(permission)
     # Include permissions in JWT extra claims
-    token2 = create_jwt_for_user(
-        user2,
-        secret="test-secret",
-        extra_claims={"permissions": ["auth.can_delete_user"]}
-    )
+    token2 = create_jwt_for_user(user2, secret="test-secret", extra_claims={"permissions": ["auth.can_delete_user"]})
 
     @api.view("/users/{user_id}", methods=["DELETE"])
     class ProtectedView(APIView):
@@ -452,21 +436,18 @@ def test_has_permission_guard_with_class_view(api):
 
     with TestClient(api, use_http_layer=True) as client:
         # User without permission - should fail
-        response = client.delete("/users/123", headers={
-            "Authorization": f"Bearer {token1}"
-        })
+        response = client.delete("/users/123", headers={"Authorization": f"Bearer {token1}"})
         assert response.status_code == 403
 
         # User with permission - should work
-        response = client.delete("/users/123", headers={
-            "Authorization": f"Bearer {token2}"
-        })
+        response = client.delete("/users/123", headers={"Authorization": f"Bearer {token2}"})
         assert response.status_code == 200
 
 
 # ============================================================================
 # Dependency Injection Tests
 # ============================================================================
+
 
 @pytest.mark.django_db(transaction=True)
 def test_depends_with_class_view(api):
@@ -475,8 +456,6 @@ def test_depends_with_class_view(api):
     NOTE: Uses transaction=True to avoid SQLite database locking issues
     when get_current_user makes async DB queries.
     """
-    from django.contrib.auth.models import User
-    from django_bolt.auth.jwt_utils import create_jwt_for_user, get_current_user
 
     user = User.objects.create(username="testuser", email="test@example.com")
     token = create_jwt_for_user(user, secret="test-secret")
@@ -486,18 +465,11 @@ def test_depends_with_class_view(api):
         auth = [JWTAuthentication(secret="test-secret")]
         guards = [IsAuthenticated()]
 
-        async def get(self,
-                     request,
-                     current_user: Annotated[User, Depends(get_current_user)]):
-            return {
-                "username": current_user.username,
-                "email": current_user.email
-            }
+        async def get(self, request, current_user: Annotated[User, Depends(get_current_user)]):
+            return {"username": current_user.username, "email": current_user.email}
 
     with TestClient(api, use_http_layer=True) as client:
-        response = client.get("/profile", headers={
-            "Authorization": f"Bearer {token}"
-        })
+        response = client.get("/profile", headers={"Authorization": f"Bearer {token}"})
         assert response.status_code == 200
         data = response.json()
         assert data["username"] == "testuser"
@@ -513,9 +485,7 @@ def test_dependency_injection(api):
 
     @api.view("/data", methods=["GET"])
     class DataView(APIView):
-        async def get(self,
-                     request,
-                     db: Annotated[dict, Depends(get_db_connection)]):
+        async def get(self, request, db: Annotated[dict, Depends(get_db_connection)]):
             return {"db_status": db}
 
     with TestClient(api) as client:
@@ -529,6 +499,7 @@ def test_dependency_injection(api):
 # ============================================================================
 # Error Handling Tests
 # ============================================================================
+
 
 def test_http_exception_handling(api):
     """Test HTTPException handling in class-based views."""
@@ -576,6 +547,7 @@ def test_unhandled_exception_in_class_view(api):
 # Streaming Response Tests
 # ============================================================================
 
+
 def test_streaming_response_with_class_view(api):
     """Test streaming responses with class-based views."""
 
@@ -586,10 +558,7 @@ def test_streaming_response_with_class_view(api):
                 for i in range(5):
                     yield f"data: {i}\n\n"
 
-            return StreamingResponse(
-                generate(),
-                media_type="text/event-stream"
-            )
+            return StreamingResponse(generate(), media_type="text/event-stream")
 
     with TestClient(api) as client:
         response = client.get("/stream")
@@ -603,10 +572,11 @@ def test_streaming_response_with_class_view(api):
 # ViewSet Integration Tests
 # ============================================================================
 
+
 def test_viewset_with_all_features(api):
     """Test ViewSet with authentication, guards, and validation."""
-    from django_bolt.auth import JWTAuthentication
-    from django_bolt.auth.guards import IsAuthenticated
+    from django_bolt.auth import JWTAuthentication  # noqa: PLC0415
+    from django_bolt.auth.guards import IsAuthenticated  # noqa: PLC0415
 
     @api.view("/articles")
     class ArticleViewSet(ViewSet):
@@ -615,20 +585,15 @@ def test_viewset_with_all_features(api):
         queryset = []  # Mock queryset
         serializer_class = UserSchema
 
-        async def get(self,
-                     request,
-                     page: Annotated[int, Query(ge=1)] = 1,
-                     limit: Annotated[int, Query(ge=1, le=100)] = 10):
+        async def get(
+            self, request, page: Annotated[int, Query(ge=1)] = 1, limit: Annotated[int, Query(ge=1, le=100)] = 10
+        ):
             """List with query validation."""
             return {"page": page, "limit": limit, "items": []}
 
         async def post(self, request, data: UserCreateSchema):
             """Create with body validation."""
-            return {
-                "id": 1,
-                "username": data.username,
-                "email": data.email
-            }
+            return {"id": 1, "username": data.username, "email": data.email}
 
     with TestClient(api) as client:
         # Without auth - should fail
@@ -647,17 +612,15 @@ def test_model_viewset_integration(api):
         queryset = []  # Mock
         serializer_class = UserSchema
 
-        async def get(self,
-                     request,
-                     pk: int,
-                     include_comments: Annotated[bool, Query()] = False,
-                     api_key: Annotated[str, Header(alias="X-API-Key")] = ""):
+        async def get(
+            self,
+            request,
+            pk: int,
+            include_comments: Annotated[bool, Query()] = False,
+            api_key: Annotated[str, Header(alias="X-API-Key")] = "",
+        ):
             """Retrieve with path, query, and header params."""
-            return {
-                "id": pk,
-                "include_comments": include_comments,
-                "api_key": api_key
-            }
+            return {"id": pk, "include_comments": include_comments, "api_key": api_key}
 
     # This test needs fixing - viewset should use api.viewset() not api.view()
     # For now, register with decorator
@@ -666,10 +629,7 @@ def test_model_viewset_integration(api):
         pass
 
     with TestClient(api) as client:
-        response = client.get(
-            "/articles/123?include_comments=true",
-            headers={"X-API-Key": "key123"}
-        )
+        response = client.get("/articles/123?include_comments=true", headers={"X-API-Key": "key123"})
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == 123
@@ -681,9 +641,9 @@ def test_model_viewset_integration(api):
 # Middleware Tests
 # ============================================================================
 
+
 def test_cors_middleware_with_class_view(api):
     """Test CORS middleware decorator on class-based view methods."""
-    from django_bolt.middleware import cors
 
     class APIView_WithCORS(APIView):
         # Apply CORS to specific method
@@ -711,7 +671,6 @@ def test_cors_middleware_with_class_view(api):
 
 def test_rate_limit_middleware_with_class_view(api):
     """Test rate limit middleware decorator on class-based view methods."""
-    from django_bolt.middleware import rate_limit
 
     class APIView_WithRateLimit(APIView):
         # Apply rate limiting to specific method
@@ -738,7 +697,6 @@ def test_rate_limit_middleware_with_class_view(api):
 
 def test_skip_middleware_with_class_view(api):
     """Test skip_middleware decorator on class-based view methods."""
-    from django_bolt.middleware import skip_middleware
 
     class APIView_SkipMiddleware(APIView):
         # Skip specific middleware for this method
@@ -764,7 +722,6 @@ def test_skip_middleware_with_class_view(api):
 
 def test_multiple_middleware_decorators_with_class_view(api):
     """Test stacking multiple middleware decorators on class-based view methods."""
-    from django_bolt.middleware import cors, rate_limit
 
     class APIView_MultiMiddleware(APIView):
         # Stack multiple middleware decorators
@@ -787,13 +744,13 @@ def test_multiple_middleware_decorators_with_class_view(api):
 # Custom Action Method Tests
 # ============================================================================
 
+
 def test_custom_action_decorator_in_viewset(api):
     """Test @action decorator custom actions INSIDE a ViewSet class."""
-    from django_bolt import action
 
     class ArticleViewSet(ViewSet):
         queryset = []
-        lookup_field = 'article_id'  # Set lookup field to match parameter names
+        lookup_field = "article_id"  # Set lookup field to match parameter names
 
         async def list(self, request):
             """Standard list action."""
@@ -856,10 +813,9 @@ def test_custom_action_decorator_in_viewset(api):
 
 def test_viewset_with_multiple_custom_actions(api):
     """Test ViewSet with many custom action methods defined INSIDE the class."""
-    from django_bolt import action
 
     class UserViewSet(ViewSet):
-        lookup_field = 'user_id'  # Set lookup field to match parameter names
+        lookup_field = "user_id"  # Set lookup field to match parameter names
 
         async def retrieve(self, request, user_id: int):
             """Standard retrieve action."""
@@ -939,54 +895,37 @@ def test_viewset_with_multiple_custom_actions(api):
 
 def test_custom_action_with_auth_and_guards(api):
     """Test custom action methods INSIDE ViewSet with authentication and guards."""
-    from django_bolt.auth import APIKeyAuthentication, IsAuthenticated
-    from django_bolt import action
+    from django_bolt.auth import APIKeyAuthentication, IsAuthenticated  # noqa: PLC0415
 
     class DocumentViewSet(ViewSet):
         # Class-level auth applies to all methods
         auth = [APIKeyAuthentication(api_keys={"admin-key": "admin1", "user-key": "user1"})]
         guards = [IsAuthenticated()]
-        lookup_field = 'doc_id'  # Set lookup field to match parameter names
+        lookup_field = "doc_id"  # Set lookup field to match parameter names
 
         async def retrieve(self, request, doc_id: int):
             """Standard retrieve - requires auth."""
             auth_context = request.get("auth", {})
-            return {
-                "doc_id": doc_id,
-                "title": "Secure Document",
-                "accessed_by": auth_context.get("user_id", "unknown")
-            }
+            return {"doc_id": doc_id, "title": "Secure Document", "accessed_by": auth_context.get("user_id", "unknown")}
 
         # Custom actions INSIDE ViewSet - inherit class-level auth/guards using @action
         @action(methods=["POST"], detail=True, path="approve")
         async def approve(self, request, doc_id: int):
             """Custom action: approve document (requires auth). POST /documents/{doc_id}/approve"""
             auth_context = request.get("auth", {})
-            return {
-                "doc_id": doc_id,
-                "approved": True,
-                "approved_by": auth_context.get("user_id", "unknown")
-            }
+            return {"doc_id": doc_id, "approved": True, "approved_by": auth_context.get("user_id", "unknown")}
 
         @action(methods=["POST"], detail=True, path="reject")
         async def reject(self, request, doc_id: int):
             """Custom action: reject document (requires auth). POST /documents/{doc_id}/reject"""
             auth_context = request.get("auth", {})
-            return {
-                "doc_id": doc_id,
-                "rejected": True,
-                "rejected_by": auth_context.get("user_id", "unknown")
-            }
+            return {"doc_id": doc_id, "rejected": True, "rejected_by": auth_context.get("user_id", "unknown")}
 
         @action(methods=["POST"], detail=True, path="lock")
         async def lock(self, request, doc_id: int):
             """Custom action: lock document for editing (requires auth). POST /documents/{doc_id}/lock"""
             auth_context = request.get("auth", {})
-            return {
-                "doc_id": doc_id,
-                "locked": True,
-                "locked_by": auth_context.get("user_id", "unknown")
-            }
+            return {"doc_id": doc_id, "locked": True, "locked_by": auth_context.get("user_id", "unknown")}
 
     @api.viewset("/documents")
     class DocumentViewSetRegistered(DocumentViewSet):
@@ -1035,28 +974,17 @@ def test_custom_action_with_auth_and_guards(api):
 
 def test_nested_resource_actions_with_class_views(api):
     """Test nested resource ViewSet (e.g., comment moderation)."""
-    from django_bolt import action
 
     class CommentViewSet(ViewSet):
         async def retrieve(self, request, post_id: int, comment_id: int):
             """Standard retrieve nested resource."""
-            return {
-                "post_id": post_id,
-                "comment_id": comment_id,
-                "text": "Sample comment",
-                "status": "pending"
-            }
+            return {"post_id": post_id, "comment_id": comment_id, "text": "Sample comment", "status": "pending"}
 
         # Custom actions for nested resources using @action decorator
         @action(methods=["POST"], detail=True, path="approve")
         async def approve(self, request, comment_id: int, post_id: int):
             """Custom action: approve comment. POST /posts/{post_id}/comments/{comment_id}/approve"""
-            return {
-                "post_id": post_id,
-                "comment_id": comment_id,
-                "approved": True,
-                "status": "approved"
-            }
+            return {"post_id": post_id, "comment_id": comment_id, "approved": True, "status": "approved"}
 
         @action(methods=["POST"], detail=True, path="reject")
         async def reject(self, request, comment_id: int, post_id: int, reason: str = "spam"):
@@ -1066,18 +994,13 @@ def test_nested_resource_actions_with_class_views(api):
                 "comment_id": comment_id,
                 "rejected": True,
                 "reason": reason,
-                "status": "rejected"
+                "status": "rejected",
             }
 
         @action(methods=["POST"], detail=True, path="flag")
         async def flag(self, request, comment_id: int, post_id: int):
             """Custom action: flag comment. POST /posts/{post_id}/comments/{comment_id}/flag"""
-            return {
-                "post_id": post_id,
-                "comment_id": comment_id,
-                "flagged": True,
-                "status": "flagged_for_review"
-            }
+            return {"post_id": post_id, "comment_id": comment_id, "flagged": True, "status": "flagged_for_review"}
 
     # Register ViewSet with nested path pattern
     # Note: ViewSet lookup_field will be 'comment_id', and post_id is an additional path param
@@ -1121,5 +1044,3 @@ def test_nested_resource_actions_with_class_views(api):
         assert data["comment_id"] == 42
         assert data["flagged"] is True
         assert data["status"] == "flagged_for_review"
-
-

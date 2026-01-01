@@ -3,15 +3,18 @@ Tests for decorator syntax (@api.view and @api.viewset).
 
 This test suite verifies that the decorator pattern works correctly.
 """
-import pytest
-import msgspec
-from django_bolt import BoltAPI, ViewSet, action
-from django_bolt.views import APIView
-from django_bolt.testing import TestClient
-from .test_models import Article
 
+import msgspec
+import pytest
+
+from django_bolt import BoltAPI, ViewSet, action
+from django_bolt.testing import TestClient
+from django_bolt.views import APIView
+
+from .test_models import Article  # noqa: PLC0415
 
 # --- Fixtures ---
+
 
 @pytest.fixture
 def api():
@@ -20,6 +23,7 @@ def api():
 
 
 # --- Tests ---
+
 
 def test_view_decorator_syntax(api):
     """Test @api.view() decorator syntax."""
@@ -81,11 +85,7 @@ def test_viewset_decorator_syntax(api):
             return ArticleSchema(id=article.id, title=article.title)
 
     # Create test article
-    article = Article.objects.create(
-        title="Test Article",
-        content="Test content",
-        author="Test Author"
-    )
+    article = Article.objects.create(title="Test Article", content="Test content", author="Test Author")
 
     client = TestClient(api)
 
@@ -130,18 +130,8 @@ def test_viewset_decorator_with_custom_actions(api):
             return articles
 
     # Create test articles
-    article1 = Article.objects.create(
-        title="Published",
-        content="Content",
-        author="Author",
-        is_published=True
-    )
-    article2 = Article.objects.create(
-        title="Draft",
-        content="Content",
-        author="Author",
-        is_published=False
-    )
+    Article.objects.create(title="Published", content="Content", author="Author", is_published=True)
+    article2 = Article.objects.create(title="Draft", content="Content", author="Author", is_published=False)
 
     client = TestClient(api)
 
@@ -155,5 +145,3 @@ def test_viewset_decorator_with_custom_actions(api):
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2  # Both should be published now
-
-

@@ -4,7 +4,16 @@ OpenAPI route registration for BoltAPI.
 This module handles the registration of OpenAPI documentation routes
 (JSON, YAML, and UI plugins) separately from the main BoltAPI class.
 """
-from typing import Dict, Any, TYPE_CHECKING
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from django.contrib.auth.decorators import login_required
+
+from django_bolt.openapi.plugins import JsonRenderPlugin, YamlRenderPlugin
+from django_bolt.openapi.schema_generator import SchemaGenerator
+from django_bolt.responses import HTML, JSON, PlainText
 
 if TYPE_CHECKING:
     from django_bolt.api import BoltAPI
@@ -13,13 +22,61 @@ if TYPE_CHECKING:
 class OpenAPIRouteRegistrar:
     """Handles registration of OpenAPI documentation routes."""
 
-    def __init__(self, api: 'BoltAPI'):
+    def __init__(self, api: BoltAPI):
         """Initialize the registrar with a BoltAPI instance.
 
         Args:
             api: The BoltAPI instance to register routes on
         """
         self.api = api
+        self._docs_api = None  # Separate API for docs when using django_auth
+
+    def _get_django_auth_decorator(self):
+        """Get the Django auth decorator if configured.
+
+        Returns:
+            The decorator function, or None if not configured.
+        """
+        django_auth = self.api.openapi_config.django_auth
+        if django_auth is None:
+            return None
+        if django_auth is True:
+            return login_required
+        # It's a decorator function (e.g., staff_member_required)
+        return django_auth
+
+    def _apply_django_auth(self, handler):
+        """Apply Django auth decorator to handler if configured.
+
+        Args:
+            handler: The async handler function
+
+        Returns:
+            The wrapped handler if django_auth is configured, otherwise original handler.
+        """
+        decorator = self._get_django_auth_decorator()
+        if decorator:
+            return decorator(handler)
+        return handler
+
+    def _get_docs_api(self):
+        """Get or create the API instance for registering docs routes.
+
+        If django_auth is configured, creates a separate BoltAPI with
+        django_middleware=True and mounts it at the docs path.
+        Otherwise, returns the main API for direct registration.
+        """
+        if self.api.openapi_config.django_auth:
+            if self._docs_api is None:
+                from django_bolt.api import BoltAPI  # noqa: PLC0415
+
+                # Create separate API with Django middleware for docs
+                self._docs_api = BoltAPI(
+                    django_middleware=True,
+                    enable_logging=False,
+                )
+            return self._docs_api
+        return self.api
 
     def register_routes(self) -> None:
         """Register OpenAPI documentation routes.
@@ -30,123 +87,155 @@ class OpenAPIRouteRegistrar:
         - /docs/openapi.yml - YAML schema endpoint (alternative)
         - UI plugin routes (e.g., /docs/swagger, /docs/redoc)
         - Root redirect to default UI
+
+        When django_auth is configured, routes are registered on a separate
+        BoltAPI with django_middleware=True and mounted at the docs path.
         """
         if not self.api.openapi_config or self.api._openapi_routes_registered:
             return
 
-        from django_bolt.openapi.plugins import JsonRenderPlugin, YamlRenderPlugin
-        from django_bolt.responses import HTML, Redirect, JSON, PlainText
+        # Check if docs are enabled
+        if not self.api.openapi_config.enabled:
+            return
+
+        # Get the API to register routes on (separate API if using django_auth)
+        docs_api = self._get_docs_api()
+        use_django_auth = self.api.openapi_config.django_auth is not None
+
+        # Get guards and auth from config for protecting doc routes
+        guards = self.api.openapi_config.guards
+        auth = self.api.openapi_config.auth
+
+        # Determine the base path for routes
+        # If using mounted docs API, routes are relative (no prefix)
+        # If using main API, routes include the full path
+        route_prefix = "" if use_django_auth else self.api.openapi_config.path
 
         # Always register JSON endpoint
         json_plugin = JsonRenderPlugin()
 
-        @self.api.get(f"{self.api.openapi_config.path}/openapi.json")
         async def openapi_json_handler(request):
             """Serve OpenAPI schema as JSON."""
             try:
                 schema = self._get_schema()
                 rendered = json_plugin.render(schema, "")
-                # Return with proper OpenAPI JSON content-type
-                return JSON(
-                    rendered,
-                    status_code=200,
-                    headers={"content-type": json_plugin.media_type}
-                )
+                return JSON(rendered, status_code=200, headers={"content-type": json_plugin.media_type})
             except Exception as e:
-                # Re-raise with more context for debugging
                 raise Exception(f"Failed to generate OpenAPI JSON schema: {type(e).__name__}: {str(e)}") from e
+
+        openapi_json_handler = self._apply_django_auth(openapi_json_handler)
+        docs_api.get(f"{route_prefix}/openapi.json", guards=guards, auth=auth)(openapi_json_handler)
 
         # Always register YAML endpoints
         yaml_plugin = YamlRenderPlugin()
 
-        @self.api.get(f"{self.api.openapi_config.path}/openapi.yaml")
         async def openapi_yaml_handler(request):
             """Serve OpenAPI schema as YAML."""
             schema = self._get_schema()
             rendered = yaml_plugin.render(schema, "")
-            # Return with proper YAML content-type
-            return PlainText(
-                rendered,
-                status_code=200,
-                headers={"content-type": yaml_plugin.media_type}
-            )
+            return PlainText(rendered, status_code=200, headers={"content-type": yaml_plugin.media_type})
 
-        @self.api.get(f"{self.api.openapi_config.path}/openapi.yml")
+        openapi_yaml_handler = self._apply_django_auth(openapi_yaml_handler)
+        docs_api.get(f"{route_prefix}/openapi.yaml", guards=guards, auth=auth)(openapi_yaml_handler)
+
         async def openapi_yml_handler(request):
             """Serve OpenAPI schema as YAML (alternative extension)."""
             schema = self._get_schema()
             rendered = yaml_plugin.render(schema, "")
-            # Return with proper YAML content-type
-            return PlainText(
-                rendered,
-                status_code=200,
-                headers={"content-type": yaml_plugin.media_type}
-            )
+            return PlainText(rendered, status_code=200, headers={"content-type": yaml_plugin.media_type})
+
+        openapi_yml_handler = self._apply_django_auth(openapi_yml_handler)
+        docs_api.get(f"{route_prefix}/openapi.yml", guards=guards, auth=auth)(openapi_yml_handler)
 
         # Register UI plugin routes
-        self._register_ui_plugins()
+        self._register_ui_plugins(docs_api, route_prefix)
 
         # Add root redirect to default plugin
-        self._register_root_redirect()
+        self._register_root_redirect(docs_api, route_prefix)
+
+        # If using separate docs API, mount it at the docs path
+        if use_django_auth and self._docs_api is not None:
+            self.api.mount(self.api.openapi_config.path, self._docs_api)
 
         self.api._openapi_routes_registered = True
 
-    def _get_schema(self) -> Dict[str, Any]:
+    def _get_schema(self) -> dict[str, Any]:
         """Get or generate OpenAPI schema.
 
         Returns:
             OpenAPI schema as dictionary
         """
         if self.api._openapi_schema is None:
-            from django_bolt.openapi.schema_generator import SchemaGenerator
-
             generator = SchemaGenerator(self.api, self.api.openapi_config)
             openapi = generator.generate()
             self.api._openapi_schema = openapi.to_schema()
 
         return self.api._openapi_schema
 
-    def _register_ui_plugins(self) -> None:
+    def _register_ui_plugins(self, docs_api, route_prefix: str) -> None:
         """Register UI plugin routes (Swagger UI, ReDoc, etc.)."""
-        from django_bolt.responses import HTML
-
+        # Schema URL is always the full path (for the UI to fetch)
         schema_url = f"{self.api.openapi_config.path}/openapi.json"
+        guards = self.api.openapi_config.guards
+        auth = self.api.openapi_config.auth
 
         for plugin in self.api.openapi_config.render_plugins:
             for plugin_path in plugin.paths:
-                full_path = f"{self.api.openapi_config.path}{plugin_path}"
+                full_path = f"{route_prefix}{plugin_path}"
 
                 # Create closure to capture plugin reference
                 def make_handler(p):
-                    async def ui_handler():
+                    async def ui_handler(request):
                         """Serve OpenAPI UI."""
                         try:
                             schema = self._get_schema()
                             rendered = p.render(schema, schema_url)
-                            # Return with proper content-type from plugin
-                            return HTML(
-                                rendered,
-                                status_code=200,
-                                headers={"content-type": p.media_type}
-                            )
+                            return HTML(rendered, status_code=200, headers={"content-type": p.media_type})
                         except Exception as e:
-                            # Re-raise with more context for debugging
                             raise Exception(
                                 f"Failed to render OpenAPI UI plugin {p.__class__.__name__}: "
                                 f"{type(e).__name__}: {str(e)}"
                             ) from e
+
                     return ui_handler
 
-                self.api.get(full_path)(make_handler(plugin))
+                handler = make_handler(plugin)
+                handler = self._apply_django_auth(handler)
+                docs_api.get(full_path, guards=guards, auth=auth)(handler)
 
-    def _register_root_redirect(self) -> None:
-        """Register root redirect to default UI plugin."""
-        from django_bolt.responses import Redirect
+    def _register_root_redirect(self, docs_api, route_prefix: str) -> None:
+        """Register root path to serve default UI directly.
 
+        Serves the default UI at the root path instead of redirecting.
+        This avoids redirect loops caused by NormalizePath::trim() middleware
+        which strips trailing slashes (e.g., /docs/ -> /docs).
+        """
         if self.api.openapi_config.default_plugin:
-            default_path = self.api.openapi_config.default_plugin.paths[0]
+            # Schema URL is always the full path (for the UI to fetch)
+            schema_url = f"{self.api.openapi_config.path}/openapi.json"
+            plugin = self.api.openapi_config.default_plugin
+            guards = self.api.openapi_config.guards
+            auth = self.api.openapi_config.auth
 
-            @self.api.get(self.api.openapi_config.path)
-            async def openapi_root_redirect():
-                """Redirect to default OpenAPI UI."""
-                return Redirect(f"{self.api.openapi_config.path}{default_path}")
+            # For mounted API, register at empty string so mount adds just the prefix
+            # e.g., "" mounted at "/docs" becomes "/docs" (not "/docs/")
+            # For main API, use the full path
+            use_django_auth = self.api.openapi_config.django_auth is not None
+            root_path = "" if use_django_auth else route_prefix
+
+            # Capture plugin in closure
+            def make_root_handler(p, url):
+                async def openapi_root_handler(request):
+                    """Serve default OpenAPI UI at root path."""
+                    try:
+                        schema = self._get_schema()
+                        rendered = p.render(schema, url)
+                        return HTML(rendered, status_code=200, headers={"content-type": p.media_type})
+                    except Exception as e:
+                        raise Exception(f"Failed to render OpenAPI UI: {type(e).__name__}: {str(e)}") from e
+
+                return openapi_root_handler
+
+            handler = make_root_handler(plugin, schema_url)
+            handler = self._apply_django_auth(handler)
+            docs_api.get(root_path, guards=guards, auth=auth)(handler)

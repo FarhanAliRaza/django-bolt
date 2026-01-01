@@ -3,11 +3,14 @@
 Tests the new TestClient in a single comprehensive test to avoid
 router re-initialization issues (the Rust global router can only be set once).
 """
-import msgspec
+
 from typing import Annotated
+
+import msgspec
+
 from django_bolt import BoltAPI
-from django_bolt.testing import TestClient
 from django_bolt.param_functions import Header
+from django_bolt.testing import TestClient
 
 
 def test_test_client_comprehensive():

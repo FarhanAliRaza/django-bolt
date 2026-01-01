@@ -1,10 +1,15 @@
 """
 Test type definitions and protocols.
 """
-import pytest
-from django_bolt import BoltAPI, Request
-from django_bolt.testing import TestClient
+
+import time
+
+import jwt
 import msgspec
+
+from django_bolt import BoltAPI, Request
+from django_bolt.auth import IsAuthenticated, JWTAuthentication
+from django_bolt.testing import TestClient
 
 
 class UserCreate(msgspec.Struct):
@@ -16,12 +21,16 @@ class UserCreate(msgspec.Struct):
 def test_request_protocol_has_expected_attributes():
     """Test that Request protocol has expected methods and properties."""
     # Verify protocol has expected attributes
+    # Note: Protocol defines the interface, PyRequest (Rust) implements it
     assert hasattr(Request, "method")
     assert hasattr(Request, "path")
     assert hasattr(Request, "body")
     assert hasattr(Request, "context")
-    assert hasattr(Request, "get")
-    assert hasattr(Request, "__getitem__")
+    assert hasattr(Request, "user")
+    assert hasattr(Request, "state")
+    assert hasattr(Request, "headers")
+    assert hasattr(Request, "cookies")
+    assert hasattr(Request, "query")
 
 
 def test_request_type_in_handler():
@@ -36,12 +45,7 @@ def test_request_type_in_handler():
         auth = request.get("auth")
         headers = request.get("headers", {})
 
-        return {
-            "method": method,
-            "path": path,
-            "has_auth": auth is not None,
-            "headers_count": len(headers)
-        }
+        return {"method": method, "path": path, "has_auth": auth is not None, "headers_count": len(headers)}
 
     with TestClient(api) as client:
         response = client.get("/test")
@@ -70,14 +74,11 @@ def test_request_with_validated_body():
             "has_auth": auth is not None,
             "user_name": user.name,
             "user_email": user.email,
-            "user_age": user.age
+            "user_age": user.age,
         }
 
     with TestClient(api) as client:
-        response = client.post(
-            "/users",
-            json={"name": "John", "email": "john@example.com", "age": 30}
-        )
+        response = client.post("/users", json={"name": "John", "email": "john@example.com", "age": 30})
         assert response.status_code == 200
 
         data = response.json()
@@ -90,17 +91,9 @@ def test_request_with_validated_body():
 
 def test_request_with_auth_context():
     """Test Request type with authentication context."""
-    from django_bolt.auth import JWTAuthentication, IsAuthenticated
-    import jwt
-    import time
-
     api = BoltAPI()
 
-    @api.get(
-        "/protected",
-        auth=[JWTAuthentication(secret="test-secret")],
-        guards=[IsAuthenticated()]
-    )
+    @api.get("/protected", auth=[JWTAuthentication(secret="test-secret")], guards=[IsAuthenticated()])
     async def protected_route(request: Request):
         # Type-safe access to auth context
         auth = request.get("auth", {})
@@ -108,26 +101,14 @@ def test_request_with_auth_context():
         is_staff = auth.get("is_staff", False)
         backend = auth.get("auth_backend")
 
-        return {
-            "user_id": user_id,
-            "is_staff": is_staff,
-            "backend": backend
-        }
+        return {"user_id": user_id, "is_staff": is_staff, "backend": backend}
 
     with TestClient(api) as client:
         # Create valid JWT token
-        payload = {
-            "sub": "123",
-            "exp": int(time.time()) + 3600,
-            "iat": int(time.time()),
-            "is_staff": True
-        }
+        payload = {"sub": "123", "exp": int(time.time()) + 3600, "iat": int(time.time()), "is_staff": True}
         token = jwt.encode(payload, "test-secret", algorithm="HS256")
 
-        response = client.get(
-            "/protected",
-            headers={"Authorization": f"Bearer {token}"}
-        )
+        response = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
         assert response.status_code == 200
 
         data = response.json()
@@ -147,11 +128,7 @@ def test_request_dict_style_access():
         path = request["path"]
         headers = request["headers"]
 
-        return {
-            "method": method,
-            "path": path,
-            "has_headers": len(headers) > 0
-        }
+        return {"method": method, "path": path, "has_headers": len(headers) > 0}
 
     with TestClient(api) as client:
         response = client.get("/test")
@@ -183,7 +160,7 @@ def test_request_get_with_defaults():
             "auth_with_default": auth_with_default,
             "context": context,
             "context_with_default": context_with_default,
-            "method": method
+            "method": method,
         }
 
     with TestClient(api) as client:
@@ -214,7 +191,7 @@ def test_request_property_access():
             "method": method_prop,
             "path": path_prop,
             "body_length": len(body_prop),
-            "has_context": context_prop is not None
+            "has_context": context_prop is not None,
         }
 
     with TestClient(api) as client:
@@ -229,8 +206,12 @@ def test_request_property_access():
 
 
 def test_request_import_from_main_module():
-    """Test that Request can be imported from django_bolt."""
-    from django_bolt import Request as ImportedRequest
+    """Test that Request can be imported from django_bolt.
 
-    # Should be the same class
+    This test intentionally uses a local import to verify the import mechanism works.
+    """
+    from django_bolt import Request as ImportedRequest  # noqa: PLC0415 - testing import mechanism
+
+    # Should be the same class (ImportedRequest is the same as the module-level Request)
+    # This test verifies the import works, even though we compare with module-level Request
     assert ImportedRequest is Request

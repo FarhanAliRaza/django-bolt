@@ -13,14 +13,20 @@ The authentication flow:
 
 Performance: ~60k+ RPS with JWT validation happening entirely in Rust.
 """
+
+from __future__ import annotations
+
 import sys
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Set
 from dataclasses import dataclass
-from django.contrib.auth import get_user_model
-from asgiref.sync import sync_to_async
+from typing import Any
+
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
+
+from .revocation import create_revocation_handler
+
 
 @dataclass
 class AuthContext:
@@ -29,12 +35,13 @@ class AuthContext:
 
     This is populated in Rust and passed to Python handlers via request.context.
     """
-    user_id: Optional[str] = None
+
+    user_id: str | None = None
     is_staff: bool = False
     is_superuser: bool = False
     backend: str = "none"
-    claims: Optional[Dict[str, Any]] = None
-    permissions: Optional[Set[str]] = None
+    claims: dict[str, Any] | None = None
+    permissions: set[str] | None = None
 
 
 class BaseAuthentication(ABC):
@@ -52,7 +59,7 @@ class BaseAuthentication(ABC):
         pass
 
     @abstractmethod
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         """
         Compile this authentication backend into metadata for Rust.
 
@@ -60,7 +67,7 @@ class BaseAuthentication(ABC):
         """
         pass
 
-    async def get_user(self, user_id: Optional[str], auth_context: Dict[str, Any]) -> Optional[Any]:
+    async def get_user(self, user_id: str | None, auth_context: dict[str, Any]) -> Any | None:
         """
         Resolve a User instance from the authentication context.
 
@@ -99,15 +106,25 @@ class JWTAuthentication(BaseAuthentication):
         issuer: Optional JWT issuer claim to validate
     """
 
+    # Class-level cached User model - resolved once on first use
+    _user_model: type | None = None
+
+    @classmethod
+    def _get_user_model(cls) -> type:
+        """Get User model, caching at class level after first call."""
+        if cls._user_model is None:
+            cls._user_model = get_user_model()
+        return cls._user_model
+
     def __init__(
         self,
-        secret: Optional[str] = None,
-        algorithms: Optional[List[str]] = None,
+        secret: str | None = None,
+        algorithms: list[str] | None = None,
         header: str = "authorization",
-        audience: Optional[str] = None,
-        issuer: Optional[str] = None,
-        revoked_token_handler: Optional[callable] = None,
-        revocation_store: Optional[Any] = None,
+        audience: str | None = None,
+        issuer: str | None = None,
+        revoked_token_handler: callable | None = None,
+        revocation_store: Any | None = None,
         require_jti: bool = False,
     ):
         self.secret = secret
@@ -119,10 +136,7 @@ class JWTAuthentication(BaseAuthentication):
         # If no secret provided, try to get Django's SECRET_KEY
         if self.secret is None:
             try:
-                from django.conf import settings
-                from django.core.exceptions import ImproperlyConfigured
-
-                if not hasattr(settings, 'SECRET_KEY'):
+                if not hasattr(settings, "SECRET_KEY"):
                     raise ImproperlyConfigured(
                         "JWTAuthentication requires a 'secret' parameter or Django's SECRET_KEY setting. "
                         "Neither was provided."
@@ -130,17 +144,16 @@ class JWTAuthentication(BaseAuthentication):
 
                 self.secret = settings.SECRET_KEY
 
-                if not self.secret or self.secret == '':
+                if not self.secret or self.secret == "":
                     raise ImproperlyConfigured(
                         "JWTAuthentication secret cannot be empty. "
                         "Please provide a non-empty 'secret' parameter or set Django's SECRET_KEY."
                     )
-            except ImportError:
-                from django.core.exceptions import ImproperlyConfigured
+            except ImportError as e:
                 raise ImproperlyConfigured(
                     "JWTAuthentication requires Django to be installed and configured, "
                     "or a 'secret' parameter must be explicitly provided."
-                )
+                ) from e
 
         # Revocation support (OPTIONAL - only checked if provided)
         self.revoked_token_handler = revoked_token_handler
@@ -153,14 +166,13 @@ class JWTAuthentication(BaseAuthentication):
 
         # If revocation_store provided, create handler from it
         if revocation_store and not revoked_token_handler:
-            from .revocation import create_revocation_handler
             self.revoked_token_handler = create_revocation_handler(revocation_store)
 
     @property
     def scheme_name(self) -> str:
         return "jwt"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         metadata = {
             "type": "jwt",
             "secret": self.secret,
@@ -177,28 +189,42 @@ class JWTAuthentication(BaseAuthentication):
 
         return metadata
 
-    async def get_user(self, user_id: Optional[str], auth_context: Dict[str, Any]) -> Optional[Any]:
+    async def get_user(self, user_id: str | None, auth_context: dict[str, Any]) -> Any | None:
         """
         Load user from database using the user_id from JWT token.
 
         The user_id should be the primary key of the user in the database.
-        Uses sync_to_async for proper thread-safety with Django ORM.
         """
         if not user_id:
             return None
 
-
-        User = get_user_model()
+        User = self._get_user_model()
 
         try:
-            # Use sync_to_async wrapper for proper thread-safety and database context
-            # Ensures Django's connection pooling is used correctly
-            return await sync_to_async(User.objects.get, thread_sensitive=False)(pk=user_id)
+            return await User.objects.aget(pk=user_id)
         except User.DoesNotExist:
-            # User not found - this is expected in some cases
             return None
         except Exception as e:
-            # Unexpected error - log it for debugging
+            print(f"Error loading user {user_id} in JWTAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
+            return None
+
+    def get_user_sync(self, user_id: str | None) -> Any | None:
+        """
+        Synchronously load user from database using the user_id from JWT token.
+
+        This method does the actual DB query. Thread pool wrapping is handled
+        by user_loader.load_user_sync() based on the handler's async context.
+        """
+        if not user_id:
+            return None
+
+        User = self._get_user_model()
+
+        try:
+            return User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return None
+        except Exception as e:
             print(f"Error loading user {user_id} in JWTAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
             return None
 
@@ -218,9 +244,9 @@ class APIKeyAuthentication(BaseAuthentication):
 
     def __init__(
         self,
-        api_keys: Optional[Set[str]] = None,
+        api_keys: set[str] | None = None,
         header: str = "x-api-key",
-        key_permissions: Optional[Dict[str, Set[str]]] = None,
+        key_permissions: dict[str, set[str]] | None = None,
     ):
         self.api_keys = api_keys or set()
         self.header = header
@@ -230,14 +256,12 @@ class APIKeyAuthentication(BaseAuthentication):
     def scheme_name(self) -> str:
         return "api_key"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         return {
             "type": "api_key",
             "api_keys": list(self.api_keys),
             "header": self.header.lower(),
-            "key_permissions": {
-                k: list(v) for k, v in self.key_permissions.items()
-            },
+            "key_permissions": {k: list(v) for k, v in self.key_permissions.items()},
         }
 
 
@@ -252,6 +276,16 @@ class SessionAuthentication(BaseAuthentication):
     Python execution for every request.
     """
 
+    # Class-level cached User model - resolved once on first use
+    _user_model: type | None = None
+
+    @classmethod
+    def _get_user_model(cls) -> type:
+        """Get User model, caching at class level after first call."""
+        if cls._user_model is None:
+            cls._user_model = get_user_model()
+        return cls._user_model
+
     def __init__(self):
         pass
 
@@ -259,36 +293,50 @@ class SessionAuthentication(BaseAuthentication):
     def scheme_name(self) -> str:
         return "session"
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         return {
             "type": "session",
         }
 
-    async def get_user(self, user_id: Optional[str], auth_context: Dict[str, Any]) -> Optional[Any]:
+    async def get_user(self, user_id: str | None, auth_context: dict[str, Any]) -> Any | None:
         """
         Load user from database using the user_id from session.
 
         The user_id should be the primary key of the user in the database.
-        Uses sync_to_async for proper thread-safety with Django ORM.
         """
         if not user_id:
             return None
-        User = get_user_model()
+        User = self._get_user_model()
 
         try:
-            # Use sync_to_async wrapper for proper thread-safety and database context
-            # Ensures Django's connection pooling is used correctly
-            return await sync_to_async(User.objects.get, thread_sensitive=False)(pk=user_id)
+            return await User.objects.aget(pk=user_id)
         except User.DoesNotExist:
-            # User not found - this is expected in some cases
             return None
         except Exception as e:
-            # Unexpected error - log it for debugging
+            print(f"Error loading user {user_id} in SessionAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
+            return None
+
+    def get_user_sync(self, user_id: str | None) -> Any | None:
+        """
+        Synchronously load user from database using the user_id from session.
+
+        This method does the actual DB query. Thread pool wrapping is handled
+        by user_loader.load_user_sync() based on the handler's async context.
+        """
+        if not user_id:
+            return None
+        User = self._get_user_model()
+
+        try:
+            return User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return None
+        except Exception as e:
             print(f"Error loading user {user_id} in SessionAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
             return None
 
 
-def get_default_authentication_classes() -> List[BaseAuthentication]:
+def get_default_authentication_classes() -> list[BaseAuthentication]:
     """
     Get default authentication classes from Django settings.
 
@@ -296,9 +344,8 @@ def get_default_authentication_classes() -> List[BaseAuthentication]:
     returns an empty list (no authentication by default).
     """
     try:
-        
         try:
-            if hasattr(settings, 'BOLT_AUTHENTICATION_CLASSES'):
+            if hasattr(settings, "BOLT_AUTHENTICATION_CLASSES"):
                 return settings.BOLT_AUTHENTICATION_CLASSES
         except ImproperlyConfigured:
             # Settings not configured, return empty list

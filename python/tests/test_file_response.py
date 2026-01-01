@@ -1,11 +1,12 @@
 import os
 import tempfile
+import time
+
 import pytest
 
 from django_bolt import BoltAPI
 from django_bolt.responses import FileResponse
 from django_bolt.testing import TestClient
-
 
 # Create test files once at module level
 TEST_DIR = tempfile.mkdtemp()
@@ -49,19 +50,12 @@ def api():
     @api.get("/file/custom-headers")
     async def get_file_with_headers():
         """Test custom headers"""
-        return FileResponse(
-            SMALL_FILE,
-            filename="custom.txt",
-            headers={"X-Custom-Header": "test-value"}
-        )
+        return FileResponse(SMALL_FILE, filename="custom.txt", headers={"X-Custom-Header": "test-value"})
 
     @api.get("/file/custom-media-type")
     async def get_file_with_media_type():
         """Test custom media type"""
-        return FileResponse(
-            SMALL_FILE,
-            media_type="application/octet-stream"
-        )
+        return FileResponse(SMALL_FILE, media_type="application/octet-stream")
 
     return api
 
@@ -125,7 +119,7 @@ def test_large_file_response(client):
 def test_file_custom_headers(client):
     """Test FileResponse with custom headers"""
     response = client.get("/file/custom-headers")
-    
+
     assert response.status_code == 200
     assert response.headers.get("x-custom-header") == "test-value"
     assert "custom.txt" in response.headers.get("content-disposition", "")
@@ -134,7 +128,7 @@ def test_file_custom_headers(client):
 def test_file_custom_media_type(client):
     """Test FileResponse with custom media type"""
     response = client.get("/file/custom-media-type")
-    
+
     assert response.status_code == 200
     assert response.headers.get("content-type") == "application/octet-stream"
 
@@ -159,34 +153,32 @@ def test_file_not_found():
 
 def test_file_performance_small_vs_large():
     """Test that small files use in-memory buffering for better performance"""
-    import time
-    
     api = BoltAPI()
     temp_dir = tempfile.mkdtemp()
-    
+
     # Create small file
     small_file = os.path.join(temp_dir, "perf_small.txt")
     with open(small_file, "w") as f:
         f.write("x" * (100 * 1024))  # 100KB
-    
+
     @api.get("/perf/small")
     async def perf_small():
         return FileResponse(small_file)
-    
+
     client = TestClient(api)
-    
+
     # Warm up
     client.get("/perf/small")
-    
+
     # Time multiple requests
     start = time.time()
     for _ in range(100):
         response = client.get("/perf/small")
         assert response.status_code == 200
     elapsed = time.time() - start
-    
+
     # Should handle 100 requests relatively quickly
     # (This is more of a smoke test than a strict perf test)
     assert elapsed < 5.0  # Should take less than 5 seconds for 100 requests
-    
-    print(f"Small file (100KB) - 100 requests: {elapsed:.3f}s ({100/elapsed:.1f} RPS)")
+
+    print(f"Small file (100KB) - 100 requests: {elapsed:.3f}s ({100 / elapsed:.1f} RPS)")

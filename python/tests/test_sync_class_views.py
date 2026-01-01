@@ -12,28 +12,26 @@ including:
 - Inline vs spawn_blocking execution modes
 - Error handling in sync views
 """
+
 from __future__ import annotations
 
-import pytest
 import msgspec
-from typing import Dict, Any, List
+import pytest
+
 from django_bolt import BoltAPI
+from django_bolt.auth.backends import JWTAuthentication
+from django_bolt.auth.guards import IsAuthenticated  # noqa: PLC0415
+from django_bolt.exceptions import HTTPException
+from django_bolt.params import Depends
 from django_bolt.testing import TestClient
 from django_bolt.views import (
     APIView,
-    ViewSet,
     ListMixin,
-    RetrieveMixin,
-    CreateMixin,
-    UpdateMixin,
+    ViewSet,
 )
-from django_bolt.params import Depends
-from django_bolt.exceptions import HTTPException
-from django_bolt.auth.guards import IsAuthenticated
-from django_bolt.auth.backends import JWTAuthentication
-
 
 # --- Schema Definitions ---
+
 
 class CreateUserRequest(msgspec.Struct):
     username: str
@@ -57,6 +55,7 @@ class InputSchema(msgspec.Struct):
 
 # --- Test Fixtures ---
 
+
 @pytest.fixture
 def api():
     """Create a fresh BoltAPI instance for each test."""
@@ -65,8 +64,10 @@ def api():
 
 # --- Basic Sync APIView Tests ---
 
+
 def test_sync_api_view_basic(api):
     """Test basic synchronous APIView with GET handler."""
+
     @api.view("/hello")
     class HelloView(APIView):
         def get(self, request) -> dict:
@@ -80,6 +81,7 @@ def test_sync_api_view_basic(api):
 
 def test_sync_api_view_with_client(api):
     """Test sync APIView with TestClient."""
+
     @api.view("/hello")
     class HelloView(APIView):
         def get(self, request) -> dict:
@@ -93,6 +95,7 @@ def test_sync_api_view_with_client(api):
 
 def test_sync_api_view_multiple_methods(api):
     """Test sync view with multiple HTTP methods."""
+
     @api.view("/items")
     class ItemView(APIView):
         def get(self, request) -> dict:
@@ -123,6 +126,7 @@ def test_sync_api_view_multiple_methods(api):
 
 def test_sync_api_view_path_parameters(api):
     """Test path parameter extraction in sync class-based views."""
+
     @api.view("/users/{user_id}")
     class UserView(APIView):
         def get(self, request, user_id: int) -> dict:
@@ -138,6 +142,7 @@ def test_sync_api_view_path_parameters(api):
 
 def test_sync_api_view_query_parameters(api):
     """Test query parameter extraction in sync class-based views."""
+
     @api.view("/search")
     class SearchView(APIView):
         def get(self, request, q: str, limit: int = 10) -> dict:
@@ -161,20 +166,14 @@ def test_sync_api_view_query_parameters(api):
 
 def test_sync_api_view_request_body(api):
     """Test request body parsing in sync class-based views."""
+
     @api.view("/users")
     class UserCreateView(APIView):
         def post(self, request, data: CreateUserRequest) -> dict:
-            return {
-                "username": data.username,
-                "email": data.email,
-                "created": True
-            }
+            return {"username": data.username, "email": data.email, "created": True}
 
     with TestClient(api) as client:
-        response = client.post(
-            "/users",
-            json={"username": "john", "email": "john@example.com"}
-        )
+        response = client.post("/users", json={"username": "john", "email": "john@example.com"})
         assert response.status_code == 200
         data = response.json()
         assert data["username"] == "john"
@@ -184,6 +183,7 @@ def test_sync_api_view_request_body(api):
 
 def test_sync_api_view_invalid_body(api):
     """Test validation error for invalid sync request body."""
+
     @api.view("/users")
     class UserCreateView(APIView):
         def post(self, request, data: CreateUserRequest) -> dict:
@@ -193,25 +193,24 @@ def test_sync_api_view_invalid_body(api):
         # Missing required field
         response = client.post(
             "/users",
-            json={"username": "john"}  # Missing email
+            json={"username": "john"},  # Missing email
         )
         assert response.status_code == 422
 
 
 # --- Sync APIView with Dependencies ---
 
+
 def test_sync_api_view_dependency_injection(api):
     """Test dependency injection in sync class-based views."""
+
     async def get_current_user(request) -> dict:
         return {"id": 1, "username": "testuser"}
 
     @api.view("/profile")
     class ProfileView(APIView):
         def get(self, request, current_user=Depends(get_current_user)) -> dict:
-            return {
-                "user_id": current_user["id"],
-                "username": current_user["username"]
-            }
+            return {"user_id": current_user["id"], "username": current_user["username"]}
 
     with TestClient(api) as client:
         response = client.get("/profile")
@@ -223,6 +222,7 @@ def test_sync_api_view_dependency_injection(api):
 
 def test_sync_api_view_multiple_dependencies(api):
     """Test multiple dependencies in sync class-based views."""
+
     def get_user(request) -> dict:
         return {"id": 1, "name": "John"}
 
@@ -231,16 +231,8 @@ def test_sync_api_view_multiple_dependencies(api):
 
     @api.view("/dashboard")
     class DashboardView(APIView):
-        def get(
-            self,
-            request,
-            user=Depends(get_user),
-            settings=Depends(get_settings)
-        ) -> dict:
-            return {
-                "user": user,
-                "settings": settings
-            }
+        def get(self, request, user=Depends(get_user), settings=Depends(get_settings)) -> dict:
+            return {"user": user, "settings": settings}
 
     with TestClient(api) as client:
         response = client.get("/dashboard")
@@ -252,8 +244,10 @@ def test_sync_api_view_multiple_dependencies(api):
 
 # --- Sync APIView with Guards and Auth ---
 
+
 def test_sync_api_view_class_level_guards(api):
     """Test class-level guards on sync APIView."""
+
     @api.view("/protected")
     class ProtectedView(APIView):
         guards = [IsAuthenticated()]
@@ -269,6 +263,7 @@ def test_sync_api_view_class_level_guards(api):
 
 def test_sync_api_view_auth_backend(api):
     """Test class-level authentication on sync APIView."""
+
     @api.view("/auth-endpoint")
     class AuthView(APIView):
         auth = [JWTAuthentication()]
@@ -284,6 +279,7 @@ def test_sync_api_view_auth_backend(api):
 
 def test_sync_api_view_status_code_override(api):
     """Test status code override in sync APIView."""
+
     @api.view("/created")
     class CreatedView(APIView):
         status_code = 201
@@ -291,16 +287,18 @@ def test_sync_api_view_status_code_override(api):
         def post(self, request) -> dict:
             return {"created": True}
 
-    handler = api._routes[0][3]
-    meta = api._handler_meta.get(handler)
+    method, path, handler_id, handler = api._routes[0]
+    meta = api._handler_meta.get(handler_id)
     assert meta is not None
     assert meta.get("default_status_code") == 201
 
 
 # --- Sync Mixin Tests ---
 
+
 def test_sync_list_mixin(api):
     """Test ListMixin with sync handler."""
+
     @api.view("/items")
     class ItemListView(ListMixin, APIView):
         async def get_queryset(self):
@@ -322,20 +320,14 @@ def test_sync_list_mixin(api):
 
 def test_sync_create_mixin(api):
     """Test CreateMixin with sync handler (data validation)."""
+
     @api.view("/items")
     class ItemCreateView(APIView):
         def post(self, request, data: ItemSchema) -> dict:
-            return {
-                "name": data.name,
-                "price": data.price,
-                "created": True
-            }
+            return {"name": data.name, "price": data.price, "created": True}
 
     with TestClient(api) as client:
-        response = client.post(
-            "/items",
-            json={"name": "Widget", "price": 9.99}
-        )
+        response = client.post("/items", json={"name": "Widget", "price": 9.99})
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "Widget"
@@ -344,8 +336,10 @@ def test_sync_create_mixin(api):
 
 # --- Sync ViewSet Tests ---
 
+
 def test_sync_viewset_multiple_methods(api):
     """Test sync ViewSet with multiple methods."""
+
     @api.view("/users")
     class UserViewSet(ViewSet):
         def get(self, request) -> list:
@@ -371,6 +365,7 @@ def test_sync_viewset_multiple_methods(api):
 
 def test_sync_viewset_with_path_params(api):
     """Test sync ViewSet with path parameters."""
+
     @api.view("/users/{user_id}")
     class UserDetailViewSet(ViewSet):
         def get(self, request, user_id: int) -> dict:
@@ -401,21 +396,14 @@ def test_sync_viewset_with_path_params(api):
 
 def test_sync_viewset_with_data_validation(api):
     """Test sync ViewSet with POST data validation."""
+
     @api.view("/users")
     class UserViewSet(ViewSet):
         def post(self, request, data: UserSchema) -> dict:
-            return {
-                "id": 1,
-                "name": data.name,
-                "email": data.email,
-                "created": True
-            }
+            return {"id": 1, "name": data.name, "email": data.email, "created": True}
 
     with TestClient(api) as client:
-        response = client.post(
-            "/users",
-            json={"name": "John", "email": "john@example.com"}
-        )
+        response = client.post("/users", json={"name": "John", "email": "john@example.com"})
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "John"
@@ -424,36 +412,41 @@ def test_sync_viewset_with_data_validation(api):
 
 # --- Sync Handler Metadata Tests ---
 
+
 def test_sync_handler_is_sync_metadata(api):
     """Test that sync handlers are correctly marked as sync."""
+
     @api.view("/sync-endpoint")
     class SyncView(APIView):
         def get(self, request) -> dict:
             return {"sync": True}
 
-    handler = api._routes[0][3]
-    meta = api._handler_meta.get(handler)
+    method, path, handler_id, handler = api._routes[0]
+    meta = api._handler_meta.get(handler_id)
     assert meta is not None
     assert meta.get("is_async") is False  # Should be sync
 
 
 def test_async_handler_is_async_metadata(api):
     """Test that async handlers are correctly marked as async."""
+
     @api.view("/async-endpoint")
     class AsyncView(APIView):
         async def get(self, request) -> dict:
             return {"async": True}
 
-    handler = api._routes[0][3]
-    meta = api._handler_meta.get(handler)
+    method, path, handler_id, handler = api._routes[0]
+    meta = api._handler_meta.get(handler_id)
     assert meta is not None
     assert meta.get("is_async") is True  # Should be async
 
 
 # --- Sync vs Async Parity Tests ---
 
+
 def test_sync_and_async_same_response(api):
     """Test that sync and async handlers produce same response structure."""
+
     @api.view("/sync")
     class SyncView(APIView):
         def get(self, request) -> dict:
@@ -475,6 +468,7 @@ def test_sync_and_async_same_response(api):
 
 def test_sync_and_async_same_validation(api):
     """Test that sync and async handlers have same validation."""
+
     @api.view("/sync")
     class SyncView(APIView):
         def post(self, request, data: InputSchema) -> dict:
@@ -504,6 +498,7 @@ def test_sync_and_async_same_validation(api):
 
 def test_sync_and_async_same_parameters(api):
     """Test that sync and async handlers extract same parameters."""
+
     @api.view("/sync/{id}")
     class SyncView(APIView):
         def get(self, request, id: int, q: str = "default") -> dict:
@@ -524,8 +519,10 @@ def test_sync_and_async_same_parameters(api):
 
 # --- Error Handling in Sync Views ---
 
+
 def test_sync_view_http_exception(api):
     """Test HTTPException handling in sync view."""
+
     @api.view("/error")
     class ErrorView(APIView):
         def get(self, request) -> dict:
@@ -539,6 +536,7 @@ def test_sync_view_http_exception(api):
 
 def test_sync_view_generic_exception(api):
     """Test generic exception handling in sync view."""
+
     @api.view("/crash")
     class CrashView(APIView):
         def get(self, request) -> dict:
@@ -551,6 +549,7 @@ def test_sync_view_generic_exception(api):
 
 def test_sync_view_missing_required_param(api):
     """Test missing required parameter in sync view."""
+
     @api.view("/search")
     class SearchView(APIView):
         def get(self, request, q: str) -> dict:
@@ -563,8 +562,10 @@ def test_sync_view_missing_required_param(api):
 
 # --- Complex Sync ViewSet Scenarios ---
 
+
 def test_sync_viewset_mixed_responses(api):
     """Test sync ViewSet with different response types per method."""
+
     @api.view("/items")
     class ItemViewSet(ViewSet):
         def get(self, request) -> list:
@@ -583,6 +584,7 @@ def test_sync_viewset_mixed_responses(api):
 
 def test_sync_viewset_with_multiple_dependencies(api):
     """Test sync ViewSet with multiple dependencies."""
+
     def get_user(request) -> dict:
         return {"id": 1, "name": "User"}
 
@@ -591,12 +593,7 @@ def test_sync_viewset_with_multiple_dependencies(api):
 
     @api.view("/protected")
     class ProtectedViewSet(ViewSet):
-        def get(
-            self,
-            request,
-            user=Depends(get_user),
-            token=Depends(get_auth_token)
-        ) -> dict:
+        def get(self, request, user=Depends(get_user), token=Depends(get_auth_token)) -> dict:
             return {"user": user, "token": token}
 
     with TestClient(api) as client:
@@ -609,14 +606,11 @@ def test_sync_viewset_with_multiple_dependencies(api):
 
 def test_sync_viewset_with_query_and_path_params(api):
     """Test sync ViewSet with both query and path parameters."""
+
     @api.view("/items/{item_id}")
     class ItemViewSet(ViewSet):
         def get(self, request, item_id: int, format: str = "json") -> dict:
-            return {
-                "item_id": item_id,
-                "format": format,
-                "data": "test"
-            }
+            return {"item_id": item_id, "format": format, "data": "test"}
 
     with TestClient(api) as client:
         response = client.get("/items/42?format=xml")
@@ -628,8 +622,10 @@ def test_sync_viewset_with_query_and_path_params(api):
 
 # --- Selective Method Registration ---
 
+
 def test_sync_view_selective_methods(api):
     """Test registering only specific methods from sync view."""
+
     @api.view("/items", methods=["GET", "POST"])
     class ItemView(APIView):
         def get(self, request) -> dict:
@@ -648,6 +644,7 @@ def test_sync_view_selective_methods(api):
 
 
 # --- Non-Async Handler Validation ---
+
 
 def test_sync_handler_raises_on_non_async_with_async_decorator():
     """Test that sync handlers still work (not decorated with async)."""

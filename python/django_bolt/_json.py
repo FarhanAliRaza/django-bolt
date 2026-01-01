@@ -3,6 +3,7 @@
 This module provides optimized JSON encoding/decoding using msgspec with:
 - Thread-local cached encoder/decoder instances (thread-safe buffer reuse)
 - Support for common non-JSON-native types (datetime, Path, Decimal, UUID, IP addresses)
+- Automatic Serializer.dump() for write_only, computed_field support
 - Type-safe decoding with validation
 - Custom encoder/decoder hooks
 
@@ -12,6 +13,7 @@ Inspired by Litestar's serialization approach.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from datetime import date, datetime, time
 from decimal import Decimal
 from ipaddress import (
@@ -23,7 +25,7 @@ from ipaddress import (
     IPv6Network,
 )
 from pathlib import Path, PurePath
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 from uuid import UUID
 
 import msgspec
@@ -54,7 +56,6 @@ DEFAULT_TYPE_ENCODERS: dict[type, Callable[[Any], Any]] = {
     IPv6Network: str,
     # UUID
     UUID: str,
-
 }
 
 
@@ -63,6 +64,9 @@ def default_serializer(value: Any) -> Any:
 
     Walks the MRO (Method Resolution Order) to support subclasses.
     Raises TypeError if type is unsupported.
+
+    Note: Serializer instances are handled in serialization.py before reaching
+    this hook, since msgspec.Struct is natively supported by msgspec.
     """
     # Walk MRO to support polymorphic types
     for base in value.__class__.__mro__[:-1]:  # Skip 'object'
@@ -135,7 +139,7 @@ def decode(value: bytes | str) -> Any:
     return _get_decoder().decode(value)
 
 
-def decode_typed(
+def decode_typed[T](
     value: bytes | str,
     target_type: type[T],
     strict: bool = True,
@@ -165,5 +169,3 @@ def decode_typed(
 
 
 __all__ = ["encode", "decode", "decode_typed", "DEFAULT_TYPE_ENCODERS", "default_serializer"]
-
-

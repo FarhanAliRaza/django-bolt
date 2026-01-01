@@ -3,10 +3,13 @@ Test JWT Token class for Django-Bolt.
 
 Tests the Token dataclass for encoding/decoding JWTs with performance focus.
 """
-import pytest
-from datetime import datetime, timedelta, timezone
-from django_bolt.auth import Token
+
+from datetime import UTC, datetime, timedelta
+
 import jwt as pyjwt
+import pytest
+
+from django_bolt.auth import Token
 
 
 class TestTokenCreation:
@@ -14,7 +17,7 @@ class TestTokenCreation:
 
     def test_create_basic_token(self):
         """Test creating a basic token"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(
             sub="user123",
             exp=exp,
@@ -22,11 +25,11 @@ class TestTokenCreation:
 
         assert token.sub == "user123"
         assert token.exp == exp.replace(microsecond=0)  # Microseconds stripped
-        assert token.iat <= datetime.now(timezone.utc)
+        assert token.iat <= datetime.now(UTC)
 
     def test_create_token_with_staff_flags(self):
         """Test creating token with staff/admin flags"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(
             sub="admin123",
             exp=exp,
@@ -39,7 +42,7 @@ class TestTokenCreation:
 
     def test_create_token_with_permissions(self):
         """Test creating token with permissions list"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(
             sub="user123",
             exp=exp,
@@ -51,7 +54,7 @@ class TestTokenCreation:
 
     def test_create_token_with_audience_issuer(self):
         """Test creating token with aud and iss claims"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(
             sub="user123",
             exp=exp,
@@ -64,7 +67,7 @@ class TestTokenCreation:
 
     def test_create_token_with_extras(self):
         """Test creating token with custom extra claims"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(
             sub="user123",
             exp=exp,
@@ -72,7 +75,7 @@ class TestTokenCreation:
                 "tenant_id": "acme-corp",
                 "role": "manager",
                 "department": "engineering",
-            }
+            },
         )
 
         assert token.extras["tenant_id"] == "acme-corp"
@@ -96,7 +99,7 @@ class TestTokenCreation:
         assert token.extras["tenant"] == "acme"
 
         # Check expiration is ~30 minutes from now
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         exp_delta = (token.exp - now).total_seconds()
         assert 1790 < exp_delta < 1810  # ~30 minutes with some tolerance
 
@@ -106,29 +109,29 @@ class TestTokenValidation:
 
     def test_empty_subject_raises_error(self):
         """Test that empty subject raises ValueError"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
 
         with pytest.raises(ValueError, match="sub.*must be.*non-empty"):
             Token(sub="", exp=exp)
 
     def test_past_expiration_raises_error(self):
         """Test that past expiration raises ValueError"""
-        exp = datetime.now(timezone.utc) - timedelta(hours=1)
+        exp = datetime.now(UTC) - timedelta(hours=1)
 
         with pytest.raises(ValueError, match="exp.*must be in the future"):
             Token(sub="user123", exp=exp)
 
     def test_future_iat_raises_error(self):
         """Test that future iat raises ValueError"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=2)
-        iat = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=2)
+        iat = datetime.now(UTC) + timedelta(hours=1)
 
         with pytest.raises(ValueError, match="iat.*must be current or past"):
             Token(sub="user123", exp=exp, iat=iat)
 
     def test_datetime_normalization(self):
         """Test that datetimes are normalized to UTC without microseconds"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         exp_with_micros = exp.replace(microsecond=123456)
 
         token = Token(sub="user123", exp=exp_with_micros)
@@ -143,7 +146,7 @@ class TestTokenEncoding:
 
     def test_encode_basic_token(self):
         """Test encoding a basic token"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(sub="user123", exp=exp)
 
         secret = "test-secret"
@@ -151,7 +154,7 @@ class TestTokenEncoding:
 
         # Should be a valid JWT string (3 parts separated by dots)
         assert isinstance(encoded, str)
-        parts = encoded.split('.')
+        parts = encoded.split(".")
         assert len(parts) == 3
 
         # Decode to verify contents
@@ -162,7 +165,7 @@ class TestTokenEncoding:
 
     def test_encode_with_claims(self):
         """Test encoding token with all claims"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(
             sub="user123",
             exp=exp,
@@ -176,13 +179,7 @@ class TestTokenEncoding:
         secret = "test-secret"
         encoded = token.encode(secret=secret)
 
-        decoded = pyjwt.decode(
-            encoded,
-            secret,
-            algorithms=["HS256"],
-            audience="my-api",
-            issuer="auth-service"
-        )
+        decoded = pyjwt.decode(encoded, secret, algorithms=["HS256"], audience="my-api", issuer="auth-service")
 
         assert decoded["sub"] == "user123"
         assert decoded["is_staff"] is True
@@ -193,7 +190,7 @@ class TestTokenEncoding:
 
     def test_encode_with_different_algorithms(self):
         """Test encoding with different algorithms"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(sub="user123", exp=exp)
 
         for algorithm in ["HS256", "HS384", "HS512"]:
@@ -205,7 +202,7 @@ class TestTokenEncoding:
 
     def test_encode_with_custom_headers(self):
         """Test encoding with custom JWT headers"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(sub="user123", exp=exp)
 
         secret = "test-secret"
@@ -222,7 +219,7 @@ class TestTokenDecoding:
 
     def test_decode_basic_token(self):
         """Test decoding a basic token"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         original = Token(sub="user123", exp=exp)
 
         secret = "test-secret"
@@ -237,7 +234,7 @@ class TestTokenDecoding:
 
     def test_decode_with_all_claims(self):
         """Test decoding token with all claims"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         original = Token(
             sub="admin123",
             exp=exp,
@@ -252,12 +249,7 @@ class TestTokenDecoding:
         secret = "test-secret"
         encoded = original.encode(secret=secret)
 
-        decoded = Token.decode(
-            encoded,
-            secret=secret,
-            audience="my-api",
-            issuer="auth-service"
-        )
+        decoded = Token.decode(encoded, secret=secret, audience="my-api", issuer="auth-service")
 
         assert decoded.sub == "admin123"
         assert decoded.is_staff is True
@@ -269,12 +261,8 @@ class TestTokenDecoding:
 
     def test_decode_with_extras(self):
         """Test decoding token with extra claims"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
-        original = Token(
-            sub="user123",
-            exp=exp,
-            extras={"tenant": "acme", "role": "admin", "level": 5}
-        )
+        exp = datetime.now(UTC) + timedelta(hours=1)
+        original = Token(sub="user123", exp=exp, extras={"tenant": "acme", "role": "admin", "level": 5})
 
         secret = "test-secret"
         encoded = original.encode(secret=secret)
@@ -290,8 +278,8 @@ class TestTokenDecoding:
         # Create token that will be expired
         payload = {
             "sub": "user123",
-            "exp": int((datetime.now(timezone.utc) - timedelta(hours=1)).timestamp()),
-            "iat": int((datetime.now(timezone.utc) - timedelta(hours=2)).timestamp()),
+            "exp": int((datetime.now(UTC) - timedelta(hours=1)).timestamp()),
+            "iat": int((datetime.now(UTC) - timedelta(hours=2)).timestamp()),
         }
 
         secret = "test-secret"
@@ -302,7 +290,7 @@ class TestTokenDecoding:
 
     def test_decode_with_wrong_secret_raises_error(self):
         """Test that decoding with wrong secret raises ValueError"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(sub="user123", exp=exp)
 
         encoded = token.encode(secret="secret1")
@@ -312,7 +300,7 @@ class TestTokenDecoding:
 
     def test_decode_with_audience_mismatch_raises_error(self):
         """Test that audience mismatch raises ValueError"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(sub="user123", exp=exp, aud="api1")
 
         secret = "test-secret"
@@ -326,8 +314,8 @@ class TestTokenDecoding:
         # Create expired token
         payload = {
             "sub": "user123",
-            "exp": int((datetime.now(timezone.utc) - timedelta(hours=1)).timestamp()),
-            "iat": int((datetime.now(timezone.utc) - timedelta(hours=2)).timestamp()),
+            "exp": int((datetime.now(UTC) - timedelta(hours=1)).timestamp()),
+            "iat": int((datetime.now(UTC) - timedelta(hours=2)).timestamp()),
         }
 
         secret = "test-secret"
@@ -343,7 +331,7 @@ class TestTokenToDictConversion:
 
     def test_to_dict_basic(self):
         """Test converting token to dict"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(sub="user123", exp=exp)
 
         d = token.to_dict()
@@ -355,7 +343,7 @@ class TestTokenToDictConversion:
 
     def test_to_dict_with_optional_fields(self):
         """Test to_dict with optional fields"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(
             sub="user123",
             exp=exp,
@@ -374,7 +362,7 @@ class TestTokenToDictConversion:
 
     def test_to_dict_excludes_none_values(self):
         """Test that None values are excluded from dict"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(
             sub="user123",
             exp=exp,
@@ -389,12 +377,8 @@ class TestTokenToDictConversion:
 
     def test_to_dict_includes_extras(self):
         """Test that extras are included in dict"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
-        token = Token(
-            sub="user123",
-            exp=exp,
-            extras={"custom1": "value1", "custom2": 42}
-        )
+        exp = datetime.now(UTC) + timedelta(hours=1)
+        token = Token(sub="user123", exp=exp, extras={"custom1": "value1", "custom2": 42})
 
         d = token.to_dict()
 
@@ -407,7 +391,7 @@ class TestTokenRoundTrip:
 
     def test_round_trip_preserves_data(self):
         """Test that encode->decode preserves all data"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         original = Token(
             sub="user123",
             exp=exp,
@@ -416,17 +400,12 @@ class TestTokenRoundTrip:
             permissions=["read", "write", "delete"],
             aud="my-api",
             iss="auth-service",
-            extras={"tenant": "acme", "role": "manager"}
+            extras={"tenant": "acme", "role": "manager"},
         )
 
         secret = "test-secret"
         encoded = original.encode(secret=secret)
-        decoded = Token.decode(
-            encoded,
-            secret=secret,
-            audience="my-api",
-            issuer="auth-service"
-        )
+        decoded = Token.decode(encoded, secret=secret, audience="my-api", issuer="auth-service")
 
         # Compare all fields (timestamps may differ slightly due to rounding)
         assert decoded.sub == original.sub
@@ -440,7 +419,7 @@ class TestTokenRoundTrip:
 
     def test_multiple_round_trips(self):
         """Test multiple encode/decode cycles"""
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         token = Token(sub="user123", exp=exp, is_staff=True)
 
         secret = "test-secret"

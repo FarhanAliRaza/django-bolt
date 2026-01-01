@@ -4,17 +4,22 @@ Tests for ModelViewSet and ReadOnlyModelViewSet (DRF-style usage).
 This test suite verifies that ModelViewSet and ReadOnlyModelViewSet work similarly
 to Django REST Framework's ModelViewSet, where you just set queryset and serializer_class.
 """
-import pytest
+
 import msgspec
+import pytest
+from asgiref.sync import async_to_sync
+
 from django_bolt import BoltAPI, ModelViewSet, ReadOnlyModelViewSet
 from django_bolt.testing import TestClient
-from .test_models import Article
 
+from .test_models import Article
 
 # --- Schemas ---
 
+
 class ArticleSchema(msgspec.Struct):
     """Full article schema."""
+
     id: int
     title: str
     content: str
@@ -34,6 +39,7 @@ class ArticleSchema(msgspec.Struct):
 
 class ArticleCreateSchema(msgspec.Struct):
     """Schema for creating/updating articles."""
+
     title: str
     content: str
     author: str
@@ -41,18 +47,17 @@ class ArticleCreateSchema(msgspec.Struct):
 
 # --- Tests ---
 
+
 @pytest.mark.django_db(transaction=True)
 def test_readonly_model_viewset(api):
     """Test ReadOnlyModelViewSet provides helpers for read operations."""
-    from asgiref.sync import async_to_sync
-
     # Create test data
     article1 = async_to_sync(Article.objects.acreate)(
         title="Article 1",
         content="Content 1",
         author="Author 1",
     )
-    article2 = async_to_sync(Article.objects.acreate)(
+    async_to_sync(Article.objects.acreate)(
         title="Article 2",
         content="Content 2",
         author="Author 2",
@@ -205,7 +210,6 @@ def test_model_viewset_with_custom_methods(api):
 @pytest.mark.django_db(transaction=True)
 def test_model_viewset_queryset_reevaluation(api):
     """Test that queryset is re-evaluated on each request (like DRF)."""
-    from asgiref.sync import async_to_sync
 
     @api.view("/articles", methods=["GET"])
     class ArticleViewSet(ReadOnlyModelViewSet):
@@ -241,8 +245,6 @@ def test_model_viewset_queryset_reevaluation(api):
 @pytest.mark.django_db(transaction=True)
 def test_model_viewset_custom_queryset(api):
     """Test ModelViewSet with custom get_queryset()."""
-    from asgiref.sync import async_to_sync
-
     # Create test data
     async_to_sync(Article.objects.acreate)(
         title="Published 1",
@@ -287,10 +289,8 @@ def test_model_viewset_custom_queryset(api):
 @pytest.mark.django_db(transaction=True)
 def test_model_viewset_lookup_field(api):
     """Test ModelViewSet with custom lookup_field."""
-    from asgiref.sync import async_to_sync
-
     # Create article
-    article = async_to_sync(Article.objects.acreate)(
+    async_to_sync(Article.objects.acreate)(
         title="Test Article",
         content="Content",
         author="test-author",
@@ -301,7 +301,7 @@ def test_model_viewset_lookup_field(api):
     class ArticleViewSet(ReadOnlyModelViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
-        lookup_field = 'author'  # Look up by author instead of pk
+        lookup_field = "author"  # Look up by author instead of pk
 
         async def get(self, request, pk: str):  # pk will be the author name
             """Retrieve article by author."""

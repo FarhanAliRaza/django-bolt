@@ -4,16 +4,31 @@ Type introspection and field definition system for parameter binding.
 Inspired by Litestar's architecture but built from scratch for Django-Bolt's
 msgspec-first, async-only design with focus on performance.
 """
+
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
+from dataclasses import dataclass, is_dataclass
+from enum import Enum
+from functools import reduce
+from operator import or_
+from typing import TYPE_CHECKING, Any, TypedDict, Union, get_args, get_origin
+
 import msgspec
-from dataclasses import dataclass
-from typing import Any, get_origin, get_args, Union, Optional, List, Dict, Annotated, TypedDict
+
+# Import Param and Depends at top level for use in from_parameter method
+# These imports must be at module top to comply with PLC0415
+from .params import Depends as DependsMarker
+from .params import Param
+
+if TYPE_CHECKING:
+    pass
 
 __all__ = [
     "FieldDefinition",
     "HandlerMetadata",
+    "HandlerPattern",
     "is_msgspec_struct",
     "is_simple_type",
     "is_sequence_type",
@@ -21,6 +36,24 @@ __all__ = [
     "unwrap_optional",
     "infer_param_source",
 ]
+
+
+class HandlerPattern(Enum):
+    """
+    Handler pattern classification for specialized injector selection.
+
+    Each pattern enables a specific fast path in the argument injector,
+    eliminating unnecessary checks and data access at request time.
+    """
+
+    REQUEST_ONLY = "request_only"  # Single request parameter
+    NO_PARAMS = "no_params"  # No parameters at all
+    PATH_ONLY = "path_only"  # Only path parameters
+    QUERY_ONLY = "query_only"  # Only query parameters
+    BODY_ONLY = "body_only"  # Single JSON body parameter
+    SIMPLE = "simple"  # Path + query combination
+    WITH_DEPS = "with_deps"  # Has dependency injection (async)
+    FULL = "full"  # Complex: headers, cookies, form, file, or mixed
 
 
 class HandlerMetadata(TypedDict, total=False):
@@ -36,7 +69,7 @@ class HandlerMetadata(TypedDict, total=False):
     sig: inspect.Signature
     """Function signature"""
 
-    fields: List[FieldDefinition]
+    fields: list[FieldDefinition]
     """List of parameter field definitions"""
 
     path_params: set[str]
@@ -63,7 +96,7 @@ class HandlerMetadata(TypedDict, total=False):
     """Default HTTP status code for successful responses"""
 
     # QuerySet serialization optimization (pre-computed at registration)
-    response_field_names: List[str]
+    response_field_names: list[str]
     """Pre-computed field names for QuerySet.values() call"""
 
     # Performance optimizations
@@ -75,7 +108,7 @@ class HandlerMetadata(TypedDict, total=False):
     """Whether handler is async (coroutine function)"""
 
     # OpenAPI documentation metadata
-    openapi_tags: List[str]
+    openapi_tags: list[str]
     """OpenAPI tags for grouping endpoints"""
 
     openapi_summary: str
@@ -83,6 +116,54 @@ class HandlerMetadata(TypedDict, total=False):
 
     openapi_description: str
     """Detailed description for OpenAPI docs"""
+
+    # Performance optimization: pre-compiled argument injector
+    injector: Any
+    """Pre-compiled function that extracts handler arguments from request.
+
+    Returns (args, kwargs) tuple ready for handler invocation.
+    Compiled once at route registration time for maximum performance.
+    Can be sync (for most handlers) or async (only if using dependencies).
+
+    Example:
+        if meta["injector_is_async"]:
+            args, kwargs = await meta["injector"](request)
+        else:
+            args, kwargs = meta["injector"](request)
+        result = await handler(*args, **kwargs)
+    """
+
+    injector_is_async: bool
+    """Whether the injector function is async (True only if handler uses Depends)"""
+
+    # Static analysis flags (skip unused parsing)
+    # These are computed at route registration time by analyzing handler parameters
+    needs_body: bool
+    """Whether handler needs request body parsing (has body/form/file params)"""
+
+    needs_query: bool
+    """Whether handler needs query string parsing (has query params)"""
+
+    needs_headers: bool
+    """Whether handler needs header extraction (has header params)"""
+
+    needs_cookies: bool
+    """Whether handler needs cookie parsing (has cookie params)"""
+
+    needs_path_params: bool
+    """Whether handler needs path parameter extraction (has path params)"""
+
+    # Static route optimization
+    is_static_route: bool
+    """Whether route has no path parameters (can use O(1) lookup)"""
+
+    # ORM analysis (static analysis for blocking detection)
+    is_blocking: bool
+    """Whether handler is likely to block (ORM usage or blocking I/O) - runs in thread pool"""
+
+    # Handler pattern classification (for specialized fast paths)
+    handler_pattern: HandlerPattern
+    """Handler pattern for specialized injector selection at registration time."""
 
 
 # Simple scalar types that map to query parameters
@@ -109,7 +190,7 @@ def is_simple_type(annotation: Any) -> bool:
 def is_sequence_type(annotation: Any) -> bool:
     """Check if annotation is a sequence type like List[T]."""
     origin = get_origin(annotation)
-    return origin in (list, List, tuple, set, frozenset)
+    return origin in (list, list, tuple, set, frozenset)
 
 
 def is_optional(annotation: Any) -> bool:
@@ -126,25 +207,19 @@ def unwrap_optional(annotation: Any) -> Any:
     origin = get_origin(annotation)
     if origin is Union:
         args = tuple(a for a in get_args(annotation) if a is not type(None))
-        return args[0] if len(args) == 1 else Union[args]  # type: ignore
+        return args[0] if len(args) == 1 else reduce(or_, args)  # type: ignore
     return annotation
 
 
 def is_dataclass_type(annotation: Any) -> bool:
     """Check if annotation is a dataclass."""
     try:
-        from dataclasses import is_dataclass
         return is_dataclass(annotation)
     except (TypeError, AttributeError):
         return False
 
 
-def infer_param_source(
-    name: str,
-    annotation: Any,
-    path_params: set[str],
-    http_method: str
-) -> str:
+def infer_param_source(name: str, annotation: Any, path_params: set[str], http_method: str) -> str:
     """
     Infer parameter source based on type and context.
 
@@ -218,10 +293,10 @@ class FieldDefinition:
     source: str
     """Parameter source: 'path', 'query', 'body', 'header', 'cookie', 'form', 'file', 'request', 'dependency'"""
 
-    alias: Optional[str] = None
+    alias: str | None = None
     """Alternative name for the parameter (e.g., 'user-id' for 'user_id')"""
 
-    embed: Optional[bool] = None
+    embed: bool | None = None
     """For body params: whether to embed in a wrapper object"""
 
     dependency: Any = None
@@ -230,21 +305,28 @@ class FieldDefinition:
     kind: inspect._ParameterKind = inspect.Parameter.POSITIONAL_OR_KEYWORD
     """Parameter kind (positional, keyword-only, etc.)"""
 
+    # Pre-compiled extractor function (set at registration time)
+    extractor: Callable[..., Any] | None = None
+    """Pre-compiled extractor function for this parameter.
+
+    Created at route registration time by the appropriate factory
+    (create_path_extractor, create_query_extractor, etc.).
+    Eliminates per-request source type checking.
+    """
+
     # Cached type properties for performance
-    _is_optional: Optional[bool] = None
-    _is_simple: Optional[bool] = None
-    _is_struct: Optional[bool] = None
-    _unwrapped: Optional[Any] = None
-    _origin: Optional[Any] = None
+    _is_optional: bool | None = None
+    _is_simple: bool | None = None
+    _is_struct: bool | None = None
+    _unwrapped: Any | None = None
+    _origin: Any | None = None
 
     @property
     def is_optional(self) -> bool:
         """Check if parameter is optional (has default or Optional type)."""
         if self._is_optional is None:
             object.__setattr__(
-                self,
-                "_is_optional",
-                self.default is not inspect.Parameter.empty or is_optional(self.annotation)
+                self, "_is_optional", self.default is not inspect.Parameter.empty or is_optional(self.annotation)
             )
         return self._is_optional  # type: ignore
 
@@ -295,8 +377,8 @@ class FieldDefinition:
         annotation: Any,
         path_params: set[str],
         http_method: str,
-        explicit_marker: Any = None
-    ) -> "FieldDefinition":
+        explicit_marker: Any = None,
+    ) -> FieldDefinition:
         """
         Create FieldDefinition from inspect.Parameter.
 
@@ -310,15 +392,13 @@ class FieldDefinition:
         Returns:
             FieldDefinition instance
         """
-        from .params import Param, Depends as DependsMarker
-
         name = parameter.name
         default = parameter.default
 
         # Handle explicit markers
         source: str
-        alias: Optional[str] = None
-        embed: Optional[bool] = None
+        alias: str | None = None
+        embed: bool | None = None
         dependency: Any = None
 
         if isinstance(explicit_marker, Param):

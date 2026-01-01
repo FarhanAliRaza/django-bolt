@@ -112,8 +112,12 @@ PYTHON_TOKEN_SCRIPT
 
 # Only run auth tests if we have a valid token
 if [ -n "$TOKEN" ] && [ ${#TOKEN} -gt 50 ]; then
-    printf "### Get Authenticated User (/auth/me)\n"
     AUTH_HEADER="Authorization: Bearer $TOKEN"
+
+    printf "### Auth NO User Access (/auth/no-user-access) - lazy loading, no DB query\n"
+    ab -k -c $C -n $N -H "$AUTH_HEADER" http://$HOST:$PORT/auth/no-user-access 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+
+    printf "### Get Authenticated User (/auth/me) - accesses request.user, triggers DB query\n"
     ab -k -c $C -n $N -H "$AUTH_HEADER" http://$HOST:$PORT/auth/me 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 
     printf "### Get User via Dependency (/auth/me-dependency)\n"
@@ -212,7 +216,7 @@ fi
 
 # Seed users for benchmarking (create 1000 test users)
 echo "Seeding 1000 users for benchmark..."
-SEED_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://$HOST:$PORT/users/seed?count=1000)
+SEED_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X GET http://$HOST:$PORT/users/seed?count=1000)
 if [ "$SEED_CODE" != "200" ]; then
   echo "Warning: Failed to seed users (got $SEED_CODE), benchmarking with empty database" >&2
 else
@@ -329,7 +333,7 @@ echo "## ORM Performance with CBV"
 
 # Seed users for CBV benchmarking
 echo "Seeding 1000 users for CBV benchmark..."
-SEED_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://$HOST:$PORT/users/seed?count=1000)
+SEED_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X GET http://$HOST:$PORT/users/seed?count=1000)
 if [ "$SEED_CODE" != "200" ]; then
   echo "Warning: Failed to seed users (got $SEED_CODE), benchmarking with empty database" >&2
 else
@@ -423,6 +427,27 @@ kill -TERM -$SERVER_PID 2>/dev/null || true
 pkill -TERM -f "manage.py runbolt --host $HOST --port $PORT" 2>/dev/null || true
 
 echo ""
+echo "## Django Middleware Performance"
+
+# Start server for middleware test
+DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
+SERVER_PID=$!
+sleep 2
+
+# Sanity check middleware endpoint
+MCODE=$(curl -s -o /dev/null -w '%{http_code}' http://$HOST:$PORT/middleware/demo)
+if [ "$MCODE" != "200" ]; then
+  echo "Expected 200 from /middleware/demo but got $MCODE; skipping middleware benchmark." >&2
+else
+  echo "### Django Middleware + Messages Framework (/middleware/demo)"
+  echo "Tests: SessionMiddleware, AuthenticationMiddleware, MessageMiddleware, custom middleware, template rendering"
+  ab -k -c $C -n $N http://$HOST:$PORT/middleware/demo 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+fi
+
+kill -TERM -$SERVER_PID 2>/dev/null || true
+pkill -TERM -f "manage.py runbolt --host $HOST --port $PORT" 2>/dev/null || true
+
+echo ""
 echo "## Django Ninja-style Benchmarks"
 
 # JSON Parsing/Validation
@@ -451,8 +476,62 @@ if [ "$PCODE" != "200" ]; then
 else
   ab -k -c $C -n $N -p "$BODY_FILE" -T 'application/json' http://$HOST:$PORT/bench/parse 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
 fi
+rm -f "$BODY_FILE"
+
+echo ""
+echo "## Serializer Performance Benchmarks"
+
+# Test raw msgspec (baseline)
+SERIALIZER_RAW=$(mktemp)
+cat > "$SERIALIZER_RAW" << 'JSON'
+{
+  "id": 1,
+  "name": "John Doe",
+  "email": "john@example.com",
+  "bio": "Software developer"
+}
+JSON
+
+echo "### Raw msgspec Serializer (POST /bench/serializer-raw)"
+ab -k -c $C -n $N -p "$SERIALIZER_RAW" -T 'application/json' http://$HOST:$PORT/bench/serializer-raw 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+rm -f "$SERIALIZER_RAW"
+
+# Test with custom validators
+SERIALIZER_VALIDATED=$(mktemp)
+cat > "$SERIALIZER_VALIDATED" << 'JSON'
+{
+  "id": 1,
+  "name": "  John Doe  ",
+  "email": "JOHN@EXAMPLE.COM",
+  "bio": "Software developer"
+}
+JSON
+
+echo "### Django-Bolt Serializer with Validators (POST /bench/serializer-validated)"
+ab -k -c $C -n $N -p "$SERIALIZER_VALIDATED" -T 'application/json' http://$HOST:$PORT/bench/serializer-validated 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+rm -f "$SERIALIZER_VALIDATED"
+
+# Test users endpoint with raw msgspec
+USER_BENCH=$(mktemp)
+cat > "$USER_BENCH" << 'JSON'
+{
+  "id": 1,
+  "username": "testuser",
+  "email": "test@example.com",
+  "bio": "Test bio"
+}
+JSON
+
+echo "### Users msgspec Serializer (POST /users/bench/msgspec)"
+USCODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary @"$USER_BENCH" http://$HOST:$PORT/users/bench/msgspec)
+if [ "$USCODE" = "200" ]; then
+  ab -k -c $C -n $N -p "$USER_BENCH" -T 'application/json' http://$HOST:$PORT/users/bench/msgspec 2>/dev/null | grep -E "(Requests per second|Time per request|Failed requests)"
+else
+  echo "Skipped: Users msgspec endpoint returned $USCODE" >&2
+fi
+rm -f "$USER_BENCH"
+
 kill -TERM -$SERVER_PID 2>/dev/null || true
 pkill -TERM -f "manage.py runbolt --host $HOST --port $PORT" 2>/dev/null || true
-rm -f "$BODY_FILE"
 
 

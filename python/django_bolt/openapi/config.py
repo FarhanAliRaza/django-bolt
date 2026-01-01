@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional, List, Dict
+from typing import TYPE_CHECKING, Any
 
+from .plugins import (
+    RapidocRenderPlugin,
+    RedocRenderPlugin,
+    ScalarRenderPlugin,
+    StoplightRenderPlugin,
+    SwaggerRenderPlugin,
+)
 from .spec import (
     Components,
     Contact,
@@ -18,6 +26,9 @@ from .spec import (
 )
 
 if TYPE_CHECKING:
+    from django_bolt.auth.backends import BaseAuthentication
+    from django_bolt.auth.guards import BasePermission
+
     from .plugins import OpenAPIRenderPlugin
 
 __all__ = ("OpenAPIConfig",)
@@ -51,52 +62,52 @@ class OpenAPIConfig:
     version: str
     """API version, e.g. '1.0.0'."""
 
-    contact: Optional[Contact] = field(default=None)
+    contact: Contact | None = field(default=None)
     """API contact information."""
 
-    description: Optional[str] = field(default=None)
+    description: str | None = field(default=None)
     """API description."""
 
-    external_docs: Optional[ExternalDocumentation] = field(default=None)
+    external_docs: ExternalDocumentation | None = field(default=None)
     """Links to external documentation."""
 
-    license: Optional[License] = field(default=None)
+    license: License | None = field(default=None)
     """API licensing information."""
 
-    security: Optional[List[SecurityRequirement]] = field(default=None)
+    security: list[SecurityRequirement] | None = field(default=None)
     """API security requirements."""
 
     components: Components = field(default_factory=Components)
     """API components (schemas, security schemes, etc.)."""
 
-    servers: List[Server] = field(default_factory=lambda: [Server(url="/")])
+    servers: list[Server] = field(default_factory=lambda: [Server(url="/")])
     """A list of Server instances."""
 
-    summary: Optional[str] = field(default=None)
+    summary: str | None = field(default=None)
     """A summary text."""
 
-    tags: Optional[List[Tag]] = field(default=None)
+    tags: list[Tag] | None = field(default=None)
     """A list of Tag instances for grouping operations."""
 
-    terms_of_service: Optional[str] = field(default=None)
+    terms_of_service: str | None = field(default=None)
     """URL to page that contains terms of service."""
 
     use_handler_docstrings: bool = field(default=True)
     """Draw operation description from route handler docstring if not otherwise provided."""
 
-    webhooks: Optional[Dict[str, PathItem | Reference]] = field(default=None)
+    webhooks: dict[str, PathItem | Reference] | None = field(default=None)
     """A mapping of webhook name to PathItem or Reference."""
 
-    path: str = "/schema"
+    path: str = "/docs"
     """Base path for the OpenAPI documentation endpoints."""
 
-    render_plugins: List[OpenAPIRenderPlugin] = field(default_factory=lambda: [])
+    render_plugins: list[OpenAPIRenderPlugin] = field(default_factory=lambda: [])
     """Plugins for rendering OpenAPI documentation UIs.
 
     If empty, ScalarRenderPlugin will be used by default.
     """
 
-    exclude_paths: List[str] = field(default_factory=lambda: ["/admin", "/static"])
+    exclude_paths: list[str] = field(default_factory=lambda: ["/admin", "/static"])
     """Path prefixes to exclude from OpenAPI schema generation.
 
     By default excludes Django admin (/admin) and static files (/static).
@@ -150,17 +161,124 @@ class OpenAPIConfig:
         ```
     """
 
+    enabled: bool = field(default=True)
+    """Enable or disable OpenAPI documentation.
+
+    When False, no documentation routes will be registered.
+    This is useful for disabling docs in production.
+
+    Example:
+        ```python
+        import os
+        from django_bolt.openapi import OpenAPIConfig
+
+        # Disable docs in production
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            enabled=os.environ.get("ENABLE_DOCS", "false").lower() == "true"
+        )
+        ```
+    """
+
+    guards: list[BasePermission] | None = field(default=None)
+    """Permission guards to protect OpenAPI documentation endpoints.
+
+    When set, all documentation routes (JSON schema, YAML schema, and UI endpoints)
+    will require passing the specified guards before access is granted.
+
+    Example:
+        ```python
+        from django_bolt.openapi import OpenAPIConfig
+        from django_bolt.auth import JWTAuthentication, IsAuthenticated, IsStaff
+
+        # Require authentication for docs
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            auth=[JWTAuthentication()],
+            guards=[IsAuthenticated()]
+        )
+
+        # Require staff access for docs
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            auth=[JWTAuthentication()],
+            guards=[IsStaff()]
+        )
+        ```
+    """
+
+    auth: list[BaseAuthentication] | None = field(default=None)
+    """Authentication backends for OpenAPI documentation endpoints.
+
+    When set, these authentication backends will be used to authenticate
+    requests to documentation endpoints. Required when using guards that
+    depend on authentication (e.g., IsAuthenticated, IsStaff, IsAdminUser).
+
+    Example:
+        ```python
+        from django_bolt.openapi import OpenAPIConfig
+        from django_bolt.auth import JWTAuthentication, IsAuthenticated
+
+        # Protect docs with JWT authentication
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            auth=[JWTAuthentication()],
+            guards=[IsAuthenticated()]
+        )
+        ```
+    """
+
+    django_auth: Callable[..., Any] | bool | None = field(default=None)
+    """Django authentication decorator for OpenAPI documentation endpoints.
+
+    Use this to protect docs with Django's built-in authentication decorators
+    like login_required or staff_member_required.
+
+    Can be:
+    - True: Apply login_required (redirects to login page if not authenticated)
+    - A Django decorator: Apply directly (e.g., staff_member_required)
+
+    Example:
+        ```python
+        from django.contrib.auth.decorators import login_required
+        from django.contrib.admin.views.decorators import staff_member_required
+
+        # Login required (shorthand)
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            django_auth=True
+        )
+
+        # Staff only
+        OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            django_auth=staff_member_required
+        )
+        ```
+    """
+
     def __post_init__(self) -> None:
         """Initialize default render plugin if none provided."""
         if not self.render_plugins:
-            from .plugins import ScalarRenderPlugin
-            self.render_plugins = [ScalarRenderPlugin()]
+            self.render_plugins = [
+                SwaggerRenderPlugin(path="/"),
+                RedocRenderPlugin(path="/redoc"),
+                ScalarRenderPlugin(path="/scalar"),
+                RapidocRenderPlugin(path="/rapidoc"),
+                StoplightRenderPlugin(path="/stoplight"),
+            ]
 
         # Normalize path
         self.path = "/" + self.path.strip("/")
 
         # Find default plugin (one that serves root path)
-        self.default_plugin: Optional[OpenAPIRenderPlugin] = None
+        self.default_plugin: OpenAPIRenderPlugin | None = None
         for plugin in self.render_plugins:
             if plugin.has_path("/"):
                 self.default_plugin = plugin

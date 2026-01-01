@@ -4,14 +4,17 @@ Pytest configuration for Django-Bolt tests.
 Ensures Django settings are properly reset between tests.
 Provides utilities for subprocess-based testing.
 """
+
+import builtins
+import contextlib
+import logging
 import os
-import pathlib
+import platform
 import signal
 import socket
 import subprocess
-import sys
 import time
-import logging
+
 import pytest
 
 # Suppress httpx INFO logs during tests
@@ -20,8 +23,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 def pytest_configure(config):
     """Configure Django settings for pytest-django."""
-    import django
-    from django.conf import settings
+    import django  # noqa: PLC0415
+    from django.conf import settings  # noqa: PLC0415
 
     # Skip configuration if DJANGO_SETTINGS_MODULE is already set
     # This allows specific test modules to use their own Django settings
@@ -33,60 +36,60 @@ def pytest_configure(config):
         # The admin apps don't significantly impact non-admin tests
         settings.configure(
             DEBUG=True,
-            SECRET_KEY='test-secret-key-global',
-            ALLOWED_HOSTS=['*'],
+            SECRET_KEY="test-secret-key-global",
+            ALLOWED_HOSTS=["*"],
             INSTALLED_APPS=[
-                'django.contrib.admin',
-                'django.contrib.auth',
-                'django.contrib.contenttypes',
-                'django.contrib.sessions',
-                'django.contrib.messages',
-                'django.contrib.staticfiles',
-                'django_bolt',
+                "django.contrib.admin",
+                "django.contrib.auth",
+                "django.contrib.contenttypes",
+                "django.contrib.sessions",
+                "django.contrib.messages",
+                "django.contrib.staticfiles",
+                "django_bolt",
             ],
             MIDDLEWARE=[
-                'django.middleware.security.SecurityMiddleware',
-                'django.contrib.sessions.middleware.SessionMiddleware',
-                'django.middleware.common.CommonMiddleware',
-                'django.middleware.csrf.CsrfViewMiddleware',
-                'django.contrib.auth.middleware.AuthenticationMiddleware',
-                'django.contrib.messages.middleware.MessageMiddleware',
-                'django.middleware.clickjacking.XFrameOptionsMiddleware',
+                "django.middleware.security.SecurityMiddleware",
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.middleware.common.CommonMiddleware",
+                "django.middleware.csrf.CsrfViewMiddleware",
+                "django.contrib.auth.middleware.AuthenticationMiddleware",
+                "django.contrib.messages.middleware.MessageMiddleware",
+                "django.middleware.clickjacking.XFrameOptionsMiddleware",
             ],
-            ROOT_URLCONF='tests.admin_tests.urls',
+            ROOT_URLCONF="tests.admin_tests.urls",
             TEMPLATES=[
                 {
-                    'BACKEND': 'django.template.backends.django.DjangoTemplates',
-                    'DIRS': [],
-                    'APP_DIRS': True,
-                    'OPTIONS': {
-                        'context_processors': [
-                            'django.template.context_processors.debug',
-                            'django.template.context_processors.request',
-                            'django.contrib.auth.context_processors.auth',
-                            'django.contrib.messages.context_processors.messages',
+                    "BACKEND": "django.template.backends.django.DjangoTemplates",
+                    "DIRS": [],
+                    "APP_DIRS": True,
+                    "OPTIONS": {
+                        "context_processors": [
+                            "django.template.context_processors.debug",
+                            "django.template.context_processors.request",
+                            "django.contrib.auth.context_processors.auth",
+                            "django.contrib.messages.context_processors.messages",
                         ],
                     },
                 },
             ],
             DATABASES={
-                'default': {
-                    'ENGINE': 'django.db.backends.sqlite3',
-                    'NAME': '/tmp/django_bolt_test.sqlite3',  # File-based for better thread isolation
+                "default": {
+                    "ENGINE": "django.db.backends.sqlite3",
+                    "NAME": "/tmp/django_bolt_test.sqlite3",  # File-based for better thread isolation
                 }
             },
             USE_TZ=True,
-            LANGUAGE_CODE='en-us',
-            TIME_ZONE='UTC',
+            LANGUAGE_CODE="en-us",
+            TIME_ZONE="UTC",
             USE_I18N=True,
-            STATIC_URL='/static/',
-            DEFAULT_AUTO_FIELD='django.db.models.BigAutoField',
+            STATIC_URL="/static/",
+            DEFAULT_AUTO_FIELD="django.db.models.BigAutoField",
         )
         # Setup Django apps so ExceptionReporter works
         django.setup()
 
 
-@pytest.fixture(scope='session')
+@pytest.fixture(scope="session")
 def django_db_setup(django_db_blocker):
     """
     Ensure database migrations are run before any tests that use the database.
@@ -95,70 +98,63 @@ def django_db_setup(django_db_blocker):
 
     Note: We skip the default django_db_setup to have better control over test database.
     """
-    from django.core.management import call_command
-    from django.db import connection
-    from django.conf import settings
-    import os
+    import os  # noqa: PLC0415
+
+    from django.conf import settings  # noqa: PLC0415
+    from django.core.management import call_command  # noqa: PLC0415
+    from django.db import connection  # noqa: PLC0415
 
     with django_db_blocker.unblock():
         # Ensure test database directory exists
-        db_path = settings.DATABASES['default']['NAME']
-        if db_path and db_path != ':memory:':
+        db_path = settings.DATABASES["default"]["NAME"]
+        if db_path and db_path != ":memory:":
             db_dir = os.path.dirname(db_path)
             if db_dir:
                 os.makedirs(db_dir, exist_ok=True)
 
         # Run migrations to create all necessary tables
-        call_command('migrate', '--run-syncdb', verbosity=0)
+        call_command("migrate", "--run-syncdb", verbosity=0)
 
         # Create test model tables manually since they're not in migrations
         # But only if they don't already exist (for persistent file-based databases)
         with connection.schema_editor() as schema_editor:
-            from .test_models import Article
-            # Check if table already exists
-            if Article._meta.db_table not in connection.introspection.table_names():
-                schema_editor.create_model(Article)
+            from .test_models import Article, Author, BlogPost, Comment, Tag, User, UserProfile  # noqa: PLC0415
+
+            models = [Article, Author, Tag, BlogPost, Comment, User, UserProfile]
+            for model in models:
+                # Check if table already exists
+                if model._meta.db_table not in connection.introspection.table_names():
+                    schema_editor.create_model(model)
 
 
 def spawn_process(command):
     """Spawn a subprocess in a new process group"""
-    import platform
     if platform.system() == "Windows":
         process = subprocess.Popen(
             command,
             shell=True,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stderr=subprocess.PIPE,
         )
     else:
-        process = subprocess.Popen(
-            command,
-            preexec_fn=os.setsid,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
+        process = subprocess.Popen(command, preexec_fn=os.setsid, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return process
 
 
 def kill_process(process):
     """Kill a subprocess and its process group"""
-    import platform
     if platform.system() == "Windows":
-        try:
+        with contextlib.suppress(builtins.BaseException):
             process.send_signal(signal.CTRL_BREAK_EVENT)
-        except:
-            pass
-        try:
+        with contextlib.suppress(builtins.BaseException):
             process.kill()
-        except:
-            pass
     else:
         try:
             os.killpg(os.getpgid(process.pid), signal.SIGKILL)
         except ProcessLookupError:
             pass
-        except:
+        except Exception:
             pass
 
 

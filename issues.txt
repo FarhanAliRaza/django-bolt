@@ -1,0 +1,2 @@
+ foward slashes are normalized and have to fix it for djanog admin and docs url to have uniform flow
+

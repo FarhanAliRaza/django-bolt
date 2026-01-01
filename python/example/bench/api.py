@@ -1,9 +1,10 @@
-from django_bolt import BoltAPI, action
-from django_bolt.views import ViewSet
-from django_bolt.exceptions import NotFound
 import msgspec
-from .models import BenchItem
 
+from django_bolt import BoltAPI, action
+from django_bolt.exceptions import NotFound
+from django_bolt.views import ViewSet
+
+from .models import BenchItem
 
 api = BoltAPI(prefix="/bench")
 
@@ -11,6 +12,7 @@ api = BoltAPI(prefix="/bench")
 # ============================================================================
 # Schemas
 # ============================================================================
+
 
 class BenchItemSchema(msgspec.Struct):
     id: int
@@ -38,6 +40,7 @@ class BenchItemUpdate(msgspec.Struct):
 # Unified ViewSet for Benchmark Items
 # ============================================================================
 
+
 @api.viewset("/items")
 class BenchItemViewSet(ViewSet):
     """
@@ -60,7 +63,7 @@ class BenchItemViewSet(ViewSet):
 
     queryset = BenchItem.objects.all()
     serializer_class = BenchItemSchema
-    lookup_field = 'id'
+    lookup_field = "id"
 
     async def list(self, request, active: bool | None = None, limit: int = 100):
         """GET /bench/items - List items with optional filtering."""
@@ -73,13 +76,11 @@ class BenchItemViewSet(ViewSet):
 
         items = []
         async for item in queryset:
-            items.append(BenchItemSchema(
-                id=item.id,
-                name=item.name,
-                value=item.value,
-                description=item.description,
-                is_active=item.is_active
-            ))
+            items.append(
+                BenchItemSchema(
+                    id=item.id, name=item.name, value=item.value, description=item.description, is_active=item.is_active
+                )
+            )
 
         return {"count": len(items), "items": items}
 
@@ -88,33 +89,20 @@ class BenchItemViewSet(ViewSet):
         try:
             item = await BenchItem.objects.aget(id=id)
             return BenchItemSchema(
-                id=item.id,
-                name=item.name,
-                value=item.value,
-                description=item.description,
-                is_active=item.is_active
+                id=item.id, name=item.name, value=item.value, description=item.description, is_active=item.is_active
             )
         except BenchItem.DoesNotExist:
-            raise NotFound(detail=f"BenchItem {id} not found")
+            raise NotFound(detail=f"BenchItem {id} not found") from None
 
     async def create(self, item: BenchItemCreate) -> BenchItemSchema:
         """POST /bench/items - Create a new item."""
         print("create", item)
         item = await BenchItem.objects.acreate(
-            name=item.name,
-            value=item.value,
-            description=item.description,
-            is_active=item.is_active
+            name=item.name, value=item.value, description=item.description, is_active=item.is_active
         )
-        
-        
 
         return BenchItemSchema(
-            id=item.id,
-            name=item.name,
-            value=item.value,
-            description=item.description,
-            is_active=item.is_active
+            id=item.id, name=item.name, value=item.value, description=item.description, is_active=item.is_active
         )
 
     async def update(self, request, id: int, data: BenchItemUpdate) -> BenchItemSchema:
@@ -122,7 +110,7 @@ class BenchItemViewSet(ViewSet):
         try:
             item = await BenchItem.objects.aget(id=id)
         except BenchItem.DoesNotExist:
-            raise NotFound(detail=f"BenchItem {id} not found")
+            raise NotFound(detail=f"BenchItem {id} not found") from None
 
         # Update all fields
         if data.name is not None:
@@ -137,11 +125,7 @@ class BenchItemViewSet(ViewSet):
         await item.asave()
 
         return BenchItemSchema(
-            id=item.id,
-            name=item.name,
-            value=item.value,
-            description=item.description,
-            is_active=item.is_active
+            id=item.id, name=item.name, value=item.value, description=item.description, is_active=item.is_active
         )
 
     async def partial_update(self, request, id: int, data: BenchItemUpdate) -> BenchItemSchema:
@@ -149,7 +133,7 @@ class BenchItemViewSet(ViewSet):
         try:
             item = await BenchItem.objects.aget(id=id)
         except BenchItem.DoesNotExist:
-            raise NotFound(detail=f"BenchItem {id} not found")
+            raise NotFound(detail=f"BenchItem {id} not found") from None
 
         # Only update provided fields
         if data.name is not None:
@@ -164,11 +148,7 @@ class BenchItemViewSet(ViewSet):
         await item.asave()
 
         return BenchItemSchema(
-            id=item.id,
-            name=item.name,
-            value=item.value,
-            description=item.description,
-            is_active=item.is_active
+            id=item.id, name=item.name, value=item.value, description=item.description, is_active=item.is_active
         )
 
     async def destroy(self, request, id: int):
@@ -178,7 +158,7 @@ class BenchItemViewSet(ViewSet):
             await item.adelete()
             return {"deleted": True, "item_id": id}
         except BenchItem.DoesNotExist:
-            raise NotFound(detail=f"BenchItem {id} not found")
+            raise NotFound(detail=f"BenchItem {id} not found") from None
 
     # ========================================================================
     # Custom Actions
@@ -193,7 +173,7 @@ class BenchItemViewSet(ViewSet):
             await item.asave()
             return {"item_id": id, "value": item.value, "incremented": True}
         except BenchItem.DoesNotExist:
-            raise NotFound(detail=f"BenchItem {id} not found")
+            raise NotFound(detail=f"BenchItem {id} not found") from None
 
     @action(methods=["POST"], detail=True)
     async def toggle(self, request, id: int):
@@ -204,20 +184,18 @@ class BenchItemViewSet(ViewSet):
             await item.asave()
             return {"item_id": id, "is_active": item.is_active, "toggled": True}
         except BenchItem.DoesNotExist:
-            raise NotFound(detail=f"BenchItem {id} not found")
+            raise NotFound(detail=f"BenchItem {id} not found") from None
 
     @action(methods=["GET"], detail=False)
     async def search(self, request, query: str):
         """GET /bench/items/search?query=xxx - Search items by name."""
         items = []
         async for item in BenchItem.objects.filter(name__icontains=query)[:10]:
-            items.append(BenchItemSchema(
-                id=item.id,
-                name=item.name,
-                value=item.value,
-                description=item.description,
-                is_active=item.is_active
-            ))
+            items.append(
+                BenchItemSchema(
+                    id=item.id, name=item.name, value=item.value, description=item.description, is_active=item.is_active
+                )
+            )
         return {"query": query, "count": len(items), "results": items}
 
     @action(methods=["GET"], detail=False)
@@ -225,11 +203,9 @@ class BenchItemViewSet(ViewSet):
         """GET /bench/items/active - Get all active items."""
         items = []
         async for item in BenchItem.objects.filter(is_active=True)[:100]:
-            items.append(BenchItemSchema(
-                id=item.id,
-                name=item.name,
-                value=item.value,
-                description=item.description,
-                is_active=item.is_active
-            ))
+            items.append(
+                BenchItemSchema(
+                    id=item.id, name=item.name, value=item.value, description=item.description, is_active=item.is_active
+                )
+            )
         return {"count": len(items), "items": items}

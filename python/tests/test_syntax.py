@@ -1,16 +1,18 @@
 import asyncio
-import os
 import json
+import os
+from typing import Annotated
 
 import msgspec
 import pytest
 
-from django_bolt import BoltAPI, JSON, StreamingResponse
-from django_bolt.param_functions import Query, Path, Header, Cookie, Depends, Form, File as FileParam
-from django_bolt.responses import PlainText, HTML, Redirect, File, FileResponse
+from django_bolt import JSON, BoltAPI, Response, StreamingResponse
 from django_bolt.exceptions import HTTPException
+from django_bolt.param_functions import Cookie, Depends, Form, Header, Query
+from django_bolt.serializers import Serializer, field_validator
+from django_bolt.param_functions import File as FileParam
+from django_bolt.responses import HTML, File, FileResponse, PlainText, Redirect
 from django_bolt.testing import TestClient
-from typing import Annotated
 
 
 @pytest.fixture(scope="module")
@@ -164,6 +166,7 @@ def api():
         def gen():
             for i in range(3):
                 yield f"p{i},"
+
         return StreamingResponse(gen(), media_type="text/plain")
 
     @api.get("/stream-bytes")
@@ -171,6 +174,7 @@ def api():
         def gen():
             for i in range(2):
                 yield str(i).encode()
+
         return StreamingResponse(gen())
 
     @api.get("/sse")
@@ -179,6 +183,7 @@ def api():
             yield "event: message\ndata: hello\n\n"
             yield "data: 1\n\n"
             yield ": comment\n\n"
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     @api.get("/stream-async")
@@ -187,6 +192,7 @@ def api():
             for i in range(3):
                 await asyncio.sleep(0.001)
                 yield f"async-{i},".encode()
+
         return StreamingResponse(async_gen(), media_type="text/plain")
 
     @api.get("/stream-async-sse")
@@ -197,6 +203,7 @@ def api():
             yield "event: message\ndata: async data\n\n"
             await asyncio.sleep(0.001)
             yield "event: end\ndata: finished\n\n"
+
         return StreamingResponse(async_gen(), media_type="text/event-stream")
 
     @api.get("/stream-async-large")
@@ -206,6 +213,7 @@ def api():
                 await asyncio.sleep(0.001)
                 chunk = f"chunk-{i:02d}-{'x' * 100}\n".encode()
                 yield chunk
+
         return StreamingResponse(async_gen(), media_type="application/octet-stream")
 
     @api.get("/stream-async-mixed-types")
@@ -218,6 +226,7 @@ def api():
             yield bytearray(b"bytearray-chunk\n")
             await asyncio.sleep(0.001)
             yield memoryview(b"memoryview-chunk\n")
+
         return StreamingResponse(async_gen(), media_type="text/plain")
 
     @api.get("/stream-async-error")
@@ -228,11 +237,65 @@ def api():
             yield b"chunk2\n"
             await asyncio.sleep(0.001)
             raise ValueError("Simulated async error")
+
         return StreamingResponse(async_gen(), media_type="text/plain")
 
     @api.post("/form-urlencoded")
     async def form_urlencoded(a: Annotated[str, Form()], b: Annotated[int, Form()]):
         return {"a": a, "b": b}
+
+    # Form data with Struct/Serializer
+    class FormDataStruct(msgspec.Struct):
+        username: str
+        age: int
+        active: bool = True
+
+    @api.post("/form-struct")
+    async def form_struct(data: Annotated[FormDataStruct, Form()]):
+        return {"username": data.username, "age": data.age, "active": data.active}
+
+    # Form data with Serializer and field_validator
+    class FormDataSerializer(Serializer):
+        username: str
+        email: str
+
+        @field_validator("username")
+        def validate_username(cls, value):
+            if len(value) < 3:
+                raise ValueError("Username must be at least 3 characters")
+            return value
+
+    @api.post("/form-serializer")
+    async def form_serializer(data: Annotated[FormDataSerializer, Form()]):
+        return {"username": data.username, "email": data.email}
+
+    # Query parameters with Struct
+    class QueryParams(msgspec.Struct):
+        limit: int = 10
+        offset: int = 0
+        search: str | None = None
+
+    @api.get("/query-struct")
+    async def query_struct(params: Annotated[QueryParams, Query()]):
+        return {"limit": params.limit, "offset": params.offset, "search": params.search}
+
+    # Header parameters with Struct
+    class HeaderParams(msgspec.Struct):
+        x_api_key: str
+        x_request_id: str | None = None
+
+    @api.get("/header-struct")
+    async def header_struct(headers: Annotated[HeaderParams, Header()]):
+        return {"api_key": headers.x_api_key, "request_id": headers.x_request_id}
+
+    # Cookie parameters with Struct
+    class CookieParams(msgspec.Struct):
+        session_id: str
+        theme: str = "light"
+
+    @api.get("/cookie-struct")
+    async def cookie_struct(cookies: Annotated[CookieParams, Cookie()]):
+        return {"session_id": cookies.session_id, "theme": cookies.theme}
 
     @api.post("/upload")
     async def upload(files: Annotated[list[dict], FileParam(alias="file")]):
@@ -244,19 +307,32 @@ def api():
             for i in range(3):
                 yield f"data: {i}\n\n"
                 await asyncio.sleep(0)
+
         return StreamingResponse(agen(), media_type="text/event-stream")
 
     @api.post("/v1/chat/completions-async-test")
     async def chat_completions_async_test(payload: dict):
         if payload.get("stream", True):
+
             async def agen():
                 for i in range(payload.get("n_chunks", 2)):
                     data = {"chunk": i, "content": " hello"}
                     yield f"data: {json.dumps(data)}\n\n"
                     await asyncio.sleep(0)
                 yield "data: [DONE]\n\n"
+
             return StreamingResponse(agen(), media_type="text/event-stream")
         return {"non_streaming": True}
+
+    # 204 No Content - returning None should work
+    @api.delete("/no-content", status_code=204)
+    async def no_content():
+        return None
+
+    # Returning None without 204 should error
+    @api.get("/none-return")
+    async def none_return():
+        return None
 
     return api
 
@@ -452,7 +528,7 @@ def test_streaming_async_large(client):
     assert response.headers.get("content-type", "").startswith("application/octet-stream")
 
     # Should have 10 chunks
-    lines = response.content.decode().strip().split('\n')
+    lines = response.content.decode().strip().split("\n")
     assert len(lines) == 10
 
     # Check format of chunks
@@ -460,7 +536,7 @@ def test_streaming_async_large(client):
         expected_prefix = f"chunk-{i:02d}-"
         assert line.startswith(expected_prefix)
         assert len(line) >= 109  # ~109 bytes per line (110 bytes per chunk with \n)
-        assert line.endswith('x' * 100)
+        assert line.endswith("x" * 100)
 
 
 def test_streaming_async_mixed_types(client):
@@ -471,12 +547,7 @@ def test_streaming_async_mixed_types(client):
 
     # Check all data types are properly converted
     text = response.content.decode()
-    expected_chunks = [
-        "bytes-chunk\n",
-        "string-chunk\n",
-        "bytearray-chunk\n",
-        "memoryview-chunk\n"
-    ]
+    expected_chunks = ["bytes-chunk\n", "string-chunk\n", "bytearray-chunk\n", "memoryview-chunk\n"]
 
     for expected in expected_chunks:
         assert expected in text
@@ -504,8 +575,8 @@ def test_streaming_async_vs_sync_compatibility(client):
     async_text = async_response.content.decode()
 
     # Both should have 3 comma-separated items
-    assert len(sync_text.split(',')) == 4  # "p0,p1,p2," = 4 parts
-    assert len(async_text.split(',')) == 4  # "async-0,async-1,async-2," = 4 parts
+    assert len(sync_text.split(",")) == 4  # "p0,p1,p2," = 4 parts
+    assert len(async_text.split(",")) == 4  # "async-0,async-1,async-2," = 4 parts
 
 
 def test_async_bridge_endpoints_work(client):
@@ -527,6 +598,7 @@ def test_streaming_requires_generator_instance():
     Both sync and async generators must be called with () before passing to StreamingResponse.
     This standardizes the API and ensures proper async/sync detection at instantiation time.
     """
+
     # Test 1: Sync generator function without () should raise TypeError
     def gen():
         yield "data"
@@ -575,11 +647,94 @@ def test_form_and_file(client):
         data={"note": "hi"},
         files=[
             ("file", ("a.txt", b"abc", "application/octet-stream")),
-            ("file", ("b.txt", b"def", "application/octet-stream"))
-        ]
+            ("file", ("b.txt", b"def", "application/octet-stream")),
+        ],
     )
     data = response.json()
     assert response.status_code == 200 and data["count"] == 2 and set(data["names"]) == {"a.txt", "b.txt"}
+
+
+def test_large_file_upload_rejected_by_default(api):
+    """Test that large file uploads (6MB) are rejected with default 1MB limit."""
+    import django_bolt.request_parsing as request_parsing
+
+    # Clear cache to ensure default 1MB limit is used
+    original_cache = request_parsing._MAX_UPLOAD_SIZE
+    request_parsing._MAX_UPLOAD_SIZE = None
+
+    try:
+        with TestClient(api, use_http_layer=False) as test_client:
+            # Create a 2MB file content (exceeds default 1MB limit)
+            large_content = b"x" * (2 * 1024 * 1024)  # 2MB
+
+            response = test_client.post(
+                "/upload", files=[("file", ("large.bin", large_content, "application/octet-stream"))]
+            )
+
+            # Should fail with 413 because file exceeds default 1MB limit
+            assert response.status_code == 413, f"Expected 413, got {response.status_code}: {response.text}"
+    finally:
+        request_parsing._MAX_UPLOAD_SIZE = original_cache
+
+
+def test_large_file_upload_with_increased_limit(api):
+    """Test that large file uploads (6MB) work when BOLT_MAX_UPLOAD_SIZE is set to 10MB."""
+    from django.conf import settings
+
+    import django_bolt.request_parsing as request_parsing
+
+    # Set max upload size to 10MB (default is 1MB which would reject 6MB files)
+    original_value = getattr(settings, "BOLT_MAX_UPLOAD_SIZE", None)
+    original_cache = request_parsing._MAX_UPLOAD_SIZE
+    settings.BOLT_MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
+    request_parsing._MAX_UPLOAD_SIZE = None  # Clear cache to pick up new setting
+
+    try:
+        # Use use_http_layer=False to bypass Actix PayloadConfig (which is set at app init time)
+        # This tests the Python multipart parsing limit which reads from Django settings dynamically
+        with TestClient(api, use_http_layer=False) as test_client:
+            # Create a 6MB file content
+            large_content = b"x" * (6 * 1024 * 1024)  # 6MB
+
+            response = test_client.post(
+                "/upload", files=[("file", ("large.bin", large_content, "application/octet-stream"))]
+            )
+
+            # Should succeed since BOLT_MAX_UPLOAD_SIZE is set to 10MB
+            assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+            data = response.json()
+            assert data["count"] == 1
+            assert data["names"] == ["large.bin"]
+    finally:
+        # Restore original values
+        request_parsing._MAX_UPLOAD_SIZE = original_cache
+        if original_value is None:
+            if hasattr(settings, "BOLT_MAX_UPLOAD_SIZE"):
+                delattr(settings, "BOLT_MAX_UPLOAD_SIZE")
+        else:
+            settings.BOLT_MAX_UPLOAD_SIZE = original_value
+
+
+def test_error_responses_have_cors_headers(api):
+    """Test that error responses (404, etc.) include CORS headers.
+
+    Note: Actix-level errors (like PayloadConfig 413) happen before the handler runs
+    and don't include CORS headers. The fix is to set BOLT_MAX_UPLOAD_SIZE high enough
+    that requests pass through to Python, where errors include CORS headers.
+    """
+    # Use HTTP layer with CORS enabled
+    with TestClient(api, use_http_layer=True, cors_allowed_origins=["*"]) as test_client:
+        response = test_client.post(
+            "/nonexistent",
+            content=b"x" * 1000,
+            headers={"Origin": "http://example.com", "Content-Type": "application/json"},
+        )
+
+        # 404 errors should have CORS headers
+        assert response.status_code == 404, f"Expected 404, got {response.status_code}"
+        assert "access-control-allow-origin" in response.headers, (
+            f"Missing CORS header on 404. Headers: {dict(response.headers)}"
+        )
 
 
 def test_head_method(client):
@@ -587,7 +742,7 @@ def test_head_method(client):
     response = client.head("/m")
     assert response.status_code == 200
     # HEAD should return headers but empty body
-    assert len(response.content) == 0 
+    assert len(response.content) == 0
 
 
 def test_head_with_params(client):
@@ -599,7 +754,8 @@ def test_head_with_params(client):
 def test_options_method_automatic(client):
     """Test automatic OPTIONS handling - returns Allow header with available methods"""
     response = client.options("/m")
-    assert response.status_code == 200
+    # 204 No Content is the standard response for OPTIONS preflight
+    assert response.status_code == 204
     # Check Allow header is present and contains the methods
     assert "allow" in response.headers or "Allow" in response.headers
     allow_header = response.headers.get("allow") or response.headers.get("Allow")
@@ -611,8 +767,7 @@ def test_options_method_automatic(client):
     assert "DELETE" in methods
     assert "HEAD" in methods
     assert "OPTIONS" in methods  # Always included for automatic OPTIONS
-    # Body should be empty JSON object
-    assert response.json() == {}
+    # 204 has no body content
 
 
 def test_options_on_nonexistent_route(client):
@@ -623,8 +778,6 @@ def test_options_on_nonexistent_route(client):
 
 def test_explicit_options_handler():
     """Test that explicit OPTIONS handler overrides automatic behavior"""
-    from django_bolt import Response
-
     api = BoltAPI()
 
     @api.get("/custom-options")
@@ -635,10 +788,9 @@ def test_explicit_options_handler():
     async def options_custom():
         return Response(
             {"custom": "options", "info": "This is a custom OPTIONS handler"},
-            headers={"Allow": "GET, OPTIONS", "X-Custom": "header"}
+            headers={"Allow": "GET, OPTIONS", "X-Custom": "header"},
         )
 
-    from django_bolt.testing import TestClient
     with TestClient(api) as client:
         response = client.options("/custom-options")
         assert response.status_code == 200
@@ -659,12 +811,133 @@ def test_method_validation():
 
     # HEAD should not accept body
     with pytest.raises(TypeError, match="HEAD.*cannot have body parameters"):
+
         @api.head("/test-head")
         async def head_with_body(body: Body):
             return {"ok": True}
 
     # OPTIONS should not accept body
     with pytest.raises(TypeError, match="OPTIONS.*cannot have body parameters"):
+
         @api.options("/test-options")
         async def options_with_body(body: Body):
             return {"ok": True}
+
+
+def test_204_no_content_with_none_return(client):
+    """Test that returning None with status_code=204 returns empty response."""
+    response = client.delete("/no-content")
+    assert response.status_code == 204
+    assert response.content == b""
+
+
+def test_none_return_without_204_returns_500(client):
+    """Test that returning None without 204 status code returns 500 error."""
+    response = client.get("/none-return")
+    assert response.status_code == 500
+
+
+def test_form_struct(client):
+    """Test Form() with Struct type parses form data into struct."""
+    response = client.post("/form-struct", data={"username": "john", "age": "30", "active": "true"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["username"] == "john"
+    assert data["age"] == 30
+    assert data["active"] is True
+
+
+def test_form_struct_with_defaults(client):
+    """Test Form() with Struct uses default values."""
+    response = client.post(
+        "/form-struct",
+        data={"username": "jane", "age": "25"},  # active not provided, uses default
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["username"] == "jane"
+    assert data["age"] == 25
+    assert data["active"] is True  # default value
+
+
+def test_form_struct_missing_required(client):
+    """Test Form() with Struct returns 422 for missing required fields."""
+    response = client.post(
+        "/form-struct",
+        data={"username": "john"},  # missing age
+    )
+    assert response.status_code == 422
+
+
+def test_form_serializer(client):
+    """Test Form() with Serializer parses and validates form data."""
+    response = client.post("/form-serializer", data={"username": "john", "email": "john@example.com"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["username"] == "john"
+    assert data["email"] == "john@example.com"
+
+
+def test_form_serializer_validation_error(client):
+    """Test Form() with Serializer runs field_validator and returns 422."""
+    response = client.post(
+        "/form-serializer",
+        data={"username": "ab", "email": "ab@example.com"},  # username too short
+    )
+    assert response.status_code == 422
+
+
+def test_query_struct(client):
+    """Test Query() with Struct type parses query parameters into struct."""
+    response = client.get("/query-struct?limit=20&offset=5&search=test")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["limit"] == 20
+    assert data["offset"] == 5
+    assert data["search"] == "test"
+
+
+def test_query_struct_with_defaults(client):
+    """Test Query() with Struct uses default values."""
+    response = client.get("/query-struct")  # no params, uses defaults
+    assert response.status_code == 200
+    data = response.json()
+    assert data["limit"] == 10
+    assert data["offset"] == 0
+    assert data["search"] is None
+
+
+def test_header_struct(client):
+    """Test Header() with Struct type parses headers into struct."""
+    response = client.get("/header-struct", headers={"X-Api-Key": "secret123", "X-Request-Id": "req-456"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["api_key"] == "secret123"
+    assert data["request_id"] == "req-456"
+
+
+def test_header_struct_missing_required(client):
+    """Test Header() with Struct returns 422 for missing required headers."""
+    response = client.get("/header-struct")  # missing X-Api-Key
+    assert response.status_code == 422
+
+
+def test_cookie_struct(client):
+    """Test Cookie() with Struct type parses cookies into struct."""
+    response = client.get("/cookie-struct", cookies={"session_id": "abc123", "theme": "dark"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["session_id"] == "abc123"
+    assert data["theme"] == "dark"
+
+
+def test_cookie_struct_with_defaults(client):
+    """Test Cookie() with Struct uses default values."""
+    response = client.get(
+        "/cookie-struct",
+        cookies={"session_id": "xyz789"},  # theme not provided, uses default
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["session_id"] == "xyz789"
+    assert data["theme"] == "light"  # default value

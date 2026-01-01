@@ -8,14 +8,20 @@ to handle requests for admin routes.
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Tuple
-from urllib.parse import parse_qs, urlencode
+import traceback
+from typing import Any
+from urllib.parse import urlencode
 
+from django.core.asgi import get_asgi_application
+
+from ..bootstrap import ensure_django_ready
 
 logger = logging.getLogger(__name__)
 
 
-def actix_to_asgi_scope(request: Dict[str, Any], server_host: str = "localhost", server_port: int = 8000) -> Dict[str, Any]:
+def actix_to_asgi_scope(
+    request: dict[str, Any], server_host: str = "localhost", server_port: int = 8000
+) -> dict[str, Any]:
     """
     Convert django-bolt PyRequest dict to ASGI3 scope dict.
 
@@ -30,6 +36,13 @@ def actix_to_asgi_scope(request: Dict[str, Any], server_host: str = "localhost",
     method = request.get("method", "GET")
     path = request.get("path", "/")
     query_params = request.get("query", {})
+
+    # Django admin expects trailing slashes on URLs (it will redirect without them).
+    # Since NormalizePath::trim() in Rust strips trailing slashes from incoming requests,
+    # we need to restore the trailing slash for Django to avoid redirect loops.
+    # Only add if path doesn't already end with / and is not just "/"
+    if path != "/" and not path.endswith("/"):
+        path = path + "/"
     headers_dict = request.get("headers", {})
 
     # Build query string from query params dict
@@ -116,7 +129,7 @@ def create_receive_callable(body: bytes):
     return receive
 
 
-def create_send_callable(response_holder: Dict[str, Any]):
+def create_send_callable(response_holder: dict[str, Any]):
     """
     Create ASGI3 send callable that collects response.
 
@@ -126,7 +139,8 @@ def create_send_callable(response_holder: Dict[str, Any]):
     Returns:
         Async callable that implements ASGI send channel
     """
-    async def send(message: Dict[str, Any]):
+
+    async def send(message: dict[str, Any]):
         msg_type = message.get("type")
 
         if msg_type == "http.response.start":
@@ -193,10 +207,7 @@ class ASGIFallbackHandler:
     def _get_asgi_app(self):
         """Lazy-load Django ASGI application with middleware."""
         if self._asgi_app is None:
-            from django.core.asgi import get_asgi_application
-
             # Ensure Django is configured
-            from ..bootstrap import ensure_django_ready
             ensure_django_ready()
 
             try:
@@ -206,7 +217,7 @@ class ASGIFallbackHandler:
 
         return self._asgi_app
 
-    async def handle_request(self, request: Dict[str, Any]) -> Tuple[int, List[Tuple[str, str]], bytes]:
+    async def handle_request(self, request: dict[str, Any]) -> tuple[int, list[tuple[str, str]], bytes]:
         """
         Handle request by converting to ASGI and calling Django app.
 
@@ -243,13 +254,8 @@ class ASGIFallbackHandler:
             await asgi_app(scope, receive, send)
         except Exception as e:
             # Handle errors by returning 500 response
-            import traceback
             error_body = f"ASGI Handler Error: {str(e)}\n\n{traceback.format_exc()}"
-            return (
-                500,
-                [("content-type", "text/plain; charset=utf-8")],
-                error_body.encode("utf-8")
-            )
+            return (500, [("content-type", "text/plain; charset=utf-8")], error_body.encode("utf-8"))
 
         # Wait for response body if streaming
         # (In case more_body was True, though Django admin typically doesn't stream)

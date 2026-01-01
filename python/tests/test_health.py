@@ -1,13 +1,18 @@
 """Tests for Django-Bolt health check system."""
 
-import pytest
 import asyncio
+import time
+
+import pytest
+
+from django_bolt import BoltAPI
 from django_bolt.health import (
     HealthCheck,
+    _health_check,
+    add_health_check,
     check_database,
     health_handler,
     ready_handler,
-    add_health_check,
     register_health_checks,
 )
 
@@ -96,7 +101,8 @@ class TestDatabaseCheck:
         """Test database check succeeds with valid connection."""
         # This test requires Django to be configured
         try:
-            from django.conf import settings
+            from django.conf import settings  # noqa: PLC0415
+
             if not settings.configured:
                 pytest.skip("Django not configured")
 
@@ -145,8 +151,6 @@ class TestHealthIntegration:
 
     def test_register_health_checks(self):
         """Test registering health checks on API."""
-        from django_bolt import BoltAPI
-
         api = BoltAPI()
         initial_route_count = len(api._routes)
 
@@ -163,13 +167,13 @@ class TestHealthIntegration:
 
     def test_add_health_check_global(self):
         """Test adding global health check."""
+
         async def custom_check():
             return True, "Custom check OK"
 
         add_health_check(custom_check)
 
         # Check should be added to global instance
-        from django_bolt.health import _health_check
         assert custom_check in _health_check._checks
 
         # Clean up
@@ -178,8 +182,6 @@ class TestHealthIntegration:
     @pytest.mark.asyncio
     async def test_custom_health_check_integration(self):
         """Test custom health check integration."""
-        from django_bolt.health import _health_check
-
         # Clear existing checks
         original_checks = _health_check._checks.copy()
         _health_check._checks.clear()
@@ -254,8 +256,6 @@ class TestHealthCheckScenarios:
     async def test_async_check_performance(self):
         """Test that async checks run concurrently."""
         hc = HealthCheck()
-        import time
-
         start_time = time.time()
 
         async def slow_check1():
@@ -269,7 +269,7 @@ class TestHealthCheckScenarios:
         hc.add_check(slow_check1)
         hc.add_check(slow_check2)
 
-        results = await hc.run_checks()
+        await hc.run_checks()
         elapsed = time.time() - start_time
 
         # If checks run sequentially, would take ~0.2s

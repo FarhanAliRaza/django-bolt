@@ -6,15 +6,24 @@ with type-safe dependency injection.
 
 Uses pytest-django for proper Django configuration.
 """
-import pytest
-import jwt
+
 import time
+
+import jwt
+import pytest
+from django.conf import settings  # noqa: PLC0415
+from django.contrib.auth import get_user_model
+
+from django_bolt import BoltAPI
 from django_bolt.auth import (
+    IsAuthenticated,
+    JWTAuthentication,
     create_jwt_for_user,
-    get_current_user,
     extract_user_id_from_context,
     get_auth_context,
+    get_current_user,
 )
+from django_bolt.params import Depends
 
 # Mark all tests to use Django DB
 pytestmark = pytest.mark.django_db
@@ -22,16 +31,10 @@ pytestmark = pytest.mark.django_db
 
 def test_create_jwt_for_user():
     """Test creating JWT tokens for Django users."""
-    from django.contrib.auth import get_user_model
     User = get_user_model()
 
     # Create a test user
-    user = User.objects.create(
-        username="testuser",
-        email="test@example.com",
-        is_staff=True,
-        is_superuser=False
-    )
+    user = User.objects.create(username="testuser", email="test@example.com", is_staff=True, is_superuser=False)
 
     # Create JWT token
     token = create_jwt_for_user(user, secret="my-secret")
@@ -54,25 +57,15 @@ def test_create_jwt_for_user():
 
 def test_create_jwt_with_extra_claims():
     """Test creating JWT tokens with custom claims."""
-    from django.contrib.auth import get_user_model
     User = get_user_model()
 
-    user = User.objects.create(
-        username="admin",
-        email="admin@example.com",
-        is_staff=True,
-        is_superuser=True
-    )
+    user = User.objects.create(username="admin", email="admin@example.com", is_staff=True, is_superuser=True)
 
     # Create token with extra claims
     token = create_jwt_for_user(
         user,
         secret="secret",
-        extra_claims={
-            "permissions": ["users.create", "users.delete"],
-            "role": "admin",
-            "department": "engineering"
-        }
+        extra_claims={"permissions": ["users.create", "users.delete"], "role": "admin", "department": "engineering"},
     )
 
     # Decode and verify
@@ -90,28 +83,15 @@ def test_create_jwt_with_extra_claims():
 
 def test_jwt_authentication_with_django_user():
     """Test JWT authentication extracts correct user data."""
-    from django.contrib.auth import get_user_model
-    from django_bolt import BoltAPI
-    from django_bolt.auth import JWTAuthentication
-    from django_bolt.auth import IsAuthenticated
     User = get_user_model()
 
     # Create test user
-    user = User.objects.create(
-        username="jwtuser",
-        email="jwt@example.com",
-        is_staff=False,
-        is_superuser=False
-    )
+    user = User.objects.create(username="jwtuser", email="jwt@example.com", is_staff=False, is_superuser=False)
 
     # Create API with JWT auth
     api = BoltAPI()
 
-    @api.get(
-        "/protected",
-        auth=[JWTAuthentication(secret="test-secret")],
-        guards=[IsAuthenticated()]
-    )
+    @api.get("/protected", auth=[JWTAuthentication(secret="test-secret")], guards=[IsAuthenticated()])
     async def protected_endpoint(request: dict):
         context = request["context"]
         return {
@@ -131,19 +111,10 @@ def test_jwt_authentication_with_django_user():
 
 def test_django_user_dependency_injection():
     """Test type-safe Django User dependency injection with Depends()."""
-    from django_bolt import BoltAPI
-    from django_bolt.auth import JWTAuthentication
-    from django_bolt.auth import IsAuthenticated
-    from django_bolt.params import Depends
-
     # Create API with the dependency (using imported get_current_user)
     api = BoltAPI()
 
-    @api.get(
-        "/me",
-        auth=[JWTAuthentication(secret="test-secret")],
-        guards=[IsAuthenticated()]
-    )
+    @api.get("/me", auth=[JWTAuthentication(secret="test-secret")], guards=[IsAuthenticated()])
     async def get_current_user_endpoint(user=Depends(get_current_user)):
         """
         Endpoint that receives Django User instance via dependency injection.
@@ -169,13 +140,13 @@ def test_django_user_dependency_injection():
 
     # Verify the route was registered correctly
     assert len(api._routes) == 1
-    method, path, _, handler_fn = api._routes[0]
+    method, path, handler_id, handler_fn = api._routes[0]
     assert method == "GET"
     assert path == "/me"
 
     # Verify handler metadata
-    assert handler_fn in api._handler_meta
-    meta = api._handler_meta[handler_fn]
+    assert handler_id in api._handler_meta
+    meta = api._handler_meta[handler_id]
     assert "fields" in meta
 
     # Check that the dependency parameter was detected
@@ -191,13 +162,7 @@ def test_django_user_dependency_injection():
 def test_jwt_utils_extract_user_id():
     """Test extracting user_id from request context."""
     # Mock request with context
-    request = {
-        "context": {
-            "user_id": "123",
-            "is_staff": True,
-            "auth_backend": "jwt"
-        }
-    }
+    request = {"context": {"user_id": "123", "is_staff": True, "auth_backend": "jwt"}}
 
     user_id = extract_user_id_from_context(request)
     assert user_id == "123"
@@ -218,7 +183,7 @@ def test_jwt_utils_get_auth_context():
             "is_staff": False,
             "is_superuser": True,
             "auth_backend": "jwt",
-            "permissions": ["read", "write"]
+            "permissions": ["read", "write"],
         }
     }
 
@@ -234,15 +199,9 @@ def test_jwt_utils_get_auth_context():
 
 def test_jwt_claims_stored_in_context():
     """Test that JWT claims are properly stored in request context."""
-    from django.contrib.auth import get_user_model
     User = get_user_model()
 
-    user = User.objects.create(
-        username="claimsuser",
-        email="claims@example.com",
-        is_staff=True,
-        is_superuser=False
-    )
+    user = User.objects.create(username="claimsuser", email="claims@example.com", is_staff=True, is_superuser=False)
 
     # Create token with custom claims
     token = create_jwt_for_user(
@@ -251,7 +210,7 @@ def test_jwt_claims_stored_in_context():
         extra_claims={
             "permissions": ["read", "write"],
             "tenant_id": "tenant123",
-        }
+        },
     )
 
     # Decode to verify claims are there
@@ -266,7 +225,6 @@ def test_jwt_claims_stored_in_context():
 
 def test_jwt_expiration():
     """Test JWT expiration handling."""
-    from django.contrib.auth import get_user_model
     User = get_user_model()
 
     user = User.objects.create(username="expuser")
@@ -282,7 +240,7 @@ def test_jwt_expiration():
     # Verify it's expired
     try:
         jwt.decode(expired_token, "secret", algorithms=["HS256"])
-        assert False, "Should have raised ExpiredSignatureError"
+        raise AssertionError("Should have raised ExpiredSignatureError")
     except jwt.ExpiredSignatureError:
         pass  # Expected
 
@@ -298,9 +256,6 @@ def test_jwt_expiration():
 
 def test_jwt_uses_django_secret_key():
     """Test that JWTAuthentication uses Django SECRET_KEY by default."""
-    from django.conf import settings
-    from django_bolt.auth import JWTAuthentication
-
     # Create JWT auth without explicit secret
     auth = JWTAuthentication()
 
@@ -311,9 +266,6 @@ def test_jwt_uses_django_secret_key():
 
 def test_jwt_custom_secret_overrides():
     """Test that explicit secret overrides Django SECRET_KEY."""
-    from django.conf import settings
-    from django_bolt.auth import JWTAuthentication
-
     # Create with explicit secret
     auth = JWTAuthentication(secret="custom-secret")
 

@@ -2,9 +2,60 @@ use ahash::AHashMap;
 use matchit::{Match, Router as MatchRouter};
 use pyo3::prelude::*;
 
+/// Lookup result type that indicates whether path params exist
+/// For static routes, params is always None (avoiding allocation)
+/// For dynamic routes, params contains the extracted path parameters
+pub enum RouteMatch<'a> {
+    Static(&'a Route),
+    Dynamic(&'a Route, AHashMap<String, String>),
+}
+
+impl<'a> RouteMatch<'a> {
+    /// Get the route handler
+    #[inline]
+    pub fn route(&self) -> &Route {
+        match self {
+            RouteMatch::Static(r) => r,
+            RouteMatch::Dynamic(r, _) => r,
+        }
+    }
+
+    /// Get path params (empty for static routes)
+    #[inline]
+    pub fn path_params(self) -> AHashMap<String, String> {
+        match self {
+            RouteMatch::Static(_) => AHashMap::new(),
+            RouteMatch::Dynamic(_, params) => params,
+        }
+    }
+
+    /// Check if this is a static route (no path params)
+    #[inline]
+    #[allow(dead_code)]
+    pub fn is_static(&self) -> bool {
+        matches!(self, RouteMatch::Static(_))
+    }
+
+    /// Get handler_id
+    #[inline]
+    pub fn handler_id(&self) -> usize {
+        self.route().handler_id
+    }
+}
+
+/// Route handler with metadata
+/// Used for both static and dynamic routes
+#[repr(C)]
 pub struct Route {
     pub handler: Py<PyAny>,
     pub handler_id: usize, // Store handler_id for middleware metadata lookup
+}
+
+/// Check if a path contains any path parameters (dynamic segments)
+/// Returns true if path contains {param} patterns
+#[inline]
+fn is_static_path(path: &str) -> bool {
+    !path.contains('{')
 }
 
 /// Convert FastAPI-style paths like /items/{id} and /files/{path:path}
@@ -57,26 +108,47 @@ pub fn convert_path(path: &str) -> String {
     result
 }
 
+/// Per-method router combining static (O(1) HashMap) and dynamic (radix tree) routing
+/// Inspired by Elysia's router optimization that separates static from dynamic routes
+struct MethodRouter {
+    /// O(1) lookup for static routes (e.g., /users, /health, /api/items)
+    /// These routes have no path parameters and can use exact string matching
+    static_routes: AHashMap<String, Route>,
+
+    /// Radix tree for dynamic routes (e.g., /users/{id}, /posts/{id}/comments)
+    /// Only used when static lookup fails
+    dynamic_router: MatchRouter<Route>,
+}
+
+impl MethodRouter {
+    fn new() -> Self {
+        MethodRouter {
+            static_routes: AHashMap::new(),
+            dynamic_router: MatchRouter::new(),
+        }
+    }
+}
+
 pub struct Router {
-    get: MatchRouter<Route>,
-    post: MatchRouter<Route>,
-    put: MatchRouter<Route>,
-    patch: MatchRouter<Route>,
-    delete: MatchRouter<Route>,
-    head: MatchRouter<Route>,
-    options: MatchRouter<Route>,
+    get: MethodRouter,
+    post: MethodRouter,
+    put: MethodRouter,
+    patch: MethodRouter,
+    delete: MethodRouter,
+    head: MethodRouter,
+    options: MethodRouter,
 }
 
 impl Router {
     pub fn new() -> Self {
         Router {
-            get: MatchRouter::new(),
-            post: MatchRouter::new(),
-            put: MatchRouter::new(),
-            patch: MatchRouter::new(),
-            delete: MatchRouter::new(),
-            head: MatchRouter::new(),
-            options: MatchRouter::new(),
+            get: MethodRouter::new(),
+            post: MethodRouter::new(),
+            put: MethodRouter::new(),
+            patch: MethodRouter::new(),
+            delete: MethodRouter::new(),
+            head: MethodRouter::new(),
+            options: MethodRouter::new(),
         }
     }
 
@@ -87,15 +159,7 @@ impl Router {
         handler_id: usize,
         handler: Py<PyAny>,
     ) -> PyResult<()> {
-        // Convert path from FastAPI syntax to matchit syntax
-        let converted_path = convert_path(path);
-
-        let route = Route {
-            handler,
-            handler_id,
-        };
-
-        let router = match method {
+        let method_router = match method {
             "GET" => &mut self.get,
             "POST" => &mut self.post,
             "PUT" => &mut self.put,
@@ -111,19 +175,43 @@ impl Router {
             }
         };
 
-        router.insert(&converted_path, route).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("Failed to register route: {}", e))
-        })?;
+        // Elysia-style optimization: Separate static routes from dynamic routes
+        // Static routes use O(1) HashMap lookup, dynamic routes use radix tree
+        if is_static_path(path) {
+            // Static route: store in HashMap for O(1) lookup
+            let route = Route {
+                handler,
+                handler_id,
+            };
+            method_router.static_routes.insert(path.to_string(), route);
+        } else {
+            // Dynamic route: convert path and store in radix tree
+            let converted_path = convert_path(path);
+            let route = Route {
+                handler,
+                handler_id,
+            };
+            method_router.dynamic_router.insert(&converted_path, route).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("Failed to register route: {}", e))
+            })?;
+        }
 
         Ok(())
     }
 
-    pub fn find(
-        &self,
-        method: &str,
-        path: &str,
-    ) -> Option<(&Route, AHashMap<String, String>, usize)> {
-        let router = match method {
+    /// Find a route handler for the given method and path.
+    ///
+    /// Uses Elysia-style two-phase lookup:
+    /// 1. O(1) HashMap lookup for static routes (no path params)
+    /// 2. Radix tree lookup for dynamic routes (with path params)
+    ///
+    /// Returns RouteMatch enum that distinguishes between static and dynamic routes,
+    /// allowing the handler to skip path param processing for static routes.
+    ///
+    /// This optimization significantly improves performance for APIs
+    /// where most routes are static (e.g., /users, /health, /api/items).
+    pub fn find(&self, method: &str, path: &str) -> Option<RouteMatch<'_>> {
+        let method_router = match method {
             "GET" => &self.get,
             "POST" => &self.post,
             "PUT" => &self.put,
@@ -134,13 +222,22 @@ impl Router {
             _ => return None,
         };
 
-        match router.at(path) {
+        // Phase 1: O(1) HashMap lookup for static routes
+        // This is the fast path - most API routes are static
+        if let Some(route) = method_router.static_routes.get(path) {
+            // Static routes have no path parameters - no HashMap allocation needed
+            return Some(RouteMatch::Static(route));
+        }
+
+        // Phase 2: Radix tree lookup for dynamic routes
+        // Only reached for paths with parameters like /users/{id}
+        match method_router.dynamic_router.at(path) {
             Ok(Match { value, params }) => {
                 let mut path_params = AHashMap::new();
                 for (key, value) in params.iter() {
                     path_params.insert(key.to_string(), value.to_string());
                 }
-                Some((value, path_params, value.handler_id))
+                Some(RouteMatch::Dynamic(value, path_params))
             }
             Err(_) => None,
         }
@@ -155,6 +252,7 @@ impl Router {
         let mut methods = Vec::new();
 
         // Check each method router to see if it has a handler for this path
+        // Need to check both static routes (HashMap) and dynamic routes (radix tree)
         let method_routers = [
             ("GET", &self.get),
             ("POST", &self.post),
@@ -165,8 +263,13 @@ impl Router {
             ("OPTIONS", &self.options),
         ];
 
-        for (method_name, router) in method_routers.iter() {
-            if router.at(path).is_ok() {
+        for (method_name, method_router) in method_routers.iter() {
+            // Check static routes first (O(1))
+            if method_router.static_routes.contains_key(path) {
+                methods.push(method_name.to_string());
+            }
+            // Then check dynamic routes (radix tree)
+            else if method_router.dynamic_router.at(path).is_ok() {
                 methods.push(method_name.to_string());
             }
         }

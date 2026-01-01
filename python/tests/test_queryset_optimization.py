@@ -3,7 +3,11 @@ Tests for QuerySet serialization optimization.
 
 These tests verify that field names are pre-computed at route registration time.
 """
+
+from typing import get_origin
+
 import msgspec
+
 from django_bolt import BoltAPI
 from django_bolt.testing import TestClient
 
@@ -28,14 +32,13 @@ def test_metadata_precomputes_field_names():
         return []
 
     # Access the handler metadata
-    handler = api._handlers[0]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     # Verify field names are pre-computed
     assert "response_field_names" in meta, "Field names should be pre-computed"
     assert set(meta["response_field_names"]) == {"id", "username"}
-    from typing import get_origin
-    assert get_origin(meta["response_type"]) == list
+    assert get_origin(meta["response_type"]) is list
 
 
 def test_metadata_has_no_field_names_for_non_list_responses():
@@ -50,8 +53,8 @@ def test_metadata_has_no_field_names_for_non_list_responses():
     async def get_user() -> UserSchema:
         return UserSchema(id=1, username="test")
 
-    handler = api._handlers[0]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     # Should NOT have field names for single object responses
     assert "response_field_names" not in meta, "Single object responses shouldn't have field names"
@@ -90,6 +93,7 @@ def test_precomputed_fields_match_struct():
 
     This test will FAIL if field pre-computation logic is wrong.
     """
+
     class DetailedSchema(msgspec.Struct):
         id: int
         name: str
@@ -102,16 +106,15 @@ def test_precomputed_fields_match_struct():
     async def list_items() -> list[DetailedSchema]:
         return []
 
-    handler = api._handlers[0]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     # Pre-computed fields should exactly match struct annotations
     assert "response_field_names" in meta
     precomputed = set(meta["response_field_names"])
     expected = set(DetailedSchema.__annotations__.keys())
 
-    assert precomputed == expected, \
-        f"Pre-computed fields {precomputed} don't match struct {expected}"
+    assert precomputed == expected, f"Pre-computed fields {precomputed} don't match struct {expected}"
 
 
 def test_field_order_preserved():
@@ -120,6 +123,7 @@ def test_field_order_preserved():
 
     This is important for QuerySet.values() to work correctly.
     """
+
     class OrderedSchema(msgspec.Struct):
         # Order matters!
         z_field: str
@@ -132,8 +136,8 @@ def test_field_order_preserved():
     async def list_items() -> list[OrderedSchema]:
         return []
 
-    handler = api._handlers[0]
-    meta = api._handler_meta[handler]
+    _method, _path, handler_id, _handler = api._routes[0]
+    meta = api._handler_meta[handler_id]
 
     # Check that all fields are present
     field_names = meta["response_field_names"]

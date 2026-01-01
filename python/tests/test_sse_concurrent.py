@@ -8,7 +8,7 @@ responses fully. Therefore, they CANNOT test:
 
 For testing those fixes, use the load test script:
     uv run python scripts/sse_load.py --url http://localhost:8000/sync-sse --clients 5000 --duration 10
-then immediately run again. If the view hangs then we have the issue. 
+then immediately run again. If the view hangs then we have the issue.
     uv run python scripts/sse_load.py --url http://localhost:8000/sync-sse --clients 5000 --duration 10
 
 The load test will:
@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+
 import pytest
+
 from django_bolt import BoltAPI, StreamingResponse
 from django_bolt.testing import TestClient
 
@@ -41,30 +43,36 @@ def api():
     @api.get("/sse-async-basic")
     async def sse_async_basic():
         """Basic async SSE with 5 messages."""
+
         async def gen():
             for i in range(5):
                 yield f"data: async-message-{i}\n\n"
                 await asyncio.sleep(0.01)
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     @api.get("/sse-async-sse-format")
     async def sse_async_sse_format():
         """Async SSE with proper SSE event fields."""
+
         async def gen():
             for i in range(3):
-                yield f"event: update\nid: {i}\ndata: {{\"count\": {i}}}\n\n"
+                yield f'event: update\nid: {i}\ndata: {{"count": {i}}}\n\n'
                 await asyncio.sleep(0.01)
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     @api.get("/sse-async-mixed-types")
     async def sse_async_mixed_types():
         """Async SSE with different data types."""
+
         async def gen():
             yield "data: first\n\n"
             await asyncio.sleep(0.01)
             yield b"data: bytes-message\n\n"
             await asyncio.sleep(0.01)
             yield "data: third\n\n"
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     # ==================== Sync SSE Endpoints ====================
@@ -72,19 +80,23 @@ def api():
     @api.get("/sse-sync-basic")
     async def sse_sync_basic():
         """Basic sync SSE with 5 messages."""
+
         def gen():
             for i in range(5):
                 yield f"data: sync-message-{i}\n\n"
                 time.sleep(0.01)
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     @api.get("/sse-sync-sse-format")
     async def sse_sync_sse_format():
         """Sync SSE with proper SSE event fields."""
+
         def gen():
             for i in range(3):
                 yield f"event: tick\nid: {i}\ndata: {i}\n\n"
                 time.sleep(0.01)
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     # ==================== High-frequency Endpoints ====================
@@ -92,19 +104,23 @@ def api():
     @api.get("/sse-rapid-async")
     async def sse_rapid_async():
         """High-frequency async messages (20 per second)."""
+
         async def gen():
             for i in range(20):
                 yield f"data: {i}\n\n"
                 await asyncio.sleep(0.05)  # 20 per second
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     @api.get("/sse-rapid-sync")
     async def sse_rapid_sync():
         """High-frequency sync messages (20 per second)."""
+
         def gen():
             for i in range(20):
                 yield f"data: {i}\n\n"
                 time.sleep(0.05)
+
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     # ==================== Endpoints with Cleanup Tracking ====================
@@ -112,6 +128,7 @@ def api():
     @api.get("/sse-async-with-tracking")
     async def sse_async_with_tracking():
         """Async SSE that yields tracking data to verify generator execution."""
+
         async def gen():
             # Send start marker
             yield "data: START\n\n"
@@ -128,6 +145,7 @@ def api():
     @api.get("/sse-sync-with-tracking")
     async def sse_sync_with_tracking():
         """Sync SSE that yields tracking data to verify generator execution."""
+
         def gen():
             # Send start marker
             yield "data: START\n\n"
@@ -244,7 +262,7 @@ def test_async_sse_event_fields(client):
     assert len(events) == 3
     assert events[0].get("event") == "update"
     assert events[0].get("id") == "0"
-    assert '0' in events[0].get("data", "")
+    assert "0" in events[0].get("data", "")
     assert events[2].get("id") == "2"
 
 
@@ -366,18 +384,17 @@ def test_concurrent_async_sse(client):
 
     # Make 3 concurrent-like requests (sequential in test, but tests server handles them)
     responses = []
-    for req_num in range(3):
+    for _req_num in range(3):
         response = client.get("/sse-async-basic")
         assert response.status_code == 200
         responses.append(response)
 
     # Verify all responses are complete and correct
-    for resp_num, response in enumerate(responses):
+    for _resp_num, response in enumerate(responses):
         content = response.content.decode()
         data = parse_sse_data(content)
         assert len(data) == 5
         assert data[0] == "async-message-0"
-
 
 
 def test_concurrent_sync_sse(client):
@@ -541,7 +558,7 @@ def test_streaming_with_iter_content(client):
 
     # Iterate over chunks
     chunks = []
-    for i, chunk in enumerate(response.iter_content(chunk_size=32, decode_unicode=True)):
+    for _i, chunk in enumerate(response.iter_content(chunk_size=32, decode_unicode=True)):
         if chunk:
             chunks.append(chunk)
 

@@ -2,5 +2,5 @@ from django.apps import AppConfig
 
 
 class BenchConfig(AppConfig):
-    default_auto_field = 'django.db.models.BigAutoField'
-    name = 'bench'
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "bench"

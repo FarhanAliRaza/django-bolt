@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::metadata::RateLimitConfig;
+use crate::response_builder;
+use crate::responses;
 
 type Limiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
@@ -29,6 +31,8 @@ pub fn check_rate_limit(
     headers: &AHashMap<String, String>,
     peer_addr: Option<&str>,
     config: &RateLimitConfig,
+    method: &str,
+    path: &str,
 ) -> Option<HttpResponse> {
     // Config is already parsed at startup - no GIL needed!
     let rps = config.rps;
@@ -98,17 +102,18 @@ pub fn check_rate_limit(
             let wait_time = not_until.wait_time_from(DefaultClock::default().now());
             let retry_after = wait_time.as_secs().max(1);
 
-            Some(
-                HttpResponse::TooManyRequests()
-                    .insert_header(("Retry-After", retry_after.to_string()))
-                    .insert_header(("X-RateLimit-Limit", rps.to_string()))
-                    .insert_header(("X-RateLimit-Burst", burst.to_string()))
-                    .content_type("application/json")
-                    .body(format!(
-                        r#"{{"detail":"Rate limit exceeded. Try again in {} seconds.","retry_after":{}}}"#,
-                        retry_after, retry_after
-                    ))
-            )
+            // Log rate limit exceeded
+            eprintln!(
+                "[django-bolt] Rate limit exceeded: {} {} | key: {} | limit: {} rps (burst: {}) | retry after: {}s",
+                method, path, key, rps, burst, retry_after
+            );
+
+            Some(response_builder::build_rate_limit_response(
+                retry_after,
+                rps,
+                burst,
+                responses::get_rate_limit_body(retry_after),
+            ))
         }
     }
 }

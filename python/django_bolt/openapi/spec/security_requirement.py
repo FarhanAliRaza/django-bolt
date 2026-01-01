@@ -1,6 +1,4 @@
-from typing_extensions import TypeAlias
-
-SecurityRequirement: TypeAlias = "dict[str, list[str]]"
+type SecurityRequirement = "dict[str, list[str]]"
 """Lists the required security schemes to execute this operation. The name used for each property MUST correspond to a
 security scheme declared in the.
 

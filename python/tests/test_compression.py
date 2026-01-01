@@ -3,9 +3,12 @@ Tests for compression middleware in Django-Bolt.
 
 Tests both global compression configuration and per-route skip functionality.
 """
+
 import pytest
+
 from django_bolt import BoltAPI
-from django_bolt.middleware import skip_middleware, no_compress, CompressionConfig
+from django_bolt.middleware import CompressionConfig, no_compress, skip_middleware
+from django_bolt.responses import HTML, PlainText, StreamingResponse
 from django_bolt.testing import TestClient
 
 
@@ -101,7 +104,7 @@ def test_compression_custom_config():
         compression=CompressionConfig(
             backend="gzip",
             minimum_size=1000,  # Larger threshold
-            gzip_fallback=True
+            gzip_fallback=True,
         )
     )
 
@@ -128,12 +131,7 @@ def test_compression_custom_config():
 
 def test_compression_brotli_config():
     """Test brotli compression configuration."""
-    api = BoltAPI(
-        compression=CompressionConfig(
-            backend="brotli",
-            minimum_size=500
-        )
-    )
+    api = BoltAPI(compression=CompressionConfig(backend="brotli", minimum_size=500))
 
     @api.get("/data")
     async def get_data():
@@ -149,13 +147,7 @@ def test_compression_brotli_config():
 
 def test_compression_zstd_config():
     """Test zstd compression configuration."""
-    api = BoltAPI(
-        compression=CompressionConfig(
-            backend="zstd",
-            minimum_size=500,
-            gzip_fallback=True
-        )
-    )
+    api = BoltAPI(compression=CompressionConfig(backend="zstd", minimum_size=500, gzip_fallback=True))
 
     @api.get("/data")
     async def get_data():
@@ -175,8 +167,6 @@ def test_compression_with_different_content_types():
     @api.get("/json")
     async def json_route():
         return {"data": "x" * 1000}
-
-    from django_bolt.responses import PlainText, HTML
 
     @api.get("/text")
     async def text_route():
@@ -203,8 +193,6 @@ def test_compression_with_different_content_types():
 
 def test_compression_skip_on_streaming():
     """Test that streaming responses can skip compression."""
-    from django_bolt.responses import StreamingResponse
-
     api = BoltAPI(compression=CompressionConfig(backend="gzip"))
 
     @api.get("/stream")

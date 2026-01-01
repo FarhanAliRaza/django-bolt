@@ -8,14 +8,17 @@ This test suite verifies that the @action decorator works correctly:
 - Custom path parameter
 - Auth/guards inheritance from class-level
 """
-import pytest
+
 import msgspec
+import pytest
+
 from django_bolt import BoltAPI, ViewSet, action
 from django_bolt.testing import TestClient
-from .test_models import Article
 
+from .test_models import Article  # noqa: PLC0415
 
 # --- Fixtures ---
+
 
 @pytest.fixture
 def api():
@@ -25,8 +28,10 @@ def api():
 
 # --- Schemas ---
 
+
 class ArticleSchema(msgspec.Struct):
     """Article schema."""
+
     id: int
     title: str
     content: str
@@ -34,12 +39,14 @@ class ArticleSchema(msgspec.Struct):
 
 class ArticleCreateSchema(msgspec.Struct):
     """Schema for creating articles."""
+
     title: str
     content: str
     author: str
 
 
 # --- Tests ---
+
 
 @pytest.mark.django_db(transaction=True)
 def test_action_decorator_detail_true(api):
@@ -54,21 +61,13 @@ def test_action_decorator_detail_true(api):
             """List articles."""
             articles = []
             async for article in await self.get_queryset():
-                articles.append(ArticleSchema(
-                    id=article.id,
-                    title=article.title,
-                    content=article.content
-                ))
+                articles.append(ArticleSchema(id=article.id, title=article.title, content=article.content))
             return articles
 
         async def retrieve(self, request, pk: int):
             """Retrieve single article."""
             article = await self.get_object(pk)
-            return ArticleSchema(
-                id=article.id,
-                title=article.title,
-                content=article.content
-            )
+            return ArticleSchema(id=article.id, title=article.title, content=article.content)
 
         @action(methods=["POST"], detail=True)
         async def publish(self, request, pk: int):
@@ -80,10 +79,7 @@ def test_action_decorator_detail_true(api):
 
     # Create test article
     article = Article.objects.create(
-        title="Test Article",
-        content="Test content",
-        author="Test Author",
-        is_published=False
+        title="Test Article", content="Test content", author="Test Author", is_published=False
     )
 
     client = TestClient(api)
@@ -113,11 +109,7 @@ def test_action_decorator_detail_false(api):
             """List articles."""
             articles = []
             async for article in await self.get_queryset():
-                articles.append(ArticleSchema(
-                    id=article.id,
-                    title=article.title,
-                    content=article.content
-                ))
+                articles.append(ArticleSchema(id=article.id, title=article.title, content=article.content))
             return articles
 
         @action(methods=["GET"], detail=False)
@@ -125,32 +117,13 @@ def test_action_decorator_detail_false(api):
             """Get published articles. GET /articles/published"""
             articles = []
             async for article in Article.objects.filter(is_published=True):
-                articles.append(ArticleSchema(
-                    id=article.id,
-                    title=article.title,
-                    content=article.content
-                ))
+                articles.append(ArticleSchema(id=article.id, title=article.title, content=article.content))
             return articles
 
     # Create test articles
-    Article.objects.create(
-        title="Published 1",
-        content="Content 1",
-        author="Author 1",
-        is_published=True
-    )
-    Article.objects.create(
-        title="Draft",
-        content="Content 2",
-        author="Author 2",
-        is_published=False
-    )
-    Article.objects.create(
-        title="Published 2",
-        content="Content 3",
-        author="Author 3",
-        is_published=True
-    )
+    Article.objects.create(title="Published 1", content="Content 1", author="Author 1", is_published=True)
+    Article.objects.create(title="Draft", content="Content 2", author="Author 2", is_published=False)
+    Article.objects.create(title="Published 2", content="Content 3", author="Author 3", is_published=True)
 
     client = TestClient(api)
 
@@ -168,6 +141,7 @@ def test_action_decorator_multiple_methods(api):
 
     class StatusUpdate(msgspec.Struct):
         """Schema for status update."""
+
         is_published: bool
 
     @api.viewset("/articles")
@@ -195,10 +169,7 @@ def test_action_decorator_multiple_methods(api):
 
     # Create test article
     article = Article.objects.create(
-        title="Test Article",
-        content="Test content",
-        author="Test Author",
-        is_published=False
+        title="Test Article", content="Test content", author="Test Author", is_published=False
     )
 
     client = TestClient(api)
@@ -238,11 +209,7 @@ def test_action_decorator_custom_path(api):
     client = TestClient(api)
 
     # Create test article
-    article = Article.objects.create(
-        title="Test Article",
-        content="Test content",
-        author="Test Author"
-    )
+    article = Article.objects.create(title="Test Article", content="Test content", author="Test Author")
 
     # Test custom path (not method name)
     response = client.post(f"/articles/{article.id}/custom-action-name")
@@ -258,6 +225,7 @@ def test_action_decorator_with_api_view_raises_error(api):
 
     # This should raise an error because api.view() doesn't support @action
     with pytest.raises(ValueError, match="uses @action decorator.*api.viewset"):
+
         @api.view("/articles", methods=["GET"])
         class ArticleViewSet(ViewSet):
             async def get(self, request):
@@ -289,11 +257,7 @@ def test_action_decorator_defaults_to_function_name(api):
     client = TestClient(api)
 
     # Create test article
-    article = Article.objects.create(
-        title="Test Article",
-        content="Test content",
-        author="Test Author"
-    )
+    article = Article.objects.create(title="Test Article", content="Test content", author="Test Author")
 
     # Test action at /articles/{pk}/archive (function name)
     response = client.post(f"/articles/{article.id}/archive")
@@ -321,11 +285,7 @@ def test_action_decorator_with_query_params(api):
             """GET /articles/search?query=xxx&limit=5"""
             articles = []
             async for article in Article.objects.filter(title__icontains=query)[:limit]:
-                articles.append(ArticleSchema(
-                    id=article.id,
-                    title=article.title,
-                    content=article.content
-                ))
+                articles.append(ArticleSchema(id=article.id, title=article.title, content=article.content))
             return {"query": query, "limit": limit, "results": articles}
 
     # Create test articles
@@ -349,6 +309,7 @@ def test_action_decorator_invalid_method(api):
     """Test that @action raises error for invalid HTTP methods."""
 
     with pytest.raises(ValueError, match="Invalid HTTP method"):
+
         @action(methods=["INVALID"], detail=True)
         async def some_action(self, request, pk: int):
             pass
@@ -362,7 +323,7 @@ def test_action_decorator_with_different_lookup_fields(api):
     class ArticleViewSet(ViewSet):
         queryset = Article.objects.all()
         serializer_class = ArticleSchema
-        lookup_field = 'id'  # Explicitly set to 'id' instead of default 'pk'
+        lookup_field = "id"  # Explicitly set to 'id' instead of default 'pk'
 
         async def list(self, request):
             """List articles."""
@@ -371,11 +332,7 @@ def test_action_decorator_with_different_lookup_fields(api):
         async def retrieve(self, request, id: int):
             """Retrieve article by id."""
             article = await self.get_object(id=id)
-            return ArticleSchema(
-                id=article.id,
-                title=article.title,
-                content=article.content
-            )
+            return ArticleSchema(id=article.id, title=article.title, content=article.content)
 
         @action(methods=["POST"], detail=True)
         async def feature(self, request, id: int):
@@ -385,11 +342,7 @@ def test_action_decorator_with_different_lookup_fields(api):
     client = TestClient(api)
 
     # Create test article
-    article = Article.objects.create(
-        title="Test Article",
-        content="Test content",
-        author="Test Author"
-    )
+    article = Article.objects.create(title="Test Article", content="Test content", author="Test Author")
 
     # Test action with custom lookup field
     response = client.post(f"/articles/{article.id}/feature")

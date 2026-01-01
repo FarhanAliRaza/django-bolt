@@ -4,8 +4,15 @@ Static file route registration for Django admin.
 This module handles the registration of static file serving routes
 needed by Django admin and other Django apps.
 """
+
 import inspect
+import sys
 from typing import TYPE_CHECKING
+
+from django.conf import settings
+
+from django_bolt.admin.static import serve_static_file
+from django_bolt.typing import FieldDefinition
 
 if TYPE_CHECKING:
     from django_bolt.api import BoltAPI
@@ -14,7 +21,7 @@ if TYPE_CHECKING:
 class StaticRouteRegistrar:
     """Handles registration of static file serving routes."""
 
-    def __init__(self, api: 'BoltAPI'):
+    def __init__(self, api: "BoltAPI"):
         """Initialize the registrar with a BoltAPI instance.
 
         Args:
@@ -37,21 +44,16 @@ class StaticRouteRegistrar:
             return
 
         try:
-            from django.conf import settings
-
             # Check if static files are configured
-            if not hasattr(settings, 'STATIC_URL') or not settings.STATIC_URL:
+            if not hasattr(settings, "STATIC_URL") or not settings.STATIC_URL:
                 return
 
-            static_url = settings.STATIC_URL.strip('/')
+            static_url = settings.STATIC_URL.strip("/")
             if not static_url:
-                static_url = 'static'
+                static_url = "static"
 
             # Register catch-all route for static files
-            route_pattern = f'/{static_url}/{{path:path}}'
-
-            # Import here to avoid circular dependency
-            from django_bolt.admin.static import serve_static_file
+            route_pattern = f"/{static_url}/{{path:path}}"
 
             # Create static file handler
             async def static_handler(path: str):
@@ -64,7 +66,6 @@ class StaticRouteRegistrar:
             self.api._static_routes_registered = True
 
         except Exception as e:
-            import sys
             print(f"[django-bolt] Warning: Failed to register static routes: {e}", file=sys.stderr)
 
     def _register_static_route(self, route_pattern: str, handler) -> None:
@@ -82,8 +83,6 @@ class StaticRouteRegistrar:
 
         # Create metadata for static handler
         # Extract path parameter metadata using FieldDefinition
-        from django_bolt.typing import FieldDefinition
-
         sig = inspect.signature(handler)
         path_field = FieldDefinition(
             name="path",
@@ -101,5 +100,15 @@ class StaticRouteRegistrar:
             "sig": sig,
             "fields": [path_field],
             "path_params": {"path"},
+            "is_async": True,  # static_handler is async
         }
-        self.api._handler_meta[handler] = meta
+
+        # Create injector for static handler (extracts path param from request)
+        def static_injector(request):
+            path_value = request["params"].get("path", "")
+            return ([path_value], {})
+
+        meta["injector"] = static_injector
+        meta["injector_is_async"] = False
+
+        self.api._handler_meta[handler_id] = meta

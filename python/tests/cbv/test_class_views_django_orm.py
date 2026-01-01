@@ -15,25 +15,24 @@ Tests cover:
 - DestroyMixin with obj.adelete()
 - End-to-end CRUD workflows
 """
-import pytest
+
 import msgspec
+import pytest
+
 from django_bolt import BoltAPI
 from django_bolt.testing import TestClient
 from django_bolt.views import (
     APIView,
-    ViewSet,
+    DestroyMixin,
     ListMixin,
     RetrieveMixin,
-    CreateMixin,
-    UpdateMixin,
-    PartialUpdateMixin,
-    DestroyMixin,
+    ViewSet,
 )
-from django_bolt.exceptions import HTTPException
+
 from ..test_models import Article
 
-
 # --- Fixtures ---
+
 
 @pytest.fixture
 def api():
@@ -44,7 +43,7 @@ def api():
 @pytest.fixture
 def sample_articles(db):
     """Create sample articles in the database."""
-    from asgiref.sync import async_to_sync
+    from asgiref.sync import async_to_sync  # noqa: PLC0415
 
     articles = []
     for i in range(1, 4):
@@ -60,8 +59,10 @@ def sample_articles(db):
 
 # --- Schemas ---
 
+
 class ArticleSchema(msgspec.Struct):
     """Full article schema (without datetime fields for simplicity)."""
+
     id: int
     title: str
     content: str
@@ -82,6 +83,7 @@ class ArticleSchema(msgspec.Struct):
 
 class ArticleCreateSchema(msgspec.Struct):
     """Schema for creating articles."""
+
     title: str
     content: str
     author: str
@@ -89,6 +91,7 @@ class ArticleCreateSchema(msgspec.Struct):
 
 class ArticleUpdateSchema(msgspec.Struct):
     """Schema for updating articles (full update)."""
+
     title: str
     content: str
     author: str
@@ -97,6 +100,7 @@ class ArticleUpdateSchema(msgspec.Struct):
 
 class ArticlePartialUpdateSchema(msgspec.Struct):
     """Schema for partial updates (all fields optional)."""
+
     title: str | None = None
     content: str | None = None
     author: str | None = None
@@ -104,6 +108,7 @@ class ArticlePartialUpdateSchema(msgspec.Struct):
 
 
 # --- ListMixin Tests ---
+
 
 @pytest.mark.django_db(transaction=True)
 def test_simple_list_without_mixin(api, sample_articles):
@@ -114,13 +119,15 @@ def test_simple_list_without_mixin(api, sample_articles):
         async def get(self, request) -> list:
             articles = []
             async for article in Article.objects.all():
-                articles.append({
-                    "id": article.id,
-                    "title": article.title,
-                    "content": article.content,
-                    "author": article.author,
-                    "is_published": article.is_published,
-                })
+                articles.append(
+                    {
+                        "id": article.id,
+                        "title": article.title,
+                        "content": article.content,
+                        "author": article.author,
+                        "is_published": article.is_published,
+                    }
+                )
             return articles
 
     with TestClient(api) as client:
@@ -187,6 +194,7 @@ def test_list_mixin_filtered_queryset(api, sample_articles):
 
 # --- RetrieveMixin Tests ---
 
+
 @pytest.mark.django_db(transaction=True)
 def test_retrieve_mixin_with_real_django_orm(api, sample_articles):
     """Test RetrieveMixin with real Django ORM aget()."""
@@ -230,6 +238,7 @@ def test_retrieve_mixin_not_found(api):
 
 # --- CreateMixin Tests ---
 
+
 @pytest.mark.django_db(transaction=True)
 def test_create_mixin_with_real_django_orm(api):
     """Test CreateMixin with real Django ORM acreate()."""
@@ -269,7 +278,8 @@ def test_create_mixin_with_real_django_orm(api):
         assert "id" in data
 
         # Verify it's actually in the database
-        from asgiref.sync import async_to_sync
+        from asgiref.sync import async_to_sync  # noqa: PLC0415
+
         article_id = data["id"]
         article = async_to_sync(Article.objects.aget)(id=article_id)
         assert article.title == "New Article"
@@ -277,6 +287,7 @@ def test_create_mixin_with_real_django_orm(api):
 
 
 # --- UpdateMixin Tests ---
+
 
 @pytest.mark.django_db(transaction=True)
 def test_update_mixin_with_real_django_orm(api, sample_articles):
@@ -321,7 +332,8 @@ def test_update_mixin_with_real_django_orm(api, sample_articles):
         assert data["is_published"] is True
 
         # Verify database was updated
-        from asgiref.sync import async_to_sync
+        from asgiref.sync import async_to_sync  # noqa: PLC0415
+
         article = async_to_sync(Article.objects.aget)(id=article_id)
         assert article.title == "Updated Title"
         assert article.content == "Updated Content"
@@ -329,6 +341,7 @@ def test_update_mixin_with_real_django_orm(api, sample_articles):
 
 
 # --- PartialUpdateMixin Tests ---
+
 
 @pytest.mark.django_db(transaction=True)
 def test_partial_update_mixin_with_real_django_orm(api, sample_articles):
@@ -371,13 +384,15 @@ def test_partial_update_mixin_with_real_django_orm(api, sample_articles):
         assert data["title"] == "Partially Updated Title"
 
         # Verify database was updated and other fields unchanged
-        from asgiref.sync import async_to_sync
+        from asgiref.sync import async_to_sync  # noqa: PLC0415
+
         article = async_to_sync(Article.objects.aget)(id=article_id)
         assert article.title == "Partially Updated Title"
         assert article.content == original_content  # Unchanged
 
 
 # --- DestroyMixin Tests ---
+
 
 @pytest.mark.django_db(transaction=True)
 def test_destroy_mixin_with_real_django_orm(api, sample_articles):
@@ -391,7 +406,8 @@ def test_destroy_mixin_with_real_django_orm(api, sample_articles):
     article_id = sample_articles[0].id
 
     # Verify article exists before deletion
-    from asgiref.sync import async_to_sync
+    from asgiref.sync import async_to_sync  # noqa: PLC0415
+
     exists_before = async_to_sync(Article.objects.filter(id=article_id).aexists)()
     assert exists_before is True
 
@@ -407,6 +423,7 @@ def test_destroy_mixin_with_real_django_orm(api, sample_articles):
 
 
 # --- Full CRUD ViewSet Tests ---
+
 
 @pytest.mark.django_db(transaction=True)
 def test_full_crud_viewset_with_django_orm(api):
@@ -568,6 +585,7 @@ def test_full_crud_viewset_with_django_orm(api):
 
 # --- Custom ViewSet Tests ---
 
+
 @pytest.mark.django_db(transaction=True)
 def test_custom_viewset_method_with_django_orm(api, sample_articles):
     """Test custom ViewSet method with Django ORM operations."""
@@ -607,6 +625,7 @@ def test_custom_viewset_method_with_django_orm(api, sample_articles):
 
 # --- Queryset Filtering Tests ---
 
+
 @pytest.mark.django_db(transaction=True)
 def test_viewset_with_filtered_queryset(api, sample_articles):
     """Test ViewSet with custom queryset filtering."""
@@ -630,6 +649,7 @@ def test_viewset_with_filtered_queryset(api, sample_articles):
 
 
 # --- Edge Cases ---
+
 
 @pytest.mark.django_db(transaction=True)
 def test_update_nonexistent_article(api):
@@ -689,10 +709,12 @@ def test_async_queryset_iteration(api, sample_articles):
             articles = []
             # Test async iteration like ListMixin does
             async for article in Article.objects.all():
-                articles.append({
-                    "id": article.id,
-                    "title": article.title,
-                })
+                articles.append(
+                    {
+                        "id": article.id,
+                        "title": article.title,
+                    }
+                )
             return articles
 
     with TestClient(api) as client:

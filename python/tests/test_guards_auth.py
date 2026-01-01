@@ -3,21 +3,26 @@ Test guards and authentication system for Django-Bolt.
 
 Tests the new DRF-inspired guards and authentication classes.
 """
-import jwt
+
 import time
+
+import django
+import jwt
 import pytest
+from django.conf import settings  # noqa: PLC0415
+
 from django_bolt import BoltAPI
 from django_bolt.auth import (
-    JWTAuthentication,
+    AllowAny,
     APIKeyAuthentication,
     AuthContext,
-    AllowAny,
-    IsAuthenticated,
-    IsAdminUser,
-    IsStaff,
-    HasPermission,
+    HasAllPermissions,
     HasAnyPermission,
-    HasAllPermissions
+    HasPermission,
+    IsAdminUser,
+    IsAuthenticated,
+    IsStaff,
+    JWTAuthentication,
 )
 
 
@@ -43,7 +48,7 @@ class TestAuthenticationClasses:
             algorithms=["HS256", "HS384"],
             header="x-auth-token",
             audience="my-app",
-            issuer="auth-server"
+            issuer="auth-server",
         )
 
         metadata = auth.to_metadata()
@@ -55,10 +60,7 @@ class TestAuthenticationClasses:
 
     def test_api_key_authentication(self):
         """Test API key authentication class"""
-        auth = APIKeyAuthentication(
-            api_keys={"key1", "key2", "key3"},
-            header="x-api-key"
-        )
+        auth = APIKeyAuthentication(api_keys={"key1", "key2", "key3"}, header="x-api-key")
 
         assert auth.scheme_name == "api_key"
         metadata = auth.to_metadata()
@@ -70,10 +72,7 @@ class TestAuthenticationClasses:
         """Test API key authentication with permission mapping"""
         auth = APIKeyAuthentication(
             api_keys={"admin-key", "read-key"},
-            key_permissions={
-                "admin-key": ["users.create", "users.delete"],
-                "read-key": ["users.view"]
-            }
+            key_permissions={"admin-key": ["users.create", "users.delete"], "read-key": ["users.view"]},
         )
 
         metadata = auth.to_metadata()
@@ -91,7 +90,7 @@ class TestPermissionGuards:
         assert guard.to_metadata() == {"type": "allow_any"}
 
         # Should allow without auth context
-        assert guard.has_permission(None) == True
+        assert guard.has_permission(None)
 
     def test_is_authenticated(self):
         """Test IsAuthenticated guard"""
@@ -100,11 +99,11 @@ class TestPermissionGuards:
         assert guard.to_metadata() == {"type": "is_authenticated"}
 
         # Should deny without auth context
-        assert guard.has_permission(None) == False
+        assert not guard.has_permission(None)
 
         # Should allow with auth context
         ctx = AuthContext(user_id="user123")
-        assert guard.has_permission(ctx) == True
+        assert guard.has_permission(ctx)
 
     def test_is_admin(self):
         """Test IsAdminUser guard"""
@@ -112,15 +111,15 @@ class TestPermissionGuards:
         assert guard.guard_name == "is_superuser"
 
         # Should deny without auth
-        assert guard.has_permission(None) == False
+        assert not guard.has_permission(None)
 
         # Should deny non-admin user
         ctx = AuthContext(user_id="user123", is_superuser=False)
-        assert guard.has_permission(ctx) == False
+        assert not guard.has_permission(ctx)
 
         # Should allow admin user
         ctx = AuthContext(user_id="admin", is_superuser=True)
-        assert guard.has_permission(ctx) == True
+        assert guard.has_permission(ctx)
 
     def test_is_staff(self):
         """Test IsStaff guard"""
@@ -129,11 +128,11 @@ class TestPermissionGuards:
 
         # Should deny non-staff
         ctx = AuthContext(user_id="user", is_staff=False)
-        assert guard.has_permission(ctx) == False
+        assert not guard.has_permission(ctx)
 
         # Should allow staff
         ctx = AuthContext(user_id="staff", is_staff=True)
-        assert guard.has_permission(ctx) == True
+        assert guard.has_permission(ctx)
 
     def test_has_permission(self):
         """Test HasPermission guard"""
@@ -146,11 +145,11 @@ class TestPermissionGuards:
 
         # Should deny without permission
         ctx = AuthContext(user_id="user", permissions={"users.view"})
-        assert guard.has_permission(ctx) == False
+        assert not guard.has_permission(ctx)
 
         # Should allow with permission
         ctx = AuthContext(user_id="user", permissions={"users.delete", "users.view"})
-        assert guard.has_permission(ctx) == True
+        assert guard.has_permission(ctx)
 
     def test_has_any_permission(self):
         """Test HasAnyPermission guard"""
@@ -162,11 +161,11 @@ class TestPermissionGuards:
 
         # Should deny without any permission
         ctx = AuthContext(user_id="user", permissions={"users.view"})
-        assert guard.has_permission(ctx) == False
+        assert not guard.has_permission(ctx)
 
         # Should allow with one permission
         ctx = AuthContext(user_id="user", permissions={"users.view", "users.create"})
-        assert guard.has_permission(ctx) == True
+        assert guard.has_permission(ctx)
 
     def test_has_all_permissions(self):
         """Test HasAllPermissions guard"""
@@ -177,11 +176,11 @@ class TestPermissionGuards:
 
         # Should deny without all permissions
         ctx = AuthContext(user_id="user", permissions={"users.create"})
-        assert guard.has_permission(ctx) == False
+        assert not guard.has_permission(ctx)
 
         # Should allow with all permissions
         ctx = AuthContext(user_id="user", permissions={"users.create", "users.delete", "users.view"})
-        assert guard.has_permission(ctx) == True
+        assert guard.has_permission(ctx)
 
 
 class TestRouteDecoratorAPI:
@@ -196,7 +195,7 @@ class TestRouteDecoratorAPI:
             return {"message": "admin only"}
 
         # Check that metadata was compiled
-        handler = api._handlers[0]
+        api._handlers[0]
         handler_id = 0
         assert handler_id in api._handler_middleware
 
@@ -209,11 +208,7 @@ class TestRouteDecoratorAPI:
         """Test route with custom auth backend"""
         api = BoltAPI()
 
-        @api.get(
-            "/api-only",
-            auth=[APIKeyAuthentication(api_keys={"key1"})],
-            guards=[IsAuthenticated()]
-        )
+        @api.get("/api-only", auth=[APIKeyAuthentication(api_keys={"key1"})], guards=[IsAuthenticated()])
         async def api_endpoint():
             return {"message": "API key only"}
 
@@ -231,11 +226,7 @@ class TestRouteDecoratorAPI:
         """Test route with multiple guards"""
         api = BoltAPI()
 
-        @api.get("/restricted", guards=[
-            IsAuthenticated(),
-            IsStaff(),
-            HasPermission("users.delete")
-        ])
+        @api.get("/restricted", guards=[IsAuthenticated(), IsStaff(), HasPermission("users.delete")])
         async def restricted_endpoint():
             return {"message": "highly restricted"}
 
@@ -267,16 +258,11 @@ class TestMetadataCompilation:
 
     def test_global_auth_defaults(self):
         """Test that global auth defaults are used when no per-route auth"""
-        import django
-        from django.conf import settings
-
         if not settings.configured:
             settings.configure(
                 SECRET_KEY="test-key",
-                BOLT_AUTHENTICATION_CLASSES=[
-                    JWTAuthentication(secret="global-secret")
-                ],
-                BOLT_DEFAULT_PERMISSION_CLASSES=[IsAuthenticated()]
+                BOLT_AUTHENTICATION_CLASSES=[JWTAuthentication(secret="global-secret")],
+                BOLT_DEFAULT_PERMISSION_CLASSES=[IsAuthenticated()],
             )
             django.setup()
 
@@ -297,11 +283,7 @@ class TestMetadataCompilation:
         """Test that per-route auth/guards override global defaults"""
         api = BoltAPI()
 
-        @api.get(
-            "/override",
-            auth=[APIKeyAuthentication(api_keys={"key1"})],
-            guards=[AllowAny()]
-        )
+        @api.get("/override", auth=[APIKeyAuthentication(api_keys={"key1"})], guards=[AllowAny()])
         async def override_endpoint():
             return {"message": "overrides global"}
 
@@ -325,7 +307,7 @@ class TestJWTTokenHandling:
             "iat": int(time.time()),
             "is_staff": True,
             "is_superuser": False,
-            "permissions": ["users.view", "users.create"]
+            "permissions": ["users.view", "users.create"],
         }
 
         token = jwt.encode(payload, secret, algorithm="HS256")
@@ -333,7 +315,7 @@ class TestJWTTokenHandling:
         # Verify we can decode it
         decoded = jwt.decode(token, secret, algorithms=["HS256"])
         assert decoded["sub"] == "user123"
-        assert decoded["is_staff"] == True
+        assert decoded["is_staff"]
         assert "users.view" in decoded["permissions"]
 
     def test_expired_jwt(self):
@@ -378,7 +360,7 @@ class TestContextPopulation:
                 "exp": 1234567890,
                 "iat": 1234567800,
                 # ... other JWT claims
-            }
+            },
         }
 
         # Verify structure
@@ -400,7 +382,6 @@ class TestEdgeCases:
             return {"message": "no guards"}
 
         # Should not create metadata if guards list is empty
-        handler_id = 0
         # Empty guards should result in no metadata or default behavior
 
     def test_none_auth_parameter(self):
@@ -413,7 +394,7 @@ class TestEdgeCases:
 
         # Should fall back to global defaults
         handler_id = 0
-        metadata = api._handler_middleware.get(handler_id)
+        api._handler_middleware.get(handler_id)
         # Verify it uses global defaults or no auth
 
     def test_mixed_guard_types(self):

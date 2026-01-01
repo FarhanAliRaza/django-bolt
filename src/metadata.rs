@@ -201,6 +201,16 @@ pub struct RouteMetadata {
     pub skip: HashSet<String>,
     pub cors_config: Option<CorsConfig>,
     pub rate_limit_config: Option<RateLimitConfig>,
+
+    // Optimization flags (skip unused parsing)
+    // These are computed in Python at route registration time via static analysis
+    pub needs_query: bool,
+    pub needs_headers: bool,
+    pub needs_cookies: bool,
+    #[allow(dead_code)] // Reserved for future optimization
+    pub needs_path_params: bool,
+    #[allow(dead_code)] // Reserved for future optimization
+    pub is_static_route: bool,
 }
 
 impl RouteMetadata {
@@ -265,12 +275,54 @@ impl RouteMetadata {
             }
         }
 
+        // Parse optimization flags (default to true for backward compatibility)
+        // These flags indicate which request components the handler actually needs
+        let needs_query = py_meta
+            .get_item("needs_query")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<bool>().ok())
+            .unwrap_or(true);
+
+        let needs_headers = py_meta
+            .get_item("needs_headers")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<bool>().ok())
+            .unwrap_or(true);
+
+        let needs_cookies = py_meta
+            .get_item("needs_cookies")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<bool>().ok())
+            .unwrap_or(true);
+
+        let needs_path_params = py_meta
+            .get_item("needs_path_params")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<bool>().ok())
+            .unwrap_or(true);
+
+        let is_static_route = py_meta
+            .get_item("is_static_route")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<bool>().ok())
+            .unwrap_or(false);
+
         Ok(RouteMetadata {
             auth_backends,
             guards,
             skip,
             cors_config,
             rate_limit_config,
+            needs_query,
+            needs_headers,
+            needs_cookies,
+            needs_path_params,
+            is_static_route,
         })
     }
 }
@@ -282,6 +334,8 @@ fn parse_cors_config(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Co
     // Parse origins and build origin set for O(1) lookups
     if let Some(origins_py) = dict.get("origins") {
         if let Ok(origins) = origins_py.extract::<Vec<String>>(py) {
+            // Detect wildcard origin
+            config.allow_all_origins = origins.iter().any(|o| o == "*");
             config.origin_set = origins.iter().cloned().collect();
             config.origins = origins;
         }

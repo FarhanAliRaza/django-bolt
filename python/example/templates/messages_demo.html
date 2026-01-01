@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>{{ title }}</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        max-width: 800px;
+        margin: 40px auto;
+        padding: 20px;
+      }
+      .message {
+        padding: 12px 16px;
+        margin: 8px 0;
+        border-radius: 4px;
+      }
+      .debug {
+        background: #f0f0f0;
+        border-left: 4px solid #666;
+      }
+      .info {
+        background: #e3f2fd;
+        border-left: 4px solid #2196f3;
+      }
+      .success {
+        background: #e8f5e9;
+        border-left: 4px solid #4caf50;
+      }
+      .warning {
+        background: #fff3e0;
+        border-left: 4px solid #ff9800;
+      }
+      .error {
+        background: #ffebee;
+        border-left: 4px solid #f44336;
+      }
+      .meta {
+        background: #f5f5f5;
+        padding: 16px;
+        border-radius: 4px;
+        margin-top: 24px;
+      }
+      .meta code {
+        background: #e0e0e0;
+        padding: 2px 6px;
+        border-radius: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>{{ title }}</h1>
+
+    <h2>Messages from Django Messages Framework</h2>
+    {% if messages %} {% for message in messages %}
+    <div class="message {{ message.tags }}">{{ message }}</div>
+    {% endfor %} {% else %}
+    <p>No messages to display.</p>
+    {% endif %}
+
+    <form method="post">
+      {% csrf_token %}
+      <input name="test" type="text" />
+      <button type="submit">Submit</button>
+    </form>
+    <div class="meta">
+      <h3>Request Info</h3>
+      <p>
+        <strong>Request ID:</strong> <code>{{ request_id|default:"N/A" }}</code>
+      </p>
+      <p>
+        <strong>Tenant ID:</strong> <code>{{ tenant_id|default:"N/A" }}</code>
+      </p>
+    </div>
+  </body>
+</html>

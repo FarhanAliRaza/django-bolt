@@ -3,19 +3,27 @@ Type definitions for Django-Bolt.
 
 This module provides type hints and protocols for Django-Bolt objects,
 enabling full IDE autocomplete and static type checking.
+
+Includes:
+- Request/AuthContext/UserType protocols (for Rust-backed objects)
+- Type aliases for common authentication patterns (JWTClaims, APIKeyAuth, etc.)
+- Request type aliases (AuthenticatedRequest, PublicRequest, etc.)
 """
+
 from __future__ import annotations
 
 from typing import (
-    Protocol,
+    TYPE_CHECKING,
     Any,
-    Dict,
-    Optional,
+    NotRequired,
+    Protocol,
+    TypedDict,
     overload,
     runtime_checkable,
 )
 
-
+if TYPE_CHECKING:
+    pass
 
 
 @runtime_checkable
@@ -40,15 +48,27 @@ class DjangoModel(Protocol):
     """
 
     # ORM methods
-    def save(self, force_insert: bool = False, force_update: bool = False, using: Optional[str] = None, update_fields: Optional[list[str]] = None) -> None: ...
-    def delete(self, using: Optional[str] = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]: ...
-    def refresh_from_db(self, using: Optional[str] = None, fields: Optional[list[str]] = None) -> None: ...
-    def full_clean(self, exclude: Optional[list[str]] = None, validate_unique: bool = True) -> None: ...
+    def save(
+        self,
+        force_insert: bool = False,
+        force_update: bool = False,
+        using: str | None = None,
+        update_fields: list[str] | None = None,
+    ) -> None: ...
+    def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]: ...
+    def refresh_from_db(self, using: str | None = None, fields: list[str] | None = None) -> None: ...
+    def full_clean(self, exclude: list[str] | None = None, validate_unique: bool = True) -> None: ...
 
     # Async ORM methods
-    async def asave(self, force_insert: bool = False, force_update: bool = False, using: Optional[str] = None, update_fields: Optional[list[str]] = None) -> None: ...
-    async def adelete(self, using: Optional[str] = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]: ...
-    async def arefresh_from_db(self, using: Optional[str] = None, fields: Optional[list[str]] = None) -> None: ...
+    async def asave(
+        self,
+        force_insert: bool = False,
+        force_update: bool = False,
+        using: str | None = None,
+        update_fields: list[str] | None = None,
+    ) -> None: ...
+    async def adelete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]: ...
+    async def arefresh_from_db(self, using: str | None = None, fields: list[str] | None = None) -> None: ...
 
 
 class UserType(DjangoModel, Protocol):
@@ -87,7 +107,7 @@ class UserType(DjangoModel, Protocol):
     def is_authenticated(self) -> bool: ...
 
     # User auth methods
-    def set_password(self, raw_password: Optional[str]) -> None: ...
+    def set_password(self, raw_password: str | None) -> None: ...
     def check_password(self, raw_password: str) -> bool: ...
     def set_unusable_password(self) -> None: ...
     def has_usable_password(self) -> bool: ...
@@ -121,7 +141,7 @@ class AuthContext(Protocol):
     """
 
     # Core fields
-    user_id: Optional[str]
+    user_id: str | None
     """User identifier extracted from credentials (user ID, API key ID, etc.)"""
 
     is_staff: bool
@@ -134,10 +154,10 @@ class AuthContext(Protocol):
     """Authentication backend used: 'jwt', 'api_key', 'session', etc."""
 
     # Optional fields
-    permissions: Optional[set[str]]
+    permissions: set[str] | None
     """User permissions/scopes (optional, may be provided by some backends)"""
 
-    claims: Optional[Dict[str, Any]]
+    claims: dict[str, Any] | None
     """Full claims dict (optional, e.g., JWT claims for JWT authentication)"""
 
 
@@ -273,7 +293,7 @@ class Request(Protocol):
         ...
 
     @property
-    def context(self) -> Optional[AuthContext]:
+    def context(self) -> AuthContext | None:
         """
         Authentication/middleware context with full type information.
 
@@ -302,7 +322,7 @@ class Request(Protocol):
         ...
 
     @property
-    def user(self) -> Optional[UserType]:
+    def user(self) -> UserType | None:
         """
         Lazy-loaded Django user object from authentication context.
 
@@ -430,4 +450,159 @@ class Request(Protocol):
         ...
 
 
-__all__ = ["Request", "UserType", "AuthContext", "DjangoModel"]
+# ═══════════════════════════════════════════════════════════════════════════
+# Authentication Type Aliases
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class JWTClaims(TypedDict, total=False):
+    """
+    Standard JWT claims structure.
+
+    See RFC 7519 for standard claim definitions.
+    Use this as the AuthT type parameter for JWT-authenticated requests.
+
+    Example:
+        @api.get("/profile")
+        async def profile(request: Request[User, JWTClaims, dict]) -> dict:
+            user_id = request.auth["sub"]  # IDE knows this is str
+            exp = request.auth["exp"]       # IDE knows this is int
+            return {"user_id": user_id}
+    """
+
+    # Registered claims (RFC 7519)
+    sub: str  # Subject (typically user ID)
+    exp: int  # Expiration time (Unix timestamp)
+    iat: int  # Issued at (Unix timestamp)
+    nbf: int  # Not before (Unix timestamp)
+    iss: str  # Issuer
+    aud: str  # Audience
+    jti: str  # JWT ID (unique identifier)
+
+    # Common custom claims
+    user_id: int
+    username: str
+    email: str
+    is_staff: bool
+    is_superuser: bool
+    permissions: list[str]
+    groups: list[str]
+
+
+class APIKeyAuth(TypedDict, total=False):
+    """
+    API key authentication context.
+
+    Use this as the AuthT type parameter for API key-authenticated requests.
+
+    Example:
+        @api.get("/data", auth=[APIKeyAuthentication()])
+        async def get_data(request: Request[None, APIKeyAuth, dict]) -> dict:
+            key_id = request.auth["key_id"]
+            permissions = request.auth.get("permissions", [])
+            return {"key": key_id}
+    """
+
+    key_id: str
+    key_name: str
+    permissions: list[str]
+    rate_limit: NotRequired[int]
+    metadata: NotRequired[dict[str, Any]]
+
+
+class SessionAuth(TypedDict, total=False):
+    """
+    Session-based authentication context.
+
+    Use this as the AuthT type parameter for session-authenticated requests.
+
+    Example:
+        @api.get("/dashboard")
+        async def dashboard(request: Request[User, SessionAuth, dict]) -> dict:
+            session_key = request.auth["session_key"]
+            return {"session": session_key}
+    """
+
+    session_key: str
+    user_id: int
+    created_at: str
+    last_activity: str
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Custom State Type Examples
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TimingState(TypedDict, total=False):
+    """
+    State for timing middleware.
+
+    Example:
+        @api.get("/timed")
+        async def timed(request: Request[User, Auth, TimingState]) -> dict:
+            request_id = request.state.request_id  # IDE autocomplete
+            start = request.state.start_time
+            return {"request_id": request_id}
+    """
+
+    start_time: float
+    request_id: str
+
+
+class TracingState(TypedDict, total=False):
+    """
+    State for distributed tracing.
+
+    Example:
+        @api.get("/traced")
+        async def traced(request: Request[User, Auth, TracingState]) -> dict:
+            trace_id = request.state.trace_id
+            return {"trace_id": trace_id}
+    """
+
+    trace_id: str
+    span_id: str
+    parent_span_id: NotRequired[str]
+    baggage: NotRequired[dict[str, str]]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Middleware Response Types
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class MiddlewareResponse(TypedDict, total=False):
+    """
+    Type for middleware response objects.
+
+    Used internally by middleware to return responses.
+
+    Note: set_cookies is a list to support multiple Set-Cookie headers.
+    HTTP allows multiple Set-Cookie headers, but dict can't have duplicate keys.
+    """
+
+    body: bytes
+    status_code: int
+    headers: dict[str, str]
+    set_cookies: list[str]
+
+
+__all__ = [
+    # Protocols
+    "Request",
+    "UserType",
+    "AuthContext",
+    "DjangoModel",
+    # JWT Types
+    "JWTClaims",
+    # API Key Types
+    "APIKeyAuth",
+    # Session Types
+    "SessionAuth",
+    # State Types
+    "TimingState",
+    "TracingState",
+    # Response Types
+    "MiddlewareResponse",
+]

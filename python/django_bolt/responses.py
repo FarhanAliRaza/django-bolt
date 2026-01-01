@@ -1,11 +1,17 @@
-import msgspec
 import inspect
-from typing import Any, Dict, Optional, List
 from pathlib import Path
+from typing import Any
+
+# Django import - may fail if Django not configured, kept at top for consistency
+try:
+    from django.conf import settings as django_settings
+except ImportError:
+    django_settings = None
+
 from . import _json
 
 # Cache for BOLT_ALLOWED_FILE_PATHS - loaded once at server startup
-_ALLOWED_FILE_PATHS_CACHE: Optional[List[Path]] = None
+_ALLOWED_FILE_PATHS_CACHE: list[Path] | None = None
 _ALLOWED_FILE_PATHS_INITIALIZED = False
 
 
@@ -20,14 +26,10 @@ def initialize_file_response_settings():
         return
 
     try:
-        from django.conf import settings
-        if hasattr(settings, 'BOLT_ALLOWED_FILE_PATHS'):
-            allowed_paths = settings.BOLT_ALLOWED_FILE_PATHS
-            if allowed_paths:
-                # Resolve all paths once at startup
-                _ALLOWED_FILE_PATHS_CACHE = [Path(p).resolve() for p in allowed_paths]
-            else:
-                _ALLOWED_FILE_PATHS_CACHE = None
+        if django_settings and hasattr(django_settings, "BOLT_ALLOWED_FILE_PATHS"):
+            allowed_paths = django_settings.BOLT_ALLOWED_FILE_PATHS
+            # Resolve all paths once at startup
+            _ALLOWED_FILE_PATHS_CACHE = [Path(p).resolve() for p in allowed_paths] if allowed_paths else None
         else:
             _ALLOWED_FILE_PATHS_CACHE = None
     except ImportError:
@@ -58,12 +60,13 @@ class Response:
                 headers={"X-Custom-Header": "value"}
             )
     """
+
     def __init__(
         self,
         content: Any = None,
         status_code: int = 200,
-        headers: Optional[Dict[str, str]] = None,
-        media_type: str = "application/json"
+        headers: dict[str, str] | None = None,
+        media_type: str = "application/json",
     ):
         self.content = content if content is not None else {}
         self.status_code = status_code
@@ -82,7 +85,7 @@ class Response:
 
 
 class JSON:
-    def __init__(self, data: Any, status_code: int = 200, headers: Optional[Dict[str, str]] = None):
+    def __init__(self, data: Any, status_code: int = 200, headers: dict[str, str] | None = None):
         self.data = data
         self.status_code = status_code
         self.headers = headers or {}
@@ -91,9 +94,8 @@ class JSON:
         return _json.encode(self.data)
 
 
-
 class PlainText:
-    def __init__(self, text: str, status_code: int = 200, headers: Optional[Dict[str, str]] = None):
+    def __init__(self, text: str, status_code: int = 200, headers: dict[str, str] | None = None):
         self.text = text
         self.status_code = status_code
         self.headers = headers or {}
@@ -103,7 +105,7 @@ class PlainText:
 
 
 class HTML:
-    def __init__(self, html: str, status_code: int = 200, headers: Optional[Dict[str, str]] = None):
+    def __init__(self, html: str, status_code: int = 200, headers: dict[str, str] | None = None):
         self.html = html
         self.status_code = status_code
         self.headers = headers or {}
@@ -113,14 +115,22 @@ class HTML:
 
 
 class Redirect:
-    def __init__(self, url: str, status_code: int = 307, headers: Optional[Dict[str, str]] = None):
+    def __init__(self, url: str, status_code: int = 307, headers: dict[str, str] | None = None):
         self.url = url
         self.status_code = status_code
         self.headers = headers or {}
 
 
 class File:
-    def __init__(self, path: str, *, media_type: Optional[str] = None, filename: Optional[str] = None, status_code: int = 200, headers: Optional[Dict[str, str]] = None):
+    def __init__(
+        self,
+        path: str,
+        *,
+        media_type: str | None = None,
+        filename: str | None = None,
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+    ):
         self.path = path
         self.media_type = media_type
         self.filename = filename
@@ -133,7 +143,7 @@ class File:
 
 
 class UploadFile:
-    def __init__(self, name: str, filename: Optional[str], content_type: Optional[str], path: str):
+    def __init__(self, name: str, filename: str | None, content_type: str | None, path: str):
         self.name = name
         self.filename = filename
         self.content_type = content_type
@@ -144,16 +154,15 @@ class UploadFile:
             return f.read()
 
 
-
 class FileResponse:
     def __init__(
         self,
         path: str,
         *,
-        media_type: Optional[str] = None,
-        filename: Optional[str] = None,
+        media_type: str | None = None,
+        filename: str | None = None,
         status_code: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ):
         # SECURITY: Validate and canonicalize path to prevent traversal
 
@@ -161,7 +170,7 @@ class FileResponse:
         try:
             resolved_path = Path(path).resolve()
         except (OSError, RuntimeError) as e:
-            raise ValueError(f"Invalid file path: {e}")
+            raise ValueError(f"Invalid file path: {e}") from e
 
         # Check if the file exists and is a regular file (not a directory or special file)
         if not resolved_path.exists():
@@ -197,24 +206,22 @@ class FileResponse:
         self.headers = headers or {}
 
 
-
 class StreamingResponse:
     def __init__(
         self,
         content: Any,
         *,
         status_code: int = 200,
-        media_type: Optional[str] = None,
-        headers: Optional[Dict[str, str]] = None,
+        media_type: str | None = None,
+        headers: dict[str, str] | None = None,
     ):
-
         # Validate that content is already a called generator/iterator, not a callable
         if callable(content):
             if inspect.isasyncgenfunction(content) or inspect.isgeneratorfunction(content):
                 raise TypeError(
-                    f"StreamingResponse requires a generator instance, not a generator function. "
-                    f"Call your generator function with parentheses: StreamingResponse(gen(), ...) "
-                    f"not StreamingResponse(gen, ...)"
+                    "StreamingResponse requires a generator instance, not a generator function. "
+                    "Call your generator function with parentheses: StreamingResponse(gen(), ...) "
+                    "not StreamingResponse(gen, ...)"
                 )
             # If it's some other callable (not a generator function), raise an error
             raise TypeError(
@@ -231,13 +238,11 @@ class StreamingResponse:
         # This avoids repeated Python inspect calls in Rust streaming loop
         self.is_async_generator = False
 
-        if hasattr(content, '__aiter__') or hasattr(content, '__anext__'):
+        if hasattr(content, "__aiter__") or hasattr(content, "__anext__"):
             # Async generator instance
             self.is_async_generator = True
-        elif not (hasattr(content, '__iter__') or hasattr(content, '__next__')):
+        elif not (hasattr(content, "__iter__") or hasattr(content, "__next__")):
             # Not a generator/iterator
             raise TypeError(
-                f"StreamingResponse content must be a generator instance. "
-                f"Received type: {type(content).__name__}"
+                f"StreamingResponse content must be a generator instance. Received type: {type(content).__name__}"
             )
-

@@ -6,22 +6,27 @@ from typing import TYPE_CHECKING, Any, cast
 
 from .base import BaseSchemaObject
 
+
 # Simple inline utility function
 def is_non_string_sequence(value: Any) -> bool:
     """Check if value is a sequence but not a string."""
     return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
 
+
 if TYPE_CHECKING:
+    from typing import Protocol
+
     from .discriminator import Discriminator
     from .enums import OpenAPIFormat, OpenAPIType
     from .external_documentation import ExternalDocumentation
     from .reference import Reference
     from .xml import XML
-    from typing import Protocol
 
     class DataclassProtocol(Protocol):
         """Simple dataclass protocol."""
+
         __dataclass_fields__: Any
+
 
 __all__ = ("Schema", "SchemaDataContainer")
 

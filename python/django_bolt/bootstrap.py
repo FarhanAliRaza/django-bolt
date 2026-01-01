@@ -1,14 +1,23 @@
 import importlib
 import os
-import sys
 from pathlib import Path
 
-from django.conf import settings
+# Django imports - may fail if Django not configured
+try:
+    import django
+    from django.conf import settings
+
+    # Import with alias for use in _info() function
+    from django.conf import settings as dj_settings
+except ImportError:
+    settings = None
+    django = None
+    dj_settings = None
 
 
 def ensure_django_ready() -> dict:
     """Ensure Django is properly configured using the project's settings module."""
-    if settings.configured:
+    if settings and settings.configured:
         return _info()
 
     settings_module = os.getenv("DJANGO_SETTINGS_MODULE")
@@ -17,7 +26,7 @@ def ensure_django_ready() -> dict:
         settings_module = _detect_settings_module()
         if settings_module:
             os.environ["DJANGO_SETTINGS_MODULE"] = settings_module
-    
+
     if not settings_module:
         raise RuntimeError(
             "Django settings module not found. Please ensure:\n"
@@ -25,17 +34,16 @@ def ensure_django_ready() -> dict:
             "2. DJANGO_SETTINGS_MODULE environment variable is set\n"
             "3. Your project has a valid settings.py file"
         )
-    
+
     try:
         importlib.import_module(settings_module)
-        import django
         django.setup()
         return _info()
     except ImportError as e:
         raise RuntimeError(
             f"Failed to import Django settings module '{settings_module}': {e}\n"
             "Please check that your settings module exists and is valid."
-        )
+        ) from e
 
 
 def _detect_settings_module() -> str | None:
@@ -49,7 +57,7 @@ def _detect_settings_module() -> str | None:
             content = manage_py.read_text()
             if "DJANGO_SETTINGS_MODULE" in content:
                 # Extract the settings module from manage.py
-                for line in content.split('\n'):
+                for line in content.split("\n"):
                     if "DJANGO_SETTINGS_MODULE" in line and "setdefault" in line:
                         # Parse line like: os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
                         parts = line.split("'")
@@ -63,7 +71,6 @@ def _detect_settings_module() -> str | None:
 
 def _info() -> dict:
     """Get information about the current Django configuration."""
-    from django.conf import settings as dj_settings
     db = dj_settings.DATABASES.get("default", {})
     return {
         "mode": "django_project",
@@ -73,5 +80,3 @@ def _info() -> dict:
         "settings_module": os.getenv("DJANGO_SETTINGS_MODULE"),
         "base_dir": str(getattr(dj_settings, "BASE_DIR", "")),
     }
-
-

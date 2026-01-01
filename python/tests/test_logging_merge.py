@@ -4,8 +4,10 @@ Tests that per-API logging configurations are preserved when multiple
 BoltAPI instances are merged (like during autodiscovery in runbolt).
 """
 
-import pytest
 import logging
+
+import pytest
+
 from django_bolt import BoltAPI
 from django_bolt.logging import LoggingConfig
 
@@ -52,8 +54,9 @@ class TestMergedAPILoggingPreservation:
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api1
-            if handler in api1._handler_meta:
-                merged._handler_meta[handler] = api1._handler_meta[handler]
+            # Copy handler metadata using the old handler_id from api1
+            if old_handler_id in api1._handler_meta:
+                merged._handler_meta[new_handler_id] = api1._handler_meta[old_handler_id]
 
         # Merge routes from api2 (renumber handler_ids to avoid collisions)
         for method, path, old_handler_id, handler in api2._routes:
@@ -62,44 +65,47 @@ class TestMergedAPILoggingPreservation:
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api2
-            if handler in api2._handler_meta:
-                merged._handler_meta[handler] = api2._handler_meta[handler]
+            # Copy handler metadata using the old handler_id from api2
+            if old_handler_id in api2._handler_meta:
+                merged._handler_meta[new_handler_id] = api2._handler_meta[old_handler_id]
 
         merged._next_handler_id = next_handler_id
 
         # Verify handler 0 (from api1) maps to api1
         handler_id_api1 = 0
-        assert handler_id_api1 in merged._handler_api_map, \
-            f"handler_id {handler_id_api1} must exist in map"
+        assert handler_id_api1 in merged._handler_api_map, f"handler_id {handler_id_api1} must exist in map"
 
         mapped_api1 = merged._handler_api_map[handler_id_api1]
-        assert id(mapped_api1) == id(api1), \
+        assert id(mapped_api1) == id(api1), (
             f"Handler 0 must map to api1 (expected id={id(api1)}, got id={id(mapped_api1)})"
+        )
 
         # Verify api1's logging config is preserved
-        assert mapped_api1._logging_middleware is not None, \
-            "api1 must have logging middleware"
-        assert mapped_api1._logging_middleware.config.logger_name == "api1_logger", \
+        assert mapped_api1._logging_middleware is not None, "api1 must have logging middleware"
+        assert mapped_api1._logging_middleware.config.logger_name == "api1_logger", (
             "api1's logger name must be preserved"
-        assert mapped_api1._logging_middleware.config.request_log_fields == {"path", "client_ip"}, \
+        )
+        assert mapped_api1._logging_middleware.config.request_log_fields == {"path", "client_ip"}, (
             "api1's request log fields must be preserved"
+        )
 
         # Verify handler 1 (from api2) maps to api2
         handler_id_api2 = 1
-        assert handler_id_api2 in merged._handler_api_map, \
-            f"handler_id {handler_id_api2} must exist in map"
+        assert handler_id_api2 in merged._handler_api_map, f"handler_id {handler_id_api2} must exist in map"
 
         mapped_api2 = merged._handler_api_map[handler_id_api2]
-        assert id(mapped_api2) == id(api2), \
+        assert id(mapped_api2) == id(api2), (
             f"Handler 1 must map to api2 (expected id={id(api2)}, got id={id(mapped_api2)})"
+        )
 
         # Verify api2's logging config is preserved
-        assert mapped_api2._logging_middleware is not None, \
-            "api2 must have logging middleware"
-        assert mapped_api2._logging_middleware.config.logger_name == "api2_logger", \
+        assert mapped_api2._logging_middleware is not None, "api2 must have logging middleware"
+        assert mapped_api2._logging_middleware.config.logger_name == "api2_logger", (
             "api2's logger name must be preserved"
-        assert mapped_api2._logging_middleware.config.request_log_fields == {"method", "path"}, \
+        )
+        assert mapped_api2._logging_middleware.config.request_log_fields == {"method", "path"}, (
             "api2's request log fields must be preserved"
+        )
 
     def test_merged_api_with_different_skip_paths(self):
         """Each API's skip_paths should be preserved independently."""
@@ -130,6 +136,9 @@ class TestMergedAPILoggingPreservation:
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api1
+            # Copy handler metadata
+            if old_handler_id in api1._handler_meta:
+                merged._handler_meta[new_handler_id] = api1._handler_meta[old_handler_id]
 
         for method, path, old_handler_id, handler in api2._routes:
             new_handler_id = next_handler_id
@@ -137,6 +146,9 @@ class TestMergedAPILoggingPreservation:
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api2
+            # Copy handler metadata
+            if old_handler_id in api2._handler_meta:
+                merged._handler_meta[new_handler_id] = api2._handler_meta[old_handler_id]
 
         # Verify each API retains its own skip_paths
         api1_from_map = merged._handler_api_map[0]
@@ -176,6 +188,9 @@ class TestMergedAPILoggingPreservation:
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api1
+            # Copy handler metadata
+            if old_handler_id in api1._handler_meta:
+                merged._handler_meta[new_handler_id] = api1._handler_meta[old_handler_id]
 
         for method, path, old_handler_id, handler in api2._routes:
             new_handler_id = next_handler_id
@@ -183,6 +198,9 @@ class TestMergedAPILoggingPreservation:
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api2
+            # Copy handler metadata
+            if old_handler_id in api2._handler_meta:
+                merged._handler_meta[new_handler_id] = api2._handler_meta[old_handler_id]
 
         # Verify each API retains its own sample_rate
         api1_from_map = merged._handler_api_map[0]
@@ -220,6 +238,9 @@ class TestMergedAPILoggingPreservation:
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api1
+            # Copy handler metadata
+            if old_handler_id in api1._handler_meta:
+                merged._handler_meta[new_handler_id] = api1._handler_meta[old_handler_id]
 
         for method, path, old_handler_id, handler in api2._routes:
             new_handler_id = next_handler_id
@@ -227,6 +248,9 @@ class TestMergedAPILoggingPreservation:
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api2
+            # Copy handler metadata
+            if old_handler_id in api2._handler_meta:
+                merged._handler_meta[new_handler_id] = api2._handler_meta[old_handler_id]
 
         # Verify each API retains its own min_duration_ms
         api1_from_map = merged._handler_api_map[0]
@@ -263,22 +287,24 @@ class TestMergedAPILoggingPreservation:
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api1
-
+            # Copy handler metadata
+            if old_handler_id is not None and old_handler_id in api1._handler_meta:
+                merged._handler_meta[new_handler_id] = api1._handler_meta[old_handler_id]
         for method, path, old_handler_id, handler in api2._routes:
             new_handler_id = next_handler_id
             next_handler_id += 1
             merged._routes.append((method, path, new_handler_id, handler))
             merged._handlers[new_handler_id] = handler
             merged._handler_api_map[new_handler_id] = api2
-
+            # Copy handler metadata
+            if old_handler_id is not None and old_handler_id in api2._handler_meta:
+                merged._handler_meta[new_handler_id] = api2._handler_meta[old_handler_id]
         # Verify api1 has logging, api2 doesn't
         api1_from_map = merged._handler_api_map[0]
         api2_from_map = merged._handler_api_map[1]
 
-        assert api1_from_map._logging_middleware is not None, \
-            "api1 must have logging middleware"
-        assert api2_from_map._logging_middleware is None, \
-            "api2 must not have logging middleware"
+        assert api1_from_map._logging_middleware is not None, "api1 must have logging middleware"
+        assert api2_from_map._logging_middleware is None, "api2 must not have logging middleware"
 
 
 class TestAPIDeduplication:
@@ -309,8 +335,7 @@ class TestAPIDeduplication:
                 deduplicated.append((api_path, api))
 
         # Should only have 1 entry
-        assert len(deduplicated) == 1, \
-            "Duplicate API instances must be deduplicated"
+        assert len(deduplicated) == 1, "Duplicate API instances must be deduplicated"
         assert deduplicated[0] == ("testproject.api:api", api1)
 
     def test_different_instances_are_not_deduplicated(self):
@@ -344,8 +369,7 @@ class TestAPIDeduplication:
                 deduplicated.append((api_path, api))
 
         # Should have both entries (different objects)
-        assert len(deduplicated) == 2, \
-            "Different API instances must not be deduplicated"
+        assert len(deduplicated) == 2, "Different API instances must not be deduplicated"
         assert id(deduplicated[0][1]) != id(deduplicated[1][1])
 
 
@@ -411,8 +435,7 @@ class TestLoggingWithHandlerCalls:
             return {"result": "success"}
 
         # Verify no logging middleware
-        assert api._logging_middleware is None, \
-            "API with enable_logging=False must not have logging middleware"
+        assert api._logging_middleware is None, "API with enable_logging=False must not have logging middleware"
 
 
 if __name__ == "__main__":

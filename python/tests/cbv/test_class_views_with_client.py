@@ -14,29 +14,28 @@ Tests cover:
 - ViewSet
 - HTTP method handling
 """
-import pytest
-import msgspec
+
 import time
+
 import jwt
+import msgspec
+import pytest
+
 from django_bolt import BoltAPI
+from django_bolt.auth.backends import JWTAuthentication
+from django_bolt.auth.guards import IsAdminUser, IsAuthenticated
+from django_bolt.exceptions import HTTPException
+from django_bolt.params import Depends
 from django_bolt.testing import TestClient
 from django_bolt.views import (
     APIView,
-    ViewSet,
     ListMixin,
     RetrieveMixin,
-    CreateMixin,
-    UpdateMixin,
-    PartialUpdateMixin,
-    DestroyMixin,
+    ViewSet,
 )
-from django_bolt.params import Depends
-from django_bolt.exceptions import HTTPException
-from django_bolt.auth.guards import IsAuthenticated, IsAdminUser
-from django_bolt.auth.backends import JWTAuthentication
-
 
 # --- Test Fixtures ---
+
 
 def create_jwt_token(user_id: int = 1, is_admin: bool = False, secret: str = "test-secret") -> str:
     """Helper to create JWT tokens for testing."""
@@ -51,6 +50,7 @@ def create_jwt_token(user_id: int = 1, is_admin: bool = False, secret: str = "te
 
 
 # --- Basic Tests ---
+
 
 def test_bolt_api_view_basic():
     """Test basic APIView with GET handler."""
@@ -145,10 +145,7 @@ def test_bolt_api_view_request_body():
             return {"username": data.username, "email": data.email}
 
     with TestClient(api) as client:
-        response = client.post(
-            "/users",
-            json={"username": "john", "email": "john@example.com"}
-        )
+        response = client.post("/users", json={"username": "john", "email": "john@example.com"})
         assert response.status_code == 200
         data = response.json()
         assert data["username"] == "john"
@@ -178,6 +175,7 @@ def test_bolt_api_view_return_annotation():
 
 # --- Dependency Injection Tests ---
 
+
 def test_bolt_api_view_dependency_injection():
     """Test dependency injection in class-based views."""
     api = BoltAPI()
@@ -199,6 +197,7 @@ def test_bolt_api_view_dependency_injection():
 
 # --- Guards and Authentication Tests ---
 
+
 def test_bolt_api_view_class_level_guards():
     """Test class-level guards are applied."""
     api = BoltAPI()
@@ -219,10 +218,7 @@ def test_bolt_api_view_class_level_guards():
 
         # With valid token - should succeed
         token = create_jwt_token(user_id=42)
-        response = client.get(
-            "/protected",
-            headers={"Authorization": f"Bearer {token}"}
-        )
+        response = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
         assert response.status_code == 200
         # Auth context extraction works, user_id may be None or valid
         # The important thing is the request succeeded
@@ -247,18 +243,12 @@ def test_bolt_api_view_route_level_guard_override():
     with TestClient(api) as client:
         # Regular user token - should fail (needs admin)
         token = create_jwt_token(user_id=1, is_admin=False)
-        response = client.get(
-            "/admin",
-            headers={"Authorization": f"Bearer {token}"}
-        )
+        response = client.get("/admin", headers={"Authorization": f"Bearer {token}"})
         assert response.status_code == 403
 
         # Admin token - should succeed
         admin_token = create_jwt_token(user_id=99, is_admin=True)
-        response = client.get(
-            "/admin",
-            headers={"Authorization": f"Bearer {admin_token}"}
-        )
+        response = client.get("/admin", headers={"Authorization": f"Bearer {admin_token}"})
         assert response.status_code == 200
         # Auth context extraction works
         data = response.json()
@@ -285,6 +275,7 @@ def test_bolt_api_view_status_code_override():
 
 # --- Mixin Tests ---
 
+
 def test_list_mixin():
     """Test ListMixin provides get() method."""
     api = BoltAPI()
@@ -305,11 +296,7 @@ def test_list_mixin():
     @api.view("/items")
     class ItemListView(ListMixin, APIView):
         async def get_queryset(self):
-            return MockQuerySet([
-                {"id": 1, "name": "Item 1"},
-                {"id": 2, "name": "Item 2"},
-                {"id": 3, "name": "Item 3"}
-            ])
+            return MockQuerySet([{"id": 1, "name": "Item 1"}, {"id": 2, "name": "Item 2"}, {"id": 3, "name": "Item 3"}])
 
     with TestClient(api) as client:
         response = client.get("/items")
@@ -361,10 +348,7 @@ def test_create_mixin():
             return {"id": 1, "name": data.name, "price": data.price}
 
     with TestClient(api) as client:
-        response = client.post(
-            "/items",
-            json={"name": "New Item", "price": 29.99}
-        )
+        response = client.post("/items", json={"name": "New Item", "price": 29.99})
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "New Item"
@@ -372,6 +356,7 @@ def test_create_mixin():
 
 
 # --- ViewSet Tests ---
+
 
 def test_bolt_viewset_get_allowed_methods():
     """Test ViewSet correctly identifies implemented methods."""
@@ -415,12 +400,12 @@ def test_bolt_viewset_get_object_not_found():
 # --- Edge Cases and Validation ---
 
 
-
 def test_bolt_api_view_non_subclass_raises():
     """Test that non-APIView classes raise TypeError."""
     api = BoltAPI()
 
     with pytest.raises(TypeError) as exc_info:
+
         @api.view("/bad")
         class NotAView:
             async def get(self, request):
@@ -434,6 +419,7 @@ def test_bolt_api_view_no_methods_raises():
     api = BoltAPI()
 
     with pytest.raises(ValueError) as exc_info:
+
         @api.view("/empty")
         class EmptyView(APIView):
             http_method_names = []
@@ -475,6 +461,7 @@ def test_bolt_api_view_unimplemented_method_raises():
     api = BoltAPI()
 
     with pytest.raises(ValueError) as exc_info:
+
         @api.view("/items", methods=["POST"])
         class GetOnlyView(APIView):
             async def get(self, request) -> dict:
@@ -484,6 +471,7 @@ def test_bolt_api_view_unimplemented_method_raises():
 
 
 # --- Complete CRUD Example ---
+
 
 def test_complete_crud_operations():
     """Test a complete CRUD API using class-based views."""
@@ -557,20 +545,14 @@ def test_complete_crud_operations():
         assert response.json()["name"] == "Item 1"
 
         # Create item
-        response = client.post(
-            "/items/create",
-            json={"name": "New Item", "price": 30.0}
-        )
+        response = client.post("/items/create", json={"name": "New Item", "price": 30.0})
         assert response.status_code == 200
         new_item = response.json()
         assert new_item["name"] == "New Item"
         assert new_item["id"] == 3
 
         # Update item
-        response = client.put(
-            "/items/1",
-            json={"name": "Updated Item", "price": 15.0}
-        )
+        response = client.put("/items/1", json={"name": "Updated Item", "price": 15.0})
         assert response.status_code == 200
         assert response.json()["name"] == "Updated Item"
 

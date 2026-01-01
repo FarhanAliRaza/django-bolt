@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicU64;
 
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
 use crate::router::Router;
+use crate::websocket::WebSocketRouter;
 
 pub struct AppState {
     pub dispatch: Py<PyAny>,
@@ -16,9 +17,12 @@ pub struct AppState {
     pub global_cors_config: Option<CorsConfig>,           // Global CORS configuration from Django settings
     pub cors_origin_regexes: Vec<Regex>,                  // Compiled regex patterns for origin matching
     pub global_compression_config: Option<CompressionConfig>, // Global compression configuration used by middleware
+    pub router: Option<Arc<Router>>,                      // Router (used by test infrastructure, optional in production)
+    pub route_metadata: Option<Arc<AHashMap<usize, RouteMetadata>>>, // Route metadata (used by test infrastructure)
 }
 
 pub static GLOBAL_ROUTER: OnceCell<Arc<Router>> = OnceCell::new();
+pub static GLOBAL_WEBSOCKET_ROUTER: OnceCell<Arc<WebSocketRouter>> = OnceCell::new();
 pub static TASK_LOCALS: OnceCell<TaskLocals> = OnceCell::new(); // reuse global python event loop
 pub static ROUTE_METADATA: OnceCell<Arc<AHashMap<usize, RouteMetadata>>> = OnceCell::new();
 pub static ROUTE_METADATA_TEMP: OnceCell<AHashMap<usize, RouteMetadata>> = OnceCell::new(); // Temporary storage before CORS injection

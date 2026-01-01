@@ -7,15 +7,24 @@ extractor functions that avoid runtime type checking.
 
 from __future__ import annotations
 
+import fnmatch
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, get_args, get_origin
 
 import msgspec
 from asgiref.sync import sync_to_async
 
+from .datastructures import UploadFile
 from .exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
-from .typing import FieldDefinition, HandlerMetadata, is_msgspec_struct, is_optional, unwrap_optional
+from .typing import (
+    FieldDefinition,
+    HandlerMetadata,
+    is_msgspec_struct,
+    is_optional,
+    is_upload_file_type,
+    unwrap_optional,
+)
 
 __all__ = [
     "convert_primitive",
@@ -245,6 +254,7 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
     """Create an extractor that builds a Struct/Serializer from parameter data.
 
     Generic helper used by Form(), Query(), and Cookie() extractors.
+    Supports UploadFile fields in structs when used with Form().
 
     Args:
         struct_type: The msgspec.Struct or Serializer class
@@ -252,46 +262,117 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
         param_type: Type name for error messages (e.g., "form field", "query parameter")
 
     Returns:
-        Extractor function that takes param_map and returns struct instance
+        Extractor function that takes param_map (and optionally files_map) and returns struct instance
     """
     # Pre-compute field info at registration time
     fields_info = []
+    has_upload_file_fields = False
+
     for field in msgspec.structs.fields(struct_type):
+        field_type = field.type
+        is_upload = is_upload_file_type(field_type)
+
+        if is_upload:
+            has_upload_file_fields = True
+
+        # Determine if field expects a list of UploadFile
+        unwrapped = unwrap_optional(field_type)
+        origin = get_origin(unwrapped)
+        expects_list = origin is list and is_upload
+
         fields_info.append(
             {
                 "name": field.name,
-                "type": field.type,
+                "type": field_type,
                 "required": field.required,
                 "default": field.default,
+                "is_upload_file": is_upload,
+                "expects_list": expects_list,
             }
         )
 
-    def extract(param_map: dict[str, Any]) -> Any:
-        # Convert param values to appropriate types
-        converted = {}
-        for field_info in fields_info:
-            field_name = field_info["name"]
-            field_type = field_info["type"]
+    if has_upload_file_fields:
+        # Extractor that handles both form_map and files_map
+        def extract_with_files(param_map: dict[str, Any], files_map: dict[str, Any] | None = None) -> Any:
+            files_map = files_map or {}
+            converted = {}
 
-            if field_name in param_map:
-                # Convert string value to appropriate type
-                value = param_map[field_name]
-                if isinstance(value, str):
-                    converted[field_name] = convert_primitive(value, field_type)
-                else:
-                    converted[field_name] = value
-            elif field_info["required"]:
-                raise HTTPException(status_code=422, detail=f"Missing required {param_type}: {field_name}")
-            # If not in param_map and not required, let msgspec use the default
+            for field_info in fields_info:
+                field_name = field_info["name"]
+                field_type = field_info["type"]
 
-        # Use msgspec.convert to create and validate the struct
-        # This runs @field_validator decorators for Serializer types
-        try:
-            return msgspec.convert(converted, struct_type)
-        except msgspec.ValidationError:
-            raise  # Let error_handlers.py handle validation errors
+                if field_info["is_upload_file"]:
+                    # Handle UploadFile field from files_map
+                    if field_name in files_map:
+                        file_info = files_map[field_name]
+                        if isinstance(file_info, list):
+                            uploads = [UploadFile.from_file_info(f) for f in file_info]
+                            converted[field_name] = uploads if field_info["expects_list"] else uploads[0]
+                            # Track for auto-cleanup
+                            if "_upload_files" not in files_map:
+                                files_map["_upload_files"] = []
+                            files_map["_upload_files"].extend(uploads)
+                        else:
+                            upload = UploadFile.from_file_info(file_info)
+                            converted[field_name] = [upload] if field_info["expects_list"] else upload
+                            # Track for auto-cleanup
+                            if "_upload_files" not in files_map:
+                                files_map["_upload_files"] = []
+                            files_map["_upload_files"].append(upload)
+                    elif field_info["required"]:
+                        raise RequestValidationError(
+                            errors=[
+                                {
+                                    "type": "file_missing",
+                                    "loc": ("body", field_name),
+                                    "msg": "Missing required file",
+                                    "input": None,
+                                }
+                            ]
+                        )
+                    # If not required and not present, let msgspec use the default
+                elif field_name in param_map:
+                    # Regular form field
+                    value = param_map[field_name]
+                    if isinstance(value, str):
+                        converted[field_name] = convert_primitive(value, field_type)
+                    else:
+                        converted[field_name] = value
+                elif field_info["required"]:
+                    raise HTTPException(status_code=422, detail=f"Missing required {param_type}: {field_name}")
 
-    return extract
+            # Use msgspec.convert to create and validate the struct
+            try:
+                return msgspec.convert(converted, struct_type)
+            except msgspec.ValidationError:
+                raise
+
+        extract_with_files.needs_files_map = True  # type: ignore[attr-defined]
+        return extract_with_files
+    else:
+        # Original extractor without file support (more efficient)
+        def extract(param_map: dict[str, Any]) -> Any:
+            converted = {}
+            for field_info in fields_info:
+                field_name = field_info["name"]
+                field_type = field_info["type"]
+
+                if field_name in param_map:
+                    value = param_map[field_name]
+                    if isinstance(value, str):
+                        converted[field_name] = convert_primitive(value, field_type)
+                    else:
+                        converted[field_name] = value
+                elif field_info["required"]:
+                    raise HTTPException(status_code=422, detail=f"Missing required {param_type}: {field_name}")
+
+            try:
+                return msgspec.convert(converted, struct_type)
+            except msgspec.ValidationError:
+                raise
+
+        extract.needs_files_map = False  # type: ignore[attr-defined]
+        return extract
 
 
 def _create_header_struct_extractor(struct_type: type, default: Any) -> Callable:
@@ -346,37 +427,219 @@ def _create_header_struct_extractor(struct_type: type, default: Any) -> Callable
     return extract
 
 
-def create_file_extractor(name: str, annotation: Any, default: Any, alias: str | None = None) -> Callable:
-    """Create a pre-compiled extractor for file uploads."""
+def _validate_upload_file(
+    upload: UploadFile,
+    field_name: str,
+    max_size: int | None,
+    min_size: int | None,
+    allowed_types: Sequence[str] | None,
+) -> None:
+    """
+    Validate an UploadFile against constraints.
+
+    Args:
+        upload: The UploadFile to validate
+        field_name: Field name for error messages
+        max_size: Maximum file size in bytes
+        min_size: Minimum file size in bytes
+        allowed_types: Allowed MIME types (supports wildcards like 'image/*')
+
+    Raises:
+        RequestValidationError: If validation fails
+    """
+    if max_size is not None and upload.size > max_size:
+        raise RequestValidationError(
+            errors=[
+                {
+                    "type": "file_too_large",
+                    "loc": ("body", field_name),
+                    "msg": f"File exceeds maximum size of {max_size} bytes",
+                    "input": {"filename": upload.filename, "size": upload.size},
+                    "ctx": {"max_size": max_size, "actual_size": upload.size},
+                }
+            ]
+        )
+
+    if min_size is not None and upload.size < min_size:
+        raise RequestValidationError(
+            errors=[
+                {
+                    "type": "file_too_small",
+                    "loc": ("body", field_name),
+                    "msg": f"File is below minimum size of {min_size} bytes",
+                    "input": {"filename": upload.filename, "size": upload.size},
+                    "ctx": {"min_size": min_size, "actual_size": upload.size},
+                }
+            ]
+        )
+
+    if allowed_types is not None:
+        content_type = upload.content_type
+        # Check if content type matches any allowed pattern (supports wildcards like 'image/*')
+        if not any(fnmatch.fnmatch(content_type, pattern) for pattern in allowed_types):
+            raise RequestValidationError(
+                errors=[
+                    {
+                        "type": "file_invalid_content_type",
+                        "loc": ("body", field_name),
+                        "msg": f"Invalid content type '{content_type}'",
+                        "input": {"filename": upload.filename, "content_type": content_type},
+                        "ctx": {"allowed_types": list(allowed_types), "actual_type": content_type},
+                    }
+                ]
+            )
+
+
+def create_file_extractor(
+    name: str,
+    annotation: Any,
+    default: Any,
+    alias: str | None = None,
+    max_size: int | None = None,
+    min_size: int | None = None,
+    allowed_types: Sequence[str] | None = None,
+    max_files: int | None = None,
+) -> Callable:
+    """
+    Create a pre-compiled extractor for file uploads with UploadFile support.
+
+    Supports both the new UploadFile type and legacy dict annotations for
+    backward compatibility.
+
+    Args:
+        name: Parameter name
+        annotation: Type annotation (UploadFile, list[UploadFile], dict, list[dict])
+        default: Default value
+        alias: Alternative field name
+        max_size: Maximum file size in bytes
+        min_size: Minimum file size in bytes
+        allowed_types: Allowed MIME types (supports wildcards)
+        max_files: Maximum number of files for list types
+
+    Returns:
+        Extractor function
+    """
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
 
-    # Check if the annotation expects a list (e.g., list[dict], list[bytes])
-    # This handles both single file and multiple file uploads correctly
-    origin = getattr(annotation, "__origin__", None)
+    # Determine expected type
+    unwrapped = unwrap_optional(annotation)
+    origin = get_origin(unwrapped)
     expects_list = origin is list
+
+    # Check if we should create UploadFile instances
+    # Use is_upload_file_type helper which handles all cases including Optional
+    expects_upload_file = is_upload_file_type(annotation)
+
+    # Pre-compute validation params
+    has_validation = max_size is not None or min_size is not None or allowed_types is not None
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
 
-        def extract(files_map: dict[str, Any]) -> Any:
-            value = files_map.get(key, default_value)
-            # Wrap single file in list if annotation expects list
-            if expects_list and value is not None and not isinstance(value, list):
-                return [value]
-            return value
+        def extract_optional(files_map: dict[str, Any]) -> Any:
+            if key not in files_map:
+                return default_value
+
+            file_info = files_map[key]
+
+            if expects_upload_file:
+                if isinstance(file_info, list):
+                    # Validate max_files
+                    if max_files is not None and len(file_info) > max_files:
+                        raise RequestValidationError(
+                            errors=[
+                                {
+                                    "type": "file_too_many",
+                                    "loc": ("body", key),
+                                    "msg": "Too many files uploaded",
+                                    "input": {"count": len(file_info)},
+                                    "ctx": {"max_files": max_files, "actual_count": len(file_info)},
+                                }
+                            ]
+                        )
+                    uploads = [UploadFile.from_file_info(f) for f in file_info]
+                    if has_validation:
+                        for upload in uploads:
+                            _validate_upload_file(upload, key, max_size, min_size, allowed_types)
+                    # Track for auto-cleanup
+                    if "_upload_files" not in files_map:
+                        files_map["_upload_files"] = []
+                    files_map["_upload_files"].extend(uploads)
+                    return uploads if expects_list else uploads[0]
+                else:
+                    upload = UploadFile.from_file_info(file_info)
+                    if has_validation:
+                        _validate_upload_file(upload, key, max_size, min_size, allowed_types)
+                    # Track for auto-cleanup
+                    if "_upload_files" not in files_map:
+                        files_map["_upload_files"] = []
+                    files_map["_upload_files"].append(upload)
+                    return [upload] if expects_list else upload
+            else:
+                # Legacy behavior for dict/bytes annotations
+                if expects_list and not isinstance(file_info, list):
+                    return [file_info]
+                return file_info
+
+        return extract_optional
     else:
 
-        def extract(files_map: dict[str, Any]) -> Any:
+        def extract_required(files_map: dict[str, Any]) -> Any:
             if key not in files_map:
-                raise HTTPException(status_code=422, detail=f"Missing required file: {key}")
-            value = files_map[key]
-            # Wrap single file in list if annotation expects list
-            if expects_list and not isinstance(value, list):
-                return [value]
-            return value
+                raise RequestValidationError(
+                    errors=[
+                        {
+                            "type": "file_missing",
+                            "loc": ("body", key),
+                            "msg": "Missing required file",
+                            "input": None,
+                        }
+                    ]
+                )
 
-    return extract
+            file_info = files_map[key]
+
+            if expects_upload_file:
+                if isinstance(file_info, list):
+                    # Validate max_files
+                    if max_files is not None and len(file_info) > max_files:
+                        raise RequestValidationError(
+                            errors=[
+                                {
+                                    "type": "file_too_many",
+                                    "loc": ("body", key),
+                                    "msg": "Too many files uploaded",
+                                    "input": {"count": len(file_info)},
+                                    "ctx": {"max_files": max_files, "actual_count": len(file_info)},
+                                }
+                            ]
+                        )
+                    uploads = [UploadFile.from_file_info(f) for f in file_info]
+                    if has_validation:
+                        for upload in uploads:
+                            _validate_upload_file(upload, key, max_size, min_size, allowed_types)
+                    # Track for auto-cleanup
+                    if "_upload_files" not in files_map:
+                        files_map["_upload_files"] = []
+                    files_map["_upload_files"].extend(uploads)
+                    return uploads if expects_list else uploads[0]
+                else:
+                    upload = UploadFile.from_file_info(file_info)
+                    if has_validation:
+                        _validate_upload_file(upload, key, max_size, min_size, allowed_types)
+                    # Track for auto-cleanup
+                    if "_upload_files" not in files_map:
+                        files_map["_upload_files"] = []
+                    files_map["_upload_files"].append(upload)
+                    return [upload] if expects_list else upload
+            else:
+                # Legacy behavior for dict/bytes annotations
+                if expects_list and not isinstance(file_info, list):
+                    return [file_info]
+                return file_info
+
+        return extract_required
 
 
 def create_body_extractor(name: str, annotation: Any) -> Callable:
@@ -458,7 +721,26 @@ def create_extractor_for_field(field: FieldDefinition) -> Callable | None:
     elif source == "form":
         return create_form_extractor(name, annotation, default, alias)
     elif source == "file":
-        return create_file_extractor(name, annotation, default, alias)
+        # Extract file constraints from Param if available
+        max_size = None
+        min_size = None
+        allowed_types = None
+        max_files = None
+        if field.param is not None:
+            max_size = getattr(field.param, "max_size", None)
+            min_size = getattr(field.param, "min_size", None)
+            allowed_types = getattr(field.param, "allowed_types", None)
+            max_files = getattr(field.param, "max_files", None)
+        return create_file_extractor(
+            name,
+            annotation,
+            default,
+            alias,
+            max_size=max_size,
+            min_size=min_size,
+            allowed_types=allowed_types,
+            max_files=max_files,
+        )
     elif source == "body":
         return create_body_extractor(name, annotation)
     elif source == "request":

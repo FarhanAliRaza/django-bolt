@@ -61,13 +61,21 @@ def pytest_configure(config):
                 {
                     "BACKEND": "django.template.backends.django.DjangoTemplates",
                     "DIRS": [],
-                    "APP_DIRS": True,
                     "OPTIONS": {
                         "context_processors": [
                             "django.template.context_processors.debug",
                             "django.template.context_processors.request",
                             "django.contrib.auth.context_processors.auth",
                             "django.contrib.messages.context_processors.messages",
+                        ],
+                        "loaders": [
+                            "django.template.loaders.app_directories.Loader",
+                            (
+                                "django.template.loaders.locmem.Loader",
+                                {
+                                    "test_dashboard.html": "<html><body><h1>{{ title }}</h1></body></html>",
+                                },
+                            ),
                         ],
                     },
                 },
@@ -118,9 +126,9 @@ def django_db_setup(django_db_blocker):
         # Create test model tables manually since they're not in migrations
         # But only if they don't already exist (for persistent file-based databases)
         with connection.schema_editor() as schema_editor:
-            from .test_models import Article, Author, BlogPost, Comment, Tag, User, UserProfile  # noqa: PLC0415
+            from .test_models import Article, Author, BlogPost, Comment, Document, Tag, User, UserProfile  # noqa: PLC0415
 
-            models = [Article, Author, Tag, BlogPost, Comment, User, UserProfile]
+            models = [Article, Author, Tag, BlogPost, Comment, User, UserProfile, Document]
             for model in models:
                 # Check if table already exists
                 if model._meta.db_table not in connection.introspection.table_names():

@@ -307,26 +307,110 @@ async def get_preferences(cookies: Annotated[SessionCookies, Cookie()]):
 
 ## File uploads
 
+Django-Bolt provides the `UploadFile` class for handling file uploads with Django integration.
+
+### Basic file upload
+
 ```python
 from typing import Annotated
-from django_bolt.param_functions import File
+from django_bolt import UploadFile
+from django_bolt.params import File
+
+@api.post("/upload")
+async def upload(file: Annotated[UploadFile, File()]):
+    content = await file.read()
+    return {
+        "filename": file.filename,
+        "size": file.size,
+        "content_type": file.content_type,
+    }
+```
+
+### UploadFile properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `filename` | `str` | Original filename |
+| `content_type` | `str` | MIME type |
+| `size` | `int` | Size in bytes |
+| `file` | `Django File` | Django File object for FileField |
+| `headers` | `dict` | Multipart headers |
+
+### UploadFile methods
+
+| Method | Description |
+|--------|-------------|
+| `await read(size=-1)` | Read file content (async) |
+| `await seek(offset)` | Seek to position (async) |
+| `await close()` | Close the file (async) |
+| `file.read()` | Read file content (sync) |
+
+### File validation
+
+Use `File()` parameters to validate uploads:
+
+```python
+from django_bolt import FileSize
 
 @api.post("/upload")
 async def upload(
-    files: Annotated[list[dict], File(alias="file")]
+    file: Annotated[UploadFile, File(
+        max_size=FileSize.MB_10,           # Maximum 10MB
+        min_size=1024,                      # Minimum 1KB
+        allowed_types=["image/*", "application/pdf"],  # MIME types (wildcards supported)
+    )]
 ):
-    for f in files:
-        print(f"Received: {f.get('filename')} ({f.get('size')} bytes)")
-
-    return {"uploaded": len(files)}
+    return {"filename": file.filename}
 ```
 
-Each file dict contains:
+### FileSize enum
 
-- `filename` - Original filename
-- `content_type` - MIME type
-- `size` - Size in bytes
-- `content` - File bytes
+Use the `FileSize` enum for readable size limits:
+
+```python
+from django_bolt import FileSize
+
+File(max_size=FileSize.MB_1)   # 1 MB
+File(max_size=FileSize.MB_5)   # 5 MB
+File(max_size=FileSize.MB_10)  # 10 MB
+File(max_size=FileSize.MB_50)  # 50 MB
+File(max_size=FileSize.MB_100) # 100 MB
+```
+
+### Multiple file uploads
+
+```python
+@api.post("/upload-multiple")
+async def upload_multiple(
+    files: Annotated[list[UploadFile], File(
+        max_files=5,              # Maximum 5 files
+        max_size=FileSize.MB_5,   # 5MB per file
+    )]
+):
+    return {
+        "count": len(files),
+        "filenames": [f.filename for f in files],
+    }
+```
+
+### Saving to Django FileField
+
+The `UploadFile.file` property returns a Django `File` object that works directly with `FileField`:
+
+```python
+from myapp.models import Document
+
+@api.post("/documents")
+async def create_document(
+    title: Annotated[str, Form()],
+    file: Annotated[UploadFile, File(max_size=FileSize.MB_10)],
+):
+    doc = Document(title=title)
+    doc.file.save(file.filename, file.file, save=False)
+    await doc.asave()
+
+    return {"id": doc.id, "url": doc.file.url}
+```
 
 ### Mixed form and files
 
@@ -335,12 +419,70 @@ Each file dict contains:
 async def submit(
     title: Annotated[str, Form()],
     description: Annotated[str, Form()],
-    attachments: Annotated[list[dict], File(alias="file")] = []
+    attachment: Annotated[UploadFile, File()] = None,
 ):
     return {
         "title": title,
-        "attachments": len(attachments)
+        "has_attachment": attachment is not None,
     }
+```
+
+### Form struct with files
+
+Combine form fields and file uploads in a struct:
+
+```python
+import msgspec
+
+class ProfileForm(msgspec.Struct):
+    name: str
+    bio: str = ""
+    avatar: UploadFile
+
+@api.post("/profile")
+async def update_profile(data: Annotated[ProfileForm, Form()]):
+    return {
+        "name": data.name,
+        "avatar_filename": data.avatar.filename,
+    }
+```
+
+### Validation errors
+
+File validation returns structured errors:
+
+```json
+{
+    "detail": [
+        {
+            "type": "file_too_large",
+            "loc": ["body", "avatar"],
+            "msg": "File exceeds maximum size of 10000000 bytes",
+            "ctx": {"max_size": 10000000, "actual_size": 15000000}
+        }
+    ]
+}
+```
+
+Error types:
+
+| Type | Description |
+|------|-------------|
+| `file_missing` | Required file not uploaded |
+| `file_too_large` | Exceeds `max_size` |
+| `file_too_small` | Below `min_size` |
+| `file_too_many` | Exceeds `max_files` |
+| `file_invalid_content_type` | Not in `allowed_types` |
+
+### Global upload limit
+
+Set a global maximum upload size in settings:
+
+```python
+# settings.py
+from django_bolt import FileSize
+
+BOLT_MAX_UPLOAD_SIZE = FileSize.MB_10  # 10 MB global limit
 ```
 
 ## Dependency injection

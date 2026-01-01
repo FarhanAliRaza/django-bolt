@@ -1,7 +1,5 @@
 from django.db import models
 
-# Create your models here.
-
 
 class Blog(models.Model):
     name = models.CharField(max_length=255)
@@ -14,3 +12,14 @@ class Blog(models.Model):
     )
 
     status = models.CharField(choices=statuses, max_length=100, default="draft")
+
+
+class Document(models.Model):
+    """Document model for file upload examples."""
+
+    title = models.CharField(max_length=255)
+    file = models.FileField(upload_to="documents/")
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.title

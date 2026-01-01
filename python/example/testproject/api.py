@@ -884,7 +884,7 @@ async def bench_serializer_validated(author: BenchAuthorWithValidators) -> Bench
 # ============================================================================
 
 
-@api.view("/cbv-simple")
+@api.view("/cbv-simple", tags=["CBV Benchmark"])
 class SimpleAPIView(APIView):
     """Simple APIView for benchmarking."""
 

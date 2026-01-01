@@ -67,6 +67,30 @@ Preflight cache duration in seconds.
 BOLT_CORS_MAX_AGE = 86400  # 24 hours
 ```
 
+## File upload settings
+
+### BOLT_MAX_UPLOAD_SIZE
+
+Maximum file upload size in bytes. Requests exceeding this limit will be rejected with a 413 error.
+
+```python
+BOLT_MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
+```
+
+You can also use the `FileSize` enum for readability:
+
+```python
+from django_bolt import FileSize
+
+BOLT_MAX_UPLOAD_SIZE = FileSize.MB_10
+```
+
+!!! note
+    This is the global limit. You can set per-endpoint limits using the `File()` parameter:
+    ```python
+    file: Annotated[UploadFile, File(max_size=FileSize.MB_5)]
+    ```
+
 ## File serving settings
 
 ### BOLT_ALLOWED_FILE_PATHS
@@ -193,4 +217,5 @@ api = BoltAPI(
 | `BOLT_CORS_ALLOW_HEADERS` | `list[str]` | `[]` | Allowed headers |
 | `BOLT_CORS_EXPOSE_HEADERS` | `list[str]` | `[]` | Exposed headers |
 | `BOLT_CORS_MAX_AGE` | `int` | `600` | Preflight cache (seconds) |
+| `BOLT_MAX_UPLOAD_SIZE` | `int` | `None` | Max upload size (bytes) |
 | `BOLT_ALLOWED_FILE_PATHS` | `list[str]` | `None` | File serving whitelist |

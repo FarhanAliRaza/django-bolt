@@ -6,7 +6,7 @@ Provides explicit parameter source annotations and validation metadata.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -75,6 +75,19 @@ class Param:
 
     deprecated: bool = False
     """Mark parameter as deprecated"""
+
+    # File upload constraints
+    max_size: int | None = None
+    """Maximum file size in bytes"""
+
+    min_size: int | None = None
+    """Minimum file size in bytes"""
+
+    allowed_types: tuple[str, ...] | None = None
+    """Allowed MIME types (supports wildcards like 'image/*')"""
+
+    max_files: int | None = None
+    """Maximum number of files for list[UploadFile] parameters"""
 
 
 def Query(
@@ -304,22 +317,41 @@ def File(
     *,
     alias: str | None = None,
     description: str | None = None,
+    max_size: int | None = None,
+    min_size: int | None = None,
+    allowed_types: Sequence[str] | None = None,
+    max_files: int | None = None,
 ) -> Any:
     """
-    Mark parameter as file upload.
+    Mark parameter as file upload with optional validation.
 
     Args:
         default: Default value (... for required)
         alias: Alternative form field name
         description: Parameter description
+        max_size: Maximum file size in bytes (e.g., 2_000_000 for 2MB)
+        min_size: Minimum file size in bytes
+        allowed_types: Allowed MIME types (e.g., ["image/*", "application/pdf"])
+        max_files: Maximum number of files for list[UploadFile] parameters
 
     Returns:
         Param marker instance
+
+    Example:
+        @api.post("/avatar")
+        async def upload(
+            avatar: Annotated[UploadFile, File(max_size=2_000_000, allowed_types=["image/*"])]
+        ):
+            content = await avatar.read()
     """
     return Param(
         source="file",
         alias=alias,
         description=description,
+        max_size=max_size,
+        min_size=min_size,
+        allowed_types=tuple(allowed_types) if allowed_types else None,
+        max_files=max_files,
     )
 
 

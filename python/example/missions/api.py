@@ -9,7 +9,6 @@ from django_bolt import BoltAPI
 from django_bolt.exceptions import NotFound
 from django_bolt.param_functions import Cookie, File, Form, Header, Query
 from django_bolt.serializers import Serializer, field_validator
-
 from missions.models import Astronaut, Mission
 
 api = BoltAPI()

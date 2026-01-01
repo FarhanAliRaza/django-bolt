@@ -9,9 +9,9 @@ import pytest
 from django_bolt import JSON, BoltAPI, Response, StreamingResponse
 from django_bolt.exceptions import HTTPException
 from django_bolt.param_functions import Cookie, Depends, Form, Header, Query
-from django_bolt.serializers import Serializer, field_validator
 from django_bolt.param_functions import File as FileParam
 from django_bolt.responses import HTML, File, FileResponse, PlainText, Redirect
+from django_bolt.serializers import Serializer, field_validator
 from django_bolt.testing import TestClient
 
 

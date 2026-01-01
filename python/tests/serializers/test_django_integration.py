@@ -25,7 +25,6 @@ constraints. This is msgspec's design - Meta constraints are for parsing.
 from datetime import datetime
 from typing import Annotated
 
-import msgspec
 import pytest
 
 from django_bolt.exceptions import RequestValidationError

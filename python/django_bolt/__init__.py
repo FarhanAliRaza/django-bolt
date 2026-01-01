@@ -69,11 +69,14 @@ from .auth import (
     get_current_user,
 )
 
+# Datastructures
+from .datastructures import UploadFile
+
 # Decorators module
 from .decorators import action
 
 # Enums module
-from .enums import MediaType
+from .enums import FileSize, MediaType
 
 # Middleware module
 from .middleware import (
@@ -171,8 +174,10 @@ __all__ = [
     "StreamingResponse",
     "CompressionConfig",
     "Depends",
+    "UploadFile",
     # Enums
     "MediaType",
+    "FileSize",
     # Router
     "Router",
     # Types

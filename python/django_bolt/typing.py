@@ -8,6 +8,7 @@ msgspec-first, async-only design with focus on performance.
 from __future__ import annotations
 
 import inspect
+import types
 from collections.abc import Callable
 from dataclasses import dataclass, is_dataclass
 from enum import Enum
@@ -33,6 +34,7 @@ __all__ = [
     "is_simple_type",
     "is_sequence_type",
     "is_optional",
+    "is_upload_file_type",
     "unwrap_optional",
     "infer_param_source",
 ]
@@ -196,16 +198,66 @@ def is_sequence_type(annotation: Any) -> bool:
 def is_optional(annotation: Any) -> bool:
     """Check if annotation is Optional[T] or T | None."""
     origin = get_origin(annotation)
-    if origin is Union:
+    # Handle both typing.Union (Optional[T]) and types.UnionType (T | None)
+    if origin is Union or origin is types.UnionType:
         args = get_args(annotation)
         return type(None) in args
     return False
 
 
+def is_upload_file_type(annotation: Any) -> bool:
+    """
+    Check if annotation is UploadFile or list[UploadFile].
+
+    Used to detect file upload fields in Form() structs.
+
+    Args:
+        annotation: Type annotation to check
+
+    Returns:
+        True if annotation is UploadFile or list[UploadFile]
+    """
+    # Unwrap Optional first
+    unwrapped = unwrap_optional(annotation)
+
+    # Direct UploadFile - check by name to handle different import paths
+    try:
+        # Verify it's our UploadFile, not some other class with the same name
+        if (
+            isinstance(unwrapped, type)
+            and unwrapped.__name__ == "UploadFile"
+            and hasattr(unwrapped, "from_file_info")
+            and hasattr(unwrapped, "file")
+        ):
+            return True
+    except (TypeError, AttributeError):
+        pass
+
+    # list[UploadFile]
+    origin = get_origin(unwrapped)
+    if origin is list:
+        args = get_args(unwrapped)
+        if args:
+            inner_type = args[0]
+            try:
+                if (
+                    isinstance(inner_type, type)
+                    and inner_type.__name__ == "UploadFile"
+                    and hasattr(inner_type, "from_file_info")
+                    and hasattr(inner_type, "file")
+                ):
+                    return True
+            except (TypeError, AttributeError):
+                pass
+
+    return False
+
+
 def unwrap_optional(annotation: Any) -> Any:
-    """Unwrap Optional[T] to get T."""
+    """Unwrap Optional[T] or T | None to get T."""
     origin = get_origin(annotation)
-    if origin is Union:
+    # Handle both typing.Union (Optional[T]) and types.UnionType (T | None)
+    if origin is Union or origin is types.UnionType:
         args = tuple(a for a in get_args(annotation) if a is not type(None))
         return args[0] if len(args) == 1 else reduce(or_, args)  # type: ignore
     return annotation
@@ -305,6 +357,9 @@ class FieldDefinition:
     kind: inspect._ParameterKind = inspect.Parameter.POSITIONAL_OR_KEYWORD
     """Parameter kind (positional, keyword-only, etc.)"""
 
+    param: Any = None
+    """Original Param marker (for accessing file constraints, etc.)"""
+
     # Pre-compiled extractor function (set at registration time)
     extractor: Callable[..., Any] | None = None
     """Pre-compiled extractor function for this parameter.
@@ -400,11 +455,13 @@ class FieldDefinition:
         alias: str | None = None
         embed: bool | None = None
         dependency: Any = None
+        param: Any = None
 
         if isinstance(explicit_marker, Param):
             source = explicit_marker.source
             alias = explicit_marker.alias
             embed = explicit_marker.embed
+            param = explicit_marker  # Store for file constraints, etc.
         elif isinstance(explicit_marker, DependsMarker):
             source = "dependency"
             dependency = explicit_marker
@@ -421,4 +478,5 @@ class FieldDefinition:
             embed=embed,
             dependency=dependency,
             kind=parameter.kind,
+            param=param,
         )

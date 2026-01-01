@@ -1685,7 +1685,12 @@ class BoltAPI:
                         elif source == "cookie":
                             value = field.extractor(cookies_map)
                         elif source == "form":
-                            value = field.extractor(form_map)
+                            # Pass files_map for Form() structs with UploadFile fields
+                            try:
+                                value = field.extractor(form_map, files_map)
+                            except TypeError:
+                                # Extractor doesn't accept files_map (non-struct)
+                                value = field.extractor(form_map)
                         elif source == "file":
                             value = field.extractor(files_map)
                         elif source == "body":
@@ -1772,7 +1777,12 @@ class BoltAPI:
                     elif source == "cookie":
                         value = field.extractor(cookies_map)
                     elif source == "form":
-                        value = field.extractor(form_map)
+                        # Pass files_map for Form() structs with UploadFile fields
+                        try:
+                            value = field.extractor(form_map, files_map)
+                        except TypeError:
+                            # Extractor doesn't accept files_map (non-struct)
+                            value = field.extractor(form_map)
                     elif source == "file":
                         value = field.extractor(files_map)
                     elif source == "body":

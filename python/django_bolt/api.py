@@ -8,6 +8,7 @@ import sys
 import time
 import types
 from collections.abc import Callable
+from contextlib import suppress
 from functools import partial
 from typing import Annotated, Any, get_args, get_origin, get_type_hints
 
@@ -62,7 +63,14 @@ from .request_parsing import parse_form_data
 from .router import Router
 from .serialization import serialize_response
 from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
-from .typing import FieldDefinition, HandlerMetadata, HandlerPattern, is_msgspec_struct
+from .typing import (
+    FieldDefinition,
+    HandlerMetadata,
+    HandlerPattern,
+    is_msgspec_struct,
+    is_upload_file_type,
+    unwrap_optional,
+)
 from .views import APIView, ViewSet
 from .websocket import WebSocket as WebSocketType
 from .websocket import mark_websocket_handler
@@ -1102,6 +1110,19 @@ class BoltAPI:
 
         return metadata
 
+    def _field_has_upload_file(self, field: FieldDefinition) -> bool:
+        """Check if a field contains UploadFile types (for auto-cleanup detection)."""
+        if field.source != "form":
+            return False
+
+        # Check if annotation is a struct with UploadFile fields
+        annotation = unwrap_optional(field.annotation)
+        if is_msgspec_struct(annotation):
+            for struct_field in msgspec.structs.fields(annotation):
+                if is_upload_file_type(struct_field.type):
+                    return True
+        return False
+
     def _classify_handler_pattern(
         self, fields: list[FieldDefinition], meta: HandlerMetadata, needs_form_parsing: bool
     ) -> HandlerPattern:
@@ -1269,6 +1290,13 @@ class BoltAPI:
         # This allows us to skip expensive form parsing for 95% of endpoints
         needs_form_parsing = any(f.source in ("form", "file") for f in field_definitions)
         meta["needs_form_parsing"] = needs_form_parsing
+
+        # Track if handler has file uploads (for auto-cleanup optimization)
+        # Check both direct File() params and Form() structs with UploadFile fields
+        meta["has_file_uploads"] = any(
+            f.source == "file" or self._field_has_upload_file(f)
+            for f in field_definitions
+        )
 
         # Static analysis: Determine which request components are actually used
         # This allows skipping unused parsing at request time
@@ -1633,6 +1661,7 @@ class BoltAPI:
             needs_headers = meta.get("needs_headers", True)
             needs_cookies = meta.get("needs_cookies", True)
             needs_path_params = meta.get("needs_path_params", True)
+            has_file_uploads = meta.get("has_file_uploads", False)
 
             async def injector_with_deps(request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
                 """Optimized argument injector with dependency support."""
@@ -1732,6 +1761,10 @@ class BoltAPI:
                     else:
                         kwargs[field.name] = value
 
+                # Track UploadFiles for auto-cleanup (only when handler has file params)
+                if has_file_uploads and "_upload_files" in files_map:
+                    request.state["_upload_files"] = files_map["_upload_files"]
+
                 return args, kwargs
 
             return injector_with_deps
@@ -1743,6 +1776,7 @@ class BoltAPI:
         needs_headers = meta.get("needs_headers", True)
         needs_cookies = meta.get("needs_cookies", True)
         needs_path_params = meta.get("needs_path_params", True)
+        has_file_uploads = meta.get("has_file_uploads", False)
 
         def injector_full(request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
             """Full injector with pre-compiled extractors."""
@@ -1825,6 +1859,10 @@ class BoltAPI:
                     args.append(value)
                 else:
                     kwargs[field.name] = value
+
+            # Track UploadFiles for auto-cleanup (only when handler has file params)
+            if has_file_uploads and "_upload_files" in files_map:
+                request.state["_upload_files"] = files_map["_upload_files"]
 
             return args, kwargs
 
@@ -2124,6 +2162,14 @@ class BoltAPI:
                 logging_middleware.log_exception(request, e, exc_info=True)
 
             return self._handle_generic_exception(e, request=request)
+        finally:
+            # Auto-cleanup UploadFiles to prevent resource leaks
+            # Only runs for handlers with file uploads (optimization: skip for 95%+ of requests)
+            if meta.get("has_file_uploads"):
+                upload_files = request.state.get("_upload_files", [])
+                for upload in upload_files:
+                    with suppress(Exception):
+                        upload.close_sync()
 
     def _get_openapi_schema(self) -> dict[str, Any]:
         """Get or generate OpenAPI schema.

@@ -181,6 +181,15 @@ class UploadFile:
         else:
             self._file.close()
 
+    def close_sync(self) -> None:
+        """
+        Close the file synchronously.
+
+        Used for framework-level auto-cleanup after request handling.
+        """
+        if not self._file.closed:
+            self._file.close()
+
     def __repr__(self) -> str:
         rolled = " (on disk)" if self.rolled_to_disk else ""
         return f"UploadFile(filename={self.filename!r}, content_type={self.content_type!r}, size={self.size}{rolled})"

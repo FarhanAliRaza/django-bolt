@@ -719,3 +719,126 @@ class TestDjangoFileFieldIntegration:
         doc = Document.objects.get(id=data["id"])
         assert doc.file.read() == file_content
         doc.file.close()
+
+
+class TestAutoCleanup:
+    """Test framework-level auto-cleanup of UploadFile resources."""
+
+    def test_files_closed_after_handler_success(self):
+        """Verify files are automatically closed after successful handler execution."""
+        api = BoltAPI()
+        tracked_files: list[UploadFile] = []
+
+        @api.post("/upload")
+        async def upload(avatar: Annotated[UploadFile, File()]):
+            # Track the file to check its state after handler completes
+            tracked_files.append(avatar)
+            # Verify file is open during handler
+            assert not avatar._file.closed, "File should be open during handler"
+            return {"filename": avatar.filename}
+
+        client = TestClient(api)
+        response = client.post(
+            "/upload",
+            files={"avatar": ("test.jpg", b"image data", "image/jpeg")},
+        )
+
+        assert response.status_code == 200
+        assert len(tracked_files) == 1
+        # File should be closed after handler completes
+        assert tracked_files[0]._file.closed, "File should be closed after handler"
+
+    def test_files_closed_after_handler_exception(self):
+        """Verify files are closed even when handler raises an exception."""
+        api = BoltAPI()
+        tracked_files: list[UploadFile] = []
+
+        @api.post("/upload")
+        async def upload(avatar: Annotated[UploadFile, File()]):
+            tracked_files.append(avatar)
+            assert not avatar._file.closed, "File should be open during handler"
+            raise ValueError("Intentional error in handler")
+
+        client = TestClient(api)
+        response = client.post(
+            "/upload",
+            files={"avatar": ("test.jpg", b"image data", "image/jpeg")},
+        )
+
+        # Handler raised an exception - should get 500
+        assert response.status_code == 500
+        assert len(tracked_files) == 1
+        # File should still be closed despite exception
+        assert tracked_files[0]._file.closed, "File should be closed even after exception"
+
+    def test_multiple_files_all_closed(self):
+        """Verify all files are closed when multiple files are uploaded."""
+        api = BoltAPI()
+        tracked_files: list[UploadFile] = []
+
+        @api.post("/upload")
+        async def upload(docs: Annotated[list[UploadFile], File()]):
+            tracked_files.extend(docs)
+            for doc in docs:
+                assert not doc._file.closed, "Files should be open during handler"
+            return {"count": len(docs)}
+
+        client = TestClient(api)
+        response = client.post(
+            "/upload",
+            files=[
+                ("docs", ("doc1.pdf", b"content1", "application/pdf")),
+                ("docs", ("doc2.pdf", b"content2", "application/pdf")),
+                ("docs", ("doc3.pdf", b"content3", "application/pdf")),
+            ],
+        )
+
+        assert response.status_code == 200
+        assert len(tracked_files) == 3
+        # All files should be closed
+        for i, upload in enumerate(tracked_files):
+            assert upload._file.closed, f"File {i} should be closed"
+
+    def test_struct_files_closed_after_handler(self):
+        """Verify files in Form struct are closed after handler."""
+        api = BoltAPI()
+        tracked_files: list[UploadFile] = []
+
+        @api.post("/profile")
+        async def update_profile(data: Annotated[ProfileForm, Form()]):
+            tracked_files.append(data.avatar)
+            assert not data.avatar._file.closed, "File should be open during handler"
+            return {"name": data.name}
+
+        client = TestClient(api)
+        response = client.post(
+            "/profile",
+            data={"name": "John"},
+            files={"avatar": ("photo.jpg", b"image data", "image/jpeg")},
+        )
+
+        assert response.status_code == 200
+        assert len(tracked_files) == 1
+        assert tracked_files[0]._file.closed, "Struct file should be closed after handler"
+
+    def test_sync_handler_files_closed(self):
+        """Verify files are closed after sync handler execution."""
+        api = BoltAPI()
+        tracked_files: list[UploadFile] = []
+
+        @api.post("/upload")
+        def upload(avatar: Annotated[UploadFile, File()]):
+            tracked_files.append(avatar)
+            assert not avatar._file.closed, "File should be open during handler"
+            content = avatar.file.read()
+            return {"size": len(content)}
+
+        client = TestClient(api)
+        response = client.post(
+            "/upload",
+            files={"avatar": ("test.txt", b"sync content", "text/plain")},
+        )
+
+        assert response.status_code == 200
+        assert len(tracked_files) == 1
+        assert tracked_files[0]._file.closed, "File should be closed after sync handler"

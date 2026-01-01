@@ -308,9 +308,17 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
                         if isinstance(file_info, list):
                             uploads = [UploadFile.from_file_info(f) for f in file_info]
                             converted[field_name] = uploads if field_info["expects_list"] else uploads[0]
+                            # Track for auto-cleanup
+                            if "_upload_files" not in files_map:
+                                files_map["_upload_files"] = []
+                            files_map["_upload_files"].extend(uploads)
                         else:
                             upload = UploadFile.from_file_info(file_info)
                             converted[field_name] = [upload] if field_info["expects_list"] else upload
+                            # Track for auto-cleanup
+                            if "_upload_files" not in files_map:
+                                files_map["_upload_files"] = []
+                            files_map["_upload_files"].append(upload)
                     elif field_info["required"]:
                         raise RequestValidationError(
                             errors=[
@@ -552,11 +560,19 @@ def create_file_extractor(
                     if has_validation:
                         for upload in uploads:
                             _validate_upload_file(upload, key, max_size, min_size, allowed_types)
+                    # Track for auto-cleanup
+                    if "_upload_files" not in files_map:
+                        files_map["_upload_files"] = []
+                    files_map["_upload_files"].extend(uploads)
                     return uploads if expects_list else uploads[0]
                 else:
                     upload = UploadFile.from_file_info(file_info)
                     if has_validation:
                         _validate_upload_file(upload, key, max_size, min_size, allowed_types)
+                    # Track for auto-cleanup
+                    if "_upload_files" not in files_map:
+                        files_map["_upload_files"] = []
+                    files_map["_upload_files"].append(upload)
                     return [upload] if expects_list else upload
             else:
                 # Legacy behavior for dict/bytes annotations
@@ -601,11 +617,19 @@ def create_file_extractor(
                     if has_validation:
                         for upload in uploads:
                             _validate_upload_file(upload, key, max_size, min_size, allowed_types)
+                    # Track for auto-cleanup
+                    if "_upload_files" not in files_map:
+                        files_map["_upload_files"] = []
+                    files_map["_upload_files"].extend(uploads)
                     return uploads if expects_list else uploads[0]
                 else:
                     upload = UploadFile.from_file_info(file_info)
                     if has_validation:
                         _validate_upload_file(upload, key, max_size, min_size, allowed_types)
+                    # Track for auto-cleanup
+                    if "_upload_files" not in files_map:
+                        files_map["_upload_files"] = []
+                    files_map["_upload_files"].append(upload)
                     return [upload] if expects_list else upload
             else:
                 # Legacy behavior for dict/bytes annotations

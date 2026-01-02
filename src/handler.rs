@@ -625,19 +625,21 @@ pub async fn handle_request(
                     let obj = result_obj.bind(py);
                     let is_streaming = (|| -> PyResult<bool> {
                         let m = py.import("django_bolt.responses")?;
-                        let cls = m.getattr("StreamingResponse")?;
+                        // OPTIMIZATION: pyo3::intern!() caches Python string objects
+                        let cls = m.getattr(pyo3::intern!(py, "StreamingResponse"))?;
                         obj.is_instance(&cls)
                     })()
                     .unwrap_or(false);
-                    if !is_streaming && !obj.hasattr("content").unwrap_or(false) {
+                    // OPTIMIZATION: Use interned strings for attribute checks
+                    if !is_streaming && !obj.hasattr(pyo3::intern!(py, "content")).unwrap_or(false) {
                         return None;
                     }
                     let status_code: u16 = obj
-                        .getattr("status_code")
+                        .getattr(pyo3::intern!(py, "status_code"))
                         .and_then(|v| v.extract())
                         .unwrap_or(200);
                     let mut headers: Vec<(String, String)> = Vec::new();
-                    if let Ok(hobj) = obj.getattr("headers") {
+                    if let Ok(hobj) = obj.getattr(pyo3::intern!(py, "headers")) {
                         if let Ok(hdict) = hobj.cast::<PyDict>() {
                             for (k, v) in hdict {
                                 if let (Ok(ks), Ok(vs)) =
@@ -649,7 +651,7 @@ pub async fn handle_request(
                         }
                     }
                     let media_type: String = obj
-                        .getattr("media_type")
+                        .getattr(pyo3::intern!(py, "media_type"))
                         .and_then(|v| v.extract())
                         .unwrap_or_else(|_| "application/octet-stream".to_string());
                     let has_ct = headers
@@ -658,13 +660,13 @@ pub async fn handle_request(
                     if !has_ct {
                         headers.push(("content-type".to_string(), media_type.clone()));
                     }
-                    let content_obj: Py<PyAny> = match obj.getattr("content") {
+                    let content_obj: Py<PyAny> = match obj.getattr(pyo3::intern!(py, "content")) {
                         Ok(c) => c.unbind(),
                         Err(_) => return None,
                     };
                     // Extract pre-computed is_async_generator metadata (detected at StreamingResponse instantiation)
                     let is_async_generator: bool = obj
-                        .getattr("is_async_generator")
+                        .getattr(pyo3::intern!(py, "is_async_generator"))
                         .and_then(|v| v.extract())
                         .unwrap_or(false);
                     Some((

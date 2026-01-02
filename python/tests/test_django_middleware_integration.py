@@ -1150,8 +1150,6 @@ class TestMultipleCookieHeaders:
                 if key.lower() == "set-cookie":
                     set_cookie_headers.append(value)
 
-            "\n".join(set_cookie_headers)
-
             # Check session_id has HttpOnly
             # Find the session_id cookie line
             session_cookie = next((c for c in set_cookie_headers if "session_id=" in c), None)

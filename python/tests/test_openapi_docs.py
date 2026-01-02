@@ -358,3 +358,69 @@ def test_openapi_django_auth_all_routes_protected():
             assert response.status_code == 302, (
                 f"Route {route} should redirect to login (302), got {response.status_code}"
             )
+
+
+def test_openapi_security_requirements_for_authenticated_routes():
+    """Test that OpenAPI schema includes security requirements for routes with auth.
+
+    Regression test for: https://github.com/FarhanAliRaza/django-bolt/pull/77
+    The authorize button in Swagger UI was not shown because security extraction
+    was looking for 'auth' key instead of '_auth_backend_instances'.
+    """
+    from django_bolt.auth import APIKeyAuthentication, IsAuthenticated, JWTAuthentication
+
+    api = BoltAPI(
+        openapi_config=OpenAPIConfig(title="Auth Test API", version="1.0.0")
+    )
+
+    # Public route - no auth
+    @api.get("/public")
+    async def public_endpoint():
+        """Public endpoint without authentication."""
+        return {"status": "public"}
+
+    # JWT protected route
+    @api.get("/jwt-protected", auth=[JWTAuthentication(secret="test-secret")], guards=[IsAuthenticated()])
+    async def jwt_protected_endpoint():
+        """JWT protected endpoint."""
+        return {"status": "protected"}
+
+    # API key protected route
+    @api.get("/api-key-protected", auth=[APIKeyAuthentication(api_keys={"test-key"})], guards=[IsAuthenticated()])
+    async def api_key_protected_endpoint():
+        """API key protected endpoint."""
+        return {"status": "api-protected"}
+
+    api._register_openapi_routes()
+
+    with TestClient(api) as client:
+        response = client.get("/docs/openapi.json")
+        assert response.status_code == 200
+
+        schema = response.json()
+
+        # Public route should NOT have security requirements
+        public_path = schema["paths"].get("/public", {})
+        public_get = public_path.get("get", {})
+        assert "security" not in public_get, "Public route should not have security requirements"
+
+        # JWT protected route SHOULD have security requirements
+        jwt_path = schema["paths"].get("/jwt-protected", {})
+        jwt_get = jwt_path.get("get", {})
+        assert "security" in jwt_get, "JWT protected route must have security requirements for Swagger authorize button"
+        jwt_security = jwt_get["security"]
+        assert any("BearerAuth" in sec for sec in jwt_security), (
+            f"JWT route should have BearerAuth security, got: {jwt_security}"
+        )
+
+        # API key protected route SHOULD have security requirements
+        api_key_path = schema["paths"].get("/api-key-protected", {})
+        api_key_get = api_key_path.get("get", {})
+        assert "security" in api_key_get, "API key protected route must have security requirements"
+        api_key_security = api_key_get["security"]
+        assert any("ApiKeyAuth" in sec for sec in api_key_security), (
+            f"API key route should have ApiKeyAuth security, got: {api_key_security}"
+        )
+
+        # Note: securitySchemes in components are populated based on the auth backends used.
+        # The key fix is that security requirements now appear on routes (tested above).

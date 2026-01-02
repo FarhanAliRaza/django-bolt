@@ -126,7 +126,16 @@ def django_db_setup(django_db_blocker):
         # Create test model tables manually since they're not in migrations
         # But only if they don't already exist (for persistent file-based databases)
         with connection.schema_editor() as schema_editor:
-            from .test_models import Article, Author, BlogPost, Comment, Document, Tag, User, UserProfile  # noqa: PLC0415
+            from .test_models import (  # noqa: PLC0415
+                Article,
+                Author,
+                BlogPost,
+                Comment,
+                Document,
+                Tag,
+                User,
+                UserProfile,
+            )
 
             models = [Article, Author, Tag, BlogPost, Comment, User, UserProfile, Document]
             for model in models:

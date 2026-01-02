@@ -78,7 +78,7 @@ def test_crud_operations_validation():
     assert len(api._routes) == 6
 
     # Verify parameter sources
-    for method, path, handler_id, fn in api._routes:
+    for method, path, handler_id, _fn in api._routes:
         meta = api._handler_meta[handler_id]
 
         if method == "GET" and path == "/users":
@@ -155,7 +155,7 @@ def test_authentication_headers():
     assert len(api._routes) == 2
 
     # Verify header sources
-    for _method, _path, handler_id, fn in api._routes:
+    for _method, _path, handler_id, _fn in api._routes:
         meta = api._handler_meta[handler_id]
         for field in meta["fields"]:
             assert field.source == "header"
@@ -260,7 +260,7 @@ def test_nested_resources_with_path_params():
         return {"org": org_id, "team": team_id, "member": member_id}
 
     # Verify all path params detected
-    for _method, path, handler_id, fn in api._routes:
+    for _method, path, handler_id, _fn in api._routes:
         meta = api._handler_meta[handler_id]
         path_fields = [f for f in meta["fields"] if f.source == "path"]
 
@@ -361,7 +361,7 @@ def test_real_world_api_structure():
     assert len(api._routes) == 6
 
     # Verify no GET endpoints have body params
-    for method, path, handler_id, fn in api._routes:
+    for method, path, handler_id, _fn in api._routes:
         if method == "GET":
             meta = api._handler_meta[handler_id]
             body_fields = [f for f in meta["fields"] if f.source == "body"]

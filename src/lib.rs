@@ -22,6 +22,9 @@ mod websocket;
 // Global allocator selection (mutually exclusive features)
 // Use jemalloc for sustained loads with lower memory fragmentation
 // Use mimalloc (default) for short-lived objects - often faster for web requests
+#[cfg(all(feature = "jemalloc", feature = "mimalloc"))]
+compile_error!("Features 'jemalloc' and 'mimalloc' are mutually exclusive. Enable only one.");
+
 #[cfg(all(feature = "jemalloc", not(feature = "mimalloc")))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;

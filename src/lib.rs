@@ -19,6 +19,14 @@ mod type_coercion;
 mod validation;
 mod websocket;
 
+// Global allocator selection (mutually exclusive features)
+// Use jemalloc for sustained loads with lower memory fragmentation
+// Use mimalloc (default) for short-lived objects - often faster for web requests
+#[cfg(all(feature = "jemalloc", not(feature = "mimalloc")))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[cfg(all(feature = "mimalloc", not(feature = "jemalloc")))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

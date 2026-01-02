@@ -26,6 +26,7 @@ use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuar
 
 /// Build an HTTP response for a file path.
 /// Handles both small files (loaded into memory) and large files (streamed).
+/// Note: Not inlined as it's async and relatively large
 pub async fn build_file_response(
     file_path: &str,
     status: StatusCode,
@@ -113,6 +114,8 @@ pub async fn build_file_response(
 }
 
 /// Handle Python errors and convert to HTTP response
+/// OPTIMIZATION: #[inline(never)] on error path - keeps hot path code smaller
+#[inline(never)]
 pub fn handle_python_error(py: Python<'_>, err: PyErr, path: &str, method: &str, debug: bool) -> HttpResponse {
     err.restore(py);
     if let Some(exc) = PyErr::take(py) {
@@ -126,6 +129,8 @@ pub fn handle_python_error(py: Python<'_>, err: PyErr, path: &str, method: &str,
 /// Extract headers from request with validation
 /// OPTIMIZATION: HeaderName::as_str() already returns lowercase (http crate canonical form)
 /// so we skip the redundant to_ascii_lowercase() call (~50ns saved per header)
+/// OPTIMIZATION: #[inline] on hot path - called on every request
+#[inline]
 pub fn extract_headers(
     req: &HttpRequest,
     max_header_size: usize,

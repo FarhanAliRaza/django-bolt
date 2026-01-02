@@ -22,22 +22,27 @@ pub struct PyRequest {
 
 #[pymethods]
 impl PyRequest {
+    /// OPTIMIZATION: #[inline] on hot path getters
     #[getter]
+    #[inline]
     fn method(&self) -> &str {
         &self.method
     }
 
     #[getter]
+    #[inline]
     fn path(&self) -> &str {
         &self.path
     }
 
     #[getter]
+    #[inline]
     fn body<'py>(&self, py: Python<'py>) -> Py<PyAny> {
         PyBytes::new(py, &self.body).into_any().unbind()
     }
 
     #[getter]
+    #[inline]
     fn context<'py>(&self, py: Python<'py>) -> Py<PyAny> {
         match &self.context {
             Some(ctx) => ctx.clone_ref(py).into_any(),
@@ -76,6 +81,7 @@ impl PyRequest {
     /// Example:
     ///     auth_header = request.headers.get("authorization")
     #[getter]
+    #[inline]
     fn headers<'py>(&self, py: Python<'py>) -> Py<PyDict> {
         self.headers.clone_ref(py)
     }
@@ -86,6 +92,7 @@ impl PyRequest {
     /// Example:
     ///     session_id = request.cookies.get("session_id")
     #[getter]
+    #[inline]
     fn cookies<'py>(&self, py: Python<'py>) -> Py<PyDict> {
         self.cookies.clone_ref(py)
     }
@@ -96,6 +103,7 @@ impl PyRequest {
     /// Example:
     ///     page = request.query.get("page", 1)  # Returns int directly
     #[getter]
+    #[inline]
     fn query<'py>(&self, py: Python<'py>) -> Py<PyDict> {
         self.query_params.clone_ref(py)
     }
@@ -109,6 +117,7 @@ impl PyRequest {
     ///     request.state["request_id"] = "abc123"
     ///     request.state["tenant"] = tenant_obj
     #[getter]
+    #[inline]
     fn state<'py>(&self, py: Python<'py>) -> Py<PyDict> {
         self.state.clone_ref(py)
     }

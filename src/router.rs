@@ -53,7 +53,8 @@ pub struct Route {
 
 /// Check if a path contains any path parameters (dynamic segments)
 /// Returns true if path contains {param} patterns
-#[inline]
+/// OPTIMIZATION: #[inline(always)] - very small function called during registration
+#[inline(always)]
 fn is_static_path(path: &str) -> bool {
     !path.contains('{')
 }
@@ -210,6 +211,9 @@ impl Router {
     ///
     /// This optimization significantly improves performance for APIs
     /// where most routes are static (e.g., /users, /health, /api/items).
+    ///
+    /// OPTIMIZATION: #[inline] on hot path - called on every request
+    #[inline]
     pub fn find(&self, method: &str, path: &str) -> Option<RouteMatch<'_>> {
         let method_router = match method {
             "GET" => &self.get,
@@ -284,6 +288,9 @@ impl Router {
     }
 }
 
+/// Parse query string into key-value pairs
+/// OPTIMIZATION: #[inline] on hot path - called on requests with query strings
+#[inline]
 pub fn parse_query_string(query: &str) -> AHashMap<String, String> {
     let mut params = AHashMap::new();
     if query.is_empty() {

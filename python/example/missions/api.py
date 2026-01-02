@@ -264,9 +264,11 @@ async def submit_report(
     mission_id: int,
     title: Annotated[str, Form()],
     summary: Annotated[str, Form()] = "",
-    attachments: Annotated[list[dict], File(alias="file")] = [],
+    attachments: Annotated[list[dict], File(alias="file")] = None,
 ):
     """Submit a mission report with optional attachments."""
+    if attachments is None:
+        attachments = []
     try:
         mission = await Mission.objects.aget(id=mission_id)
     except Mission.DoesNotExist:

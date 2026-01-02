@@ -574,7 +574,7 @@ class SchemaGenerator:
             List of SecurityRequirement objects or None.
         """
         middleware_meta = self.api._handler_middleware.get(handler_id, {})
-        auth_config = middleware_meta.get("auth")
+        auth_config = middleware_meta.get("_auth_backend_instances")
 
         if not auth_config:
             return None

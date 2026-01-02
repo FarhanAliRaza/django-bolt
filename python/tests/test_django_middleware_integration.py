@@ -801,7 +801,7 @@ class TestLoginRequiredBehavior:
             return {"status": "secret data"}
 
         with TestClient(api, raise_server_exceptions=False) as client:
-            response = client.get("/protected")
+            client.get("/protected")
             # Should redirect to login page (302) or we get redirected (200 to login form)
             # TestClient follows redirects by default, so we check the handler wasn't called
             assert handler_called["called"] is False
@@ -1150,7 +1150,7 @@ class TestMultipleCookieHeaders:
                 if key.lower() == "set-cookie":
                     set_cookie_headers.append(value)
 
-            all_cookies = "\n".join(set_cookie_headers)
+            "\n".join(set_cookie_headers)
 
             # Check session_id has HttpOnly
             # Find the session_id cookie line

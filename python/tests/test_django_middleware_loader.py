@@ -457,7 +457,7 @@ class TestRealDjangoMiddleware:
             response = client.get("/test", headers={"Accept-Encoding": "gzip"})
             assert response.status_code == 200
             # GZip middleware should add Content-Encoding header
-            headers_lower = {k.lower(): v for k, v in response.headers.items()}
+            {k.lower(): v for k, v in response.headers.items()}
             # May or may not be compressed depending on response size threshold
             # Just verify middleware runs without error
             assert response.status_code == 200

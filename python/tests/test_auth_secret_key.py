@@ -65,12 +65,16 @@ def test_global_auth_with_django_secret():
         JWTAuthentication()  # No secret - should use Django's
     ]
 
-    from django_bolt.auth import get_default_authentication_classes  # noqa: PLC0415
+    try:
+        from django_bolt.auth import get_default_authentication_classes  # noqa: PLC0415
 
-    auth_classes = get_default_authentication_classes()
-    assert len(auth_classes) > 0
-    assert auth_classes[0].secret == settings.SECRET_KEY
-    print("✓ Global auth configuration uses Django SECRET_KEY")
+        auth_classes = get_default_authentication_classes()
+        assert len(auth_classes) > 0
+        assert auth_classes[0].secret == settings.SECRET_KEY
+        print("✓ Global auth configuration uses Django SECRET_KEY")
+    finally:
+        # Clean up to prevent leaking to other tests
+        del settings.BOLT_AUTHENTICATION_CLASSES
 
 
 if __name__ == "__main__":

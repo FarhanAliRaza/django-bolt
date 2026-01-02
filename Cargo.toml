@@ -22,7 +22,7 @@ socket2 = { version = "0.6", features = ["all"] }
 matchit = "0.9"
 # Middleware dependencies
 governor = "0.10"  # Rate limiting
-jsonwebtoken = "9"  # JWT authentication
+jsonwebtoken = "10"  # JWT authentication
 dashmap = "6"  # Fast concurrent hashmap for rate limiting
 parking_lot = "0.12"  # Fast RwLock for shared state
 serde = { version = "1", features = ["derive"] }

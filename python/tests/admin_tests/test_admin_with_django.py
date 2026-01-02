@@ -317,7 +317,7 @@ class TestStaticRouteMetadata:
 
         # Get metadata for the static handler (find handler_id from routes)
         handler_id = None
-        for method, path, hid, handler in api._routes:
+        for _method, path, hid, handler in api._routes:
             if handler == static_handler:
                 handler_id = hid
                 break
@@ -353,7 +353,7 @@ class TestStaticRouteMetadata:
 
         # Get metadata using handler_id from routes
         handler_id = None
-        for method, path, hid, handler in api._routes:
+        for _method, path, hid, handler in api._routes:
             if handler == static_handler:
                 handler_id = hid
                 break
@@ -391,7 +391,7 @@ class TestStaticRouteMetadata:
 
         # Get metadata using handler_id from routes
         handler_id = None
-        for method, path, hid, handler in api._routes:
+        for _method, path, hid, handler in api._routes:
             if handler == static_handler:
                 handler_id = hid
                 break

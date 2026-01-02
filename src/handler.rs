@@ -19,6 +19,7 @@ use crate::responses;
 use crate::router::parse_query_string;
 use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
 use crate::streaming::{create_python_stream, create_sse_stream};
+use crate::type_coercion::{coerce_param, TYPE_STRING};
 use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
 
 // Reuse the global Python asyncio event loop created at server startup (TASK_LOCALS)
@@ -167,7 +168,23 @@ pub async fn handle_request(
     let (path_params, handler_id) = {
         if let Some(route_match) = router.find(method, path) {
             let handler_id = route_match.handler_id();
-            let path_params = route_match.path_params(); // No allocation for static routes
+            let raw_params = route_match.path_params(); // No allocation for static routes
+
+            // URL-decode path parameters for consistency with query string parsing
+            // This ensures /items/hello%20world correctly yields id="hello world"
+            let path_params: AHashMap<String, String> = if raw_params.is_empty() {
+                raw_params
+            } else {
+                raw_params
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let decoded = urlencoding::decode(&v)
+                            .unwrap_or_else(|_| std::borrow::Cow::Borrowed(&v))
+                            .into_owned();
+                        (k, decoded)
+                    })
+                    .collect()
+            };
             (path_params, handler_id)
         } else {
             // No explicit handler found - check for automatic OPTIONS
@@ -228,6 +245,41 @@ pub async fn handle_request(
     } else {
         AHashMap::new()
     };
+
+    // Type validation for path and query parameters (Rust-native, no GIL)
+    // This validates parameter types before GIL acquisition, returning 422 for invalid types
+    // Performance: Eliminates Python's convert_primitive() overhead for invalid requests
+    if let Some(ref route_meta) = route_metadata {
+        if !route_meta.param_types.is_empty() {
+            // Validate path parameters
+            for (name, value) in &path_params {
+                if let Some(&type_hint) = route_meta.param_types.get(name) {
+                    if type_hint != TYPE_STRING {
+                        if let Err(error_msg) = coerce_param(value, type_hint) {
+                            return responses::error_422_validation(&format!(
+                                "Path parameter '{}': {}",
+                                name, error_msg
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // Validate query parameters
+            for (name, value) in &query_params {
+                if let Some(&type_hint) = route_meta.param_types.get(name) {
+                    if type_hint != TYPE_STRING {
+                        if let Err(error_msg) = coerce_param(value, type_hint) {
+                            return responses::error_422_validation(&format!(
+                                "Query parameter '{}': {}",
+                                name, error_msg
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Optimization: Check if handler needs headers
     // Headers are still needed for auth/rate limiting middleware, so we extract them for Rust
@@ -342,14 +394,100 @@ pub async fn handle_request(
             AHashMap::new()
         };
 
+        // Get type hints for type coercion
+        let param_types = route_metadata.as_ref()
+            .map(|m| &m.param_types)
+            .cloned()
+            .unwrap_or_default();
+
+        // Create typed path_params dict - convert values to Python types
+        let path_params_dict = PyDict::new(py);
+        for (name, value) in &path_params {
+            let type_hint = param_types.get(name).copied().unwrap_or(TYPE_STRING);
+            let py_value: Py<PyAny> = match type_hint {
+                crate::type_coercion::TYPE_INT => {
+                    value.parse::<i64>().unwrap_or(0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_FLOAT => {
+                    value.parse::<f64>().unwrap_or(0.0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_BOOL => {
+                    let is_true = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+                    is_true.into_pyobject(py).unwrap().to_owned().unbind().into_any()
+                }
+                _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
+            };
+            let _ = path_params_dict.set_item(name, py_value);
+        }
+
+        // Create typed query_params dict - convert values to Python types
+        let query_params_dict = PyDict::new(py);
+        for (name, value) in &query_params {
+            let type_hint = param_types.get(name).copied().unwrap_or(TYPE_STRING);
+            let py_value: Py<PyAny> = match type_hint {
+                crate::type_coercion::TYPE_INT => {
+                    value.parse::<i64>().unwrap_or(0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_FLOAT => {
+                    value.parse::<f64>().unwrap_or(0.0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_BOOL => {
+                    let is_true = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+                    is_true.into_pyobject(py).unwrap().to_owned().unbind().into_any()
+                }
+                _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
+            };
+            let _ = query_params_dict.set_item(name, py_value);
+        }
+
+        // Create typed headers dict - convert values to Python types
+        let headers_dict = PyDict::new(py);
+        for (name, value) in &headers_for_python {
+            let type_hint = param_types.get(name).copied().unwrap_or(TYPE_STRING);
+            let py_value: Py<PyAny> = match type_hint {
+                crate::type_coercion::TYPE_INT => {
+                    value.parse::<i64>().unwrap_or(0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_FLOAT => {
+                    value.parse::<f64>().unwrap_or(0.0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_BOOL => {
+                    let is_true = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+                    is_true.into_pyobject(py).unwrap().to_owned().unbind().into_any()
+                }
+                _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
+            };
+            let _ = headers_dict.set_item(name, py_value);
+        }
+
+        // Create typed cookies dict - convert values to Python types
+        let cookies_dict = PyDict::new(py);
+        for (name, value) in &cookies {
+            let type_hint = param_types.get(name).copied().unwrap_or(TYPE_STRING);
+            let py_value: Py<PyAny> = match type_hint {
+                crate::type_coercion::TYPE_INT => {
+                    value.parse::<i64>().unwrap_or(0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_FLOAT => {
+                    value.parse::<f64>().unwrap_or(0.0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_BOOL => {
+                    let is_true = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+                    is_true.into_pyobject(py).unwrap().to_owned().unbind().into_any()
+                }
+                _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
+            };
+            let _ = cookies_dict.set_item(name, py_value);
+        }
+
         let request = PyRequest {
             method: method_owned.clone(),
             path: path_owned.clone(),
             body: body.to_vec(),
-            path_params, // For static routes, this is already empty from RouteMatch::Static
-            query_params,
-            headers: headers_for_python,
-            cookies,
+            path_params: path_params_dict.unbind(),
+            query_params: query_params_dict.unbind(),
+            headers: headers_dict.unbind(),
+            cookies: cookies_dict.unbind(),
             context,
             user: None,
             state: PyDict::new(py).unbind(), // Empty state dict for middleware and dynamic attributes

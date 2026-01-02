@@ -211,6 +211,10 @@ pub struct RouteMetadata {
     pub needs_path_params: bool,
     #[allow(dead_code)] // Reserved for future optimization
     pub is_static_route: bool,
+
+    // Type hints for path/query parameters (enables Rust-side type coercion)
+    // Maps parameter name to type hint constant (see type_coercion.rs)
+    pub param_types: HashMap<String, u8>,
 }
 
 impl RouteMetadata {
@@ -312,6 +316,16 @@ impl RouteMetadata {
             .and_then(|v| v.extract::<bool>().ok())
             .unwrap_or(false);
 
+        // Parse param_types for Rust-side type coercion
+        // Format: {"param_name": type_hint_id, ...}
+        // Type hint IDs match type_coercion.rs constants (TYPE_INT=1, TYPE_FLOAT=2, etc.)
+        let param_types: HashMap<String, u8> = py_meta
+            .get_item("param_types")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<HashMap<String, u8>>().ok())
+            .unwrap_or_default();
+
         Ok(RouteMetadata {
             auth_backends,
             guards,
@@ -323,6 +337,7 @@ impl RouteMetadata {
             needs_cookies,
             needs_path_params,
             is_static_route,
+            param_types,
         })
     }
 }

@@ -556,6 +556,39 @@ async fn handle_test_request_internal(
         AHashMap::new()
     };
 
+    // Validate typed parameters before GIL acquisition
+    if let Some(ref meta) = route_meta {
+        use crate::type_coercion::{coerce_param, TYPE_STRING};
+
+        // Validate path parameters
+        for (name, value) in &path_params {
+            if let Some(&type_hint) = meta.param_types.get(name) {
+                if type_hint != TYPE_STRING {
+                    if let Err(error_msg) = coerce_param(value, type_hint) {
+                        return responses::error_422_validation(&format!(
+                            "Path parameter '{}': {}",
+                            name, error_msg
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Validate query parameters
+        for (name, value) in &query_params {
+            if let Some(&type_hint) = meta.param_types.get(name) {
+                if type_hint != TYPE_STRING {
+                    if let Err(error_msg) = coerce_param(value, type_hint) {
+                        return responses::error_422_validation(&format!(
+                            "Query parameter '{}': {}",
+                            name, error_msg
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
     // Extract headers
     let needs_headers = route_meta.as_ref().map(|m| m.needs_headers).unwrap_or(true);
     let skip_cors = route_meta
@@ -632,14 +665,101 @@ async fn handle_test_request_internal(
             AHashMap::new()
         };
 
+        // Get param_types from route metadata for typed conversion
+        let param_types = route_meta
+            .as_ref()
+            .map(|m| &m.param_types)
+            .cloned()
+            .unwrap_or_default();
+
+        // Create typed path_params dict - convert values to Python types
+        let path_params_dict = PyDict::new(py);
+        for (name, value) in &path_params {
+            let type_hint = param_types.get(name).copied().unwrap_or(crate::type_coercion::TYPE_STRING);
+            let py_value: Py<PyAny> = match type_hint {
+                crate::type_coercion::TYPE_INT => {
+                    value.parse::<i64>().unwrap_or(0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_FLOAT => {
+                    value.parse::<f64>().unwrap_or(0.0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_BOOL => {
+                    let is_true = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+                    is_true.into_pyobject(py).unwrap().to_owned().unbind().into_any()
+                }
+                _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
+            };
+            let _ = path_params_dict.set_item(name, py_value);
+        }
+
+        // Create typed query_params dict - convert values to Python types
+        let query_params_dict = PyDict::new(py);
+        for (name, value) in &query_params {
+            let type_hint = param_types.get(name).copied().unwrap_or(crate::type_coercion::TYPE_STRING);
+            let py_value: Py<PyAny> = match type_hint {
+                crate::type_coercion::TYPE_INT => {
+                    value.parse::<i64>().unwrap_or(0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_FLOAT => {
+                    value.parse::<f64>().unwrap_or(0.0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_BOOL => {
+                    let is_true = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+                    is_true.into_pyobject(py).unwrap().to_owned().unbind().into_any()
+                }
+                _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
+            };
+            let _ = query_params_dict.set_item(name, py_value);
+        }
+
+        // Create typed headers dict - convert values to Python types
+        let headers_dict = PyDict::new(py);
+        for (name, value) in &headers_for_python {
+            let type_hint = param_types.get(name).copied().unwrap_or(crate::type_coercion::TYPE_STRING);
+            let py_value: Py<PyAny> = match type_hint {
+                crate::type_coercion::TYPE_INT => {
+                    value.parse::<i64>().unwrap_or(0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_FLOAT => {
+                    value.parse::<f64>().unwrap_or(0.0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_BOOL => {
+                    let is_true = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+                    is_true.into_pyobject(py).unwrap().to_owned().unbind().into_any()
+                }
+                _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
+            };
+            let _ = headers_dict.set_item(name, py_value);
+        }
+
+        // Create typed cookies dict - convert values to Python types
+        let cookies_dict = PyDict::new(py);
+        for (name, value) in &cookies {
+            let type_hint = param_types.get(name).copied().unwrap_or(crate::type_coercion::TYPE_STRING);
+            let py_value: Py<PyAny> = match type_hint {
+                crate::type_coercion::TYPE_INT => {
+                    value.parse::<i64>().unwrap_or(0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_FLOAT => {
+                    value.parse::<f64>().unwrap_or(0.0).into_pyobject(py).unwrap().into_any().unbind()
+                }
+                crate::type_coercion::TYPE_BOOL => {
+                    let is_true = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+                    is_true.into_pyobject(py).unwrap().to_owned().unbind().into_any()
+                }
+                _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
+            };
+            let _ = cookies_dict.set_item(name, py_value);
+        }
+
         let request = PyRequest {
             method: method.to_string(),
             path: path.to_string(),
             body: body.to_vec(),
-            path_params,
-            query_params,
-            headers: headers_for_python,
-            cookies,
+            path_params: path_params_dict.unbind(),
+            query_params: query_params_dict.unbind(),
+            headers: headers_dict.unbind(),
+            cookies: cookies_dict.unbind(),
             context,
             user: None,
             state: PyDict::new(py).unbind(),

@@ -1,13 +1,76 @@
 """Middleware compilation utilities."""
 
+from __future__ import annotations
+
+import datetime
+import decimal
 import logging
+import uuid
 from collections.abc import Callable
-from typing import Any
+from typing import Any, get_origin
 
 from ..auth.backends import get_default_authentication_classes
 from ..auth.guards import get_default_permission_classes
+from ..typing import unwrap_optional
 
 logger = logging.getLogger(__name__)
+
+# Type hint constants - MUST match src/type_coercion.rs
+TYPE_INT = 1
+TYPE_FLOAT = 2
+TYPE_BOOL = 3
+TYPE_STRING = 4
+TYPE_UUID = 5
+TYPE_DATETIME = 6
+TYPE_DECIMAL = 7
+TYPE_DATE = 8
+TYPE_TIME = 9
+
+
+def get_type_hint_id(annotation: Any) -> int:
+    """
+    Map Python type annotations to Rust type hint IDs.
+
+    These IDs are used by Rust's type_coercion module to convert
+    string parameters to typed values before passing to Python.
+
+    Args:
+        annotation: Python type annotation (e.g., int, str, uuid.UUID)
+
+    Returns:
+        Type hint ID constant (TYPE_INT, TYPE_STRING, etc.)
+    """
+    # Unwrap Optional[T] or T | None
+    unwrapped = unwrap_optional(annotation)
+
+    # Get base type if it's a generic
+    origin = get_origin(unwrapped)
+    if origin is not None:
+        # For generic types like list[int], we can't coerce in Rust
+        return TYPE_STRING
+
+    # Direct type mapping
+    if unwrapped is int:
+        return TYPE_INT
+    elif unwrapped is float:
+        return TYPE_FLOAT
+    elif unwrapped is bool:
+        return TYPE_BOOL
+    elif unwrapped is str:
+        return TYPE_STRING
+    elif unwrapped is uuid.UUID:
+        return TYPE_UUID
+    elif unwrapped is datetime.datetime:
+        return TYPE_DATETIME
+    elif unwrapped is datetime.date:
+        return TYPE_DATE
+    elif unwrapped is datetime.time:
+        return TYPE_TIME
+    elif unwrapped is decimal.Decimal:
+        return TYPE_DECIMAL
+    else:
+        # Complex types (structs, dicts, etc.) - keep as string
+        return TYPE_STRING
 
 
 def compile_middleware_meta(
@@ -138,12 +201,15 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
     These flags indicate which request components the handler actually needs,
     allowing Rust to skip parsing unused data.
 
+    Also extracts type hints for path and query parameters to enable
+    Rust-side type coercion (avoiding Python's convert_primitive overhead).
+
     Args:
         metadata: Existing middleware metadata dict (or None to create new)
         handler_meta: Handler metadata containing the optimization flags
 
     Returns:
-        Updated metadata dict with optimization flags
+        Updated metadata dict with optimization flags and param_types
     """
     if metadata is None:
         metadata = {}
@@ -155,6 +221,24 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
     metadata["needs_cookies"] = handler_meta.get("needs_cookies", True)
     metadata["needs_path_params"] = handler_meta.get("needs_path_params", True)
     metadata["is_static_route"] = handler_meta.get("is_static_route", False)
+
+    # Extract type hints for all parameter sources
+    # This enables Rust-side type coercion, eliminating Python overhead
+    # Format: {"param_name": type_hint_id, ...}
+    param_types: dict[str, int] = {}
+
+    fields = handler_meta.get("fields", [])
+    for field in fields:
+        # Include type hints for path, query, header, cookie, and form
+        # Body and file have complex handling in Python
+        if field.source in ("path", "query", "header", "cookie", "form"):
+            type_hint = get_type_hint_id(field.annotation)
+            # Only include non-string types (string is the default, no coercion needed)
+            if type_hint != TYPE_STRING:
+                param_types[field.name] = type_hint
+
+    if param_types:
+        metadata["param_types"] = param_types
 
     return metadata
 

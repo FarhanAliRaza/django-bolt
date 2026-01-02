@@ -534,4 +534,57 @@ rm -f "$USER_BENCH"
 kill -TERM -$SERVER_PID 2>/dev/null || true
 pkill -TERM -f "manage.py runbolt --host $HOST --port $PORT" 2>/dev/null || true
 
+echo ""
+echo "## Latency Percentile Benchmarks (bombardier)"
+echo "Measures p50/p75/p90/p99 latency for type coercion overhead analysis"
+
+# Check if bombardier is available
+BOMBARDIER_BIN=""
+if command -v bombardier &> /dev/null; then
+    BOMBARDIER_BIN="bombardier"
+elif [ -f "$HOME/go/bin/bombardier" ]; then
+    BOMBARDIER_BIN="$HOME/go/bin/bombardier"
+elif [ -f "$HOME/.local/bin/bombardier" ]; then
+    BOMBARDIER_BIN="$HOME/.local/bin/bombardier"
+fi
+
+if [ -n "$BOMBARDIER_BIN" ]; then
+    # Start server for latency tests
+    DJANGO_BOLT_WORKERS=$WORKERS setsid uv run python manage.py runbolt --host $HOST --port $PORT --processes $P >/dev/null 2>&1 &
+    SERVER_PID=$!
+    sleep 2
+
+    echo ""
+    echo "### Baseline - No Parameters (/)"
+    $BOMBARDIER_BIN -c $C -n $N -l http://$HOST:$PORT/ 2>&1 | grep -E "(Reqs/sec|Latency|p50|p75|p90|p99|50%|75%|90%|99%)"
+
+    echo ""
+    echo "### Path Parameter - int (/items/12345)"
+    $BOMBARDIER_BIN -c $C -n $N -l "http://$HOST:$PORT/items/12345" 2>&1 | grep -E "(Reqs/sec|Latency|p50|p75|p90|p99|50%|75%|90%|99%)"
+
+    echo ""
+    echo "### Path + Query Parameters (/items/12345?q=hello)"
+    $BOMBARDIER_BIN -c $C -n $N -l "http://$HOST:$PORT/items/12345?q=hello" 2>&1 | grep -E "(Reqs/sec|Latency|p50|p75|p90|p99|50%|75%|90%|99%)"
+
+    echo ""
+    echo "### Header Parameter (/header)"
+    $BOMBARDIER_BIN -c $C -n $N -l -H "x-test: testvalue" http://$HOST:$PORT/header 2>&1 | grep -E "(Reqs/sec|Latency|p50|p75|p90|p99|50%|75%|90%|99%)"
+
+    echo ""
+    echo "### Cookie Parameter (/cookie)"
+    $BOMBARDIER_BIN -c $C -n $N -l -H "Cookie: session=abc123" http://$HOST:$PORT/cookie 2>&1 | grep -E "(Reqs/sec|Latency|p50|p75|p90|p99|50%|75%|90%|99%)"
+
+    echo ""
+    echo "### Auth Context - JWT validated, no DB (/auth/context)"
+    if [ -n "$TOKEN" ] && [ ${#TOKEN} -gt 50 ]; then
+        $BOMBARDIER_BIN -c $C -n $N -l -H "Authorization: Bearer $TOKEN" http://$HOST:$PORT/auth/context 2>&1 | grep -E "(Reqs/sec|Latency|p50|p75|p90|p99|50%|75%|90%|99%)"
+    else
+        echo "Skipped: No valid JWT token"
+    fi
+
+    kill -TERM -$SERVER_PID 2>/dev/null || true
+    pkill -TERM -f "manage.py runbolt --host $HOST --port $PORT" 2>/dev/null || true
+else
+    echo "bombardier not installed. Install with: go install github.com/codesenberg/bombardier@latest"
+fi
 

@@ -15,6 +15,7 @@ mod server;
 mod state;
 mod streaming;
 mod testing;
+mod type_coercion;
 mod validation;
 mod websocket;
 

@@ -54,47 +54,33 @@ def get_msgspec_decoder(type_: Any) -> msgspec.json.Decoder:
     return _DECODER_CACHE[type_]
 
 
-def convert_primitive(value: str, annotation: Any) -> Any:
+def convert_primitive(value: Any, annotation: Any) -> Any:
     """
-    Convert string value to the appropriate type based on annotation.
+    Convert value to the target type if needed.
 
-    Args:
-        value: Raw string value from request
-        annotation: Target type annotation
-
-    Returns:
-        Converted value
+    For path/query/header/cookie: Rust pre-converts to typed values, pass through.
+    For form data: Values are strings from body parsing, need Python conversion.
     """
+    # Already typed (Rust pre-converted) - pass through
+    if isinstance(value, (int, float, bool)) and not isinstance(value, str):
+        return value
+
     tp = unwrap_optional(annotation)
 
+    # String target or unknown - pass through
     if tp is str or tp is Any or tp is None or tp is inspect._empty:
         return value
 
-    if tp is int:
-        try:
+    # String value (form data) needs conversion
+    if isinstance(value, str):
+        if tp is bool:
+            return value.lower() in ("true", "1", "yes", "on")
+        if tp is int:
             return int(value)
-        except ValueError as e:
-            raise HTTPException(422, detail=f"Invalid integer value: '{value}'") from e
-
-    if tp is float:
-        try:
+        if tp is float:
             return float(value)
-        except ValueError as e:
-            raise HTTPException(422, detail=f"Invalid float value: '{value}'") from e
 
-    if tp is bool:
-        v = value.lower()
-        if v in ("1", "true", "t", "yes", "y", "on"):
-            return True
-        if v in ("0", "false", "f", "no", "n", "off"):
-            return False
-        return bool(value)
-
-    # Fallback: try msgspec decode for JSON in value
-    try:
-        return msgspec.json.decode(value.encode())
-    except Exception:
-        return value
+    return value
 
 
 def create_path_extractor(name: str, annotation: Any, alias: str | None = None) -> Callable:
@@ -102,7 +88,8 @@ def create_path_extractor(name: str, annotation: Any, alias: str | None = None) 
     key = alias or name
 
     def converter(v):
-        return convert_primitive(str(v), annotation)
+        # Don't wrap in str() - Rust pre-converts to typed values (int, float, bool)
+        return convert_primitive(v, annotation)
 
     def extract(params_map: dict[str, Any]) -> Any:
         if key not in params_map:
@@ -129,7 +116,8 @@ def create_query_extractor(name: str, annotation: Any, default: Any, alias: str 
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
 
     def converter(v):
-        return convert_primitive(str(v), annotation)
+        # Don't wrap in str() - Rust pre-converts to typed values (int, float, bool)
+        return convert_primitive(v, annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
@@ -165,7 +153,8 @@ def create_header_extractor(name: str, annotation: Any, default: Any, alias: str
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
 
     def converter(v):
-        return convert_primitive(str(v), annotation)
+        # Don't wrap in str() - Rust pre-converts to typed values (int, float, bool)
+        return convert_primitive(v, annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
@@ -199,7 +188,8 @@ def create_cookie_extractor(name: str, annotation: Any, default: Any, alias: str
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
 
     def converter(v):
-        return convert_primitive(str(v), annotation)
+        # Don't wrap in str() - Rust pre-converts to typed values (int, float, bool)
+        return convert_primitive(v, annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
@@ -233,7 +223,8 @@ def create_form_extractor(name: str, annotation: Any, default: Any, alias: str |
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
 
     def converter(v):
-        return convert_primitive(str(v), annotation)
+        # Don't wrap in str() - Rust pre-converts to typed values (int, float, bool)
+        return convert_primitive(v, annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default

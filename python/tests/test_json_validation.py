@@ -342,45 +342,20 @@ class TestRequestValidationErrorHandling:
 
 
 class TestTypeCoercionEdgeCases:
-    """Test edge cases in type coercion and conversion."""
+    """Test edge cases in type coercion and conversion.
 
-    def test_boolean_coercion_from_string(self):
-        """Test boolean coercion from string query params."""
-        # True values
-        assert convert_primitive("true", bool) is True
-        assert convert_primitive("True", bool) is True
-        assert convert_primitive("1", bool) is True
-        assert convert_primitive("yes", bool) is True
-        assert convert_primitive("on", bool) is True
+    Note: Type coercion for basic types (int, float, bool) is now done in Rust.
+    convert_primitive is just a pass-through for already-typed values.
+    """
 
-        # False values
-        assert convert_primitive("false", bool) is False
-        assert convert_primitive("False", bool) is False
-        assert convert_primitive("0", bool) is False
-        assert convert_primitive("no", bool) is False
-        assert convert_primitive("off", bool) is False
-
-    def test_number_coercion_errors(self):
-        """Test that invalid number strings raise errors."""
-        # Invalid int - now raises HTTPException(422) instead of ValueError
-        with pytest.raises(HTTPException) as exc_info:
-            convert_primitive("not_a_number", int)
-        assert exc_info.value.status_code == 422
-
-        # Invalid float - now raises HTTPException(422) instead of ValueError
-        with pytest.raises(HTTPException) as exc_info:
-            convert_primitive("not_a_float", float)
-        assert exc_info.value.status_code == 422
-
-    def test_empty_string_coercion(self):
-        """Test coercion of empty strings."""
-        # Empty string for string type should be empty string
-        assert convert_primitive("", str) == ""
-
-        # Empty string for int should fail - now raises HTTPException(422)
-        with pytest.raises(HTTPException) as exc_info:
-            convert_primitive("", int)
-        assert exc_info.value.status_code == 422
+    def test_passthrough_typed_values(self):
+        """Test that already-typed values pass through unchanged."""
+        # Rust pre-converts these, so convert_primitive just returns them
+        assert convert_primitive(True, bool) is True
+        assert convert_primitive(False, bool) is False
+        assert convert_primitive(42, int) == 42
+        assert convert_primitive(3.14, float) == 3.14
+        assert convert_primitive("hello", str) == "hello"
 
     def test_optional_fields_with_none(self):
         """Test that optional fields handle None correctly."""

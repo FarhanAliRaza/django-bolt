@@ -36,7 +36,6 @@ dependencies = [
     "Django>=4.2",
     "click>=8.1",
     "msgspec>=0.20",
-    "multipart>=1.3",
     "pyjwt>=2.10.1",
     "typing-extensions>=4.5.0",  # required openapi docs
     "pyyaml>=6.0", # required openapi docs

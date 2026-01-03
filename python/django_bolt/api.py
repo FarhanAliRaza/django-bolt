@@ -33,7 +33,6 @@ from .auth.user_loader import load_user_sync
 
 # Import modularized components
 from .binding import (
-    convert_primitive,
     create_extractor_for_field,
     get_msgspec_decoder,
 )
@@ -59,7 +58,6 @@ from .openapi.routes import OpenAPIRouteRegistrar
 from .openapi.schema_generator import SchemaGenerator
 from .params import Depends as DependsMarker
 from .params import Param
-from .request_parsing import parse_form_data
 from .router import Router
 from .serialization import serialize_response
 from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
@@ -129,21 +127,21 @@ def extract_parameter_value(
         Tuple of (value, body_obj, body_loaded)
     """
     name = field.name
-    annotation = field.annotation
     default = field.default
     source = field.source
     alias = field.alias
     key = alias or name
 
     # Handle different sources
+    # Note: Rust pre-converts values to typed Python objects (int, float, bool, str)
     if source == "path":
         if key in params_map:
-            return convert_primitive(str(params_map[key]), annotation), body_obj, body_loaded
+            return params_map[key], body_obj, body_loaded
         raise HTTPException(status_code=422, detail=f"Missing required path parameter: {key}")
 
     elif source == "query":
         if key in query_map:
-            return convert_primitive(str(query_map[key]), annotation), body_obj, body_loaded
+            return query_map[key], body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise HTTPException(status_code=422, detail=f"Missing required query parameter: {key}")
@@ -151,21 +149,21 @@ def extract_parameter_value(
     elif source == "header":
         lower_key = key.lower()
         if lower_key in headers_map:
-            return convert_primitive(str(headers_map[lower_key]), annotation), body_obj, body_loaded
+            return headers_map[lower_key], body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise HTTPException(status_code=422, detail=f"Missing required header: {key}")
 
     elif source == "cookie":
         if key in cookies_map:
-            return convert_primitive(str(cookies_map[key]), annotation), body_obj, body_loaded
+            return cookies_map[key], body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise HTTPException(status_code=422, detail=f"Missing required cookie: {key}")
 
     elif source == "form":
         if key in form_map:
-            return convert_primitive(str(form_map[key]), annotation), body_obj, body_loaded
+            return form_map[key], body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
         raise HTTPException(status_code=422, detail=f"Missing required form field: {key}")
@@ -1455,10 +1453,11 @@ class BoltAPI:
         headers_map = request.get("headers", {})
         cookies_map = request.get("cookies", {})
 
-        # Parse form/multipart data ONLY if handler uses Form() or File() parameters
-        # This optimization skips parsing for 95% of endpoints (JSON/GET endpoints)
+        # Form/multipart data is pre-parsed by Rust (type coerced and validated)
+        # Use request.form and request.files for pre-typed values
         if meta.get("needs_form_parsing", False):
-            form_map, files_map = parse_form_data(request, headers_map)
+            form_map = request.form
+            files_map = request.files
         else:
             form_map, files_map = {}, {}
 
@@ -1674,7 +1673,8 @@ class BoltAPI:
                 cookies_map = request.get("cookies", {}) if needs_cookies else {}
 
                 if needs_form:
-                    form_map, files_map = parse_form_data(request, headers_map)
+                    form_map = request.form
+                    files_map = request.files
                 else:
                     form_map, files_map = {}, {}
 
@@ -1788,7 +1788,8 @@ class BoltAPI:
             cookies_map = request.get("cookies", {}) if needs_cookies else {}
 
             if needs_form:
-                form_map, files_map = parse_form_data(request, headers_map)
+                form_map = request.form
+                files_map = request.files
             else:
                 form_map, files_map = {}, {}
 

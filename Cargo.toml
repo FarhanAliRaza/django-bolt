@@ -49,6 +49,10 @@ regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
 rust_decimal = { version = "1", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+# Form parsing dependencies
+actix-multipart = "0.7"
+serde_urlencoded = "0.7"
+tempfile = "3"
 
 [profile.release]
 codegen-units = 1        # Better optimization (single codegen unit allows more inlining)

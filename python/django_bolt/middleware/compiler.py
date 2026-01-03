@@ -9,9 +9,11 @@ import uuid
 from collections.abc import Callable
 from typing import Any, get_origin
 
+import msgspec
+
 from ..auth.backends import get_default_authentication_classes
 from ..auth.guards import get_default_permission_classes
-from ..typing import unwrap_optional
+from ..typing import is_msgspec_struct, unwrap_optional
 
 logger = logging.getLogger(__name__)
 
@@ -221,24 +223,76 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
     metadata["needs_cookies"] = handler_meta.get("needs_cookies", True)
     metadata["needs_path_params"] = handler_meta.get("needs_path_params", True)
     metadata["is_static_route"] = handler_meta.get("is_static_route", False)
+    metadata["needs_form_parsing"] = handler_meta.get("needs_form_parsing", False)
 
     # Extract type hints for all parameter sources
     # This enables Rust-side type coercion, eliminating Python overhead
     # Format: {"param_name": type_hint_id, ...}
     param_types: dict[str, int] = {}
+    form_type_hints: dict[str, int] = {}
+    file_constraints: dict[str, dict[str, Any]] = {}
 
     fields = handler_meta.get("fields", [])
     for field in fields:
-        # Include type hints for path, query, header, cookie, and form
-        # Body and file have complex handling in Python
-        if field.source in ("path", "query", "header", "cookie", "form"):
-            type_hint = get_type_hint_id(field.annotation)
-            # Only include non-string types (string is the default, no coercion needed)
-            if type_hint != TYPE_STRING:
-                param_types[field.name] = type_hint
+        # Include type hints for path, query, header, cookie
+        if field.source in ("path", "query", "header", "cookie"):
+            unwrapped = unwrap_optional(field.annotation)
+            # Check if this is a struct type (Query/Header/Cookie with struct parameter)
+            if is_msgspec_struct(unwrapped):
+                # Extract type hints for each struct field
+                for struct_field in msgspec.structs.fields(unwrapped):
+                    struct_type_hint = get_type_hint_id(struct_field.type)
+                    if struct_type_hint != TYPE_STRING:
+                        param_types[struct_field.name] = struct_type_hint
+            else:
+                # Individual field
+                type_hint = get_type_hint_id(field.annotation)
+                # Only include non-string types (string is the default, no coercion needed)
+                if type_hint != TYPE_STRING:
+                    param_types[field.name] = type_hint
+
+        # Form fields - extract type hints for Rust-side form parsing
+        elif field.source == "form":
+            unwrapped = unwrap_optional(field.annotation)
+            # Check if this is a struct type (Form with struct parameter)
+            if is_msgspec_struct(unwrapped):
+                # Extract type hints for each struct field
+                for struct_field in msgspec.structs.fields(unwrapped):
+                    struct_type_hint = get_type_hint_id(struct_field.type)
+                    form_type_hints[struct_field.name] = struct_type_hint
+            else:
+                # Individual form field
+                type_hint = get_type_hint_id(field.annotation)
+                form_type_hints[field.name] = type_hint
+
+        # File fields - extract constraints for Rust-side validation
+        elif field.source == "file":
+            constraints = {}
+            if field.param is not None:
+                # Extract constraints from ParamMetadata
+                if hasattr(field.param, "max_size") and field.param.max_size is not None:
+                    constraints["max_size"] = field.param.max_size
+                if hasattr(field.param, "min_size") and field.param.min_size is not None:
+                    constraints["min_size"] = field.param.min_size
+                if hasattr(field.param, "allowed_types") and field.param.allowed_types is not None:
+                    constraints["allowed_types"] = list(field.param.allowed_types)
+                if hasattr(field.param, "max_files") and field.param.max_files is not None:
+                    constraints["max_files"] = field.param.max_files
+            if constraints:
+                file_constraints[field.name] = constraints
 
     if param_types:
         metadata["param_types"] = param_types
+
+    if form_type_hints:
+        metadata["form_type_hints"] = form_type_hints
+
+    if file_constraints:
+        metadata["file_constraints"] = file_constraints
+
+    # Max upload size - default 1MB, can be configured via Django settings
+    # TODO: Read from Django settings if available
+    metadata["max_upload_size"] = 1024 * 1024  # 1MB default
 
     return metadata
 

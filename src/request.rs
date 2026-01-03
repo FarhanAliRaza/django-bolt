@@ -18,6 +18,10 @@ pub struct PyRequest {
     // None if no auth context or user not found
     pub user: Option<Py<PyAny>>,
     pub state: Py<PyDict>, // Arbitrary state for middleware AND dynamic attributes (e.g. _messages)
+    /// Form data - pre-typed by Rust (int, float, bool, str, etc.)
+    pub form_map: Py<PyDict>,
+    /// Files data - dict of {field_name: {filename, content, content_type, size, temp_path?}}
+    pub files_map: Py<PyDict>,
 }
 
 #[pymethods]
@@ -120,6 +124,29 @@ impl PyRequest {
     #[inline]
     fn state<'py>(&self, py: Python<'py>) -> Py<PyDict> {
         self.state.clone_ref(py)
+    }
+
+    /// Get form data as a dict for parameter access.
+    /// Values are pre-typed by Rust (int, float, bool, str).
+    ///
+    /// Example:
+    ///     username = request.form.get("username")
+    ///     age = request.form.get("age")  # Returns int directly
+    #[getter]
+    #[inline]
+    fn form<'py>(&self, py: Python<'py>) -> Py<PyDict> {
+        self.form_map.clone_ref(py)
+    }
+
+    /// Get files as a dict for file access.
+    /// Each file entry contains: filename, content, content_type, size, temp_path (if spooled to disk).
+    ///
+    /// Example:
+    ///     avatar = request.files.get("avatar")  # {"filename": "photo.jpg", ...}
+    #[getter]
+    #[inline]
+    fn files<'py>(&self, py: Python<'py>) -> Py<PyDict> {
+        self.files_map.clone_ref(py)
     }
 
     /// Get the async user loader (Django-style).

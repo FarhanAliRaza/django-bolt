@@ -15,7 +15,7 @@ import msgspec
 import pytest
 
 from django_bolt import BoltAPI
-from django_bolt.binding import _DECODER_CACHE, convert_primitive, create_body_extractor, get_msgspec_decoder
+from django_bolt.binding import _DECODER_CACHE, create_body_extractor, get_msgspec_decoder
 from django_bolt.error_handlers import handle_exception, msgspec_validation_error_to_dict
 from django_bolt.exceptions import HTTPException, RequestValidationError
 
@@ -345,17 +345,8 @@ class TestTypeCoercionEdgeCases:
     """Test edge cases in type coercion and conversion.
 
     Note: Type coercion for basic types (int, float, bool) is now done in Rust.
-    convert_primitive is just a pass-through for already-typed values.
+    The convert_primitive function has been removed - Rust handles all coercion.
     """
-
-    def test_passthrough_typed_values(self):
-        """Test that already-typed values pass through unchanged."""
-        # Rust pre-converts these, so convert_primitive just returns them
-        assert convert_primitive(True, bool) is True
-        assert convert_primitive(False, bool) is False
-        assert convert_primitive(42, int) == 42
-        assert convert_primitive(3.14, float) == 3.14
-        assert convert_primitive("hello", str) == "hello"
 
     def test_optional_fields_with_none(self):
         """Test that optional fields handle None correctly."""

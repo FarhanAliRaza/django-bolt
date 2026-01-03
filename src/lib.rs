@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 
 mod cors;
 mod error;
+mod form_parsing;
 mod handler;
 mod json;
 mod metadata;

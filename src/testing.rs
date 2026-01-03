@@ -23,12 +23,64 @@ use pyo3::types::PyDict;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::form_parsing::{
+    parse_multipart, parse_urlencoded, FormParseResult, DEFAULT_MAX_PARTS, DEFAULT_MEMORY_LIMIT,
+};
 use crate::metadata::{CorsConfig, RouteMetadata};
 use crate::middleware::compression::CompressionMiddleware;
 use crate::middleware::cors::CorsMiddleware;
 use crate::router::Router;
 use crate::state::{AppState, TASK_LOCALS};
+use crate::type_coercion::CoercedValue;
 use crate::websocket::WebSocketRouter;
+use actix_multipart::Multipart;
+use futures_util::StreamExt;
+use std::collections::HashMap;
+
+use crate::form_parsing::FileContent;
+
+/// Convert CoercedValue to Python object
+fn coerced_value_to_py(py: Python<'_>, value: &CoercedValue) -> Py<PyAny> {
+    match value {
+        CoercedValue::Int(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
+        CoercedValue::Float(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
+        CoercedValue::Bool(v) => v.into_pyobject(py).unwrap().to_owned().unbind().into_any(),
+        CoercedValue::String(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
+        CoercedValue::Uuid(v) => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
+        CoercedValue::DateTime(v) => v.to_rfc3339().into_pyobject(py).unwrap().into_any().unbind(),
+        CoercedValue::NaiveDateTime(v) => {
+            v.to_string().into_pyobject(py).unwrap().into_any().unbind()
+        }
+        CoercedValue::Date(v) => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
+        CoercedValue::Time(v) => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
+        CoercedValue::Decimal(v) => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
+        CoercedValue::Null => py.None(),
+    }
+}
+
+/// Convert FileInfo to Python dict (for multipart file uploads)
+fn file_info_to_py(py: Python<'_>, file: &crate::form_parsing::FileInfo) -> PyResult<Py<PyDict>> {
+    use pyo3::types::PyBytes;
+
+    let dict = PyDict::new(py);
+    dict.set_item("filename", &file.filename)?;
+    dict.set_item("content_type", &file.content_type)?;
+    dict.set_item("size", file.size)?;
+
+    match &file.content {
+        FileContent::Memory(bytes) => {
+            dict.set_item("content", PyBytes::new(py, bytes))?;
+            dict.set_item("temp_path", py.None())?;
+        }
+        FileContent::Disk(temp_file) => {
+            // For disk-spooled files, pass the temp path instead of content
+            dict.set_item("content", py.None())?;
+            dict.set_item("temp_path", temp_file.path().to_string_lossy().to_string())?;
+        }
+    }
+
+    Ok(dict.unbind())
+}
 
 /// One-time initialization flag for async runtime
 static ASYNC_RUNTIME_INITIALIZED: std::sync::Once = std::sync::Once::new();
@@ -409,11 +461,12 @@ pub fn test_request(
         let metadata_for_handler = route_metadata.clone();
 
         // Create the test handler that uses per-instance state
-        let handler = move |req: HttpRequest, body: web::Bytes| {
+        // Use web::Payload to support multipart form parsing (which needs the stream)
+        let handler = move |req: HttpRequest, payload: web::Payload| {
             let router = router_for_handler.clone();
             let metadata = metadata_for_handler.clone();
 
-            async move { handle_test_request_internal(req, body, router, metadata).await }
+            async move { handle_test_request_internal(req, payload, router, metadata).await }
         };
 
         // Create Actix test service with production middleware stack
@@ -486,7 +539,7 @@ pub fn test_request(
 /// This mirrors the production `handle_request` but uses the provided router and metadata.
 async fn handle_test_request_internal(
     req: HttpRequest,
-    body: web::Bytes,
+    mut payload: web::Payload,
     router: Arc<Router>,
     route_metadata: Arc<AHashMap<usize, RouteMetadata>>,
 ) -> HttpResponse {
@@ -499,7 +552,7 @@ async fn handle_test_request_internal(
     use crate::router::parse_query_string;
     use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
     use actix_web::http::StatusCode;
-    use pyo3::types::{PyBytes, PyTuple};
+    use pyo3::types::{PyBytes, PyList, PyTuple};
 
     let method = req.method().as_str();
     let path = req.path();
@@ -642,6 +695,110 @@ async fn handle_test_request_internal(
         AHashMap::new()
     };
 
+    // Form parsing (URL-encoded and multipart)
+    let needs_form_parsing = route_meta
+        .as_ref()
+        .map(|m| m.needs_form_parsing)
+        .unwrap_or(false);
+
+    let content_type = headers
+        .get("content-type")
+        .map(|s| s.as_str())
+        .unwrap_or("");
+
+    let is_multipart = content_type.starts_with("multipart/form-data");
+    let is_urlencoded = content_type.starts_with("application/x-www-form-urlencoded");
+
+    // Read body from payload (before form parsing consumes it for multipart)
+    let (body, form_result): (Vec<u8>, Option<FormParseResult>) = if needs_form_parsing
+        && is_multipart
+    {
+        // Multipart form parsing - uses the payload stream directly
+        let form_type_hints = route_meta
+            .as_ref()
+            .map(|m| &m.form_type_hints)
+            .cloned()
+            .unwrap_or_default();
+        let file_constraints = route_meta
+            .as_ref()
+            .map(|m| &m.file_constraints)
+            .cloned()
+            .unwrap_or_default();
+        let max_upload_size = route_meta
+            .as_ref()
+            .map(|m| m.max_upload_size)
+            .unwrap_or(1024 * 1024);
+
+        // Create Multipart from the payload
+        let multipart = Multipart::new(req.headers(), payload);
+
+        match parse_multipart(
+            multipart,
+            &form_type_hints,
+            &file_constraints,
+            max_upload_size,
+            DEFAULT_MEMORY_LIMIT,
+            DEFAULT_MAX_PARTS,
+        )
+        .await
+        {
+            Ok(result) => (Vec::new(), Some(result)),
+            Err(validation_error) => {
+                // Return HTTP 422 for validation errors
+                let body = serde_json::json!({
+                    "detail": [validation_error.to_json()]
+                });
+                return HttpResponse::UnprocessableEntity()
+                    .content_type("application/json")
+                    .body(body.to_string());
+            }
+        }
+    } else {
+        // Read payload as bytes (for non-multipart requests)
+        let mut body_bytes = web::BytesMut::new();
+        while let Some(chunk) = payload.next().await {
+            match chunk {
+                Ok(data) => body_bytes.extend_from_slice(&data),
+                Err(e) => {
+                    return HttpResponse::BadRequest()
+                        .content_type("application/json")
+                        .body(format!("{{\"error\": \"Failed to read request body: {}\"}}", e));
+                }
+            }
+        }
+        let body = body_bytes.freeze();
+
+        // URL-encoded form parsing
+        if needs_form_parsing && is_urlencoded {
+            let form_type_hints = route_meta
+                .as_ref()
+                .map(|m| &m.form_type_hints)
+                .cloned()
+                .unwrap_or_default();
+
+            match parse_urlencoded(&body, &form_type_hints) {
+                Ok(form_map) => {
+                    let result = FormParseResult {
+                        form_map,
+                        files_map: HashMap::new(),
+                    };
+                    (body.to_vec(), Some(result))
+                }
+                Err(validation_error) => {
+                    // Return HTTP 422 for validation errors
+                    let body = serde_json::json!({
+                        "detail": [validation_error.to_json()]
+                    });
+                    return HttpResponse::UnprocessableEntity()
+                        .content_type("application/json")
+                        .body(body.to_string());
+                }
+            }
+        } else {
+            (body.to_vec(), None)
+        }
+    };
+
     let is_head_request = method == "HEAD";
 
     // Execute handler using run_coroutine_threadsafe to submit to background event loop
@@ -752,6 +909,39 @@ async fn handle_test_request_internal(
             let _ = cookies_dict.set_item(name, py_value);
         }
 
+        // Create form_map and files_map from form parsing result
+        let (form_map_dict, files_map_dict) = if let Some(ref result) = form_result {
+            // Convert form_map
+            let form_dict = PyDict::new(py);
+            for (key, value) in &result.form_map {
+                let py_value = coerced_value_to_py(py, value);
+                let _ = form_dict.set_item(key, py_value);
+            }
+
+            // Convert files_map - each field can have multiple files
+            let files_dict = PyDict::new(py);
+            for (field_name, files) in &result.files_map {
+                if files.len() == 1 {
+                    // Single file - store directly
+                    if let Ok(file_dict) = file_info_to_py(py, &files[0]) {
+                        let _ = files_dict.set_item(field_name, file_dict);
+                    }
+                } else {
+                    // Multiple files - store as list
+                    let file_list = PyList::empty(py);
+                    for file in files {
+                        if let Ok(file_dict) = file_info_to_py(py, file) {
+                            let _ = file_list.append(file_dict);
+                        }
+                    }
+                    let _ = files_dict.set_item(field_name, file_list);
+                }
+            }
+            (form_dict.unbind(), files_dict.unbind())
+        } else {
+            (PyDict::new(py).unbind(), PyDict::new(py).unbind())
+        };
+
         let request = PyRequest {
             method: method.to_string(),
             path: path.to_string(),
@@ -763,6 +953,8 @@ async fn handle_test_request_internal(
             context,
             user: None,
             state: PyDict::new(py).unbind(),
+            form_map: form_map_dict,
+            files_map: files_map_dict,
         };
         let request_obj = Py::new(py, request)?;
 

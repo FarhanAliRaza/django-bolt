@@ -112,13 +112,26 @@ pub async fn build_file_response(
 }
 
 /// Handle Python errors and convert to HTTP response
-pub fn handle_python_error(py: Python<'_>, err: PyErr, path: &str, method: &str, debug: bool) -> HttpResponse {
+pub fn handle_python_error(
+    py: Python<'_>,
+    err: PyErr,
+    path: &str,
+    method: &str,
+    debug: bool,
+) -> HttpResponse {
     err.restore(py);
     if let Some(exc) = PyErr::take(py) {
         let exc_value = exc.value(py);
         error::handle_python_exception(py, exc_value, path, method, debug)
     } else {
-        error::build_error_response(py, 500, "Handler execution error".to_string(), vec![], None, debug)
+        error::build_error_response(
+            py,
+            500,
+            "Handler execution error".to_string(),
+            vec![],
+            None,
+            debug,
+        )
     }
 }
 
@@ -290,7 +303,12 @@ pub async fn handle_request(
 
     // Execute authentication and guards using shared validation logic
     let auth_ctx = if let Some(ref route_meta) = route_metadata {
-        match validate_auth_and_guards(&headers, &cookies, &route_meta.auth_backends, &route_meta.guards) {
+        match validate_auth_and_guards(
+            &headers,
+            &cookies,
+            &route_meta.auth_backends,
+            &route_meta.guards,
+        ) {
             AuthGuardResult::Allow(ctx) => ctx,
             AuthGuardResult::Unauthorized => {
                 // CORS headers will be added by CorsMiddleware
@@ -304,9 +322,6 @@ pub async fn handle_request(
     } else {
         None
     };
-
-    
-
 
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
@@ -416,7 +431,14 @@ pub async fn handle_request(
                     }
                 }
                 if let Some(fpath) = file_path {
-                    return build_file_response(&fpath, status, headers, skip_compression, is_head_request).await;
+                    return build_file_response(
+                        &fpath,
+                        status,
+                        headers,
+                        skip_compression,
+                        is_head_request,
+                    )
+                    .await;
                 } else {
                     // Non-file response path: body already copied within GIL scope above
                     // Use optimized response builder
@@ -459,7 +481,14 @@ pub async fn handle_request(
                         }
                     }
                     if let Some(fpath) = file_path {
-                        return build_file_response(&fpath, status, headers, skip_compression, is_head_request).await;
+                        return build_file_response(
+                            &fpath,
+                            status,
+                            headers,
+                            skip_compression,
+                            is_head_request,
+                        )
+                        .await;
                     } else {
                         let mut builder = HttpResponse::build(status);
                         for (k, v) in headers {
@@ -554,9 +583,10 @@ pub async fn handle_request(
 
                             // Set skip-cors marker if @skip_middleware("cors") is used
                             if skip_cors {
-                                response
-                                    .headers_mut()
-                                    .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
+                                response.headers_mut().insert(
+                                    "x-bolt-skip-cors".parse().unwrap(),
+                                    "true".parse().unwrap(),
+                                );
                             }
 
                             // CORS headers will be added by CorsMiddleware
@@ -565,19 +595,17 @@ pub async fn handle_request(
 
                         // Use optimized SSE response builder (batches all SSE headers)
                         let final_content_obj = content_obj;
-                        let mut builder = response_builder::build_sse_response(
-                            status,
-                            headers,
-                            skip_compression,
-                        );
+                        let mut builder =
+                            response_builder::build_sse_response(status, headers, skip_compression);
                         let stream = create_sse_stream(final_content_obj, is_async_generator);
                         let mut response = builder.streaming(stream);
 
                         // Set skip-cors marker if @skip_middleware("cors") is used
                         if skip_cors {
-                            response
-                                .headers_mut()
-                                .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
+                            response.headers_mut().insert(
+                                "x-bolt-skip-cors".parse().unwrap(),
+                                "true".parse().unwrap(),
+                            );
                         }
 
                         // CORS headers will be added by CorsMiddleware

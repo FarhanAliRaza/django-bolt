@@ -67,7 +67,7 @@ impl PyRequest {
     fn set_user(&mut self, value: Py<PyAny>) {
         self.user = Some(value);
     }
-    
+
     /// Set the auser object
     #[setter]
     fn set_auser(&mut self, value: Py<PyAny>) {
@@ -179,7 +179,7 @@ impl PyRequest {
     #[getter]
     fn session<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
         let state_dict = self.state.bind(py);
-        
+
         match state_dict.get_item("session") {
             Ok(Some(session)) => Ok(session.unbind()),
             _ => Ok(py.None()),

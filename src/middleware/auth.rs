@@ -78,7 +78,7 @@ impl AuthContext {
     pub fn from_session(_cookie_name: &str) -> Self {
         AuthContext {
             user_id: Some("session_user".to_string()),
-            is_staff: false,    
+            is_staff: false,
             is_superuser: false,
             backend: "session".to_string(),
             claims: None,
@@ -114,7 +114,6 @@ pub fn authenticate(
     cookies: &AHashMap<String, String>,
     backends: &[AuthBackend],
 ) -> Option<AuthContext> {
-
     for backend in backends {
         match backend {
             AuthBackend::JWT {
@@ -151,7 +150,6 @@ pub fn authenticate(
                     }
                 }
             }
-            
         }
     }
     None

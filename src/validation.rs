@@ -131,7 +131,7 @@ mod tests {
     fn test_validate_auth_no_config() {
         let headers = AHashMap::new();
         let cookies = AHashMap::new();
-        let result = validate_auth_and_guards(&headers, &cookies,&[], &[]);
+        let result = validate_auth_and_guards(&headers, &cookies, &[], &[]);
         matches!(result, AuthGuardResult::Allow(None));
     }
 }

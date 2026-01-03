@@ -6,7 +6,6 @@ import inspect
 from collections.abc import Callable
 from typing import Any
 
-from .binding import convert_primitive
 from .params import Depends as DependsMarker
 from .typing import FieldDefinition
 
@@ -153,19 +152,20 @@ def extract_dependency_value(
     """
     key = field.alias or field.name
 
+    # Rust pre-converts values to typed Python objects (int, float, bool, str)
     if key in params_map:
-        return convert_primitive(str(params_map[key]), field.annotation)
+        return params_map[key]
     elif key in query_map:
-        return convert_primitive(str(query_map[key]), field.annotation)
+        return query_map[key]
     elif field.source == "header":
         raw = headers_map.get(key.lower())
         if raw is None:
             raise ValueError(f"Missing required header: {key}")
-        return convert_primitive(str(raw), field.annotation)
+        return raw
     elif field.source == "cookie":
         raw = cookies_map.get(key)
         if raw is None:
             raise ValueError(f"Missing required cookie: {key}")
-        return convert_primitive(str(raw), field.annotation)
+        return raw
     else:
         return None

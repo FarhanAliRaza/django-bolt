@@ -81,19 +81,32 @@ class UploadFile:
         """
         Create UploadFile from the file_info dict returned by request parsing.
 
+        Supports both in-memory files (content provided) and disk-spooled files
+        (temp_path provided by Rust for large files).
+
         Args:
-            file_info: Dict with keys: filename, content, content_type, size
+            file_info: Dict with keys: filename, content, content_type, size, temp_path
             max_spool_size: Size threshold before spooling to disk
 
         Returns:
             UploadFile instance
         """
+        # Check if file was spooled to disk by Rust
+        temp_path = file_info.get("temp_path")
+        if temp_path:
+            # Read from the temp file created by Rust
+            with open(temp_path, "rb") as f:
+                file_data = f.read()
+        else:
+            # File content is in memory
+            file_data = file_info.get("content")
+
         return cls(
             filename=file_info.get("filename", ""),
             content_type=file_info.get("content_type", "application/octet-stream"),
             size=file_info.get("size", 0),
             headers=file_info.get("headers"),
-            file_data=file_info.get("content"),
+            file_data=file_data,
             max_spool_size=max_spool_size,
         )
 

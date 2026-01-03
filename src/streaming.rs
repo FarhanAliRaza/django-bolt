@@ -38,8 +38,10 @@ pub fn convert_python_chunk(value: &Bound<'_, PyAny>) -> Option<Bytes> {
             }
         }
     }
-    if value.hasattr("__bytes__").unwrap_or(false) {
-        if let Ok(buffer) = value.call_method0("__bytes__") {
+    // OPTIMIZATION: Use interned strings for attribute checks
+    let py = value.py();
+    if value.hasattr(pyo3::intern!(py, "__bytes__")).unwrap_or(false) {
+        if let Ok(buffer) = value.call_method0(pyo3::intern!(py, "__bytes__")) {
             if let Ok(py_bytes) = buffer.cast::<PyBytes>() {
                 return Some(Bytes::copy_from_slice(py_bytes.as_bytes()));
             }
@@ -117,14 +119,15 @@ fn create_python_stream_with_config(
                 }
             });
 
+            // OPTIMIZATION: Use interned strings for iterator protocol checks
             let async_iter: Option<Py<PyAny>> = Python::attach(|py| {
                 let b = resolved_target_final.bind(py);
-                if b.hasattr("__aiter__").unwrap_or(false) {
-                    match b.call_method0("__aiter__") {
+                if b.hasattr(pyo3::intern!(py, "__aiter__")).unwrap_or(false) {
+                    match b.call_method0(pyo3::intern!(py, "__aiter__")) {
                         Ok(it) => Some(it.unbind()),
                         Err(_) => None,
                     }
-                } else if b.hasattr("__anext__").unwrap_or(false) {
+                } else if b.hasattr(pyo3::intern!(py, "__anext__")).unwrap_or(false) {
                     Some(resolved_target_final.clone_ref(py))
                 } else {
                     None
@@ -166,7 +169,8 @@ fn create_python_stream_with_config(
                         current_batch_size
                     };
                     for _ in 0..iterations {
-                        match async_iter.bind(py).call_method0("__anext__") {
+                        // OPTIMIZATION: Use interned string for __anext__
+                        match async_iter.bind(py).call_method0(pyo3::intern!(py, "__anext__")) {
                             Ok(awaitable) => {
                                 match pyo3_async_runtimes::into_future_with_locals(
                                     locals, awaitable,
@@ -229,8 +233,9 @@ fn create_python_stream_with_config(
                                     // Client disconnected - close the async generator to run cleanup code
                                     let close_result = Python::attach(|py| {
                                         let iter_bound = async_iter.bind(py);
-                                        if iter_bound.hasattr("aclose").unwrap_or(false) {
-                                            if let Ok(awaitable) = iter_bound.call_method0("aclose") {
+                                        // OPTIMIZATION: Use interned string for aclose
+                                        if iter_bound.hasattr(pyo3::intern!(py, "aclose")).unwrap_or(false) {
+                                            if let Ok(awaitable) = iter_bound.call_method0(pyo3::intern!(py, "aclose")) {
                                                 if let Some(locals) = TASK_LOCALS.get() {
                                                     return pyo3_async_runtimes::into_future_with_locals(locals, awaitable).ok();
                                                 } else {
@@ -271,8 +276,9 @@ fn create_python_stream_with_config(
             // Ensure async generator cleanup runs
             let close_result = Python::attach(|py| {
                 let iter_bound = async_iter.bind(py);
-                if iter_bound.hasattr("aclose").unwrap_or(false) {
-                    if let Ok(awaitable) = iter_bound.call_method0("aclose") {
+                // OPTIMIZATION: Use interned string for aclose
+                if iter_bound.hasattr(pyo3::intern!(py, "aclose")).unwrap_or(false) {
+                    if let Ok(awaitable) = iter_bound.call_method0(pyo3::intern!(py, "aclose")) {
                         if let Some(locals) = TASK_LOCALS.get() {
                             return pyo3_async_runtimes::into_future_with_locals(locals, awaitable).ok();
                         } else {
@@ -352,10 +358,11 @@ fn create_python_stream_with_config(
                     if iterator.is_none() {
                         let iter_target = resolved_target_final.clone_ref(py);
                         let bound = iter_target.bind(py);
-                        let iter_obj = if bound.hasattr("__next__").unwrap_or(false) {
+                        // OPTIMIZATION: Use interned strings for iterator protocol
+                        let iter_obj = if bound.hasattr(pyo3::intern!(py, "__next__")).unwrap_or(false) {
                             iter_target
-                        } else if bound.hasattr("__iter__").unwrap_or(false) {
-                            match bound.call_method0("__iter__") {
+                        } else if bound.hasattr(pyo3::intern!(py, "__iter__")).unwrap_or(false) {
+                            match bound.call_method0(pyo3::intern!(py, "__iter__")) {
                                 Ok(it) => it.unbind(),
                                 Err(_) => return true,
                             }
@@ -366,7 +373,7 @@ fn create_python_stream_with_config(
                     }
                     let it = iterator.as_ref().unwrap().bind(py);
                     for _ in 0..sync_batch {
-                        match it.call_method0("__next__") {
+                        match it.call_method0(pyo3::intern!(py, "__next__")) {
                             Ok(value) => {
                                 if let Some(bytes) = super::streaming::convert_python_chunk(&value)
                                 {
@@ -395,7 +402,8 @@ fn create_python_stream_with_config(
                         // Client disconnected - close the generator to run cleanup code
                         if let Some(ref iter) = iterator {
                             Python::attach(|py| {
-                                match iter.bind(py).call_method0("close") {
+                                // OPTIMIZATION: Use interned string for close
+                                match iter.bind(py).call_method0(pyo3::intern!(py, "close")) {
                                     Ok(_) => {},
                                     Err(e) => {
                                         eprintln!("[SSE WARNING] Error during sync generator cleanup on client disconnect: {}", e);
@@ -415,7 +423,8 @@ fn create_python_stream_with_config(
             // Ensure sync generator cleanup runs
             if let Some(ref iter) = iterator {
                 Python::attach(|py| {
-                    match iter.bind(py).call_method0("close") {
+                    // OPTIMIZATION: Use interned string for close
+                    match iter.bind(py).call_method0(pyo3::intern!(py, "close")) {
                         Ok(_) => {},
                         Err(e) => {
                             eprintln!("[SSE WARNING] Error during sync generator cleanup at end of stream: {}", e);

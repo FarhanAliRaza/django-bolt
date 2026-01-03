@@ -369,7 +369,9 @@ def test_openapi_security_requirements_for_authenticated_routes():
     """
     from django_bolt.auth import APIKeyAuthentication, IsAuthenticated, JWTAuthentication
 
-    api = BoltAPI(openapi_config=OpenAPIConfig(title="Auth Test API", version="1.0.0"))
+    api = BoltAPI(
+        openapi_config=OpenAPIConfig(title="Auth Test API", version="1.0.0")
+    )
 
     # Public route - no auth
     @api.get("/public")

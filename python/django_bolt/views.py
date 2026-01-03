@@ -115,8 +115,11 @@ class APIView:
         view_instance = cls()
 
         # Set action name once at registration time
-        if hasattr(view_instance, "action"):
-            view_instance.action = action_name
+        # if hasattr(view_instance, "action"):
+        view_instance.action = action_name
+        # Get guards and auth dynamically using get_guards/get_auth methods (similar to DRF's get_permission)
+        guards = view_instance.get_guards()
+        auth = view_instance.get_auth()
 
         # Bind the method once to eliminate lookup overhead
         bound_method = method_handler.__get__(view_instance, cls)
@@ -160,14 +163,50 @@ class APIView:
 
         # Attach class-level metadata for middleware compilation
         # These will be picked up by BoltAPI._route_decorator
-        if cls.guards is not None:
-            view_handler.__bolt_guards__ = cls.guards
-        if cls.auth is not None:
-            view_handler.__bolt_auth__ = cls.auth
+        if guards is not None:
+            view_handler.__bolt_guards__ = guards
+        if auth is not None:
+            view_handler.__bolt_auth__ = auth
         if cls.status_code is not None:
             view_handler.__bolt_status_code__ = cls.status_code
 
         return view_handler
+
+    def get_guards(self) -> list[Any] | None:
+        """
+        Get the guards for this view.
+
+        Returns:
+            List of guard/permission classes, or None if no guards should be applied
+
+        Example:
+            class ArticleViewSet(ViewSet):
+                guards = [IsAuthenticated()]
+
+                def get_guards(self):
+                    # Allow anonymous access to list/retrieve
+                    return [AllowAny()]
+        """
+        return getattr(self.__class__, "guards", None)
+
+
+    def get_auth(self) -> list[Any] | None:
+        """
+        Get the auth for this view.
+
+        Returns:
+            List of authentication backends, or None if no auth should be applied
+
+        Example:
+            class ArticleViewSet(ViewSet):
+                auth = [JWTAuthentication()]
+
+                def get_auth(self):
+                    # Use API key for write operations
+                    return [APIKeyAuthentication(api_keys={"admin-key"})]
+        """
+        return getattr(self.__class__, "auth", None)
+
 
     def initialize(self, request: dict[str, Any]) -> None:
         """

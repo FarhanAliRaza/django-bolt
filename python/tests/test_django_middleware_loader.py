@@ -456,11 +456,11 @@ class TestRealDjangoMiddleware:
             # Request with Accept-Encoding to trigger gzip
             response = client.get("/test", headers={"Accept-Encoding": "gzip"})
             assert response.status_code == 200
-            # GZip middleware should add Content-Encoding header
-            {k.lower(): v for k, v in response.headers.items()}
-            # May or may not be compressed depending on response size threshold
-            # Just verify middleware runs without error
-            assert response.status_code == 200
+            # GZip middleware should add Content-Encoding header for large responses
+            headers_lower = {k.lower(): v for k, v in response.headers.items()}
+            # Django GZipMiddleware compresses responses > 200 bytes when Accept-Encoding: gzip
+            assert "content-encoding" in headers_lower, "GZipMiddleware should add Content-Encoding header"
+            assert headers_lower["content-encoding"] == "gzip"
 
     def test_messages_middleware_enables_messages_framework(self):
         """Test MessageMiddleware runs and enables Django messages framework."""

@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use crate::metadata::CorsConfig;
 use crate::middleware::rate_limit::check_rate_limit;
 use crate::state::{AppState, ROUTE_METADATA, TASK_LOCALS};
-use crate::validation::{validate_auth_and_guards, AuthGuardResult};
+use crate::validation::{AuthGuardResult, parse_cookies_inline, validate_auth_and_guards};
 
 use super::actor::WebSocketActor;
 use super::config::WS_CONFIG;
@@ -416,6 +416,8 @@ pub async fn handle_websocket_upgrade_with_handler(
         }
     }
 
+    let cookies = parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()));
+
     // Get peer address for rate limiting
     let peer_addr = req.peer_addr().map(|addr| addr.ip().to_string());
 
@@ -448,7 +450,7 @@ pub async fn handle_websocket_upgrade_with_handler(
     // Evaluate authentication and guards before upgrading
     if let Some(route_metadata) = ROUTE_METADATA.get() {
         if let Some(route_meta) = route_metadata.get(&handler_id) {
-            match validate_auth_and_guards(&headers, &route_meta.auth_backends, &route_meta.guards) {
+            match validate_auth_and_guards(&headers, &cookies, &route_meta.auth_backends, &route_meta.guards) {
                 AuthGuardResult::Allow(_ctx) => {
                     // Guards passed, continue with WebSocket upgrade
                 }

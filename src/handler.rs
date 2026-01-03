@@ -275,9 +275,22 @@ pub async fn handle_request(
         }
     }
 
+    // Optimization: Only parse cookies if handler needs them
+    // Cookie parsing can be expensive for requests with many cookies
+    let needs_cookies = route_metadata
+        .as_ref()
+        .map(|m| m.needs_cookies)
+        .unwrap_or(true);
+
+    let cookies = if needs_cookies {
+        parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()))
+    } else {
+        AHashMap::new()
+    };
+
     // Execute authentication and guards using shared validation logic
     let auth_ctx = if let Some(ref route_meta) = route_metadata {
-        match validate_auth_and_guards(&headers, &route_meta.auth_backends, &route_meta.guards) {
+        match validate_auth_and_guards(&headers, &cookies, &route_meta.auth_backends, &route_meta.guards) {
             AuthGuardResult::Allow(ctx) => ctx,
             AuthGuardResult::Unauthorized => {
                 // CORS headers will be added by CorsMiddleware
@@ -292,18 +305,7 @@ pub async fn handle_request(
         None
     };
 
-    // Optimization: Only parse cookies if handler needs them
-    // Cookie parsing can be expensive for requests with many cookies
-    let needs_cookies = route_metadata
-        .as_ref()
-        .map(|m| m.needs_cookies)
-        .unwrap_or(true);
-
-    let cookies = if needs_cookies {
-        parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()))
-    } else {
-        AHashMap::new()
-    };
+    
 
 
     // Check if this is a HEAD request (needed for body stripping after Python handler)
@@ -352,6 +354,7 @@ pub async fn handle_request(
             cookies,
             context,
             user: None,
+            auser: None,
             state: PyDict::new(py).unbind(), // Empty state dict for middleware and dynamic attributes
         };
         let request_obj = Py::new(py, request)?;

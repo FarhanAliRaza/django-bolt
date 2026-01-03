@@ -14,6 +14,7 @@ Performance considerations:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import contextvars
 import io
@@ -305,6 +306,8 @@ class DjangoMiddleware:
         # Copy cookies - use empty dict directly if no cookies
         django_request.COOKIES = dict(request.cookies) if request.cookies else {}
 
+        django_request.session = request.session if request.session else None
+
         # Query params - only create mutable QueryDict if we have params
         if request.query:
             django_request.GET = QueryDict(mutable=True)
@@ -478,6 +481,7 @@ _SKIP_HEADERS = frozenset(("content-type", "content-length"))
 _DJANGO_SAFE_MIDDLEWARE_PREFIXES = frozenset(
     [
         "django.middleware.",  # security, common, csrf, clickjacking, gzip, locale, http
+        "django_bolt.middleware.",  # SessionMiddleware
         "django.contrib.sessions.",  # SessionMiddleware
         "django.contrib.auth.",  # AuthenticationMiddleware, etc.
         "django.contrib.messages.",  # MessageMiddleware
@@ -679,7 +683,11 @@ class DjangoMiddlewareStack:
 
         # 2. Run Django built-in process_request hooks DIRECTLY (fast path - no blocking I/O)
         for middleware in self._django_process_request:
-            response = middleware.process_request(django_request)
+            is_coroutine_func = asyncio.iscoroutinefunction(middleware.process_request)
+            if is_coroutine_func:
+                response = await middleware.process_request(django_request)
+            else:
+                response = middleware.process_request(django_request)
             if response is not None:
                 return _to_bolt_response(response)
 
@@ -739,8 +747,11 @@ class DjangoMiddlewareStack:
 
         # 7. Run Django built-in process_response hooks DIRECTLY (reverse order)
         for middleware in self._django_process_response_reversed:
-            django_response = middleware.process_response(django_request, django_response)
-
+            is_coroutine_middleware = asyncio.iscoroutinefunction(middleware.process_response)
+            if is_coroutine_middleware:
+                django_response = await middleware.process_response(django_request, django_response)
+            else:
+                django_response = middleware.process_response(django_request, django_response)
         # 8. Single Django→Bolt conversion at the end
         return _to_bolt_response(django_response)
 

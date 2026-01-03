@@ -14,6 +14,7 @@ pub struct PyRequest {
     pub context: Option<Py<PyDict>>, // Middleware context data
     // None if no auth context or user not found
     pub user: Option<Py<PyAny>>,
+    pub auser: Option<Py<PyAny>>,
     pub state: Py<PyDict>, // Arbitrary state for middleware AND dynamic attributes (e.g. _messages)
 }
 
@@ -65,6 +66,12 @@ impl PyRequest {
     #[setter]
     fn set_user(&mut self, value: Py<PyAny>) {
         self.user = Some(value);
+    }
+    
+    /// Set the auser object
+    #[setter]
+    fn set_auser(&mut self, value: Py<PyAny>) {
+        self.auser = Some(value);
     }
 
     /// Get headers as a dict for middleware access.
@@ -166,6 +173,16 @@ impl PyRequest {
                 .collect::<Vec<_>>()
                 .join("&");
             format!("{}?{}", self.path, query_string)
+        }
+    }
+
+    #[getter]
+    fn session<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
+        let state_dict = self.state.bind(py);
+        
+        match state_dict.get_item("session") {
+            Ok(Some(session)) => Ok(session.unbind()),
+            _ => Ok(py.None()),
         }
     }
 

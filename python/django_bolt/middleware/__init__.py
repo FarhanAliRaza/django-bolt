@@ -55,6 +55,7 @@ from .django_loader import (
     load_django_middleware,
 )
 from .middleware import (
+    AuthenticationMiddleware,
     BaseMiddleware,
     ErrorHandlerMiddleware,
     GetResponse,
@@ -63,6 +64,7 @@ from .middleware import (
     # Protocols and base classes
     MiddlewareProtocol,
     MiddlewareType,
+    SessionMiddleware,
     # Built-in middleware (Python)
     TimingMiddleware,
     cors,
@@ -77,6 +79,8 @@ __all__ = [
     # Protocols and base classes
     "MiddlewareProtocol",
     "BaseMiddleware",
+    "SessionMiddleware",
+    "AuthenticationMiddleware",
     "Middleware",
     "GetResponse",
     "MiddlewareType",

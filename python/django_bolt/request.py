@@ -80,6 +80,16 @@ class Request(Protocol):
         """Async user getter (Django-style)"""
         ...
 
+    @property
+    def session(self) -> Any:
+        """
+        Django session object (requires SessionMiddleware).
+
+        Acts like a dictionary but supports saving/loading from the backend.
+        Example: request.session['cart_id'] = 123
+        """
+        ...
+
 
 __all__ = [
     "Request",

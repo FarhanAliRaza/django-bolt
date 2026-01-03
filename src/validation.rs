@@ -61,6 +61,7 @@ pub enum AuthGuardResult {
 #[inline(always)]
 pub fn validate_auth_and_guards(
     headers: &AHashMap<String, String>,
+    cookies: &AHashMap<String, String>,
     auth_backends: &[AuthBackend],
     guards: &[Guard],
 ) -> AuthGuardResult {
@@ -71,7 +72,7 @@ pub fn validate_auth_and_guards(
 
     // Authenticate if backends configured
     let auth_ctx = if !auth_backends.is_empty() {
-        authenticate(headers, auth_backends)
+        authenticate(headers, cookies, auth_backends)
     } else {
         None
     };
@@ -129,7 +130,8 @@ mod tests {
     #[test]
     fn test_validate_auth_no_config() {
         let headers = AHashMap::new();
-        let result = validate_auth_and_guards(&headers, &[], &[]);
+        let cookies = AHashMap::new();
+        let result = validate_auth_and_guards(&headers, &cookies,&[], &[]);
         matches!(result, AuthGuardResult::Allow(None));
     }
 }

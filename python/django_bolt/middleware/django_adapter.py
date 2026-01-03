@@ -683,8 +683,8 @@ class DjangoMiddlewareStack:
 
         # 2. Run Django built-in process_request hooks DIRECTLY (fast path - no blocking I/O)
         for middleware in self._django_process_request:
-            is_coroutine_func = asyncio.iscoroutinefunction(middleware.process_request)
-            if is_coroutine_func:
+            is_coroutine_process_resquest = asyncio.iscoroutinefunction(middleware.process_request)
+            if is_coroutine_process_resquest:
                 response = await middleware.process_request(django_request)
             else:
                 response = middleware.process_request(django_request)
@@ -747,8 +747,8 @@ class DjangoMiddlewareStack:
 
         # 7. Run Django built-in process_response hooks DIRECTLY (reverse order)
         for middleware in self._django_process_response_reversed:
-            is_coroutine_middleware = asyncio.iscoroutinefunction(middleware.process_response)
-            if is_coroutine_middleware:
+            is_coroutine_process_response = asyncio.iscoroutinefunction(middleware.process_response)
+            if is_coroutine_process_response:
                 django_response = await middleware.process_response(django_request, django_response)
             else:
                 django_response = middleware.process_response(django_request, django_response)

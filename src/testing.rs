@@ -590,8 +590,9 @@ async fn handle_test_request_internal(
         }
     }
 
-
-    let needs_cookies = route_metadata.get(&handler_id).map(|m| m.needs_cookies)
+    let needs_cookies = route_metadata
+        .get(&handler_id)
+        .map(|m| m.needs_cookies)
         .unwrap_or(true);
 
     let cookies = if needs_cookies {
@@ -1010,7 +1011,7 @@ pub fn handle_test_websocket(
             if let Some(eq_pos) = pair.find('=') {
                 let (key, value) = pair.split_at(eq_pos);
                 // value đang dính dấu '=' ở đầu, cần bỏ đi
-                let value = &value[1..]; 
+                let value = &value[1..];
                 if !key.is_empty() {
                     cookie_map.insert(key.to_string(), value.to_string());
                 }
@@ -1133,17 +1134,14 @@ pub fn handle_test_websocket(
     }
     scope_dict.set_item("cookies", cookies_dict)?;
 
-
     let client_tuple = pyo3::types::PyTuple::new(py, &["127.0.0.1", "12345"])?;
     scope_dict.set_item("client", client_tuple)?;
 
-    
     if let Some(ref auth) = final_auth_ctx {
-            let ctx_dict = pyo3::types::PyDict::new(py);
-            crate::middleware::auth::populate_auth_context(&ctx_dict.clone().unbind(), auth, py);
-            scope_dict.set_item("auth_context", ctx_dict)?;
-        }
-    
+        let ctx_dict = pyo3::types::PyDict::new(py);
+        crate::middleware::auth::populate_auth_context(&ctx_dict.clone().unbind(), auth, py);
+        scope_dict.set_item("auth_context", ctx_dict)?;
+    }
 
     Ok((
         true,

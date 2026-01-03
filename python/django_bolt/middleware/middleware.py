@@ -32,12 +32,13 @@ from typing import (
 
 from django.conf import settings
 from django.contrib.sessions.backends.base import UpdateError
+from django.contrib.sessions.exceptions import SessionInterrupted
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.cache import patch_vary_headers
 from django.utils.deprecation import MiddlewareMixin
 from django.utils.http import http_date
 
-from django_bolt.middleware.exceptions import SessionInterrupted
+from django_bolt.middleware.functional import AsyncLazyObject
 from django_bolt.middleware.utils import auser
 
 from ..exceptions import HTTPException
@@ -45,12 +46,24 @@ from ..exceptions import HTTPException
 if TYPE_CHECKING:
     from ..request import Request
     from ..responses import Response
-
+from django.contrib.sessions.backends.db import SessionStore
 from django.contrib.sessions.middleware import SessionMiddleware as BaseSessionMiddleware
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Type Aliases
 # ═══════════════════════════════════════════════════════════════════════════
+from django.utils import timezone
+
+from django_bolt.exceptions import Unauthorized
+
+
+async def validate_session(session_key: str) -> bool:
+    session = SessionStore(session_key=session_key)
+
+    if not await session.aexists(session_key):
+        return False
+
+    return await session.aget_expiry_date() > timezone.now()
 
 
 # Type alias for get_response function (Django-style)
@@ -653,8 +666,36 @@ class AuthenticationMiddleware(MiddlewareMixin):
                 "'django.contrib.sessions.middleware.SessionMiddleware' before "
                 "'django.contrib.auth.middleware.AuthenticationMiddleware'."
             )
-        request.user = await auser(request)
+        context = self._get_context(request)
+        if context:
+            is_session_authentication = self._is_session_authentication(context)
+            if is_session_authentication:
+                session_key = self._get_session_key(request)
+                if session_key:
+                    await self._validate_session(session_key)
+                    await self.authenticate(request)
+
+        request.user = AsyncLazyObject(lambda: auser(request))
         request.auser = partial(auser, request)
+
+    async def authenticate(self, request):
+        try:
+            await request.session.aget("_auth_user_id")
+        except Exception:
+            raise Unauthorized(detail="Invalid or expired session")
+
+    def _get_context(self, request):
+        return request._bolt_request.context
+
+    def _is_session_authentication(self, context):
+        return context.get("auth_backend", None) == "session"
+
+    def _get_session_key(self, request) -> str | None:
+        return request.COOKIES.get(settings.SESSION_COOKIE_NAME, None)
+
+    async def _validate_session(self, session_key: str):
+        if not await validate_session(session_key):
+            raise Unauthorized(detail="Invalid or expired session")
 
 
 __all__ = [

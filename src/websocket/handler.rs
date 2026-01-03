@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use crate::metadata::CorsConfig;
 use crate::middleware::rate_limit::check_rate_limit;
 use crate::state::{AppState, ROUTE_METADATA, TASK_LOCALS};
-use crate::validation::{AuthGuardResult, parse_cookies_inline, validate_auth_and_guards};
+use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
 
 use super::actor::WebSocketActor;
 use super::config::WS_CONFIG;
@@ -53,7 +53,10 @@ pub fn is_websocket_upgrade(req: &HttpRequest) -> bool {
         .headers()
         .get("connection")
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.split(',').any(|p| p.trim().eq_ignore_ascii_case("upgrade")))
+        .map(|v| {
+            v.split(',')
+                .any(|p| p.trim().eq_ignore_ascii_case("upgrade"))
+        })
         .unwrap_or(false);
 
     if !has_upgrade_connection {
@@ -216,7 +219,9 @@ fn create_send_fn(py: Python<'_>, state: Arc<WsConnectionState>) -> PyResult<Py<
                                     e
                                 ))
                             })?;
-                        Ok(Python::attach(|py| py.None().into_pyobject(py).unwrap().unbind()))
+                        Ok(Python::attach(|py| {
+                            py.None().into_pyobject(py).unwrap().unbind()
+                        }))
                     })?;
                     Ok(future.into())
                 }
@@ -235,7 +240,9 @@ fn create_send_fn(py: Python<'_>, state: Arc<WsConnectionState>) -> PyResult<Py<
                                         e
                                     ))
                                 })?;
-                            Ok(Python::attach(|py| py.None().into_pyobject(py).unwrap().unbind()))
+                            Ok(Python::attach(|py| {
+                                py.None().into_pyobject(py).unwrap().unbind()
+                            }))
                         })?;
                         Ok(future.into())
                     } else if let Some(bytes) = message.get_item("bytes")? {
@@ -252,7 +259,9 @@ fn create_send_fn(py: Python<'_>, state: Arc<WsConnectionState>) -> PyResult<Py<
                                         e
                                     ))
                                 })?;
-                            Ok(Python::attach(|py| py.None().into_pyobject(py).unwrap().unbind()))
+                            Ok(Python::attach(|py| {
+                                py.None().into_pyobject(py).unwrap().unbind()
+                            }))
                         })?;
                         Ok(future.into())
                     } else {
@@ -284,7 +293,9 @@ fn create_send_fn(py: Python<'_>, state: Arc<WsConnectionState>) -> PyResult<Py<
                                     e
                                 ))
                             })?;
-                        Ok(Python::attach(|py| py.None().into_pyobject(py).unwrap().unbind()))
+                        Ok(Python::attach(|py| {
+                            py.None().into_pyobject(py).unwrap().unbind()
+                        }))
                     })?;
                     Ok(future.into())
                 }
@@ -342,7 +353,11 @@ fn validate_origin(req: &HttpRequest, state: &AppState) -> bool {
 
 /// Check if an origin is allowed by the CORS configuration
 /// Reuses the same logic as HTTP CORS validation
-fn is_origin_allowed(origin: &str, cors_config: &CorsConfig, global_regexes: &[regex::Regex]) -> bool {
+fn is_origin_allowed(
+    origin: &str,
+    cors_config: &CorsConfig,
+    global_regexes: &[regex::Regex],
+) -> bool {
     // Allow all origins if configured
     if cors_config.allow_all_origins {
         return true;
@@ -450,7 +465,12 @@ pub async fn handle_websocket_upgrade_with_handler(
     // Evaluate authentication and guards before upgrading
     if let Some(route_metadata) = ROUTE_METADATA.get() {
         if let Some(route_meta) = route_metadata.get(&handler_id) {
-            match validate_auth_and_guards(&headers, &cookies, &route_meta.auth_backends, &route_meta.guards) {
+            match validate_auth_and_guards(
+                &headers,
+                &cookies,
+                &route_meta.auth_backends,
+                &route_meta.guards,
+            ) {
                 AuthGuardResult::Allow(_ctx) => {
                     // Guards passed, continue with WebSocket upgrade
                 }
@@ -481,7 +501,10 @@ pub async fn handle_websocket_upgrade_with_handler(
         Err(e) => {
             // CRITICAL: Decrement counter on error to prevent resource leak
             ACTIVE_WS_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
-            return Err(actix_web::error::ErrorBadRequest(format!("Invalid request: {}", e)));
+            return Err(actix_web::error::ErrorBadRequest(format!(
+                "Invalid request: {}",
+                e
+            )));
         }
     };
 
@@ -497,7 +520,10 @@ pub async fn handle_websocket_upgrade_with_handler(
         Err(e) => {
             // CRITICAL: Decrement counter on error to prevent resource leak
             ACTIVE_WS_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
-            return Err(actix_web::error::ErrorInternalServerError(format!("WebSocket error: {}", e)));
+            return Err(actix_web::error::ErrorInternalServerError(format!(
+                "WebSocket error: {}",
+                e
+            )));
         }
     };
 
@@ -569,20 +595,24 @@ pub async fn handle_websocket_upgrade_with_handler(
                     if let Err(e) = future.await {
                         eprintln!("[django-bolt] WebSocket handler error: {}", e);
                         // Close the connection on error - this triggers actor stopped() which decrements counter
-                        let _ = addr.send(SendToClient(WsMessage::Close {
-                            code: 1011,
-                            reason: "Internal error".to_string(),
-                        })).await;
+                        let _ = addr
+                            .send(SendToClient(WsMessage::Close {
+                                code: 1011,
+                                reason: "Internal error".to_string(),
+                            }))
+                            .await;
                     }
                     // Normal completion - actor will be stopped when handler returns and Python closes
                 }
                 Err(e) => {
                     eprintln!("[django-bolt] WebSocket handler setup error: {}", e);
                     // Close the connection on setup error - this triggers actor stopped() which decrements counter
-                    let _ = addr.send(SendToClient(WsMessage::Close {
-                        code: 1011,
-                        reason: "Handler setup failed".to_string(),
-                    })).await;
+                    let _ = addr
+                        .send(SendToClient(WsMessage::Close {
+                            code: 1011,
+                            reason: "Handler setup failed".to_string(),
+                        }))
+                        .await;
                 }
             }
         })
@@ -593,10 +623,12 @@ pub async fn handle_websocket_upgrade_with_handler(
         if result.is_err() {
             eprintln!("[django-bolt] WebSocket handler task panicked - closing connection");
             // Send close message to trigger actor stopped() which decrements counter
-            let _ = addr.send(SendToClient(WsMessage::Close {
-                code: 1011,
-                reason: "Internal server error".to_string(),
-            })).await;
+            let _ = addr
+                .send(SendToClient(WsMessage::Close {
+                    code: 1011,
+                    reason: "Internal server error".to_string(),
+                }))
+                .await;
         }
     });
 

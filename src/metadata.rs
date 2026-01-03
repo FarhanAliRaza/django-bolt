@@ -178,9 +178,9 @@ impl Default for RateLimitConfig {
 /// Compression configuration parsed at startup
 #[derive(Debug, Clone)]
 pub struct CompressionConfig {
-    pub backend: String,        // "gzip", "brotli", "zstd"
-    pub minimum_size: usize,    // Minimum response size to compress (bytes)
-    pub gzip_fallback: bool,    // Fall back to gzip if backend not supported
+    pub backend: String,     // "gzip", "brotli", "zstd"
+    pub minimum_size: usize, // Minimum response size to compress (bytes)
+    pub gzip_fallback: bool, // Fall back to gzip if backend not supported
 }
 
 impl Default for CompressionConfig {
@@ -495,7 +495,7 @@ fn parse_auth_backend(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<A
         }
         "session" => {
             let cookie_name = dict
-                .get("cookie_name")
+                .get("session_cookie_name")
                 .and_then(|c| c.extract::<String>(py).ok())
                 .unwrap_or_else(|| "sessionid".to_string());
             Some(AuthBackend::Session { cookie_name })

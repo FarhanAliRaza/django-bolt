@@ -28,9 +28,9 @@ pub use config::WS_CONFIG;
 pub use handler::{handle_websocket_upgrade_with_handler, is_websocket_upgrade};
 #[allow(unused_imports)] // Re-exported for external use
 pub use messages::{SendToClient, WsMessage};
-pub use router::WebSocketRouter;
 #[allow(unused_imports)] // Re-exported for external use
 pub use router::WebSocketRoute;
+pub use router::WebSocketRouter;
 
 /// Global counter for active WebSocket connections
 pub static ACTIVE_WS_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);

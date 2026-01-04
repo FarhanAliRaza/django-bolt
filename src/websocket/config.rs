@@ -22,14 +22,12 @@ pub struct WsConfig {
 }
 
 /// Global cached configuration - initialized once at first access
-pub static WS_CONFIG: Lazy<WsConfig> = Lazy::new(|| {
-    WsConfig {
-        max_connections: load_max_connections(),
-        channel_buffer_size: load_channel_buffer_size(),
-        heartbeat_interval: load_heartbeat_interval(),
-        client_timeout: load_client_timeout(),
-        max_message_size: load_max_message_size(),
-    }
+pub static WS_CONFIG: Lazy<WsConfig> = Lazy::new(|| WsConfig {
+    max_connections: load_max_connections(),
+    channel_buffer_size: load_channel_buffer_size(),
+    heartbeat_interval: load_heartbeat_interval(),
+    client_timeout: load_client_timeout(),
+    max_message_size: load_max_message_size(),
 });
 
 /// Load max connections from env var or Django settings

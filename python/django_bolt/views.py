@@ -115,6 +115,7 @@ class APIView:
         view_instance = cls()
 
         # Set action name once at registration time
+        # if hasattr(view_instance, "action"):
         if hasattr(view_instance, "action"):
             view_instance.action = action_name
 

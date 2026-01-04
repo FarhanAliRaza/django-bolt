@@ -45,10 +45,7 @@ pub fn add_cors_headers_with_config(
 
     // Handle allow_all_origins (wildcard) without credentials
     if cors_config.allow_all_origins {
-        headers.insert(
-            ACCESS_CONTROL_ALLOW_ORIGIN,
-            HeaderValue::from_static("*"),
-        );
+        headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
         if let Some(ref cached_val) = cors_config.expose_headers_header {
             headers.insert(ACCESS_CONTROL_EXPOSE_HEADERS, cached_val.clone());
         }
@@ -136,7 +133,9 @@ pub fn add_preflight_headers_with_config(headers: &mut HeaderMap, cors_config: &
     if !has_preflight_vary {
         headers.append(
             VARY,
-            HeaderValue::from_static("Access-Control-Request-Method, Access-Control-Request-Headers"),
+            HeaderValue::from_static(
+                "Access-Control-Request-Method, Access-Control-Request-Headers",
+            ),
         );
     }
 }

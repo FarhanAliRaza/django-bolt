@@ -206,7 +206,9 @@ fn find_cors_for_method<'a>(
     let route_match = if let Some(ref router) = state.router {
         router.find(method, path)
     } else {
-        GLOBAL_ROUTER.get().and_then(|router| router.find(method, path))
+        GLOBAL_ROUTER
+            .get()
+            .and_then(|router| router.find(method, path))
     };
 
     if let Some(route_match) = route_match {
@@ -216,7 +218,9 @@ fn find_cors_for_method<'a>(
         let meta = if let Some(ref meta_map) = state.route_metadata {
             meta_map.get(&handler_id)
         } else {
-            ROUTE_METADATA.get().and_then(|meta_map| meta_map.get(&handler_id))
+            ROUTE_METADATA
+                .get()
+                .and_then(|meta_map| meta_map.get(&handler_id))
         };
 
         if let Some(meta) = meta {

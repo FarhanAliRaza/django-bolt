@@ -456,7 +456,10 @@ fn is_websocket_upgrade_guard(ctx: &actix_web::guard::GuardContext) -> bool {
     let has_upgrade_connection = headers
         .get("connection")
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.split(',').any(|p| p.trim().eq_ignore_ascii_case("upgrade")))
+        .map(|v| {
+            v.split(',')
+                .any(|p| p.trim().eq_ignore_ascii_case("upgrade"))
+        })
         .unwrap_or(false);
 
     if !has_upgrade_connection {

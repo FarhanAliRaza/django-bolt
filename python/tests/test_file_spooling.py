@@ -26,10 +26,12 @@ class TestFileAutoCleanup:
         @api.post("/upload")
         async def upload_file(file: Annotated[UploadFile, File()]) -> dict:
             content = await file.read()
-            file_states.append({
-                "file_obj": file,
-                "content_len": len(content),
-            })
+            file_states.append(
+                {
+                    "file_obj": file,
+                    "content_len": len(content),
+                }
+            )
             return {"size": len(content)}
 
         with TestClient(api) as client:
@@ -52,10 +54,12 @@ class TestFileAutoCleanup:
             file: Annotated[UploadFile, File(max_size=50 * 1024 * 1024)],
         ) -> dict:
             content = await file.read()
-            file_states.append({
-                "file_obj": file,
-                "rolled_to_disk": file.rolled_to_disk,
-            })
+            file_states.append(
+                {
+                    "file_obj": file,
+                    "rolled_to_disk": file.rolled_to_disk,
+                }
+            )
             return {"size": len(content)}
 
         with TestClient(api) as client:

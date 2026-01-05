@@ -1291,10 +1291,7 @@ class BoltAPI:
 
         # Track if handler has file uploads (for auto-cleanup optimization)
         # Check both direct File() params and Form() structs with UploadFile fields
-        meta["has_file_uploads"] = any(
-            f.source == "file" or self._field_has_upload_file(f)
-            for f in field_definitions
-        )
+        meta["has_file_uploads"] = any(f.source == "file" or self._field_has_upload_file(f) for f in field_definitions)
 
         # Static analysis: Determine which request components are actually used
         # This allows skipping unused parsing at request time

@@ -14,9 +14,9 @@ from typing import Any, get_args, get_origin
 import msgspec
 from asgiref.sync import sync_to_async
 
-from .datastructures import UploadFile
-from .exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
-from .typing import (
+from ..datastructures import UploadFile
+from ..exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
+from ..typing import (
     FieldDefinition,
     HandlerMetadata,
     is_msgspec_struct,

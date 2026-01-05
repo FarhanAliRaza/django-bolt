@@ -260,6 +260,7 @@ pub async fn parse_multipart(
             // Read file content with size limit and disk spooling
             let file_info = read_file_content(
                 &mut field,
+                &field_name,
                 &filename,
                 &content_type,
                 max_upload_size,
@@ -332,6 +333,7 @@ pub async fn parse_multipart(
 /// Read file content with disk spooling for large files
 async fn read_file_content(
     field: &mut actix_multipart::Field,
+    field_name: &str,
     filename: &str,
     content_type: &str,
     max_size: usize,
@@ -353,7 +355,7 @@ async fn read_file_content(
 
         // Check max size limit
         if size > max_size {
-            return Err(ValidationError::file_too_large("file", max_size, size));
+            return Err(ValidationError::file_too_large(field_name, max_size, size));
         }
 
         // Decide whether to keep in memory or spool to disk

@@ -304,35 +304,44 @@ def test_non_struct_response_type():
 
 def test_metadata_extraction_at_registration():
     """Test that field extraction happens once at route registration, not per-request."""
+    import django_bolt.api as api_module
+
     api = BoltAPI()
     call_count = 0
 
-    # Monkey-patch to verify _extract_response_metadata is called during registration
-    original_extract = api._extract_response_metadata
+    # Monkey-patch where the function is USED (api module), not where it's defined
+    # When api.py does 'from .api_compilation import extract_response_metadata',
+    # it creates a reference in the api module namespace
+    original_extract = api_module.extract_response_metadata
 
     def tracked_extract(response_type):
         nonlocal call_count
         call_count += 1
         return original_extract(response_type)
 
-    api._extract_response_metadata = tracked_extract
+    api_module.extract_response_metadata = tracked_extract
 
-    @api.get("/users", response_model=list[UserMini])
-    def get_users():
-        pass
+    try:
 
-    # Should be called exactly once during registration
-    assert call_count == 1
+        @api.get("/users", response_model=list[UserMini])
+        def get_users():
+            pass
 
-    # Get metadata - should not trigger another call
-    # Get handler function name from previous decorator
-    _method, _path, handler_id, _handler = api._routes[0]
-    meta = api._handler_meta[handler_id]
+        # Should be called exactly once during registration
+        assert call_count == 1
 
-    assert "response_field_names" in meta
+        # Get metadata - should not trigger another call
+        # Get handler function name from previous decorator
+        _method, _path, handler_id, _handler = api._routes[0]
+        meta = api._handler_meta[handler_id]
 
-    # Still should be 1 (no additional calls)
-    assert call_count == 1
+        assert "response_field_names" in meta
+
+        # Still should be 1 (no additional calls)
+        assert call_count == 1
+    finally:
+        # Restore original function
+        api_module.extract_response_metadata = original_extract
 
 
 # ============================================================================

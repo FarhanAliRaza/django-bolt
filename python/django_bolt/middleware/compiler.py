@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import Any, get_origin
 
 import msgspec
+from django.conf import settings
 
 from ..auth.backends import get_default_authentication_classes
 from ..auth.guards import get_default_permission_classes
@@ -290,9 +291,24 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
     if file_constraints:
         metadata["file_constraints"] = file_constraints
 
-    # Max upload size - default 1MB, can be configured via Django settings
-    # TODO: Read from Django settings if available
-    metadata["max_upload_size"] = 1024 * 1024  # 1MB default
+    # Max upload size priority:
+    # 1. Per-field max_size (route level) - highest priority
+    # 2. BOLT_MAX_UPLOAD_SIZE (Django settings) - global fallback
+    # 3. 1MB default
+    if file_constraints:
+        # Use largest per-field max_size if any field has it
+        max_sizes = [c.get("max_size") for c in file_constraints.values() if c.get("max_size")]
+        if max_sizes:
+            metadata["max_upload_size"] = max(max_sizes)
+        else:
+            # No per-field max_size, use global setting or default
+            metadata["max_upload_size"] = getattr(settings, "BOLT_MAX_UPLOAD_SIZE", 1024 * 1024)
+    else:
+        # No file constraints at all, use global setting or default
+        metadata["max_upload_size"] = getattr(settings, "BOLT_MAX_UPLOAD_SIZE", 1024 * 1024)
+
+    # Memory spool threshold - when to spool files to disk (default 1MB)
+    metadata["memory_spool_threshold"] = getattr(settings, "BOLT_MEMORY_SPOOL_THRESHOLD", 1024 * 1024)
 
     return metadata
 

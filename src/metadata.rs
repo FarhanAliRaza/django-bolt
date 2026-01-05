@@ -222,6 +222,7 @@ pub struct RouteMetadata {
     pub form_type_hints: HashMap<String, u8>,
     pub file_constraints: HashMap<String, FileFieldConstraints>,
     pub max_upload_size: usize,
+    pub memory_spool_threshold: usize,
 }
 
 impl RouteMetadata {
@@ -360,6 +361,14 @@ impl RouteMetadata {
             .and_then(|v| v.extract::<usize>().ok())
             .unwrap_or(1024 * 1024);
 
+        // Memory spool threshold - when to spool files to disk (default 1MB)
+        let memory_spool_threshold = py_meta
+            .get_item("memory_spool_threshold")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<usize>().ok())
+            .unwrap_or(1024 * 1024);
+
         Ok(RouteMetadata {
             auth_backends,
             guards,
@@ -376,6 +385,7 @@ impl RouteMetadata {
             form_type_hints,
             file_constraints,
             max_upload_size,
+            memory_spool_threshold,
         })
     }
 }

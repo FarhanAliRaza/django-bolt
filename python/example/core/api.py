@@ -39,7 +39,7 @@ class DocumentResponse(msgspec.Struct):
 @files_api.post("/upload")
 async def upload_document(
     title: Annotated[str, Form()],
-    file: Annotated[UploadFile, File(max_size=FileSize.MB_1, allowed_types=["application/pdf", "image/*"])],
+    file: Annotated[UploadFile, File(max_size=FileSize.MB_30, allowed_types=["application/pdf", "image/*"])],
 ) -> DocumentResponse:
     """
     Upload a document with validation.

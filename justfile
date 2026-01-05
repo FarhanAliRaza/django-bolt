@@ -14,7 +14,12 @@ default:
 
 # Build Rust extension in release mode
 build:
+    uv run maturin develop 
+
+# Build Rust extension in release mode
+build-release:
     uv run maturin develop --release
+
 
 # Kill any servers on PORT
 kill port=port:

@@ -91,6 +91,25 @@ BOLT_MAX_UPLOAD_SIZE = FileSize.MB_10
     file: Annotated[UploadFile, File(max_size=FileSize.MB_5)]
     ```
 
+### BOLT_MEMORY_SPOOL_THRESHOLD
+
+Size threshold before file uploads are spooled to disk. Files smaller than this are kept in memory; larger files are written to a temporary file on disk.
+
+```python
+BOLT_MEMORY_SPOOL_THRESHOLD = 5 * 1024 * 1024  # 5 MB
+```
+
+**Default:** `1048576` (1 MB)
+
+This setting controls memory usage during file uploads:
+
+- **Lower values** reduce memory usage but increase disk I/O
+- **Higher values** improve performance for medium-sized files but use more memory
+
+!!! tip "When to adjust"
+    - Set higher (e.g., 5-10 MB) if you frequently receive medium-sized files and have sufficient memory
+    - Set lower (e.g., 256 KB) on memory-constrained systems or when handling many concurrent uploads
+
 ## File serving settings
 
 ### BOLT_ALLOWED_FILE_PATHS
@@ -217,5 +236,6 @@ api = BoltAPI(
 | `BOLT_CORS_ALLOW_HEADERS` | `list[str]` | `[]` | Allowed headers |
 | `BOLT_CORS_EXPOSE_HEADERS` | `list[str]` | `[]` | Exposed headers |
 | `BOLT_CORS_MAX_AGE` | `int` | `600` | Preflight cache (seconds) |
-| `BOLT_MAX_UPLOAD_SIZE` | `int` | `None` | Max upload size (bytes) |
+| `BOLT_MAX_UPLOAD_SIZE` | `int` | `1048576` | Max upload size (bytes) |
+| `BOLT_MEMORY_SPOOL_THRESHOLD` | `int` | `1048576` | Memory threshold before disk spooling (bytes) |
 | `BOLT_ALLOWED_FILE_PATHS` | `list[str]` | `None` | File serving whitelist |

@@ -728,6 +728,10 @@ async fn handle_test_request_internal(
             .as_ref()
             .map(|m| m.max_upload_size)
             .unwrap_or(1024 * 1024);
+        let memory_spool_threshold = route_meta
+            .as_ref()
+            .map(|m| m.memory_spool_threshold)
+            .unwrap_or(DEFAULT_MEMORY_LIMIT);
 
         // Create Multipart from the payload
         let multipart = Multipart::new(req.headers(), payload);
@@ -737,7 +741,7 @@ async fn handle_test_request_internal(
             &form_type_hints,
             &file_constraints,
             max_upload_size,
-            DEFAULT_MEMORY_LIMIT,
+            memory_spool_threshold,
             DEFAULT_MAX_PARTS,
         )
         .await

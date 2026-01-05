@@ -486,6 +486,10 @@ pub async fn handle_request(
             .as_ref()
             .map(|m| m.max_upload_size)
             .unwrap_or(1024 * 1024);
+        let memory_spool_threshold = route_metadata
+            .as_ref()
+            .map(|m| m.memory_spool_threshold)
+            .unwrap_or(DEFAULT_MEMORY_LIMIT);
 
         // Create Multipart from the payload
         let multipart = Multipart::new(req.headers(), payload);
@@ -495,7 +499,7 @@ pub async fn handle_request(
             &form_type_hints,
             &file_constraints,
             max_upload_size,
-            DEFAULT_MEMORY_LIMIT,
+            memory_spool_threshold,
             DEFAULT_MAX_PARTS,
         )
         .await

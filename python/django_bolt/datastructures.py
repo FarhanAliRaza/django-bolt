@@ -82,7 +82,7 @@ class UploadFile:
             self._file.seek(0)
 
     @classmethod
-    def from_file_info(cls, file_info: dict[str, Any], max_spool_size: int = DEFAULT_MAX_SPOOL_SIZE) -> UploadFile:
+    def from_file_info(cls, file_info: dict[str, Any]) -> UploadFile:
         """
         Create UploadFile from the file_info dict returned by Rust form parsing.
 
@@ -92,7 +92,6 @@ class UploadFile:
 
         Args:
             file_info: Dict with keys: filename, content, content_type, size, temp_path
-            max_spool_size: Size threshold before spooling to disk
 
         Returns:
             UploadFile instance

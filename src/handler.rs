@@ -123,13 +123,26 @@ pub async fn build_file_response(
 /// Handle Python errors and convert to HTTP response
 /// OPTIMIZATION: #[inline(never)] on error path - keeps hot path code smaller
 #[inline(never)]
-pub fn handle_python_error(py: Python<'_>, err: PyErr, path: &str, method: &str, debug: bool) -> HttpResponse {
+pub fn handle_python_error(
+    py: Python<'_>,
+    err: PyErr,
+    path: &str,
+    method: &str,
+    debug: bool,
+) -> HttpResponse {
     err.restore(py);
     if let Some(exc) = PyErr::take(py) {
         let exc_value = exc.value(py);
         error::handle_python_exception(py, exc_value, path, method, debug)
     } else {
-        error::build_error_response(py, 500, "Handler execution error".to_string(), vec![], None, debug)
+        error::build_error_response(
+            py,
+            500,
+            "Handler execution error".to_string(),
+            vec![],
+            None,
+            debug,
+        )
     }
 }
 
@@ -180,7 +193,12 @@ fn coerced_value_to_py(py: Python<'_>, value: &CoercedValue) -> Py<PyAny> {
         CoercedValue::Bool(v) => v.into_pyobject(py).unwrap().to_owned().unbind().into_any(),
         CoercedValue::String(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
         CoercedValue::Uuid(v) => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
-        CoercedValue::DateTime(v) => v.to_rfc3339().into_pyobject(py).unwrap().into_any().unbind(),
+        CoercedValue::DateTime(v) => v
+            .to_rfc3339()
+            .into_pyobject(py)
+            .unwrap()
+            .into_any()
+            .unbind(),
         CoercedValue::NaiveDateTime(v) => {
             v.to_string().into_pyobject(py).unwrap().into_any().unbind()
         }
@@ -468,86 +486,88 @@ pub async fn handle_request(
 
     // Read body from payload (before form parsing consumes it for multipart)
     // For multipart, we need the payload stream directly
-    let (body, form_result): (Vec<u8>, Option<FormParseResult>) = if needs_form_parsing
-        && is_multipart
-    {
-        // Multipart form parsing - uses the payload stream directly
-        let form_type_hints = route_metadata
-            .as_ref()
-            .map(|m| &m.form_type_hints)
-            .cloned()
-            .unwrap_or_default();
-        let file_constraints = route_metadata
-            .as_ref()
-            .map(|m| &m.file_constraints)
-            .cloned()
-            .unwrap_or_default();
-        let max_upload_size = route_metadata
-            .as_ref()
-            .map(|m| m.max_upload_size)
-            .unwrap_or(1024 * 1024);
-        let memory_spool_threshold = route_metadata
-            .as_ref()
-            .map(|m| m.memory_spool_threshold)
-            .unwrap_or(DEFAULT_MEMORY_LIMIT);
-
-        // Create Multipart from the payload
-        let multipart = Multipart::new(req.headers(), payload);
-
-        match parse_multipart(
-            multipart,
-            &form_type_hints,
-            &file_constraints,
-            max_upload_size,
-            memory_spool_threshold,
-            DEFAULT_MAX_PARTS,
-        )
-        .await
-        {
-            Ok(result) => (Vec::new(), Some(result)),
-            Err(validation_error) => {
-                return build_validation_error_response(&validation_error);
-            }
-        }
-    } else {
-        // Read payload as bytes (for non-multipart requests)
-        let mut body_bytes = web::BytesMut::new();
-        while let Some(chunk) = payload.next().await {
-            match chunk {
-                Ok(data) => body_bytes.extend_from_slice(&data),
-                Err(e) => {
-                    return HttpResponse::BadRequest()
-                        .content_type("application/json")
-                        .body(format!("{{\"error\": \"Failed to read request body: {}\"}}", e));
-                }
-            }
-        }
-        let body = body_bytes.freeze();
-
-        // URL-encoded form parsing
-        if needs_form_parsing && is_urlencoded {
+    let (body, form_result): (Vec<u8>, Option<FormParseResult>) =
+        if needs_form_parsing && is_multipart {
+            // Multipart form parsing - uses the payload stream directly
             let form_type_hints = route_metadata
                 .as_ref()
                 .map(|m| &m.form_type_hints)
                 .cloned()
                 .unwrap_or_default();
+            let file_constraints = route_metadata
+                .as_ref()
+                .map(|m| &m.file_constraints)
+                .cloned()
+                .unwrap_or_default();
+            let max_upload_size = route_metadata
+                .as_ref()
+                .map(|m| m.max_upload_size)
+                .unwrap_or(1024 * 1024);
+            let memory_spool_threshold = route_metadata
+                .as_ref()
+                .map(|m| m.memory_spool_threshold)
+                .unwrap_or(DEFAULT_MEMORY_LIMIT);
 
-            match parse_urlencoded(&body, &form_type_hints) {
-                Ok(form_map) => {
-                    let result = FormParseResult {
-                        form_map,
-                        files_map: HashMap::new(),
-                    };
-                    (body.to_vec(), Some(result))
-                }
+            // Create Multipart from the payload
+            let multipart = Multipart::new(req.headers(), payload);
+
+            match parse_multipart(
+                multipart,
+                &form_type_hints,
+                &file_constraints,
+                max_upload_size,
+                memory_spool_threshold,
+                DEFAULT_MAX_PARTS,
+            )
+            .await
+            {
+                Ok(result) => (Vec::new(), Some(result)),
                 Err(validation_error) => {
                     return build_validation_error_response(&validation_error);
                 }
             }
         } else {
-            (body.to_vec(), None)
-        }
-    };
+            // Read payload as bytes (for non-multipart requests)
+            let mut body_bytes = web::BytesMut::new();
+            while let Some(chunk) = payload.next().await {
+                match chunk {
+                    Ok(data) => body_bytes.extend_from_slice(&data),
+                    Err(e) => {
+                        return HttpResponse::BadRequest()
+                            .content_type("application/json")
+                            .body(format!(
+                                "{{\"error\": \"Failed to read request body: {}\"}}",
+                                e
+                            ));
+                    }
+                }
+            }
+            let body = body_bytes.freeze();
+
+            // URL-encoded form parsing
+            if needs_form_parsing && is_urlencoded {
+                let form_type_hints = route_metadata
+                    .as_ref()
+                    .map(|m| &m.form_type_hints)
+                    .cloned()
+                    .unwrap_or_default();
+
+                match parse_urlencoded(&body, &form_type_hints) {
+                    Ok(form_map) => {
+                        let result = FormParseResult {
+                            form_map,
+                            files_map: HashMap::new(),
+                        };
+                        (body.to_vec(), Some(result))
+                    }
+                    Err(validation_error) => {
+                        return build_validation_error_response(&validation_error);
+                    }
+                }
+            } else {
+                (body.to_vec(), None)
+            }
+        };
 
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
@@ -586,7 +606,8 @@ pub async fn handle_request(
         };
 
         // Get type hints for type coercion
-        let param_types = route_metadata.as_ref()
+        let param_types = route_metadata
+            .as_ref()
             .map(|m| &m.param_types)
             .cloned()
             .unwrap_or_default();
@@ -596,15 +617,29 @@ pub async fn handle_request(
         for (name, value) in &path_params {
             let type_hint = param_types.get(name).copied().unwrap_or(TYPE_STRING);
             let py_value: Py<PyAny> = match type_hint {
-                crate::type_coercion::TYPE_INT => {
-                    value.parse::<i64>().unwrap_or(0).into_pyobject(py).unwrap().into_any().unbind()
-                }
-                crate::type_coercion::TYPE_FLOAT => {
-                    value.parse::<f64>().unwrap_or(0.0).into_pyobject(py).unwrap().into_any().unbind()
-                }
+                crate::type_coercion::TYPE_INT => value
+                    .parse::<i64>()
+                    .unwrap_or(0)
+                    .into_pyobject(py)
+                    .unwrap()
+                    .into_any()
+                    .unbind(),
+                crate::type_coercion::TYPE_FLOAT => value
+                    .parse::<f64>()
+                    .unwrap_or(0.0)
+                    .into_pyobject(py)
+                    .unwrap()
+                    .into_any()
+                    .unbind(),
                 crate::type_coercion::TYPE_BOOL => {
-                    let is_true = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
-                    is_true.into_pyobject(py).unwrap().to_owned().unbind().into_any()
+                    let is_true =
+                        matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+                    is_true
+                        .into_pyobject(py)
+                        .unwrap()
+                        .to_owned()
+                        .unbind()
+                        .into_any()
                 }
                 _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
             };
@@ -616,15 +651,29 @@ pub async fn handle_request(
         for (name, value) in &query_params {
             let type_hint = param_types.get(name).copied().unwrap_or(TYPE_STRING);
             let py_value: Py<PyAny> = match type_hint {
-                crate::type_coercion::TYPE_INT => {
-                    value.parse::<i64>().unwrap_or(0).into_pyobject(py).unwrap().into_any().unbind()
-                }
-                crate::type_coercion::TYPE_FLOAT => {
-                    value.parse::<f64>().unwrap_or(0.0).into_pyobject(py).unwrap().into_any().unbind()
-                }
+                crate::type_coercion::TYPE_INT => value
+                    .parse::<i64>()
+                    .unwrap_or(0)
+                    .into_pyobject(py)
+                    .unwrap()
+                    .into_any()
+                    .unbind(),
+                crate::type_coercion::TYPE_FLOAT => value
+                    .parse::<f64>()
+                    .unwrap_or(0.0)
+                    .into_pyobject(py)
+                    .unwrap()
+                    .into_any()
+                    .unbind(),
                 crate::type_coercion::TYPE_BOOL => {
-                    let is_true = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
-                    is_true.into_pyobject(py).unwrap().to_owned().unbind().into_any()
+                    let is_true =
+                        matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+                    is_true
+                        .into_pyobject(py)
+                        .unwrap()
+                        .to_owned()
+                        .unbind()
+                        .into_any()
                 }
                 _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
             };
@@ -636,15 +685,29 @@ pub async fn handle_request(
         for (name, value) in &headers_for_python {
             let type_hint = param_types.get(name).copied().unwrap_or(TYPE_STRING);
             let py_value: Py<PyAny> = match type_hint {
-                crate::type_coercion::TYPE_INT => {
-                    value.parse::<i64>().unwrap_or(0).into_pyobject(py).unwrap().into_any().unbind()
-                }
-                crate::type_coercion::TYPE_FLOAT => {
-                    value.parse::<f64>().unwrap_or(0.0).into_pyobject(py).unwrap().into_any().unbind()
-                }
+                crate::type_coercion::TYPE_INT => value
+                    .parse::<i64>()
+                    .unwrap_or(0)
+                    .into_pyobject(py)
+                    .unwrap()
+                    .into_any()
+                    .unbind(),
+                crate::type_coercion::TYPE_FLOAT => value
+                    .parse::<f64>()
+                    .unwrap_or(0.0)
+                    .into_pyobject(py)
+                    .unwrap()
+                    .into_any()
+                    .unbind(),
                 crate::type_coercion::TYPE_BOOL => {
-                    let is_true = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
-                    is_true.into_pyobject(py).unwrap().to_owned().unbind().into_any()
+                    let is_true =
+                        matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+                    is_true
+                        .into_pyobject(py)
+                        .unwrap()
+                        .to_owned()
+                        .unbind()
+                        .into_any()
                 }
                 _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
             };
@@ -656,15 +719,29 @@ pub async fn handle_request(
         for (name, value) in &cookies {
             let type_hint = param_types.get(name).copied().unwrap_or(TYPE_STRING);
             let py_value: Py<PyAny> = match type_hint {
-                crate::type_coercion::TYPE_INT => {
-                    value.parse::<i64>().unwrap_or(0).into_pyobject(py).unwrap().into_any().unbind()
-                }
-                crate::type_coercion::TYPE_FLOAT => {
-                    value.parse::<f64>().unwrap_or(0.0).into_pyobject(py).unwrap().into_any().unbind()
-                }
+                crate::type_coercion::TYPE_INT => value
+                    .parse::<i64>()
+                    .unwrap_or(0)
+                    .into_pyobject(py)
+                    .unwrap()
+                    .into_any()
+                    .unbind(),
+                crate::type_coercion::TYPE_FLOAT => value
+                    .parse::<f64>()
+                    .unwrap_or(0.0)
+                    .into_pyobject(py)
+                    .unwrap()
+                    .into_any()
+                    .unbind(),
                 crate::type_coercion::TYPE_BOOL => {
-                    let is_true = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
-                    is_true.into_pyobject(py).unwrap().to_owned().unbind().into_any()
+                    let is_true =
+                        matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+                    is_true
+                        .into_pyobject(py)
+                        .unwrap()
+                        .to_owned()
+                        .unbind()
+                        .into_any()
                 }
                 _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
             };
@@ -751,7 +828,14 @@ pub async fn handle_request(
                     }
                 }
                 if let Some(fpath) = file_path {
-                    return build_file_response(&fpath, status, headers, skip_compression, is_head_request).await;
+                    return build_file_response(
+                        &fpath,
+                        status,
+                        headers,
+                        skip_compression,
+                        is_head_request,
+                    )
+                    .await;
                 } else {
                     // Non-file response path: body already copied within GIL scope above
                     // Use optimized response builder
@@ -794,7 +878,14 @@ pub async fn handle_request(
                         }
                     }
                     if let Some(fpath) = file_path {
-                        return build_file_response(&fpath, status, headers, skip_compression, is_head_request).await;
+                        return build_file_response(
+                            &fpath,
+                            status,
+                            headers,
+                            skip_compression,
+                            is_head_request,
+                        )
+                        .await;
                     } else {
                         let mut builder = HttpResponse::build(status);
                         for (k, v) in headers {
@@ -826,7 +917,8 @@ pub async fn handle_request(
                     })()
                     .unwrap_or(false);
                     // OPTIMIZATION: Use interned strings for attribute checks
-                    if !is_streaming && !obj.hasattr(pyo3::intern!(py, "content")).unwrap_or(false) {
+                    if !is_streaming && !obj.hasattr(pyo3::intern!(py, "content")).unwrap_or(false)
+                    {
                         return None;
                     }
                     let status_code: u16 = obj
@@ -891,9 +983,10 @@ pub async fn handle_request(
 
                             // Set skip-cors marker if @skip_middleware("cors") is used
                             if skip_cors {
-                                response
-                                    .headers_mut()
-                                    .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
+                                response.headers_mut().insert(
+                                    "x-bolt-skip-cors".parse().unwrap(),
+                                    "true".parse().unwrap(),
+                                );
                             }
 
                             // CORS headers will be added by CorsMiddleware
@@ -902,19 +995,17 @@ pub async fn handle_request(
 
                         // Use optimized SSE response builder (batches all SSE headers)
                         let final_content_obj = content_obj;
-                        let mut builder = response_builder::build_sse_response(
-                            status,
-                            headers,
-                            skip_compression,
-                        );
+                        let mut builder =
+                            response_builder::build_sse_response(status, headers, skip_compression);
                         let stream = create_sse_stream(final_content_obj, is_async_generator);
                         let mut response = builder.streaming(stream);
 
                         // Set skip-cors marker if @skip_middleware("cors") is used
                         if skip_cors {
-                            response
-                                .headers_mut()
-                                .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
+                            response.headers_mut().insert(
+                                "x-bolt-skip-cors".parse().unwrap(),
+                                "true".parse().unwrap(),
+                            );
                         }
 
                         // CORS headers will be added by CorsMiddleware

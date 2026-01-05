@@ -41,8 +41,9 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         start_server_async,
     };
     use crate::testing::{
-        create_test_app, destroy_test_app, handle_test_websocket, register_test_middleware_metadata,
-        register_test_routes, register_test_websocket_routes, test_request,
+        create_test_app, destroy_test_app, handle_test_websocket,
+        register_test_middleware_metadata, register_test_routes, register_test_websocket_routes,
+        test_request,
     };
 
     // Production server functions

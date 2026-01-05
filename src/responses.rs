@@ -2,7 +2,6 @@
 ///
 /// Inspired by Bun/uWebSockets zero-copy patterns, these responses are
 /// stored as static byte slices to eliminate allocations in hot paths.
-
 use actix_web::HttpResponse;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;

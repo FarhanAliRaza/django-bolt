@@ -192,9 +192,15 @@ impl Router {
                 handler,
                 handler_id,
             };
-            method_router.dynamic_router.insert(&converted_path, route).map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("Failed to register route: {}", e))
-            })?;
+            method_router
+                .dynamic_router
+                .insert(&converted_path, route)
+                .map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "Failed to register route: {}",
+                        e
+                    ))
+                })?;
         }
 
         Ok(())

@@ -40,7 +40,10 @@ pub fn convert_python_chunk(value: &Bound<'_, PyAny>) -> Option<Bytes> {
     }
     // OPTIMIZATION: Use interned strings for attribute checks
     let py = value.py();
-    if value.hasattr(pyo3::intern!(py, "__bytes__")).unwrap_or(false) {
+    if value
+        .hasattr(pyo3::intern!(py, "__bytes__"))
+        .unwrap_or(false)
+    {
         if let Ok(buffer) = value.call_method0(pyo3::intern!(py, "__bytes__")) {
             if let Ok(py_bytes) = buffer.cast::<PyBytes>() {
                 return Some(Bytes::copy_from_slice(py_bytes.as_bytes()));
@@ -103,7 +106,6 @@ fn create_python_stream_with_config(
     let resolved_target = Python::attach(|py| content.clone_ref(py));
     let is_async_iter = is_async_from_metadata;
 
-
     let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(channel_capacity);
     let resolved_target_final = Python::attach(|py| resolved_target.clone_ref(py));
     let is_async_final = is_async_iter;
@@ -133,7 +135,6 @@ fn create_python_stream_with_config(
                     None
                 }
             });
-
 
             if async_iter.is_none() {
                 let _ = tx
@@ -170,7 +171,10 @@ fn create_python_stream_with_config(
                     };
                     for _ in 0..iterations {
                         // OPTIMIZATION: Use interned string for __anext__
-                        match async_iter.bind(py).call_method0(pyo3::intern!(py, "__anext__")) {
+                        match async_iter
+                            .bind(py)
+                            .call_method0(pyo3::intern!(py, "__anext__"))
+                        {
                             Ok(awaitable) => {
                                 match pyo3_async_runtimes::into_future_with_locals(
                                     locals, awaitable,
@@ -191,7 +195,6 @@ fn create_python_stream_with_config(
                         }
                     }
                 });
-
 
                 if batch_futures.len() < current_batch_size / 2 {
                     consecutive_small_batches += 1;
@@ -234,8 +237,13 @@ fn create_python_stream_with_config(
                                     let close_result = Python::attach(|py| {
                                         let iter_bound = async_iter.bind(py);
                                         // OPTIMIZATION: Use interned string for aclose
-                                        if iter_bound.hasattr(pyo3::intern!(py, "aclose")).unwrap_or(false) {
-                                            if let Ok(awaitable) = iter_bound.call_method0(pyo3::intern!(py, "aclose")) {
+                                        if iter_bound
+                                            .hasattr(pyo3::intern!(py, "aclose"))
+                                            .unwrap_or(false)
+                                        {
+                                            if let Ok(awaitable) =
+                                                iter_bound.call_method0(pyo3::intern!(py, "aclose"))
+                                            {
                                                 if let Some(locals) = TASK_LOCALS.get() {
                                                     return pyo3_async_runtimes::into_future_with_locals(locals, awaitable).ok();
                                                 } else {
@@ -277,10 +285,14 @@ fn create_python_stream_with_config(
             let close_result = Python::attach(|py| {
                 let iter_bound = async_iter.bind(py);
                 // OPTIMIZATION: Use interned string for aclose
-                if iter_bound.hasattr(pyo3::intern!(py, "aclose")).unwrap_or(false) {
+                if iter_bound
+                    .hasattr(pyo3::intern!(py, "aclose"))
+                    .unwrap_or(false)
+                {
                     if let Ok(awaitable) = iter_bound.call_method0(pyo3::intern!(py, "aclose")) {
                         if let Some(locals) = TASK_LOCALS.get() {
-                            return pyo3_async_runtimes::into_future_with_locals(locals, awaitable).ok();
+                            return pyo3_async_runtimes::into_future_with_locals(locals, awaitable)
+                                .ok();
                         } else {
                             eprintln!("[SSE WARNING] Unable to get task locals for async generator cleanup at end of stream");
                         }
@@ -292,10 +304,12 @@ fn create_python_stream_with_config(
             });
             if let Some(close_future) = close_result {
                 if let Err(e) = close_future.await {
-                    eprintln!("[SSE WARNING] Error during async generator cleanup at end of stream: {}", e);
+                    eprintln!(
+                        "[SSE WARNING] Error during async generator cleanup at end of stream: {}",
+                        e
+                    );
                 }
             }
-
         });
 
         // Async streaming successful, return stream
@@ -321,7 +335,10 @@ fn create_python_stream_with_config(
         let current_threads = ACTIVE_SYNC_STREAMING_THREADS.load(Ordering::Relaxed);
 
         if current_threads >= max_threads {
-            eprintln!("[SSE WARNING] Sync streaming thread limit reached: {} >= {}", current_threads, max_threads);
+            eprintln!(
+                "[SSE WARNING] Sync streaming thread limit reached: {} >= {}",
+                current_threads, max_threads
+            );
             // Spawn async task to send retry directive (can't use blocking_send from runtime)
             tokio::spawn({
                 let tx_clone = tx.clone();

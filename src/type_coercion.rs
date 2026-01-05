@@ -163,11 +163,7 @@ fn parse_datetime(value: &str) -> Result<CoercedValue, String> {
 
 /// Parse time string supporting multiple formats
 fn parse_time(value: &str) -> Result<CoercedValue, String> {
-    let formats = [
-        "%H:%M:%S%.f",
-        "%H:%M:%S",
-        "%H:%M",
-    ];
+    let formats = ["%H:%M:%S%.f", "%H:%M:%S", "%H:%M"];
 
     for fmt in &formats {
         if let Ok(time) = NaiveTime::parse_from_str(value, fmt) {
@@ -216,37 +212,80 @@ mod tests {
 
     #[test]
     fn test_coerce_int() {
-        assert!(matches!(coerce_param("42", TYPE_INT), Ok(CoercedValue::Int(42))));
-        assert!(matches!(coerce_param("-123", TYPE_INT), Ok(CoercedValue::Int(-123))));
+        assert!(matches!(
+            coerce_param("42", TYPE_INT),
+            Ok(CoercedValue::Int(42))
+        ));
+        assert!(matches!(
+            coerce_param("-123", TYPE_INT),
+            Ok(CoercedValue::Int(-123))
+        ));
         assert!(coerce_param("abc", TYPE_INT).is_err());
     }
 
     #[test]
     fn test_coerce_float() {
-        assert!(matches!(coerce_param("3.14", TYPE_FLOAT), Ok(CoercedValue::Float(f)) if (f - 3.14).abs() < 0.001));
-        assert!(matches!(coerce_param("-2.5", TYPE_FLOAT), Ok(CoercedValue::Float(f)) if (f + 2.5).abs() < 0.001));
+        assert!(
+            matches!(coerce_param("3.14", TYPE_FLOAT), Ok(CoercedValue::Float(f)) if (f - 3.14).abs() < 0.001)
+        );
+        assert!(
+            matches!(coerce_param("-2.5", TYPE_FLOAT), Ok(CoercedValue::Float(f)) if (f + 2.5).abs() < 0.001)
+        );
         assert!(coerce_param("not_a_float", TYPE_FLOAT).is_err());
     }
 
     #[test]
     fn test_coerce_bool() {
-        assert!(matches!(coerce_param("true", TYPE_BOOL), Ok(CoercedValue::Bool(true))));
-        assert!(matches!(coerce_param("True", TYPE_BOOL), Ok(CoercedValue::Bool(true))));
-        assert!(matches!(coerce_param("1", TYPE_BOOL), Ok(CoercedValue::Bool(true))));
-        assert!(matches!(coerce_param("yes", TYPE_BOOL), Ok(CoercedValue::Bool(true))));
-        assert!(matches!(coerce_param("on", TYPE_BOOL), Ok(CoercedValue::Bool(true))));
+        assert!(matches!(
+            coerce_param("true", TYPE_BOOL),
+            Ok(CoercedValue::Bool(true))
+        ));
+        assert!(matches!(
+            coerce_param("True", TYPE_BOOL),
+            Ok(CoercedValue::Bool(true))
+        ));
+        assert!(matches!(
+            coerce_param("1", TYPE_BOOL),
+            Ok(CoercedValue::Bool(true))
+        ));
+        assert!(matches!(
+            coerce_param("yes", TYPE_BOOL),
+            Ok(CoercedValue::Bool(true))
+        ));
+        assert!(matches!(
+            coerce_param("on", TYPE_BOOL),
+            Ok(CoercedValue::Bool(true))
+        ));
 
-        assert!(matches!(coerce_param("false", TYPE_BOOL), Ok(CoercedValue::Bool(false))));
-        assert!(matches!(coerce_param("False", TYPE_BOOL), Ok(CoercedValue::Bool(false))));
-        assert!(matches!(coerce_param("0", TYPE_BOOL), Ok(CoercedValue::Bool(false))));
-        assert!(matches!(coerce_param("no", TYPE_BOOL), Ok(CoercedValue::Bool(false))));
-        assert!(matches!(coerce_param("off", TYPE_BOOL), Ok(CoercedValue::Bool(false))));
+        assert!(matches!(
+            coerce_param("false", TYPE_BOOL),
+            Ok(CoercedValue::Bool(false))
+        ));
+        assert!(matches!(
+            coerce_param("False", TYPE_BOOL),
+            Ok(CoercedValue::Bool(false))
+        ));
+        assert!(matches!(
+            coerce_param("0", TYPE_BOOL),
+            Ok(CoercedValue::Bool(false))
+        ));
+        assert!(matches!(
+            coerce_param("no", TYPE_BOOL),
+            Ok(CoercedValue::Bool(false))
+        ));
+        assert!(matches!(
+            coerce_param("off", TYPE_BOOL),
+            Ok(CoercedValue::Bool(false))
+        ));
     }
 
     #[test]
     fn test_coerce_uuid() {
         let uuid_str = "550e8400-e29b-41d4-a716-446655440000";
-        assert!(matches!(coerce_param(uuid_str, TYPE_UUID), Ok(CoercedValue::Uuid(_))));
+        assert!(matches!(
+            coerce_param(uuid_str, TYPE_UUID),
+            Ok(CoercedValue::Uuid(_))
+        ));
         assert!(coerce_param("not-a-uuid", TYPE_UUID).is_err());
     }
 
@@ -275,8 +314,14 @@ mod tests {
 
     #[test]
     fn test_coerce_decimal() {
-        assert!(matches!(coerce_param("123.45", TYPE_DECIMAL), Ok(CoercedValue::Decimal(_))));
-        assert!(matches!(coerce_param("-99.99", TYPE_DECIMAL), Ok(CoercedValue::Decimal(_))));
+        assert!(matches!(
+            coerce_param("123.45", TYPE_DECIMAL),
+            Ok(CoercedValue::Decimal(_))
+        ));
+        assert!(matches!(
+            coerce_param("-99.99", TYPE_DECIMAL),
+            Ok(CoercedValue::Decimal(_))
+        ));
         assert!(coerce_param("not_decimal", TYPE_DECIMAL).is_err());
     }
 }

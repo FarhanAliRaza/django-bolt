@@ -102,11 +102,7 @@ impl ValidationError {
         }
     }
 
-    pub fn invalid_content_type(
-        field: &str,
-        allowed_types: &[String],
-        actual_type: &str,
-    ) -> Self {
+    pub fn invalid_content_type(field: &str, allowed_types: &[String], actual_type: &str) -> Self {
         let mut ctx = HashMap::new();
         ctx.insert(
             "allowed_types".to_string(),
@@ -135,7 +131,10 @@ impl ValidationError {
 
     pub fn type_coercion_error(field: &str, expected_type: &str, error_msg: &str) -> Self {
         let mut ctx = HashMap::new();
-        ctx.insert("expected_type".to_string(), serde_json::json!(expected_type));
+        ctx.insert(
+            "expected_type".to_string(),
+            serde_json::json!(expected_type),
+        );
         ctx.insert("error".to_string(), serde_json::json!(error_msg));
         ValidationError {
             error_type: "type_error".to_string(),
@@ -170,14 +169,13 @@ pub fn parse_urlencoded(
     let mut result = HashMap::new();
 
     // Parse URL-encoded body
-    let parsed: Vec<(String, String)> = serde_urlencoded::from_bytes(body).map_err(|e| {
-        ValidationError {
+    let parsed: Vec<(String, String)> =
+        serde_urlencoded::from_bytes(body).map_err(|e| ValidationError {
             error_type: "parse_error".to_string(),
             loc: vec!["body".to_string()],
             msg: format!("Failed to parse form data: {}", e),
             ctx: HashMap::new(),
-        }
-    })?;
+        })?;
 
     // Group values by key (handle multiple values for same key)
     let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
@@ -417,14 +415,18 @@ fn validate_file(
     // Check max_size
     if let Some(max_size) = constraints.max_size {
         if file.size > max_size {
-            return Err(ValidationError::file_too_large(field_name, max_size, file.size));
+            return Err(ValidationError::file_too_large(
+                field_name, max_size, file.size,
+            ));
         }
     }
 
     // Check min_size
     if let Some(min_size) = constraints.min_size {
         if file.size < min_size {
-            return Err(ValidationError::file_too_small(field_name, min_size, file.size));
+            return Err(ValidationError::file_too_small(
+                field_name, min_size, file.size,
+            ));
         }
     }
 
@@ -525,7 +527,10 @@ mod tests {
             Some(CoercedValue::String(s)) if s == "John"
         ));
         assert!(matches!(result.get("age"), Some(CoercedValue::Int(30))));
-        assert!(matches!(result.get("active"), Some(CoercedValue::Bool(true))));
+        assert!(matches!(
+            result.get("active"),
+            Some(CoercedValue::Bool(true))
+        ));
     }
 
     #[test]

@@ -2,7 +2,6 @@
 ///
 /// Reduces the number of mutations on HttpResponse::Builder
 /// by batching operations and pre-allocating capacity.
-
 use actix_web::http::header::{HeaderName, HeaderValue};
 use actix_web::{http::StatusCode, HttpResponse, HttpResponseBuilder};
 
@@ -97,12 +96,8 @@ mod tests {
             ("x-custom".to_string(), "value".to_string()),
         ];
 
-        let response = build_response_with_headers(
-            StatusCode::OK,
-            headers,
-            false,
-            b"test".to_vec(),
-        );
+        let response =
+            build_response_with_headers(StatusCode::OK, headers, false, b"test".to_vec());
 
         assert_eq!(response.status(), StatusCode::OK);
     }

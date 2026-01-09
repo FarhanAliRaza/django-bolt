@@ -40,11 +40,7 @@ static TIME_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 fn get_uuid_class(py: Python<'_>) -> &Py<PyAny> {
     UUID_CLASS.get_or_init(py, || {
-        py.import("uuid")
-            .unwrap()
-            .getattr("UUID")
-            .unwrap()
-            .unbind()
+        py.import("uuid").unwrap().getattr("UUID").unwrap().unbind()
     })
 }
 
@@ -257,14 +253,10 @@ pub fn coerced_value_to_py(py: Python<'_>, value: &CoercedValue) -> Py<PyAny> {
         CoercedValue::String(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
 
         // UUID: construct Python uuid.UUID object
-        CoercedValue::Uuid(v) => get_uuid_class(py)
-            .call1(py, (v.to_string(),))
-            .unwrap(),
+        CoercedValue::Uuid(v) => get_uuid_class(py).call1(py, (v.to_string(),)).unwrap(),
 
         // Decimal: construct Python decimal.Decimal object
-        CoercedValue::Decimal(v) => get_decimal_class(py)
-            .call1(py, (v.to_string(),))
-            .unwrap(),
+        CoercedValue::Decimal(v) => get_decimal_class(py).call1(py, (v.to_string(),)).unwrap(),
 
         // DateTime (with timezone): construct Python datetime.datetime
         CoercedValue::DateTime(v) => {
@@ -447,7 +439,9 @@ pub async fn handle_request(
     // This validates parameter types before GIL acquisition, returning 422 for invalid types
     // Performance: Eliminates Python's convert_primitive() overhead for invalid requests
     if let Some(ref route_meta) = route_metadata {
-        if let Some(response) = validate_typed_params(&path_params, &query_params, &route_meta.param_types) {
+        if let Some(response) =
+            validate_typed_params(&path_params, &query_params, &route_meta.param_types)
+        {
             return response;
         }
     }

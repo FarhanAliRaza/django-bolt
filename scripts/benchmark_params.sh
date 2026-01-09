@@ -89,7 +89,7 @@ echo ""
 
 # URL-encoded form - existing endpoint (name, age int, email)
 FORM_SIMPLE=$(mktemp)
-echo "name=TestUser&age=25&email=test%40example.com" > "$FORM_SIMPLE"
+printf '%s' "name=TestUser&age=25&email=test%40example.com" > "$FORM_SIMPLE"
 run_bench_post "URL-Encoded Form - 3 fields (/form)" \
     "http://$HOST:$PORT/form" \
     "application/x-www-form-urlencoded" \
@@ -98,7 +98,7 @@ rm -f "$FORM_SIMPLE"
 
 # URL-encoded form with typed params (name, age int, score float, active bool)
 FORM_TYPED=$(mktemp)
-echo "name=TestUser&age=25&score=98.5&active=true" > "$FORM_TYPED"
+printf '%s' "name=TestUser&age=25&score=98.5&active=true" > "$FORM_TYPED"
 run_bench_post "URL-Encoded Form - Typed int/float/bool (/bench/form/typed)" \
     "http://$HOST:$PORT/bench/form/typed" \
     "application/x-www-form-urlencoded" \
@@ -107,7 +107,7 @@ rm -f "$FORM_TYPED"
 
 # URL-encoded form with 10 fields
 FORM_LARGE=$(mktemp)
-echo "field1=value1&field2=value2&field3=value3&field4=value4&field5=value5&num1=100&num2=200&num3=3.14&flag1=true&flag2=false" > "$FORM_LARGE"
+printf '%s' "field1=value1&field2=value2&field3=value3&field4=value4&field5=value5&num1=100&num2=200&num3=3.14&flag1=true&flag2=false" > "$FORM_LARGE"
 run_bench_post "URL-Encoded Form - 10 fields (/bench/form/large)" \
     "http://$HOST:$PORT/bench/form/large" \
     "application/x-www-form-urlencoded" \

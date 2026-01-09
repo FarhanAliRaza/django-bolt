@@ -11,6 +11,10 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 use uuid::Uuid;
 
+/// Maximum allowed length for parameter values (8KB default)
+/// Prevents memory exhaustion attacks from extremely long parameters
+pub const MAX_PARAM_LENGTH: usize = 8192;
+
 /// Type hint constants (must match Python's get_type_hint_id() in compiler.py)
 pub const TYPE_INT: u8 = 1;
 pub const TYPE_FLOAT: u8 = 2;
@@ -69,6 +73,15 @@ impl CoercedValue {
 /// * `Ok(CoercedValue)` - Successfully coerced value
 /// * `Err(String)` - Error message describing the coercion failure
 pub fn coerce_param(value: &str, type_hint: u8) -> Result<CoercedValue, String> {
+    // Security: Reject excessively long parameters to prevent memory exhaustion
+    if value.len() > MAX_PARAM_LENGTH {
+        return Err(format!(
+            "Parameter too long: {} bytes (max {} bytes)",
+            value.len(),
+            MAX_PARAM_LENGTH
+        ));
+    }
+
     match type_hint {
         TYPE_INT => value
             .parse::<i64>()
@@ -378,5 +391,18 @@ mod tests {
             Ok(CoercedValue::Decimal(_))
         ));
         assert!(coerce_param("not_decimal", TYPE_DECIMAL).is_err());
+    }
+
+    #[test]
+    fn test_param_length_limit() {
+        // Valid length should work
+        let valid = "a".repeat(MAX_PARAM_LENGTH);
+        assert!(coerce_param(&valid, TYPE_STRING).is_ok());
+
+        // Exceeding limit should fail
+        let too_long = "a".repeat(MAX_PARAM_LENGTH + 1);
+        let result = coerce_param(&too_long, TYPE_STRING);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Parameter too long"));
     }
 }

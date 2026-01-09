@@ -569,7 +569,9 @@ async fn handle_test_request_internal(
 
     // Validate typed parameters before GIL acquisition
     if let Some(ref meta) = route_meta {
-        if let Some(response) = validate_typed_params(&path_params, &query_params, &meta.param_types) {
+        if let Some(response) =
+            validate_typed_params(&path_params, &query_params, &meta.param_types)
+        {
             return response;
         }
     }
@@ -775,9 +777,8 @@ async fn handle_test_request_internal(
 
         // Create form_map and files_map from form parsing result
         let (form_map_dict, files_map_dict) = if let Some(ref result) = form_result {
-            form_result_to_py(py, result).unwrap_or_else(|_| {
-                (PyDict::new(py).unbind(), PyDict::new(py).unbind())
-            })
+            form_result_to_py(py, result)
+                .unwrap_or_else(|_| (PyDict::new(py).unbind(), PyDict::new(py).unbind()))
         } else {
             (PyDict::new(py).unbind(), PyDict::new(py).unbind())
         };

@@ -222,13 +222,7 @@ pub async fn parse_multipart(
     let mut part_count = 0;
 
     while let Some(item) = payload.next().await {
-        let mut field = item.map_err(|e| ValidationError {
-            error_type: "multipart_error".to_string(),
-            loc: vec!["body".to_string()],
-            msg: format!("Failed to read multipart field: {}", e),
-            ctx: HashMap::new(),
-        })?;
-
+        // Security: Check part count BEFORE expensive field parsing
         part_count += 1;
         if part_count > max_parts {
             return Err(ValidationError {
@@ -238,6 +232,13 @@ pub async fn parse_multipart(
                 ctx: HashMap::new(),
             });
         }
+
+        let mut field = item.map_err(|e| ValidationError {
+            error_type: "multipart_error".to_string(),
+            loc: vec!["body".to_string()],
+            msg: format!("Failed to read multipart field: {}", e),
+            ctx: HashMap::new(),
+        })?;
 
         // Get content disposition - skip if not present
         let Some(content_disposition) = field.content_disposition() else {

@@ -665,10 +665,10 @@ pub async fn handle_request(
             .unwrap_or_default();
 
         // Create typed dicts - convert values to Python types
-        let path_params_dict = params_to_py_dict(py, &path_params, &param_types);
-        let query_params_dict = params_to_py_dict(py, &query_params, &param_types);
-        let headers_dict = params_to_py_dict(py, &headers_for_python, &param_types);
-        let cookies_dict = params_to_py_dict(py, &cookies, &param_types);
+        let path_params_dict = params_to_py_dict(py, &path_params, &param_types)?;
+        let query_params_dict = params_to_py_dict(py, &query_params, &param_types)?;
+        let headers_dict = params_to_py_dict(py, &headers_for_python, &param_types)?;
+        let cookies_dict = params_to_py_dict(py, &cookies, &param_types)?;
 
         // Create form_map and files_map from form parsing result
         let (form_map_dict, files_map_dict) = if let Some(ref result) = form_result {

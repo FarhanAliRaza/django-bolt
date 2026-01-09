@@ -8,7 +8,7 @@ use ahash::AHashMap;
 use std::collections::HashMap;
 
 use crate::responses;
-use crate::type_coercion::{coerce_param, TYPE_STRING};
+use crate::type_coercion::{coerce_param, MAX_PARAM_LENGTH, TYPE_STRING};
 
 /// Validate path and query parameters against type hints.
 /// Returns Some(HttpResponse) if validation fails, None if all parameters are valid.
@@ -17,12 +17,19 @@ pub fn validate_typed_params(
     query_params: &AHashMap<String, String>,
     param_types: &HashMap<String, u8>,
 ) -> Option<HttpResponse> {
-    if param_types.is_empty() {
-        return None;
-    }
-
-    // Validate path parameters
+    // Validate path parameters - always check length, type validation for non-strings
     for (name, value) in path_params {
+        // Security: Always validate length for ALL parameters (including strings)
+        if value.len() > MAX_PARAM_LENGTH {
+            return Some(responses::error_422_validation(&format!(
+                "Path parameter '{}': Parameter too long: {} bytes (max {} bytes)",
+                name,
+                value.len(),
+                MAX_PARAM_LENGTH
+            )));
+        }
+
+        // Type validation for non-string types
         if let Some(&type_hint) = param_types.get(name) {
             if type_hint != TYPE_STRING {
                 if let Err(error_msg) = coerce_param(value, type_hint) {
@@ -35,8 +42,19 @@ pub fn validate_typed_params(
         }
     }
 
-    // Validate query parameters
+    // Validate query parameters - always check length, type validation for non-strings
     for (name, value) in query_params {
+        // Security: Always validate length for ALL parameters (including strings)
+        if value.len() > MAX_PARAM_LENGTH {
+            return Some(responses::error_422_validation(&format!(
+                "Query parameter '{}': Parameter too long: {} bytes (max {} bytes)",
+                name,
+                value.len(),
+                MAX_PARAM_LENGTH
+            )));
+        }
+
+        // Type validation for non-string types
         if let Some(&type_hint) = param_types.get(name) {
             if type_hint != TYPE_STRING {
                 if let Err(error_msg) = coerce_param(value, type_hint) {

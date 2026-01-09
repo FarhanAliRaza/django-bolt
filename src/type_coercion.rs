@@ -5,7 +5,7 @@
 //! Performance improvement: ~100-500µs per parameter.
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use pyo3::types::PyDictMethods;
+use pyo3::types::{PyAnyMethods, PyDictMethods};
 use pyo3::IntoPyObject;
 use rust_decimal::Decimal;
 use std::str::FromStr;
@@ -96,12 +96,13 @@ pub fn coerce_param(value: &str, type_hint: u8) -> Result<CoercedValue, String> 
         TYPE_BOOL => {
             let lower = value.to_lowercase();
             let is_true = matches!(lower.as_str(), "true" | "1" | "yes" | "on");
-            let is_false = matches!(lower.as_str(), "false" | "0" | "no" | "off" | "");
+            let is_false = matches!(lower.as_str(), "false" | "0" | "no" | "off");
             if is_true {
                 Ok(CoercedValue::Bool(true))
             } else if is_false {
                 Ok(CoercedValue::Bool(false))
             } else {
+                // Empty string or invalid value - reject (don't silently convert to false)
                 Err(format!(
                     "Invalid boolean '{}': expected true/false/1/0/yes/no/on/off",
                     value
@@ -222,56 +223,167 @@ pub fn coerce_path_params(
 }
 
 /// Convert a string value to Python object based on type hint.
-/// This is the simplified version for basic types (int, float, bool, string).
+/// Handles all supported types including datetime, uuid, and decimal.
+/// Returns PyResult to properly handle validation errors.
 #[inline]
-pub fn coerce_to_py(py: pyo3::Python<'_>, value: &str, type_hint: u8) -> pyo3::Py<pyo3::PyAny> {
+pub fn coerce_to_py(
+    py: pyo3::Python<'_>,
+    value: &str,
+    type_hint: u8,
+) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
+    // Security: Validate length for ALL types (defense in depth)
+    if value.len() > MAX_PARAM_LENGTH {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Parameter too long: {} bytes (max {} bytes)",
+            value.len(),
+            MAX_PARAM_LENGTH
+        )));
+    }
+
     match type_hint {
-        TYPE_INT => value
+        TYPE_INT => Ok(value
             .parse::<i64>()
             .unwrap_or(0)
             .into_pyobject(py)
             .unwrap()
             .into_any()
-            .unbind(),
-        TYPE_FLOAT => value
+            .unbind()),
+        TYPE_FLOAT => Ok(value
             .parse::<f64>()
             .unwrap_or(0.0)
             .into_pyobject(py)
             .unwrap()
             .into_any()
-            .unbind(),
+            .unbind()),
         TYPE_BOOL => {
             let is_true = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
-            is_true
+            Ok(is_true
                 .into_pyobject(py)
                 .unwrap()
                 .to_owned()
                 .unbind()
-                .into_any()
+                .into_any())
         }
-        _ => value
+        TYPE_UUID => {
+            // Parse UUID in Rust, convert to Python uuid.UUID
+            match Uuid::parse_str(value) {
+                Ok(uuid) => {
+                    let uuid_module = py.import("uuid")?;
+                    let uuid_class = uuid_module.getattr("UUID")?;
+                    let py_uuid = uuid_class.call1((uuid.to_string(),))?;
+                    Ok(py_uuid.unbind())
+                }
+                Err(e) => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Invalid UUID '{}': {}",
+                    value, e
+                ))),
+            }
+        }
+        TYPE_DATETIME => {
+            // Parse datetime in Rust, convert to Python datetime
+            match parse_datetime(value) {
+                Ok(CoercedValue::DateTime(dt)) => {
+                    let datetime_module = py.import("datetime")?;
+                    let datetime_class = datetime_module.getattr("datetime")?;
+                    // Use fromisoformat for RFC3339 strings
+                    let py_dt = datetime_class.call_method1("fromisoformat", (dt.to_rfc3339(),))?;
+                    Ok(py_dt.unbind())
+                }
+                Ok(CoercedValue::NaiveDateTime(ndt)) => {
+                    let datetime_module = py.import("datetime")?;
+                    let datetime_class = datetime_module.getattr("datetime")?;
+                    // Format as ISO string for fromisoformat
+                    let py_dt =
+                        datetime_class.call_method1("fromisoformat", (ndt.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),))?;
+                    Ok(py_dt.unbind())
+                }
+                Ok(_) => {
+                    // Shouldn't happen, but fallback to string
+                    Ok(value
+                        .to_string()
+                        .into_pyobject(py)
+                        .unwrap()
+                        .into_any()
+                        .unbind())
+                }
+                Err(e) => Err(pyo3::exceptions::PyValueError::new_err(e)),
+            }
+        }
+        TYPE_DECIMAL => {
+            // Validate decimal in Rust, convert to Python Decimal
+            match Decimal::from_str(value) {
+                Ok(d) => {
+                    let decimal_module = py.import("decimal")?;
+                    let decimal_class = decimal_module.getattr("Decimal")?;
+                    let py_decimal = decimal_class.call1((d.to_string(),))?;
+                    Ok(py_decimal.unbind())
+                }
+                Err(e) => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Invalid decimal '{}': {}",
+                    value, e
+                ))),
+            }
+        }
+        TYPE_DATE => {
+            // Parse date in Rust, convert to Python date
+            match NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+                Ok(date) => {
+                    let datetime_module = py.import("datetime")?;
+                    let date_class = datetime_module.getattr("date")?;
+                    let py_date = date_class.call_method1("fromisoformat", (date.to_string(),))?;
+                    Ok(py_date.unbind())
+                }
+                Err(e) => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Invalid date '{}': {}",
+                    value, e
+                ))),
+            }
+        }
+        TYPE_TIME => {
+            // Parse time in Rust, convert to Python time
+            match parse_time(value) {
+                Ok(CoercedValue::Time(time)) => {
+                    let datetime_module = py.import("datetime")?;
+                    let time_class = datetime_module.getattr("time")?;
+                    let py_time = time_class.call_method1("fromisoformat", (time.to_string(),))?;
+                    Ok(py_time.unbind())
+                }
+                Ok(_) => {
+                    // Shouldn't happen, but fallback to string
+                    Ok(value
+                        .to_string()
+                        .into_pyobject(py)
+                        .unwrap()
+                        .into_any()
+                        .unbind())
+                }
+                Err(e) => Err(pyo3::exceptions::PyValueError::new_err(e)),
+            }
+        }
+        _ => Ok(value
             .to_string()
             .into_pyobject(py)
             .unwrap()
             .into_any()
-            .unbind(),
+            .unbind()),
     }
 }
 
 /// Convert a map of string params to a Python dict with type coercion.
 /// Used by both production handler and test handler.
+/// Returns PyResult to properly handle coercion errors.
 pub fn params_to_py_dict<'py>(
     py: pyo3::Python<'py>,
     params: &ahash::AHashMap<String, String>,
     param_types: &std::collections::HashMap<String, u8>,
-) -> pyo3::Bound<'py, pyo3::types::PyDict> {
+) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
     let dict = pyo3::types::PyDict::new(py);
     for (name, value) in params {
         let type_hint = param_types.get(name).copied().unwrap_or(TYPE_STRING);
-        let py_value = coerce_to_py(py, value, type_hint);
+        let py_value = coerce_to_py(py, value, type_hint)?;
         let _ = dict.set_item(name, py_value);
     }
-    dict
+    Ok(dict)
 }
 
 #[cfg(test)]

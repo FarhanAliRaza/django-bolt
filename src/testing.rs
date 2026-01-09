@@ -36,33 +36,9 @@ use actix_multipart::Multipart;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 
-use crate::form_parsing::FileContent;
-use crate::handler::coerced_value_to_py;
-use crate::type_coercion::{coerce_param, TYPE_STRING};
-
-/// Convert FileInfo to Python dict (for multipart file uploads)
-fn file_info_to_py(py: Python<'_>, file: &crate::form_parsing::FileInfo) -> PyResult<Py<PyDict>> {
-    use pyo3::types::PyBytes;
-
-    let dict = PyDict::new(py);
-    dict.set_item("filename", &file.filename)?;
-    dict.set_item("content_type", &file.content_type)?;
-    dict.set_item("size", file.size)?;
-
-    match &file.content {
-        FileContent::Memory(bytes) => {
-            dict.set_item("content", PyBytes::new(py, bytes))?;
-            dict.set_item("temp_path", py.None())?;
-        }
-        FileContent::Disk(temp_file) => {
-            // For disk-spooled files, pass the temp path instead of content
-            dict.set_item("content", py.None())?;
-            dict.set_item("temp_path", temp_file.path().to_string_lossy().to_string())?;
-        }
-    }
-
-    Ok(dict.unbind())
-}
+use crate::handler::{coerced_value_to_py, form_result_to_py};
+use crate::request_pipeline::validate_typed_params;
+use crate::type_coercion::{coerce_param, params_to_py_dict, TYPE_STRING};
 
 /// One-time initialization flag for async runtime
 static ASYNC_RUNTIME_INITIALIZED: std::sync::Once = std::sync::Once::new();
@@ -534,7 +510,7 @@ async fn handle_test_request_internal(
     use crate::router::parse_query_string;
     use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
     use actix_web::http::StatusCode;
-    use pyo3::types::{PyBytes, PyList, PyTuple};
+    use pyo3::types::{PyBytes, PyTuple};
 
     let method = req.method().as_str();
     let path = req.path();
@@ -593,34 +569,8 @@ async fn handle_test_request_internal(
 
     // Validate typed parameters before GIL acquisition
     if let Some(ref meta) = route_meta {
-        use crate::type_coercion::{coerce_param, TYPE_STRING};
-
-        // Validate path parameters
-        for (name, value) in &path_params {
-            if let Some(&type_hint) = meta.param_types.get(name) {
-                if type_hint != TYPE_STRING {
-                    if let Err(error_msg) = coerce_param(value, type_hint) {
-                        return responses::error_422_validation(&format!(
-                            "Path parameter '{}': {}",
-                            name, error_msg
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Validate query parameters
-        for (name, value) in &query_params {
-            if let Some(&type_hint) = meta.param_types.get(name) {
-                if type_hint != TYPE_STRING {
-                    if let Err(error_msg) = coerce_param(value, type_hint) {
-                        return responses::error_422_validation(&format!(
-                            "Query parameter '{}': {}",
-                            name, error_msg
-                        ));
-                    }
-                }
-            }
+        if let Some(response) = validate_typed_params(&path_params, &query_params, &meta.param_types) {
+            return response;
         }
     }
 
@@ -817,183 +767,17 @@ async fn handle_test_request_internal(
             .cloned()
             .unwrap_or_default();
 
-        // Create typed path_params dict - convert values to Python types
-        let path_params_dict = PyDict::new(py);
-        for (name, value) in &path_params {
-            let type_hint = param_types
-                .get(name)
-                .copied()
-                .unwrap_or(crate::type_coercion::TYPE_STRING);
-            let py_value: Py<PyAny> = match type_hint {
-                crate::type_coercion::TYPE_INT => value
-                    .parse::<i64>()
-                    .unwrap_or(0)
-                    .into_pyobject(py)
-                    .unwrap()
-                    .into_any()
-                    .unbind(),
-                crate::type_coercion::TYPE_FLOAT => value
-                    .parse::<f64>()
-                    .unwrap_or(0.0)
-                    .into_pyobject(py)
-                    .unwrap()
-                    .into_any()
-                    .unbind(),
-                crate::type_coercion::TYPE_BOOL => {
-                    let is_true =
-                        matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
-                    is_true
-                        .into_pyobject(py)
-                        .unwrap()
-                        .to_owned()
-                        .unbind()
-                        .into_any()
-                }
-                _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
-            };
-            let _ = path_params_dict.set_item(name, py_value);
-        }
-
-        // Create typed query_params dict - convert values to Python types
-        let query_params_dict = PyDict::new(py);
-        for (name, value) in &query_params {
-            let type_hint = param_types
-                .get(name)
-                .copied()
-                .unwrap_or(crate::type_coercion::TYPE_STRING);
-            let py_value: Py<PyAny> = match type_hint {
-                crate::type_coercion::TYPE_INT => value
-                    .parse::<i64>()
-                    .unwrap_or(0)
-                    .into_pyobject(py)
-                    .unwrap()
-                    .into_any()
-                    .unbind(),
-                crate::type_coercion::TYPE_FLOAT => value
-                    .parse::<f64>()
-                    .unwrap_or(0.0)
-                    .into_pyobject(py)
-                    .unwrap()
-                    .into_any()
-                    .unbind(),
-                crate::type_coercion::TYPE_BOOL => {
-                    let is_true =
-                        matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
-                    is_true
-                        .into_pyobject(py)
-                        .unwrap()
-                        .to_owned()
-                        .unbind()
-                        .into_any()
-                }
-                _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
-            };
-            let _ = query_params_dict.set_item(name, py_value);
-        }
-
-        // Create typed headers dict - convert values to Python types
-        let headers_dict = PyDict::new(py);
-        for (name, value) in &headers_for_python {
-            let type_hint = param_types
-                .get(name)
-                .copied()
-                .unwrap_or(crate::type_coercion::TYPE_STRING);
-            let py_value: Py<PyAny> = match type_hint {
-                crate::type_coercion::TYPE_INT => value
-                    .parse::<i64>()
-                    .unwrap_or(0)
-                    .into_pyobject(py)
-                    .unwrap()
-                    .into_any()
-                    .unbind(),
-                crate::type_coercion::TYPE_FLOAT => value
-                    .parse::<f64>()
-                    .unwrap_or(0.0)
-                    .into_pyobject(py)
-                    .unwrap()
-                    .into_any()
-                    .unbind(),
-                crate::type_coercion::TYPE_BOOL => {
-                    let is_true =
-                        matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
-                    is_true
-                        .into_pyobject(py)
-                        .unwrap()
-                        .to_owned()
-                        .unbind()
-                        .into_any()
-                }
-                _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
-            };
-            let _ = headers_dict.set_item(name, py_value);
-        }
-
-        // Create typed cookies dict - convert values to Python types
-        let cookies_dict = PyDict::new(py);
-        for (name, value) in &cookies {
-            let type_hint = param_types
-                .get(name)
-                .copied()
-                .unwrap_or(crate::type_coercion::TYPE_STRING);
-            let py_value: Py<PyAny> = match type_hint {
-                crate::type_coercion::TYPE_INT => value
-                    .parse::<i64>()
-                    .unwrap_or(0)
-                    .into_pyobject(py)
-                    .unwrap()
-                    .into_any()
-                    .unbind(),
-                crate::type_coercion::TYPE_FLOAT => value
-                    .parse::<f64>()
-                    .unwrap_or(0.0)
-                    .into_pyobject(py)
-                    .unwrap()
-                    .into_any()
-                    .unbind(),
-                crate::type_coercion::TYPE_BOOL => {
-                    let is_true =
-                        matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
-                    is_true
-                        .into_pyobject(py)
-                        .unwrap()
-                        .to_owned()
-                        .unbind()
-                        .into_any()
-                }
-                _ => value.clone().into_pyobject(py).unwrap().into_any().unbind(),
-            };
-            let _ = cookies_dict.set_item(name, py_value);
-        }
+        // Create typed dicts - convert values to Python types
+        let path_params_dict = params_to_py_dict(py, &path_params, &param_types);
+        let query_params_dict = params_to_py_dict(py, &query_params, &param_types);
+        let headers_dict = params_to_py_dict(py, &headers_for_python, &param_types);
+        let cookies_dict = params_to_py_dict(py, &cookies, &param_types);
 
         // Create form_map and files_map from form parsing result
         let (form_map_dict, files_map_dict) = if let Some(ref result) = form_result {
-            // Convert form_map
-            let form_dict = PyDict::new(py);
-            for (key, value) in &result.form_map {
-                let py_value = coerced_value_to_py(py, value);
-                let _ = form_dict.set_item(key, py_value);
-            }
-
-            // Convert files_map - each field can have multiple files
-            let files_dict = PyDict::new(py);
-            for (field_name, files) in &result.files_map {
-                if files.len() == 1 {
-                    // Single file - store directly
-                    if let Ok(file_dict) = file_info_to_py(py, &files[0]) {
-                        let _ = files_dict.set_item(field_name, file_dict);
-                    }
-                } else {
-                    // Multiple files - store as list
-                    let file_list = PyList::empty(py);
-                    for file in files {
-                        if let Ok(file_dict) = file_info_to_py(py, file) {
-                            let _ = file_list.append(file_dict);
-                        }
-                    }
-                    let _ = files_dict.set_item(field_name, file_list);
-                }
-            }
-            (form_dict.unbind(), files_dict.unbind())
+            form_result_to_py(py, result).unwrap_or_else(|_| {
+                (PyDict::new(py).unbind(), PyDict::new(py).unbind())
+            })
         } else {
             (PyDict::new(py).unbind(), PyDict::new(py).unbind())
         };

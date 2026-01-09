@@ -9,6 +9,7 @@ mod metadata;
 mod middleware;
 mod permissions;
 mod request;
+mod request_pipeline;
 mod response_builder;
 mod responses;
 mod router;

@@ -5,6 +5,8 @@
 //! Performance improvement: ~100-500µs per parameter.
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use pyo3::types::PyDictMethods;
+use pyo3::IntoPyObject;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use uuid::Uuid;
@@ -204,6 +206,59 @@ pub fn coerce_path_params(
     }
 
     Ok(result)
+}
+
+/// Convert a string value to Python object based on type hint.
+/// This is the simplified version for basic types (int, float, bool, string).
+#[inline]
+pub fn coerce_to_py(py: pyo3::Python<'_>, value: &str, type_hint: u8) -> pyo3::Py<pyo3::PyAny> {
+    match type_hint {
+        TYPE_INT => value
+            .parse::<i64>()
+            .unwrap_or(0)
+            .into_pyobject(py)
+            .unwrap()
+            .into_any()
+            .unbind(),
+        TYPE_FLOAT => value
+            .parse::<f64>()
+            .unwrap_or(0.0)
+            .into_pyobject(py)
+            .unwrap()
+            .into_any()
+            .unbind(),
+        TYPE_BOOL => {
+            let is_true = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+            is_true
+                .into_pyobject(py)
+                .unwrap()
+                .to_owned()
+                .unbind()
+                .into_any()
+        }
+        _ => value
+            .to_string()
+            .into_pyobject(py)
+            .unwrap()
+            .into_any()
+            .unbind(),
+    }
+}
+
+/// Convert a map of string params to a Python dict with type coercion.
+/// Used by both production handler and test handler.
+pub fn params_to_py_dict<'py>(
+    py: pyo3::Python<'py>,
+    params: &ahash::AHashMap<String, String>,
+    param_types: &std::collections::HashMap<String, u8>,
+) -> pyo3::Bound<'py, pyo3::types::PyDict> {
+    let dict = pyo3::types::PyDict::new(py);
+    for (name, value) in params {
+        let type_hint = param_types.get(name).copied().unwrap_or(TYPE_STRING);
+        let py_value = coerce_to_py(py, value, type_hint);
+        let _ = dict.set_item(name, py_value);
+    }
+    dict
 }
 
 #[cfg(test)]

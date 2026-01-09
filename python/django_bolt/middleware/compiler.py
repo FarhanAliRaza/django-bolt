@@ -7,7 +7,7 @@ import decimal
 import logging
 import uuid
 from collections.abc import Callable
-from typing import Any, get_origin
+from typing import Annotated, Any, get_args, get_origin
 
 import msgspec
 from django.conf import settings
@@ -48,6 +48,15 @@ def get_type_hint_id(annotation: Any) -> int:
 
     # Get base type if it's a generic
     origin = get_origin(unwrapped)
+
+    # Handle Annotated[T, ...] - extract the base type T
+    if origin is Annotated:
+        args = get_args(unwrapped)
+        if args:
+            # First arg is the actual type, rest are metadata
+            unwrapped = args[0]
+            origin = get_origin(unwrapped)
+
     if origin is not None:
         # For generic types like list[int], we can't coerce in Rust
         return TYPE_STRING

@@ -6,7 +6,6 @@ import contextlib
 import inspect
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs
 
 if TYPE_CHECKING:
     from .types import WebSocket
@@ -35,14 +34,9 @@ def build_websocket_request(scope: dict[str, Any]) -> dict[str, Any]:
     - cookies: request cookies
     - body: empty bytes (WebSocket has no request body at connect time)
     """
-    # Parse query string into dict
-    query_string = scope.get("query_string", b"")
-    if isinstance(query_string, bytes):
-        query_string = query_string.decode("utf-8", errors="replace")
-
-    parsed_qs = parse_qs(query_string, keep_blank_values=True)
-    # Convert lists to single values for simple access
-    query_map = {k: v[0] if len(v) == 1 else v for k, v in parsed_qs.items()}
+    # Use pre-coerced query_params from Rust scope (type coercion already done)
+    # Rust builds query_params with properly typed values (int, uuid, etc.)
+    query_map = scope.get("query_params", {})
 
     return {
         "params": scope.get("path_params", {}),

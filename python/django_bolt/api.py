@@ -445,6 +445,11 @@ class BoltAPI:
                 guards=guards,
                 auth=auth,
             )
+
+            # Add optimization flags and param_types to middleware metadata
+            # These enable Rust-side type coercion for path/query params
+            middleware_meta = add_optimization_flags_to_metadata(middleware_meta, meta)
+
             if middleware_meta:
                 self._handler_middleware[handler_id] = middleware_meta
                 # Store auth backend instances for user resolution

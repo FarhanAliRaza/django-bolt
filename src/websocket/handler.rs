@@ -12,9 +12,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use std::collections::HashMap;
+
+use crate::handler::coerced_value_to_py;
 use crate::metadata::CorsConfig;
 use crate::middleware::rate_limit::check_rate_limit;
 use crate::state::{AppState, ROUTE_METADATA, TASK_LOCALS};
+use crate::type_coercion::{coerce_param, TYPE_STRING};
 use crate::validation::{validate_auth_and_guards, AuthGuardResult};
 
 use super::actor::WebSocketActor;
@@ -71,14 +75,50 @@ pub fn is_websocket_upgrade(req: &HttpRequest) -> bool {
 }
 
 /// Build scope dict for Python WebSocket handler
+///
+/// Parses and coerces query and path parameters to typed Python objects
+/// using the same type coercion as HTTP handlers.
 fn build_scope(
     py: Python<'_>,
     req: &HttpRequest,
     path_params: &AHashMap<String, String>,
+    param_types: &HashMap<String, u8>,
 ) -> PyResult<Py<PyAny>> {
     let scope_dict = PyDict::new(py);
     scope_dict.set_item("type", "websocket")?;
     scope_dict.set_item("path", req.path())?;
+
+    // Parse and coerce query parameters
+    let query_dict = PyDict::new(py);
+    let query_string = req.query_string();
+    if !query_string.is_empty() {
+        for pair in query_string.split('&') {
+            if let Some((key, value)) = pair.split_once('=') {
+                let decoded_key = urlencoding::decode(key).unwrap_or_default();
+                let decoded_value = urlencoding::decode(value).unwrap_or_default();
+
+                // Get type hint and coerce
+                let type_hint = param_types
+                    .get(decoded_key.as_ref())
+                    .copied()
+                    .unwrap_or(TYPE_STRING);
+
+                match coerce_param(&decoded_value, type_hint) {
+                    Ok(coerced) => {
+                        let py_value = coerced_value_to_py(py, &coerced);
+                        query_dict.set_item(decoded_key.as_ref(), py_value)?;
+                    }
+                    Err(_) => {
+                        // Fall back to string on coercion error
+                        query_dict.set_item(decoded_key.as_ref(), decoded_value.as_ref())?;
+                    }
+                }
+            }
+        }
+    }
+    scope_dict.set_item("query_params", query_dict)?;
+
+    // Keep raw query_string for compatibility
     scope_dict.set_item("query_string", req.query_string().as_bytes())?;
 
     // Add headers as dict (FastAPI style)
@@ -91,10 +131,20 @@ fn build_scope(
     }
     scope_dict.set_item("headers", headers_dict)?;
 
-    // Add path params
+    // Coerce path params using type hints
     let params_dict = PyDict::new(py);
     for (k, v) in path_params.iter() {
-        params_dict.set_item(k.as_str(), v.as_str())?;
+        let type_hint = param_types.get(k).copied().unwrap_or(TYPE_STRING);
+        match coerce_param(v, type_hint) {
+            Ok(coerced) => {
+                let py_value = coerced_value_to_py(py, &coerced);
+                params_dict.set_item(k.as_str(), py_value)?;
+            }
+            Err(_) => {
+                // Fall back to string on coercion error
+                params_dict.set_item(k.as_str(), v.as_str())?;
+            }
+        }
     }
     scope_dict.set_item("path_params", params_dict)?;
 
@@ -489,8 +539,15 @@ pub async fn handle_websocket_upgrade_with_handler(
     // Create channels for bidirectional communication (configurable size)
     let (to_python_tx, to_python_rx) = mpsc::channel::<WsMessage>(config.channel_buffer_size);
 
+    // Get param_types from route metadata for type coercion
+    let param_types = ROUTE_METADATA
+        .get()
+        .and_then(|m| m.get(&handler_id))
+        .map(|m| m.param_types.clone())
+        .unwrap_or_default();
+
     // Build scope for Python - if this fails, decrement counter
-    let scope = match Python::attach(|py| build_scope(py, &req, &path_params)) {
+    let scope = match Python::attach(|py| build_scope(py, &req, &path_params, &param_types)) {
         Ok(s) => s,
         Err(e) => {
             // CRITICAL: Decrement counter on error to prevent resource leak

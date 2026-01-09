@@ -52,46 +52,18 @@ def get_msgspec_decoder(type_: Any) -> msgspec.json.Decoder:
     return _DECODER_CACHE[type_]
 
 
-def _coerce_if_string(value: Any, annotation: Any) -> Any:
-    """
-    Coerce string values to the expected type.
-
-    For HTTP: Rust pre-converts values, so this is a no-op.
-    For WebSocket: Values are strings from parse_qs, need Python coercion.
-    """
-    # Already typed (from Rust) - pass through
-    if not isinstance(value, str):
-        return value
-
-    tp = unwrap_optional(annotation)
-
-    # String target or unknown - pass through
-    if tp is str or tp is Any or tp is None or tp is inspect._empty:
-        return value
-
-    # String value needs conversion
-    if tp is bool:
-        return value.lower() in ("true", "1", "yes", "on")
-    if tp is int:
-        return int(value)
-    if tp is float:
-        return float(value)
-
-    return value
-
-
 def create_path_extractor(name: str, annotation: Any, alias: str | None = None) -> Callable:
     """Create a pre-compiled extractor for path parameters.
 
-    Note: Rust pre-converts values to typed Python objects (int, float, bool, str).
-    For WebSocket, values are strings and need Python coercion.
+    Note: Rust pre-converts values to typed Python objects (int, float, bool,
+    str, uuid.UUID, decimal.Decimal, datetime, date, time) for both HTTP and WebSocket.
     """
     key = alias or name
 
     def extract(params_map: dict[str, Any]) -> Any:
         if key not in params_map:
             raise HTTPException(status_code=422, detail=f"Missing required path parameter: {key}")
-        return _coerce_if_string(params_map[key], annotation)
+        return params_map[key]
 
     return extract
 
@@ -103,8 +75,8 @@ def create_query_extractor(name: str, annotation: Any, default: Any, alias: str 
     When annotation is a msgspec.Struct or Serializer, extracts all struct
     fields from the query parameters and constructs the struct instance.
 
-    Note: Rust pre-converts values to typed Python objects (int, float, bool, str).
-    For WebSocket, values are strings and need Python coercion.
+    Note: Rust pre-converts values to typed Python objects (int, float, bool,
+    str, uuid.UUID, decimal.Decimal, datetime, date, time) for both HTTP and WebSocket.
     """
     # Check if annotation is a Struct/Serializer type
     unwrapped = unwrap_optional(annotation)
@@ -120,14 +92,14 @@ def create_query_extractor(name: str, annotation: Any, default: Any, alias: str 
 
         def extract(query_map: dict[str, Any]) -> Any:
             if key in query_map:
-                return _coerce_if_string(query_map[key], annotation)
+                return query_map[key]
             return default_value
     else:
 
         def extract(query_map: dict[str, Any]) -> Any:
             if key not in query_map:
                 raise HTTPException(status_code=422, detail=f"Missing required query parameter: {key}")
-            return _coerce_if_string(query_map[key], annotation)
+            return query_map[key]
 
     return extract
 
@@ -139,8 +111,8 @@ def create_header_extractor(name: str, annotation: Any, default: Any, alias: str
     When annotation is a msgspec.Struct or Serializer, extracts all struct
     fields from the headers and constructs the struct instance.
 
-    Note: Rust pre-converts values to typed Python objects (int, float, bool, str).
-    For WebSocket, values are strings and need Python coercion.
+    Note: Rust pre-converts values to typed Python objects (int, float, bool,
+    str, uuid.UUID, decimal.Decimal, datetime, date, time) for both HTTP and WebSocket.
     """
     # Check if annotation is a Struct/Serializer type
     unwrapped = unwrap_optional(annotation)
@@ -158,14 +130,14 @@ def create_header_extractor(name: str, annotation: Any, default: Any, alias: str
 
         def extract(headers_map: dict[str, str]) -> Any:
             if key in headers_map:
-                return _coerce_if_string(headers_map[key], annotation)
+                return headers_map[key]
             return default_value
     else:
 
         def extract(headers_map: dict[str, str]) -> Any:
             if key not in headers_map:
                 raise HTTPException(status_code=422, detail=f"Missing required header: {key}")
-            return _coerce_if_string(headers_map[key], annotation)
+            return headers_map[key]
 
     return extract
 
@@ -177,8 +149,8 @@ def create_cookie_extractor(name: str, annotation: Any, default: Any, alias: str
     When annotation is a msgspec.Struct or Serializer, extracts all struct
     fields from the cookies and constructs the struct instance.
 
-    Note: Rust pre-converts values to typed Python objects (int, float, bool, str).
-    For WebSocket, values are strings and need Python coercion.
+    Note: Rust pre-converts values to typed Python objects (int, float, bool,
+    str, uuid.UUID, decimal.Decimal, datetime, date, time) for both HTTP and WebSocket.
     """
     # Check if annotation is a Struct/Serializer type
     unwrapped = unwrap_optional(annotation)
@@ -194,14 +166,14 @@ def create_cookie_extractor(name: str, annotation: Any, default: Any, alias: str
 
         def extract(cookies_map: dict[str, str]) -> Any:
             if key in cookies_map:
-                return _coerce_if_string(cookies_map[key], annotation)
+                return cookies_map[key]
             return default_value
     else:
 
         def extract(cookies_map: dict[str, str]) -> Any:
             if key not in cookies_map:
                 raise HTTPException(status_code=422, detail=f"Missing required cookie: {key}")
-            return _coerce_if_string(cookies_map[key], annotation)
+            return cookies_map[key]
 
     return extract
 

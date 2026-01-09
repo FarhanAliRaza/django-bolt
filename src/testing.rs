@@ -31,37 +31,14 @@ use crate::middleware::compression::CompressionMiddleware;
 use crate::middleware::cors::CorsMiddleware;
 use crate::router::Router;
 use crate::state::{AppState, TASK_LOCALS};
-use crate::type_coercion::CoercedValue;
 use crate::websocket::WebSocketRouter;
 use actix_multipart::Multipart;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 
 use crate::form_parsing::FileContent;
-
-/// Convert CoercedValue to Python object
-fn coerced_value_to_py(py: Python<'_>, value: &CoercedValue) -> Py<PyAny> {
-    match value {
-        CoercedValue::Int(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
-        CoercedValue::Float(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
-        CoercedValue::Bool(v) => v.into_pyobject(py).unwrap().to_owned().unbind().into_any(),
-        CoercedValue::String(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
-        CoercedValue::Uuid(v) => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
-        CoercedValue::DateTime(v) => v
-            .to_rfc3339()
-            .into_pyobject(py)
-            .unwrap()
-            .into_any()
-            .unbind(),
-        CoercedValue::NaiveDateTime(v) => {
-            v.to_string().into_pyobject(py).unwrap().into_any().unbind()
-        }
-        CoercedValue::Date(v) => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
-        CoercedValue::Time(v) => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
-        CoercedValue::Decimal(v) => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
-        CoercedValue::Null => py.None(),
-    }
-}
+use crate::handler::coerced_value_to_py;
+use crate::type_coercion::{coerce_param, TYPE_STRING};
 
 /// Convert FileInfo to Python dict (for multipart file uploads)
 fn file_info_to_py(py: Python<'_>, file: &crate::form_parsing::FileInfo) -> PyResult<Py<PyDict>> {
@@ -1469,16 +1446,62 @@ pub fn handle_test_websocket(
         }
     }
 
-    // Build path_params dict
+    // Get param_types from route metadata for type coercion
+    let param_types = app
+        .route_metadata
+        .get(&handler_id)
+        .map(|m| &m.param_types)
+        .cloned()
+        .unwrap_or_default();
+
+    // Build path_params dict with type coercion
     let path_params_dict = pyo3::types::PyDict::new(py);
     for (k, v) in path_params.iter() {
-        path_params_dict.set_item(k, v)?;
+        let type_hint = param_types.get(k).copied().unwrap_or(TYPE_STRING);
+        match coerce_param(v, type_hint) {
+            Ok(coerced) => {
+                let py_value = coerced_value_to_py(py, &coerced);
+                path_params_dict.set_item(k, py_value)?;
+            }
+            Err(_) => {
+                path_params_dict.set_item(k, v)?;
+            }
+        }
     }
 
     // Build scope dict
     let scope_dict = pyo3::types::PyDict::new(py);
     scope_dict.set_item("type", "websocket")?;
     scope_dict.set_item("path", &path)?;
+
+    // Parse and coerce query parameters
+    let query_dict = pyo3::types::PyDict::new(py);
+    if let Some(ref qs) = query_string {
+        if !qs.is_empty() {
+            for pair in qs.split('&') {
+                if let Some((key, value)) = pair.split_once('=') {
+                    let decoded_key = urlencoding::decode(key).unwrap_or_default();
+                    let decoded_value = urlencoding::decode(value).unwrap_or_default();
+
+                    let type_hint = param_types
+                        .get(decoded_key.as_ref())
+                        .copied()
+                        .unwrap_or(TYPE_STRING);
+
+                    match coerce_param(&decoded_value, type_hint) {
+                        Ok(coerced) => {
+                            let py_value = coerced_value_to_py(py, &coerced);
+                            query_dict.set_item(decoded_key.as_ref(), py_value)?;
+                        }
+                        Err(_) => {
+                            query_dict.set_item(decoded_key.as_ref(), decoded_value.as_ref())?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    scope_dict.set_item("query_params", query_dict)?;
 
     let qs_bytes = query_string.as_ref().map(|s| s.as_bytes()).unwrap_or(b"");
     scope_dict.set_item("query_string", pyo3::types::PyBytes::new(py, qs_bytes))?;

@@ -6,6 +6,7 @@ use bytes::Bytes;
 use futures_util::stream;
 use futures_util::StreamExt;
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -28,6 +29,63 @@ use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
 use crate::streaming::{create_python_stream, create_sse_stream};
 use crate::type_coercion::{coerce_param, CoercedValue, TYPE_STRING};
 use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
+
+// Cache Python classes for type construction (avoids repeated imports)
+static UUID_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static DECIMAL_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static DATETIME_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static DATE_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static TIME_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+
+fn get_uuid_class(py: Python<'_>) -> &Py<PyAny> {
+    UUID_CLASS.get_or_init(py, || {
+        py.import("uuid")
+            .unwrap()
+            .getattr("UUID")
+            .unwrap()
+            .unbind()
+    })
+}
+
+fn get_decimal_class(py: Python<'_>) -> &Py<PyAny> {
+    DECIMAL_CLASS.get_or_init(py, || {
+        py.import("decimal")
+            .unwrap()
+            .getattr("Decimal")
+            .unwrap()
+            .unbind()
+    })
+}
+
+fn get_datetime_class(py: Python<'_>) -> &Py<PyAny> {
+    DATETIME_CLASS.get_or_init(py, || {
+        py.import("datetime")
+            .unwrap()
+            .getattr("datetime")
+            .unwrap()
+            .unbind()
+    })
+}
+
+fn get_date_class(py: Python<'_>) -> &Py<PyAny> {
+    DATE_CLASS.get_or_init(py, || {
+        py.import("datetime")
+            .unwrap()
+            .getattr("date")
+            .unwrap()
+            .unbind()
+    })
+}
+
+fn get_time_class(py: Python<'_>) -> &Py<PyAny> {
+    TIME_CLASS.get_or_init(py, || {
+        py.import("datetime")
+            .unwrap()
+            .getattr("time")
+            .unwrap()
+            .unbind()
+    })
+}
 
 // Reuse the global Python asyncio event loop created at server startup (TASK_LOCALS)
 
@@ -186,25 +244,50 @@ fn build_validation_error_response(error: &ValidationError) -> HttpResponse {
 }
 
 /// Convert CoercedValue to Python object
-fn coerced_value_to_py(py: Python<'_>, value: &CoercedValue) -> Py<PyAny> {
+///
+/// Constructs actual Python typed objects (uuid.UUID, decimal.Decimal, datetime, etc.)
+/// instead of strings, eliminating double-parsing on the Python side.
+pub fn coerced_value_to_py(py: Python<'_>, value: &CoercedValue) -> Py<PyAny> {
     match value {
+        // Primitives - direct conversion
         CoercedValue::Int(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
         CoercedValue::Float(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
         CoercedValue::Bool(v) => v.into_pyobject(py).unwrap().to_owned().unbind().into_any(),
         CoercedValue::String(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
-        CoercedValue::Uuid(v) => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
-        CoercedValue::DateTime(v) => v
-            .to_rfc3339()
-            .into_pyobject(py)
-            .unwrap()
-            .into_any()
-            .unbind(),
-        CoercedValue::NaiveDateTime(v) => {
-            v.to_string().into_pyobject(py).unwrap().into_any().unbind()
+
+        // UUID: construct Python uuid.UUID object
+        CoercedValue::Uuid(v) => get_uuid_class(py)
+            .call1(py, (v.to_string(),))
+            .unwrap(),
+
+        // Decimal: construct Python decimal.Decimal object
+        CoercedValue::Decimal(v) => get_decimal_class(py)
+            .call1(py, (v.to_string(),))
+            .unwrap(),
+
+        // DateTime (with timezone): construct Python datetime.datetime
+        CoercedValue::DateTime(v) => {
+            let iso_str = v.to_rfc3339().replace('Z', "+00:00");
+            get_datetime_class(py)
+                .call_method1(py, "fromisoformat", (iso_str,))
+                .unwrap()
         }
-        CoercedValue::Date(v) => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
-        CoercedValue::Time(v) => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
-        CoercedValue::Decimal(v) => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
+
+        // NaiveDateTime: construct Python datetime.datetime (no timezone)
+        CoercedValue::NaiveDateTime(v) => get_datetime_class(py)
+            .call_method1(py, "fromisoformat", (v.to_string(),))
+            .unwrap(),
+
+        // Date: construct Python datetime.date
+        CoercedValue::Date(v) => get_date_class(py)
+            .call_method1(py, "fromisoformat", (v.to_string(),))
+            .unwrap(),
+
+        // Time: construct Python datetime.time
+        CoercedValue::Time(v) => get_time_class(py)
+            .call_method1(py, "fromisoformat", (v.to_string(),))
+            .unwrap(),
+
         CoercedValue::Null => py.None(),
     }
 }

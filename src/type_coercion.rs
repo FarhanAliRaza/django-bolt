@@ -264,8 +264,10 @@ pub fn coerce_to_py(
                     let datetime_module = py.import("datetime")?;
                     let datetime_class = datetime_module.getattr("datetime")?;
                     // Format as ISO string for fromisoformat
-                    let py_dt =
-                        datetime_class.call_method1("fromisoformat", (ndt.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),))?;
+                    let py_dt = datetime_class.call_method1(
+                        "fromisoformat",
+                        (ndt.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),),
+                    )?;
                     Ok(py_dt.unbind())
                 }
                 Ok(_) => {

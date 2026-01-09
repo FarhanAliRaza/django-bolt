@@ -807,6 +807,7 @@ class TestDecimalEdgeCases:
         data = response.json()
         # Decimal may be returned in scientific notation (1E-8) or fixed (0.00000001)
         from decimal import Decimal
+
         returned = Decimal(data["value"])
         expected = Decimal("0.00000001")
         assert returned == expected, f"Expected {expected}, got {returned}"
@@ -860,9 +861,7 @@ class TestKnownSecurityGaps:
         # Create a 10KB string (just over 8KB limit) - now correctly rejected
         huge_value = "a" * 10000
         response = client.get(f"/str/{huge_value}")
-        assert response.status_code == 422, (
-            f"String param should be rejected at 10KB, got {response.status_code}"
-        )
+        assert response.status_code == 422, f"String param should be rejected at 10KB, got {response.status_code}"
 
     def test_datetime_query_param_is_coerced(self, client_datetime):
         """
@@ -911,9 +910,7 @@ class TestKnownSecurityGaps:
         """
         # Empty query param - now correctly rejected
         response = client_datetime.get("/query/bool?value=")
-        assert response.status_code == 422, (
-            f"Empty bool param should be rejected, got {response.status_code}"
-        )
+        assert response.status_code == 422, f"Empty bool param should be rejected, got {response.status_code}"
 
 
 class TestSecurityGapsDocumentation:

@@ -57,7 +57,6 @@ from .serialization import serialize_response
 from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
 from .typing import HandlerMetadata
 from .views import APIView, ViewSet
-from .websocket import WebSocket as WebSocketType
 from .websocket import mark_websocket_handler
 
 Response = tuple[int, list[tuple[str, str]], bytes]
@@ -420,7 +419,7 @@ class BoltAPI:
 
             # Compile parameter binder for WebSocket (reuses HTTP binding logic)
             # This enables injection of path params, query params, headers, cookies
-            meta = self._compile_websocket_binder(fn, full_path, WebSocketType)
+            meta = self._compile_websocket_binder(fn, full_path)
             meta["is_async"] = True
             meta["is_websocket"] = True
 
@@ -903,10 +902,8 @@ class BoltAPI:
         """Delegate to compile_binder in api_compilation module."""
         return compile_binder(fn, http_method, path)
 
-    def _compile_websocket_binder(self, fn: Callable, path: str, websocket_type: type) -> HandlerMetadata:
+    def _compile_websocket_binder(self, fn: Callable, path: str) -> HandlerMetadata:
         """Delegate to compile_websocket_binder in api_compilation module."""
-        # Note: websocket_type param is no longer needed as compile_websocket_binder
-        # imports WebSocket type directly
         return compile_websocket_binder(fn, path)
 
     def _compile_argument_injector(

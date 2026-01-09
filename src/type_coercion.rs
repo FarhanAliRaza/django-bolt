@@ -193,35 +193,6 @@ fn parse_time(value: &str) -> Result<CoercedValue, String> {
     ))
 }
 
-/// Coerce path parameters based on type hints from route metadata
-///
-/// # Arguments
-/// * `path_params` - Map of parameter name to string value
-/// * `type_hints` - Map of parameter name to type hint
-///
-/// # Returns
-/// Map of parameter name to coerced value (or error)
-pub fn coerce_path_params(
-    path_params: &ahash::AHashMap<String, String>,
-    type_hints: &std::collections::HashMap<String, u8>,
-) -> Result<ahash::AHashMap<String, CoercedValue>, (String, String)> {
-    let mut result = ahash::AHashMap::with_capacity(path_params.len());
-
-    for (name, value) in path_params {
-        let type_hint = type_hints.get(name).copied().unwrap_or(TYPE_STRING);
-        match coerce_param(value, type_hint) {
-            Ok(coerced) => {
-                result.insert(name.clone(), coerced);
-            }
-            Err(error_msg) => {
-                return Err((name.clone(), error_msg));
-            }
-        }
-    }
-
-    Ok(result)
-}
-
 /// Convert a string value to Python object based on type hint.
 /// Handles all supported types including datetime, uuid, and decimal.
 /// Returns PyResult to properly handle validation errors.

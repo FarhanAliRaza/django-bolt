@@ -26,7 +26,6 @@ actix-web-actors = "4"  # WebSocket support
 actix = "0.13"  # Actor framework for WebSocket
 actix-files = "0.6"
 tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["rt"] }  # TaskTracker for graceful shutdown
 socket2 = { version = "0.6", features = ["all"] }
 matchit = "0.9"
 # Middleware dependencies

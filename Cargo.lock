@@ -853,7 +853,6 @@ dependencies = [
  "tempfile",
  "tikv-jemallocator",
  "tokio",
- "tokio-util",
  "urlencoding",
  "uuid",
 ]
@@ -2674,7 +2673,6 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
- "futures-util",
  "pin-project-lite",
  "tokio",
 ]

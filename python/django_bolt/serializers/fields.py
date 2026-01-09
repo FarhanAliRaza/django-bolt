@@ -186,13 +186,12 @@ def field(
     return _FieldMarker(config=config)
 
 
-def get_msgspec_type_for_django_field(field: models.Field, **field_kwargs: Any) -> type:
+def get_msgspec_type_for_django_field(field: models.Field) -> type:
     """
     Convert a Django model field to a msgspec-compatible type annotation.
 
     Args:
         field: Django model field instance
-        **field_kwargs: Additional type metadata (e.g., for constraints)
 
     Returns:
         A type annotation suitable for use in a msgspec.Struct

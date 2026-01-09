@@ -27,29 +27,6 @@ pub enum FileContent {
     Disk(NamedTempFile),
 }
 
-impl FileContent {
-    /// Get the file content as bytes (reads from disk if spooled)
-    pub fn as_bytes(&self) -> std::io::Result<Vec<u8>> {
-        match self {
-            FileContent::Memory(bytes) => Ok(bytes.clone()),
-            FileContent::Disk(file) => std::fs::read(file.path()),
-        }
-    }
-
-    /// Get the temp file path if spooled to disk
-    pub fn temp_path(&self) -> Option<&std::path::Path> {
-        match self {
-            FileContent::Memory(_) => None,
-            FileContent::Disk(file) => Some(file.path()),
-        }
-    }
-
-    /// Check if file is in memory
-    pub fn is_in_memory(&self) -> bool {
-        matches!(self, FileContent::Memory(_))
-    }
-}
-
 /// File information with disk spooling support
 #[derive(Debug)]
 pub struct FileInfo {

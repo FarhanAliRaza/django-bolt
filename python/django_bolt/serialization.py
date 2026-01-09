@@ -12,7 +12,7 @@ from django.http import HttpResponse as DjangoHttpResponse
 from django.http import HttpResponseRedirect as DjangoHttpResponseRedirect
 
 from . import _json
-from .binding import coerce_to_response_type, coerce_to_response_type_async
+from ._kwargs import coerce_to_response_type, coerce_to_response_type_async
 from .responses import HTML, JSON, File, FileResponse, PlainText, Redirect, StreamingResponse
 from .responses import Response as ResponseClass
 

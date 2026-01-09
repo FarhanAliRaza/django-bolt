@@ -474,16 +474,23 @@ Error types:
 | `file_too_many` | Exceeds `max_files` |
 | `file_invalid_content_type` | Not in `allowed_types` |
 
-### Global upload limit
+### Global upload settings
 
-Set a global maximum upload size in settings:
+Configure file upload limits in settings:
 
 ```python
 # settings.py
 from django_bolt import FileSize
 
+# Maximum upload size (requests exceeding this are rejected)
 BOLT_MAX_UPLOAD_SIZE = FileSize.MB_10  # 10 MB global limit
+
+# Memory threshold before spooling to disk (default: 1 MB)
+# Files smaller than this are kept in memory; larger files are written to temp files
+BOLT_MEMORY_SPOOL_THRESHOLD = 5 * 1024 * 1024  # 5 MB
 ```
+
+See [Settings Reference](../ref/settings.md#file-upload-settings) for more details.
 
 ## Dependency injection
 

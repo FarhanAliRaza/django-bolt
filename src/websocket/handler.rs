@@ -12,9 +12,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use std::collections::HashMap;
+
+use crate::handler::coerced_value_to_py;
 use crate::metadata::CorsConfig;
 use crate::middleware::rate_limit::check_rate_limit;
 use crate::state::{AppState, ROUTE_METADATA, TASK_LOCALS};
+use crate::type_coercion::{coerce_param, TYPE_STRING};
 use crate::validation::{validate_auth_and_guards, AuthGuardResult};
 
 use super::actor::WebSocketActor;
@@ -53,7 +57,10 @@ pub fn is_websocket_upgrade(req: &HttpRequest) -> bool {
         .headers()
         .get("connection")
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.split(',').any(|p| p.trim().eq_ignore_ascii_case("upgrade")))
+        .map(|v| {
+            v.split(',')
+                .any(|p| p.trim().eq_ignore_ascii_case("upgrade"))
+        })
         .unwrap_or(false);
 
     if !has_upgrade_connection {
@@ -68,14 +75,50 @@ pub fn is_websocket_upgrade(req: &HttpRequest) -> bool {
 }
 
 /// Build scope dict for Python WebSocket handler
+///
+/// Parses and coerces query and path parameters to typed Python objects
+/// using the same type coercion as HTTP handlers.
 fn build_scope(
     py: Python<'_>,
     req: &HttpRequest,
     path_params: &AHashMap<String, String>,
+    param_types: &HashMap<String, u8>,
 ) -> PyResult<Py<PyAny>> {
     let scope_dict = PyDict::new(py);
     scope_dict.set_item("type", "websocket")?;
     scope_dict.set_item("path", req.path())?;
+
+    // Parse and coerce query parameters
+    let query_dict = PyDict::new(py);
+    let query_string = req.query_string();
+    if !query_string.is_empty() {
+        for pair in query_string.split('&') {
+            if let Some((key, value)) = pair.split_once('=') {
+                let decoded_key = urlencoding::decode(key).unwrap_or_default();
+                let decoded_value = urlencoding::decode(value).unwrap_or_default();
+
+                // Get type hint and coerce
+                let type_hint = param_types
+                    .get(decoded_key.as_ref())
+                    .copied()
+                    .unwrap_or(TYPE_STRING);
+
+                match coerce_param(&decoded_value, type_hint) {
+                    Ok(coerced) => {
+                        let py_value = coerced_value_to_py(py, &coerced);
+                        query_dict.set_item(decoded_key.as_ref(), py_value)?;
+                    }
+                    Err(_) => {
+                        // Fall back to string on coercion error
+                        query_dict.set_item(decoded_key.as_ref(), decoded_value.as_ref())?;
+                    }
+                }
+            }
+        }
+    }
+    scope_dict.set_item("query_params", query_dict)?;
+
+    // Keep raw query_string for compatibility
     scope_dict.set_item("query_string", req.query_string().as_bytes())?;
 
     // Add headers as dict (FastAPI style)
@@ -88,10 +131,20 @@ fn build_scope(
     }
     scope_dict.set_item("headers", headers_dict)?;
 
-    // Add path params
+    // Coerce path params using type hints
     let params_dict = PyDict::new(py);
     for (k, v) in path_params.iter() {
-        params_dict.set_item(k.as_str(), v.as_str())?;
+        let type_hint = param_types.get(k).copied().unwrap_or(TYPE_STRING);
+        match coerce_param(v, type_hint) {
+            Ok(coerced) => {
+                let py_value = coerced_value_to_py(py, &coerced);
+                params_dict.set_item(k.as_str(), py_value)?;
+            }
+            Err(_) => {
+                // Fall back to string on coercion error
+                params_dict.set_item(k.as_str(), v.as_str())?;
+            }
+        }
     }
     scope_dict.set_item("path_params", params_dict)?;
 
@@ -216,7 +269,9 @@ fn create_send_fn(py: Python<'_>, state: Arc<WsConnectionState>) -> PyResult<Py<
                                     e
                                 ))
                             })?;
-                        Ok(Python::attach(|py| py.None().into_pyobject(py).unwrap().unbind()))
+                        Ok(Python::attach(|py| {
+                            py.None().into_pyobject(py).unwrap().unbind()
+                        }))
                     })?;
                     Ok(future.into())
                 }
@@ -235,7 +290,9 @@ fn create_send_fn(py: Python<'_>, state: Arc<WsConnectionState>) -> PyResult<Py<
                                         e
                                     ))
                                 })?;
-                            Ok(Python::attach(|py| py.None().into_pyobject(py).unwrap().unbind()))
+                            Ok(Python::attach(|py| {
+                                py.None().into_pyobject(py).unwrap().unbind()
+                            }))
                         })?;
                         Ok(future.into())
                     } else if let Some(bytes) = message.get_item("bytes")? {
@@ -252,7 +309,9 @@ fn create_send_fn(py: Python<'_>, state: Arc<WsConnectionState>) -> PyResult<Py<
                                         e
                                     ))
                                 })?;
-                            Ok(Python::attach(|py| py.None().into_pyobject(py).unwrap().unbind()))
+                            Ok(Python::attach(|py| {
+                                py.None().into_pyobject(py).unwrap().unbind()
+                            }))
                         })?;
                         Ok(future.into())
                     } else {
@@ -284,7 +343,9 @@ fn create_send_fn(py: Python<'_>, state: Arc<WsConnectionState>) -> PyResult<Py<
                                     e
                                 ))
                             })?;
-                        Ok(Python::attach(|py| py.None().into_pyobject(py).unwrap().unbind()))
+                        Ok(Python::attach(|py| {
+                            py.None().into_pyobject(py).unwrap().unbind()
+                        }))
                     })?;
                     Ok(future.into())
                 }
@@ -342,7 +403,11 @@ fn validate_origin(req: &HttpRequest, state: &AppState) -> bool {
 
 /// Check if an origin is allowed by the CORS configuration
 /// Reuses the same logic as HTTP CORS validation
-fn is_origin_allowed(origin: &str, cors_config: &CorsConfig, global_regexes: &[regex::Regex]) -> bool {
+fn is_origin_allowed(
+    origin: &str,
+    cors_config: &CorsConfig,
+    global_regexes: &[regex::Regex],
+) -> bool {
     // Allow all origins if configured
     if cors_config.allow_all_origins {
         return true;
@@ -448,7 +513,8 @@ pub async fn handle_websocket_upgrade_with_handler(
     // Evaluate authentication and guards before upgrading
     if let Some(route_metadata) = ROUTE_METADATA.get() {
         if let Some(route_meta) = route_metadata.get(&handler_id) {
-            match validate_auth_and_guards(&headers, &route_meta.auth_backends, &route_meta.guards) {
+            match validate_auth_and_guards(&headers, &route_meta.auth_backends, &route_meta.guards)
+            {
                 AuthGuardResult::Allow(_ctx) => {
                     // Guards passed, continue with WebSocket upgrade
                 }
@@ -473,13 +539,23 @@ pub async fn handle_websocket_upgrade_with_handler(
     // Create channels for bidirectional communication (configurable size)
     let (to_python_tx, to_python_rx) = mpsc::channel::<WsMessage>(config.channel_buffer_size);
 
+    // Get param_types from route metadata for type coercion
+    let param_types = ROUTE_METADATA
+        .get()
+        .and_then(|m| m.get(&handler_id))
+        .map(|m| m.param_types.clone())
+        .unwrap_or_default();
+
     // Build scope for Python - if this fails, decrement counter
-    let scope = match Python::attach(|py| build_scope(py, &req, &path_params)) {
+    let scope = match Python::attach(|py| build_scope(py, &req, &path_params, &param_types)) {
         Ok(s) => s,
         Err(e) => {
             // CRITICAL: Decrement counter on error to prevent resource leak
             ACTIVE_WS_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
-            return Err(actix_web::error::ErrorBadRequest(format!("Invalid request: {}", e)));
+            return Err(actix_web::error::ErrorBadRequest(format!(
+                "Invalid request: {}",
+                e
+            )));
         }
     };
 
@@ -495,7 +571,10 @@ pub async fn handle_websocket_upgrade_with_handler(
         Err(e) => {
             // CRITICAL: Decrement counter on error to prevent resource leak
             ACTIVE_WS_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
-            return Err(actix_web::error::ErrorInternalServerError(format!("WebSocket error: {}", e)));
+            return Err(actix_web::error::ErrorInternalServerError(format!(
+                "WebSocket error: {}",
+                e
+            )));
         }
     };
 
@@ -567,20 +646,24 @@ pub async fn handle_websocket_upgrade_with_handler(
                     if let Err(e) = future.await {
                         eprintln!("[django-bolt] WebSocket handler error: {}", e);
                         // Close the connection on error - this triggers actor stopped() which decrements counter
-                        let _ = addr.send(SendToClient(WsMessage::Close {
-                            code: 1011,
-                            reason: "Internal error".to_string(),
-                        })).await;
+                        let _ = addr
+                            .send(SendToClient(WsMessage::Close {
+                                code: 1011,
+                                reason: "Internal error".to_string(),
+                            }))
+                            .await;
                     }
                     // Normal completion - actor will be stopped when handler returns and Python closes
                 }
                 Err(e) => {
                     eprintln!("[django-bolt] WebSocket handler setup error: {}", e);
                     // Close the connection on setup error - this triggers actor stopped() which decrements counter
-                    let _ = addr.send(SendToClient(WsMessage::Close {
-                        code: 1011,
-                        reason: "Handler setup failed".to_string(),
-                    })).await;
+                    let _ = addr
+                        .send(SendToClient(WsMessage::Close {
+                            code: 1011,
+                            reason: "Handler setup failed".to_string(),
+                        }))
+                        .await;
                 }
             }
         })
@@ -591,10 +674,12 @@ pub async fn handle_websocket_upgrade_with_handler(
         if result.is_err() {
             eprintln!("[django-bolt] WebSocket handler task panicked - closing connection");
             // Send close message to trigger actor stopped() which decrements counter
-            let _ = addr.send(SendToClient(WsMessage::Close {
-                code: 1011,
-                reason: "Internal server error".to_string(),
-            })).await;
+            let _ = addr
+                .send(SendToClient(WsMessage::Close {
+                    code: 1011,
+                    reason: "Internal server error".to_string(),
+                }))
+                .await;
         }
     });
 

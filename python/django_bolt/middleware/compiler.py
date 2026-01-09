@@ -1,13 +1,88 @@
 """Middleware compilation utilities."""
 
+from __future__ import annotations
+
+import datetime
+import decimal
 import logging
+import uuid
 from collections.abc import Callable
-from typing import Any
+from typing import Annotated, Any, get_args, get_origin
+
+import msgspec
+from django.conf import settings
 
 from ..auth.backends import get_default_authentication_classes
 from ..auth.guards import get_default_permission_classes
+from ..typing import is_msgspec_struct, unwrap_optional
 
 logger = logging.getLogger(__name__)
+
+# Type hint constants - MUST match src/type_coercion.rs
+TYPE_INT = 1
+TYPE_FLOAT = 2
+TYPE_BOOL = 3
+TYPE_STRING = 4
+TYPE_UUID = 5
+TYPE_DATETIME = 6
+TYPE_DECIMAL = 7
+TYPE_DATE = 8
+TYPE_TIME = 9
+
+
+def get_type_hint_id(annotation: Any) -> int:
+    """
+    Map Python type annotations to Rust type hint IDs.
+
+    These IDs are used by Rust's type_coercion module to convert
+    string parameters to typed values before passing to Python.
+
+    Args:
+        annotation: Python type annotation (e.g., int, str, uuid.UUID)
+
+    Returns:
+        Type hint ID constant (TYPE_INT, TYPE_STRING, etc.)
+    """
+    # Unwrap Optional[T] or T | None
+    unwrapped = unwrap_optional(annotation)
+
+    # Get base type if it's a generic
+    origin = get_origin(unwrapped)
+
+    # Handle Annotated[T, ...] - extract the base type T
+    if origin is Annotated:
+        args = get_args(unwrapped)
+        if args:
+            # First arg is the actual type, rest are metadata
+            unwrapped = args[0]
+            origin = get_origin(unwrapped)
+
+    if origin is not None:
+        # For generic types like list[int], we can't coerce in Rust
+        return TYPE_STRING
+
+    # Direct type mapping
+    if unwrapped is int:
+        return TYPE_INT
+    elif unwrapped is float:
+        return TYPE_FLOAT
+    elif unwrapped is bool:
+        return TYPE_BOOL
+    elif unwrapped is str:
+        return TYPE_STRING
+    elif unwrapped is uuid.UUID:
+        return TYPE_UUID
+    elif unwrapped is datetime.datetime:
+        return TYPE_DATETIME
+    elif unwrapped is datetime.date:
+        return TYPE_DATE
+    elif unwrapped is datetime.time:
+        return TYPE_TIME
+    elif unwrapped is decimal.Decimal:
+        return TYPE_DECIMAL
+    else:
+        # Complex types (structs, dicts, etc.) - keep as string
+        return TYPE_STRING
 
 
 def compile_middleware_meta(
@@ -138,12 +213,15 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
     These flags indicate which request components the handler actually needs,
     allowing Rust to skip parsing unused data.
 
+    Also extracts type hints for path and query parameters to enable
+    Rust-side type coercion (avoiding Python's convert_primitive overhead).
+
     Args:
         metadata: Existing middleware metadata dict (or None to create new)
         handler_meta: Handler metadata containing the optimization flags
 
     Returns:
-        Updated metadata dict with optimization flags
+        Updated metadata dict with optimization flags and param_types
     """
     if metadata is None:
         metadata = {}
@@ -155,6 +233,91 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
     metadata["needs_cookies"] = handler_meta.get("needs_cookies", True)
     metadata["needs_path_params"] = handler_meta.get("needs_path_params", True)
     metadata["is_static_route"] = handler_meta.get("is_static_route", False)
+    metadata["needs_form_parsing"] = handler_meta.get("needs_form_parsing", False)
+
+    # Extract type hints for all parameter sources
+    # This enables Rust-side type coercion, eliminating Python overhead
+    # Format: {"param_name": type_hint_id, ...}
+    param_types: dict[str, int] = {}
+    form_type_hints: dict[str, int] = {}
+    file_constraints: dict[str, dict[str, Any]] = {}
+
+    fields = handler_meta.get("fields", [])
+    for field in fields:
+        # Include type hints for path, query, header, cookie
+        if field.source in ("path", "query", "header", "cookie"):
+            unwrapped = unwrap_optional(field.annotation)
+            # Check if this is a struct type (Query/Header/Cookie with struct parameter)
+            if is_msgspec_struct(unwrapped):
+                # Extract type hints for each struct field
+                for struct_field in msgspec.structs.fields(unwrapped):
+                    struct_type_hint = get_type_hint_id(struct_field.type)
+                    if struct_type_hint != TYPE_STRING:
+                        param_types[struct_field.name] = struct_type_hint
+            else:
+                # Individual field
+                type_hint = get_type_hint_id(field.annotation)
+                # Only include non-string types (string is the default, no coercion needed)
+                if type_hint != TYPE_STRING:
+                    param_types[field.name] = type_hint
+
+        # Form fields - extract type hints for Rust-side form parsing
+        elif field.source == "form":
+            unwrapped = unwrap_optional(field.annotation)
+            # Check if this is a struct type (Form with struct parameter)
+            if is_msgspec_struct(unwrapped):
+                # Extract type hints for each struct field
+                for struct_field in msgspec.structs.fields(unwrapped):
+                    struct_type_hint = get_type_hint_id(struct_field.type)
+                    form_type_hints[struct_field.name] = struct_type_hint
+            else:
+                # Individual form field
+                type_hint = get_type_hint_id(field.annotation)
+                form_type_hints[field.name] = type_hint
+
+        # File fields - extract constraints for Rust-side validation
+        elif field.source == "file":
+            constraints = {}
+            if field.param is not None:
+                # Extract constraints from ParamMetadata
+                if hasattr(field.param, "max_size") and field.param.max_size is not None:
+                    constraints["max_size"] = field.param.max_size
+                if hasattr(field.param, "min_size") and field.param.min_size is not None:
+                    constraints["min_size"] = field.param.min_size
+                if hasattr(field.param, "allowed_types") and field.param.allowed_types is not None:
+                    constraints["allowed_types"] = list(field.param.allowed_types)
+                if hasattr(field.param, "max_files") and field.param.max_files is not None:
+                    constraints["max_files"] = field.param.max_files
+            if constraints:
+                file_constraints[field.name] = constraints
+
+    if param_types:
+        metadata["param_types"] = param_types
+
+    if form_type_hints:
+        metadata["form_type_hints"] = form_type_hints
+
+    if file_constraints:
+        metadata["file_constraints"] = file_constraints
+
+    # Max upload size priority:
+    # 1. Per-field max_size (route level) - highest priority
+    # 2. BOLT_MAX_UPLOAD_SIZE (Django settings) - global fallback
+    # 3. 1MB default
+    if file_constraints:
+        # Use largest per-field max_size if any field has it
+        max_sizes = [c.get("max_size") for c in file_constraints.values() if c.get("max_size")]
+        if max_sizes:
+            metadata["max_upload_size"] = max(max_sizes)
+        else:
+            # No per-field max_size, use global setting or default
+            metadata["max_upload_size"] = getattr(settings, "BOLT_MAX_UPLOAD_SIZE", 1024 * 1024)
+    else:
+        # No file constraints at all, use global setting or default
+        metadata["max_upload_size"] = getattr(settings, "BOLT_MAX_UPLOAD_SIZE", 1024 * 1024)
+
+    # Memory spool threshold - when to spool files to disk (default 1MB)
+    metadata["memory_spool_threshold"] = getattr(settings, "BOLT_MEMORY_SPOOL_THRESHOLD", 1024 * 1024)
 
     return metadata
 

@@ -465,6 +465,64 @@ async def bench_slow(ms: int | None = 100):
     return {"ok": True, "ms": ms}
 
 
+# ==== Parameter Handling Benchmark Endpoints ====
+@api.get("/bench/params/typed/{id}")
+async def bench_typed_params(
+    id: int,
+    count: int,
+    price: float,
+    active: bool = True,
+):
+    return {"id": id, "count": count, "price": price, "active": active}
+
+
+@api.get("/bench/params/multi-query")
+async def bench_multi_query(
+    page: int = 1,
+    limit: int = 10,
+    sort: str = "id",
+    order: str = "asc",
+    filter_active: bool = True,
+    min_price: float = 0.0,
+    max_price: float = 1000.0,
+):
+    return {
+        "page": page,
+        "limit": limit,
+        "sort": sort,
+        "order": order,
+        "filter_active": filter_active,
+        "min_price": min_price,
+        "max_price": max_price,
+    }
+
+
+@api.post("/bench/form/typed")
+async def bench_typed_form(
+    name: Annotated[str, Form()],
+    age: Annotated[int, Form()],
+    score: Annotated[float, Form()],
+    active: Annotated[bool, Form()] = True,
+):
+    return {"name": name, "age": age, "score": score, "active": active}
+
+
+@api.post("/bench/form/large")
+async def bench_large_form(
+    field1: Annotated[str, Form()],
+    field2: Annotated[str, Form()],
+    field3: Annotated[str, Form()],
+    field4: Annotated[str, Form()],
+    field5: Annotated[str, Form()],
+    num1: Annotated[int, Form()],
+    num2: Annotated[int, Form()],
+    num3: Annotated[float, Form()],
+    flag1: Annotated[bool, Form()] = True,
+    flag2: Annotated[bool, Form()] = False,
+):
+    return {"fields": 10, "ok": True}
+
+
 # ==== Benchmark endpoints for Header/Cookie/Exception/HTML/Redirect ====
 @api.get("/header")
 async def get_header(x: Annotated[str, Header(alias="x-test")]):

@@ -2,12 +2,14 @@ use pyo3::prelude::*;
 
 mod cors;
 mod error;
+mod form_parsing;
 mod handler;
 mod json;
 mod metadata;
 mod middleware;
 mod permissions;
 mod request;
+mod request_pipeline;
 mod response_builder;
 mod responses;
 mod router;
@@ -15,9 +17,21 @@ mod server;
 mod state;
 mod streaming;
 mod testing;
+mod type_coercion;
 mod validation;
 mod websocket;
 
+// Global allocator selection (mutually exclusive features)
+// Use jemalloc for sustained loads with lower memory fragmentation
+// Use mimalloc (default) for short-lived objects - often faster for web requests
+#[cfg(all(feature = "jemalloc", feature = "mimalloc"))]
+compile_error!("Features 'jemalloc' and 'mimalloc' are mutually exclusive. Enable only one.");
+
+#[cfg(all(feature = "jemalloc", not(feature = "mimalloc")))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[cfg(all(feature = "mimalloc", not(feature = "jemalloc")))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -28,8 +42,9 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         start_server_async,
     };
     use crate::testing::{
-        create_test_app, destroy_test_app, handle_test_websocket, register_test_middleware_metadata,
-        register_test_routes, register_test_websocket_routes, test_request,
+        create_test_app, destroy_test_app, handle_test_websocket,
+        register_test_middleware_metadata, register_test_routes, register_test_websocket_routes,
+        test_request,
     };
 
     // Production server functions

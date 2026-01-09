@@ -51,7 +51,9 @@ impl WebSocketActor {
         ctx.run_interval(self.heartbeat_interval, move |act, ctx| {
             if Instant::now().duration_since(act.hb) > timeout {
                 // Send disconnect to Python
-                let _ = act.to_python_tx.try_send(WsMessage::Disconnect { code: 1001 });
+                let _ = act
+                    .to_python_tx
+                    .try_send(WsMessage::Disconnect { code: 1001 });
                 ctx.stop();
                 return;
             }
@@ -154,7 +156,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WebSocketActor {
                     return;
                 }
                 // Forward to Python handler - close connection if channel fails
-                if let Err(e) = self.to_python_tx.try_send(WsMessage::Text(text.to_string())) {
+                if let Err(e) = self
+                    .to_python_tx
+                    .try_send(WsMessage::Text(text.to_string()))
+                {
                     self.close_on_channel_error(
                         ctx,
                         &format!("Failed to forward text message to Python: {}", e),
@@ -214,7 +219,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WebSocketActor {
             Err(e) => {
                 eprintln!("[django-bolt] WebSocket protocol error: {}", e);
                 self.close_code = Some(1002); // Protocol error
-                let _ = self.to_python_tx.try_send(WsMessage::Disconnect { code: 1002 });
+                let _ = self
+                    .to_python_tx
+                    .try_send(WsMessage::Disconnect { code: 1002 });
                 ctx.stop();
             }
             _ => {}

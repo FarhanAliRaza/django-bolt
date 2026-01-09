@@ -14,7 +14,12 @@ default:
 
 # Build Rust extension in release mode
 build:
+    uv run maturin develop 
+
+# Build Rust extension in release mode
+build-release:
     uv run maturin develop --release
+
 
 # Kill any servers on PORT
 kill port=port:
@@ -127,6 +132,10 @@ save-bench host=host port=port c=c n=n p=p workers=workers:
 
 # Build and run benchmark
 build-bench: build save-bench
+
+# Focused parameter and form parsing benchmark (fast iteration)
+bench-params host=host port=port c=c n=n p=p workers=workers:
+    P={{p}} WORKERS={{workers}} C={{c}} N={{n}} HOST={{host}} PORT={{port}} ./scripts/benchmark_params.sh
 
 # Release new version
 # Usage: just release 0.2.2

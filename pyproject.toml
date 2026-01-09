@@ -36,7 +36,6 @@ dependencies = [
     "Django>=4.2",
     "click>=8.1",
     "msgspec>=0.20",
-    "multipart>=1.3",
     "pyjwt>=2.10.1",
     "typing-extensions>=4.5.0",  # required openapi docs
     "pyyaml>=6.0", # required openapi docs
@@ -94,6 +93,7 @@ select = [
     "SIM",    # flake8-simplify
     "S110",   # try-except-pass detected (no silent exception passing)
     "PLC0415", # import-outside-top-level (no imports inside functions/classes)
+    "FIX002", # line contains TODO - must be resolved before merge
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)

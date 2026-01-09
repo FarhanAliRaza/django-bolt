@@ -2,7 +2,6 @@
 ///
 /// Inspired by Bun/uWebSockets zero-copy patterns, these responses are
 /// stored as static byte slices to eliminate allocations in hot paths.
-
 use actix_web::HttpResponse;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -90,6 +89,30 @@ pub fn error_400_header_too_large(max_size: usize) -> HttpResponse {
     body.extend_from_slice(br#" bytes)"}"#);
 
     HttpResponse::BadRequest()
+        .content_type("application/json")
+        .body(body)
+}
+
+/// 422 Unprocessable Entity for validation errors (type coercion failures)
+/// Used when path/query parameters fail type validation in Rust
+#[inline]
+pub fn error_422_validation(detail: &str) -> HttpResponse {
+    // Pre-allocate based on expected size (avoid reallocation)
+    let mut body = Vec::with_capacity(32 + detail.len());
+    body.extend_from_slice(br#"{"detail":""#);
+    // Escape any quotes in the detail message
+    for byte in detail.bytes() {
+        if byte == b'"' {
+            body.extend_from_slice(br#"\""#);
+        } else if byte == b'\\' {
+            body.extend_from_slice(br#"\\"#);
+        } else {
+            body.push(byte);
+        }
+    }
+    body.extend_from_slice(br#""}"#);
+
+    HttpResponse::UnprocessableEntity()
         .content_type("application/json")
         .body(body)
 }

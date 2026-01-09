@@ -9,6 +9,7 @@ use pyo3::types::PyDict;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
+use crate::form_parsing::FileFieldConstraints;
 use crate::middleware::auth::AuthBackend;
 use crate::permissions::Guard;
 
@@ -178,9 +179,9 @@ impl Default for RateLimitConfig {
 /// Compression configuration parsed at startup
 #[derive(Debug, Clone)]
 pub struct CompressionConfig {
-    pub backend: String,        // "gzip", "brotli", "zstd"
-    pub minimum_size: usize,    // Minimum response size to compress (bytes)
-    pub gzip_fallback: bool,    // Fall back to gzip if backend not supported
+    pub backend: String,     // "gzip", "brotli", "zstd"
+    pub minimum_size: usize, // Minimum response size to compress (bytes)
+    pub gzip_fallback: bool, // Fall back to gzip if backend not supported
 }
 
 impl Default for CompressionConfig {
@@ -211,6 +212,17 @@ pub struct RouteMetadata {
     pub needs_path_params: bool,
     #[allow(dead_code)] // Reserved for future optimization
     pub is_static_route: bool,
+
+    // Type hints for path/query parameters (enables Rust-side type coercion)
+    // Maps parameter name to type hint constant (see type_coercion.rs)
+    pub param_types: HashMap<String, u8>,
+
+    // Form-related metadata for Rust-side form parsing
+    pub needs_form_parsing: bool,
+    pub form_type_hints: HashMap<String, u8>,
+    pub file_constraints: HashMap<String, FileFieldConstraints>,
+    pub max_upload_size: usize,
+    pub memory_spool_threshold: usize,
 }
 
 impl RouteMetadata {
@@ -312,6 +324,51 @@ impl RouteMetadata {
             .and_then(|v| v.extract::<bool>().ok())
             .unwrap_or(false);
 
+        // Parse param_types for Rust-side type coercion
+        // Format: {"param_name": type_hint_id, ...}
+        // Type hint IDs match type_coercion.rs constants (TYPE_INT=1, TYPE_FLOAT=2, etc.)
+        let param_types: HashMap<String, u8> = py_meta
+            .get_item("param_types")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<HashMap<String, u8>>().ok())
+            .unwrap_or_default();
+
+        // Parse form-related metadata for Rust-side form parsing
+        let needs_form_parsing = py_meta
+            .get_item("needs_form_parsing")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<bool>().ok())
+            .unwrap_or(false);
+
+        // Form field type hints (same format as param_types)
+        let form_type_hints: HashMap<String, u8> = py_meta
+            .get_item("form_type_hints")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<HashMap<String, u8>>().ok())
+            .unwrap_or_default();
+
+        // File field constraints
+        let file_constraints = parse_file_constraints(py_meta, py);
+
+        // Max upload size (default 1MB)
+        let max_upload_size = py_meta
+            .get_item("max_upload_size")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<usize>().ok())
+            .unwrap_or(1024 * 1024);
+
+        // Memory spool threshold - when to spool files to disk (default 1MB)
+        let memory_spool_threshold = py_meta
+            .get_item("memory_spool_threshold")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<usize>().ok())
+            .unwrap_or(1024 * 1024);
+
         Ok(RouteMetadata {
             auth_backends,
             guards,
@@ -323,6 +380,12 @@ impl RouteMetadata {
             needs_cookies,
             needs_path_params,
             is_static_route,
+            param_types,
+            needs_form_parsing,
+            form_type_hints,
+            file_constraints,
+            max_upload_size,
+            memory_spool_threshold,
         })
     }
 }
@@ -520,4 +583,51 @@ fn parse_guard(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Guard> {
         }
         _ => None,
     }
+}
+
+/// Parse file field constraints from Python metadata
+/// Format: {"field_name": {"max_size": 1024, "min_size": 0, "allowed_types": ["image/*"], "max_files": 5}, ...}
+fn parse_file_constraints(
+    py_meta: &Bound<'_, PyDict>,
+    py: Python,
+) -> HashMap<String, FileFieldConstraints> {
+    let mut result = HashMap::new();
+
+    if let Ok(Some(constraints_dict)) = py_meta.get_item("file_constraints") {
+        if let Ok(constraints_map) =
+            constraints_dict.extract::<HashMap<String, HashMap<String, Py<PyAny>>>>()
+        {
+            for (field_name, field_constraints) in constraints_map {
+                let mut constraints = FileFieldConstraints::default();
+
+                if let Some(max_size_py) = field_constraints.get("max_size") {
+                    if let Ok(max_size) = max_size_py.extract::<usize>(py) {
+                        constraints.max_size = Some(max_size);
+                    }
+                }
+
+                if let Some(min_size_py) = field_constraints.get("min_size") {
+                    if let Ok(min_size) = min_size_py.extract::<usize>(py) {
+                        constraints.min_size = Some(min_size);
+                    }
+                }
+
+                if let Some(allowed_types_py) = field_constraints.get("allowed_types") {
+                    if let Ok(allowed_types) = allowed_types_py.extract::<Vec<String>>(py) {
+                        constraints.allowed_types = Some(allowed_types);
+                    }
+                }
+
+                if let Some(max_files_py) = field_constraints.get("max_files") {
+                    if let Ok(max_files) = max_files_py.extract::<usize>(py) {
+                        constraints.max_files = Some(max_files);
+                    }
+                }
+
+                result.insert(field_name, constraints);
+            }
+        }
+    }
+
+    result
 }

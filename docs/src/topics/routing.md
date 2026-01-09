@@ -180,3 +180,87 @@ api.mount("/api/v1", users_api)
 ```
 
 Routes from `users_api` are now available at `/api/v1/users`.
+
+## Trailing slash handling
+
+Django-Bolt normalizes trailing slashes at route registration time. By default, trailing slashes are stripped from paths:
+
+```python
+api = BoltAPI()
+
+@api.get("/users/")  # Registered as /users
+async def list_users():
+    return []
+```
+
+### Trailing slash modes
+
+You can control this behavior with the `trailing_slash` parameter:
+
+| Mode | Description | Example |
+|------|-------------|---------|
+| `"strip"` | Remove trailing slashes (default) | `/users/` → `/users` |
+| `"append"` | Add trailing slashes | `/users` → `/users/` |
+| `"keep"` | No normalization | `/users/` → `/users/` |
+
+### Strip mode (default)
+
+The default mode removes trailing slashes, which produces clean URLs:
+
+```python
+api = BoltAPI()  # trailing_slash="strip" is the default
+
+@api.get("/users/")   # Accessible at /users
+@api.get("/items")    # Accessible at /items
+```
+
+### Append mode
+
+Use append mode to follow Django's URL convention where paths end with slashes:
+
+```python
+api = BoltAPI(trailing_slash="append")
+
+@api.get("/users")    # Accessible at /users/
+@api.get("/items/")   # Accessible at /items/
+```
+
+### Keep mode
+
+Use keep mode when you need explicit control over each path:
+
+```python
+api = BoltAPI(trailing_slash="keep")
+
+@api.get("/users")    # Accessible at /users
+@api.get("/items/")   # Accessible at /items/
+```
+
+### Mounted APIs
+
+When mounting APIs, the child API inherits the parent's `trailing_slash` setting:
+
+```python
+parent = BoltAPI(trailing_slash="append")
+child = BoltAPI()
+
+@child.get("/users")  # Will be at /api/users/ (inherits append mode)
+async def list_users():
+    return []
+
+parent.mount("/api", child)
+```
+
+## URL prefix
+
+Apply a prefix to all routes using the `prefix` parameter:
+
+```python
+api = BoltAPI(prefix="/api/v1")
+
+@api.get("/users")  # Accessible at /api/v1/users
+async def list_users():
+    return []
+```
+
+This is useful for versioning your API or grouping routes under a common path.

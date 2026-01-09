@@ -11,7 +11,7 @@
 
 use actix_web::dev::Service;
 use actix_web::http::header::HeaderValue;
-use actix_web::middleware::NormalizePath;
+use actix_web::middleware::{NormalizePath, TrailingSlash};
 use actix_web::{test, web, App, HttpRequest, HttpResponse};
 use ahash::AHashMap;
 use bytes::Bytes;
@@ -120,6 +120,8 @@ pub struct TestAppState {
     pub global_cors_config: Option<CorsConfig>,
     pub debug: bool,
     pub max_payload_size: usize,
+    /// Trailing slash handling mode: "strip", "append", or "keep"
+    pub trailing_slash: String,
 }
 
 /// Registry for test app instances
@@ -227,12 +229,13 @@ fn parse_cors_config_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<CorsConfig>
 
 /// Create a test app instance and return its ID
 #[pyfunction]
-#[pyo3(signature = (dispatch, debug, cors_config=None))]
+#[pyo3(signature = (dispatch, debug, cors_config=None, trailing_slash=None))]
 pub fn create_test_app(
     py: Python<'_>,
     dispatch: Py<PyAny>,
     debug: bool,
     cors_config: Option<&Bound<'_, PyDict>>,
+    trailing_slash: Option<String>,
 ) -> PyResult<u64> {
     let global_cors_config = if let Some(cors_dict) = cors_config {
         Some(parse_cors_config_from_dict(cors_dict)?)
@@ -257,6 +260,7 @@ pub fn create_test_app(
         global_cors_config,
         debug,
         max_payload_size,
+        trailing_slash: trailing_slash.unwrap_or_else(|| "strip".to_string()),
     };
 
     let id = TEST_ID_GEN.fetch_add(1, Ordering::Relaxed);
@@ -389,7 +393,7 @@ pub fn test_request(
 
     runtime_handle.block_on(async {
         // Read test app state
-        let (router, route_metadata, dispatch, global_cors_config, debug, max_payload_size) = {
+        let (router, route_metadata, dispatch, global_cors_config, debug, max_payload_size, trailing_slash) = {
             let state = app_state.read();
             (
                 state.router.clone(),
@@ -398,6 +402,7 @@ pub fn test_request(
                 state.global_cors_config.clone(),
                 state.debug,
                 state.max_payload_size,
+                state.trailing_slash.clone(),
             )
         };
 
@@ -428,11 +433,17 @@ pub fn test_request(
         };
 
         // Create Actix test service with production middleware stack
+        // Configure NormalizePath based on trailing_slash setting
+        let normalize_mode = match trailing_slash.as_str() {
+            "strip" => TrailingSlash::Trim,     // Remove trailing slashes
+            "append" => TrailingSlash::Always,  // Add trailing slashes
+            _ => TrailingSlash::MergeOnly,      // "keep" - no trailing slash changes
+        };
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(app_state_arc.clone()))
                 .app_data(web::PayloadConfig::new(max_payload_size))
-                .wrap(NormalizePath::trim())
+                .wrap(NormalizePath::new(normalize_mode))
                 .wrap(CorsMiddleware::new())
                 .wrap(CompressionMiddleware::new())
                 .default_service(web::to(handler)),

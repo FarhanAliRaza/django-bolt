@@ -66,10 +66,36 @@ Response = tuple[int, list[tuple[str, str]], bytes]
 _BOLT_API_REGISTRY = []
 
 
+def _normalize_path(path: str, trailing_slash: str = "strip") -> str:
+    """Normalize a path based on trailing slash mode.
+
+    Args:
+        path: The path to normalize
+        trailing_slash: Mode for handling trailing slashes:
+            - "strip": Remove trailing slashes (default)
+            - "append": Add trailing slashes
+            - "keep": No normalization
+
+    Returns:
+        Normalized path based on the trailing_slash mode
+    """
+    # Root path "/" is always kept as-is
+    if not path or path == "/":
+        return "/"
+
+    if trailing_slash == "strip":
+        return path.rstrip("/")
+    elif trailing_slash == "append":
+        return path if path.endswith("/") else path + "/"
+    else:  # "keep"
+        return path
+
+
 class BoltAPI:
     def __init__(
         self,
         prefix: str = "",
+        trailing_slash: str = "strip",
         middleware: list[Any] | None = None,
         middleware_config: dict[str, Any] | None = None,
         django_middleware: bool | list[str] | dict[str, Any] | None = None,
@@ -83,6 +109,10 @@ class BoltAPI:
 
         Args:
             prefix: URL prefix for all routes (e.g., "/api/v1")
+            trailing_slash: How to handle trailing slashes in routes:
+                - "strip": Remove trailing slashes (default, cleaner URLs)
+                - "append": Add trailing slashes (Django convention)
+                - "keep": No normalization, keep as registered
             middleware: List of Bolt middleware instances
             middleware_config: Dict-based middleware configuration (legacy)
             django_middleware: Django middleware configuration. Can be:
@@ -103,7 +133,8 @@ class BoltAPI:
         self._handler_meta: dict[int, HandlerMetadata] = {}
         self._handler_middleware: dict[int, dict[str, Any]] = {}  # Middleware metadata per handler
         self._next_handler_id = 0
-        self.prefix = prefix.rstrip("/")  # Remove trailing slash
+        self.prefix = prefix.rstrip("/")  # Remove trailing slash from prefix
+        self.trailing_slash = trailing_slash  # Mode: "strip", "append", or "keep"
 
         # Build middleware list: Django middleware first, then custom middleware
         self.middleware = []
@@ -795,6 +826,7 @@ class BoltAPI:
         tags: list[str] | None = None,
         summary: str | None = None,
         description: str | None = None,
+        _skip_prefix: bool = False,
     ):
         def decorator(fn: Callable):
             # Detect if handler is async or sync
@@ -803,8 +835,22 @@ class BoltAPI:
             handler_id = self._next_handler_id
             self._next_handler_id += 1
 
+            # Normalize path (following Starlette conventions):
+            # - Empty "" becomes "/"
+            # - Trailing slashes are stripped (except for root "/")
+            normalized_path = path if path else "/"
+
             # Apply prefix to path (conversion happens in Rust)
-            full_path = self.prefix + path if self.prefix else path
+            # _skip_prefix is used internally for OpenAPI routes that should be at absolute paths
+            if _skip_prefix:
+                full_path = normalized_path
+            elif self.prefix:
+                full_path = self.prefix + normalized_path
+            else:
+                full_path = normalized_path
+
+            # Normalize trailing slash based on setting
+            full_path = _normalize_path(full_path, self.trailing_slash)
 
             self._routes.append((method, full_path, handler_id, fn))
             self._handlers[handler_id] = fn
@@ -1316,13 +1362,13 @@ class BoltAPI:
                 f"Use include_router() for Router instances."
             )
 
-        # Normalize path prefix
-        mount_path = path.rstrip("/")
+        # Normalize path prefix: ensure leading slash, strip trailing slash
+        mount_path = "/" + path.strip("/") if path else ""
 
         # Copy routes from sub-app to this app with path prefix
         for method, route_path, handler_id, handler in app._routes:
-            # Compute new path with mount prefix
-            new_path = mount_path + route_path
+            # Compute new path with mount prefix and normalize using parent's trailing_slash setting
+            new_path = _normalize_path(mount_path + route_path, self.trailing_slash)
 
             # Create new handler ID in parent's namespace
             new_handler_id = self._next_handler_id
@@ -1348,7 +1394,9 @@ class BoltAPI:
 
         # Copy WebSocket routes
         for ws_path, handler_id, handler in app._websocket_routes:
-            new_path = mount_path + ws_path
+            # Compute new path with mount prefix and normalize using parent's trailing_slash setting
+            new_path = _normalize_path(mount_path + ws_path, self.trailing_slash)
+
             new_handler_id = self._next_handler_id
             self._next_handler_id += 1
 

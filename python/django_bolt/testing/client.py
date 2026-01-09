@@ -289,7 +289,9 @@ class TestClient(httpx.Client):
             cors_config = self._read_cors_settings_from_django()
 
         # Create test app instance with full CORS config
-        self.app_id = _core.create_test_app(api._dispatch, False, cors_config)
+        # Pass trailing_slash setting to configure NormalizePath middleware
+        trailing_slash = getattr(api, 'trailing_slash', 'strip')
+        self.app_id = _core.create_test_app(api._dispatch, False, cors_config, trailing_slash)
 
         # Register routes
         rust_routes = [(method, path, handler_id, handler) for method, path, handler_id, handler in api._routes]
@@ -499,8 +501,9 @@ class AsyncTestClient(httpx.AsyncClient):
         elif read_django_settings:
             cors_config = TestClient._read_cors_settings_from_django()
 
-        # Create test app instance
-        self.app_id = _core.create_test_app(api._dispatch, False, cors_config)
+        # Create test app instance with trailing_slash setting
+        trailing_slash = getattr(api, 'trailing_slash', 'strip')
+        self.app_id = _core.create_test_app(api._dispatch, False, cors_config, trailing_slash)
 
         # Register routes
         rust_routes = [(method, path, handler_id, handler) for method, path, handler_id, handler in api._routes]

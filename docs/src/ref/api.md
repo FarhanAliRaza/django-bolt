@@ -20,12 +20,59 @@ api = BoltAPI()
 
 ```python
 BoltAPI(
+    prefix="",                 # URL prefix for all routes
+    trailing_slash="strip",    # Trailing slash handling: "strip", "append", or "keep"
     openapi_config=None,       # OpenAPIConfig for documentation
     compression=None,          # CompressionConfig for response compression
     default_auth=None,         # Default authentication backends
     default_guards=None,       # Default permission guards
     middleware=None,           # List of middleware classes
 )
+```
+
+#### Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prefix` | `str` | `""` | URL prefix applied to all routes (e.g., `/api/v1`) |
+| `trailing_slash` | `str` | `"strip"` | How to handle trailing slashes in route paths |
+| `openapi_config` | `OpenAPIConfig` | `None` | Configuration for OpenAPI documentation |
+| `compression` | `CompressionConfig` | `None` | Response compression settings |
+| `default_auth` | `list` | `None` | Default authentication backends for all routes |
+| `default_guards` | `list` | `None` | Default permission guards for all routes |
+| `middleware` | `list` | `None` | Middleware classes to apply |
+
+#### Trailing slash modes
+
+The `trailing_slash` parameter controls how route paths are normalized:
+
+| Mode | Description | Example |
+|------|-------------|---------|
+| `"strip"` | Remove trailing slashes (default) | `/users/` → `/users` |
+| `"append"` | Add trailing slashes | `/users` → `/users/` |
+| `"keep"` | No normalization, keep paths as-is | `/users/` → `/users/` |
+
+```python
+# Default: strip trailing slashes
+api = BoltAPI()
+
+@api.get("/users/")  # Registered as /users
+async def list_users():
+    return []
+
+# Append trailing slashes (Django convention)
+api = BoltAPI(trailing_slash="append")
+
+@api.get("/users")  # Registered as /users/
+async def list_users():
+    return []
+
+# Keep paths as defined
+api = BoltAPI(trailing_slash="keep")
+
+@api.get("/users/")  # Registered as /users/
+async def list_users():
+    return []
 ```
 
 ### Route decorators

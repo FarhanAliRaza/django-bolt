@@ -2,15 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.5.0] - Unreleased
+
+### Added
+
+- **Trailing slash configuration** - New `trailing_slash` parameter for `BoltAPI` to control path normalization:
+  - `"strip"` (default): Remove trailing slashes (`/users/` → `/users`)
+  - `"append"`: Add trailing slashes (`/users` → `/users/`)
+  - `"keep"`: No normalization, keep paths as defined
+- **URL prefix support** - New `prefix` parameter for `BoltAPI` to apply a URL prefix to all routes (e.g., `/api/v1`).
+- **Memory allocator options** - Optional jemalloc and mimalloc support via feature flags for improved memory performance.
 
 ### Performance
 
-- **Rust hot path optimizations** - Merged GIL acquisitions, removed redundant `to_ascii_lowercase()` calls in header extraction, optimized WebSocket upgrade guards to avoid allocations.
-- **Python hot path optimizations** - Changed `_handler_meta` to use `handler_id` (int) keys instead of callable keys for faster O(1) hash lookups.
-- **Dispatch loop optimizations** - Eliminated `hasattr()` checks by initializing `_handler_api_map` in `__init__`, cached `isEnabledFor()` timing decisions per logging middleware instance, and reduced redundant `.get()` calls by pre-extracting commonly used metadata before conditional branches.
+- **Type coercion moved to Rust** - Path, query, and header parameter type coercion now happens in Rust before reaching Python.
+- **Form parsing in Rust** - Multipart form data and URL-encoded body parsing moved to Rust for faster file uploads and form handling.
+- Combined, these changes provide **10-60% performance improvement** depending on endpoint complexity.
+- **Interned Python strings** - Attribute access in Rust hot paths uses interned strings for faster lookups.
+
+### Fixed
+
+- **OpenAPI authorize button** - Fixed authorize button not showing for routes with authentication in Swagger UI.
+- **OpenAPI docs with prefix** - Documentation routes (`/docs/*`) now work correctly when API has a prefix, staying at absolute paths.
+- **Mount path normalization** - Mount paths without leading slash are now properly normalized.
+
+### Changed
+
+- **Refactored parameter extraction** - Consolidated `binding.py` into `_kwargs` module with pre-compiled extractors for better performance and maintainability.
+- **Updated jsonwebtoken to v10** - Upgraded Rust JWT library.
+
+## [0.4.8]
+
+### Added
+
+- **UploadFile class** - Django-compatible file upload handling with automatic resource cleanup, size validation, and content type checking.
+- **FileSize enum** - Human-readable file size constants (`FileSize.MB(10)`, `FileSize.GB(1)`) for upload limits.
+- **MediaType enum** - Content type constants for response handling.
+- **Tags support for views** - Added `tags` parameter to `@api.view()` and `@api.viewset()` decorators for OpenAPI grouping.
+
+### Changed
+
+- **Documentation improvements** - Updated routing and cookie documentation.
+
+## [0.4.7]
+
+### Performance
+
 - **Lazy user loading optimization** - Replaced lambda with `functools.partial` for `SimpleLazyObject` user loader, avoiding closure allocation overhead per authenticated request.
-- **Response serialization fast path** - Added dedicated fast path for dict/list responses (90%+ of handlers) that skips `_convert_serializers()` check and unnecessary isinstance chain. Extracted `default_status_code` once at function start to avoid repeated dict lookups.
+- **Response serialization fast path** - Added dedicated fast path for dict/list responses (90%+ of handlers) that skips `_convert_serializers()` check and unnecessary isinstance chain.
 
 ## [0.4.6]
 

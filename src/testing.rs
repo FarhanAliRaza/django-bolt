@@ -393,7 +393,7 @@ pub fn test_request(
 
     runtime_handle.block_on(async {
         // Read test app state
-        let (router, route_metadata, dispatch, global_cors_config, debug, max_payload_size, trailing_slash) = {
+        let (router, route_metadata, dispatch, global_cors_config, debug, max_payload_size, _trailing_slash) = {
             let state = app_state.read();
             (
                 state.router.clone(),
@@ -433,17 +433,13 @@ pub fn test_request(
         };
 
         // Create Actix test service with production middleware stack
-        // Configure NormalizePath based on trailing_slash setting
-        let normalize_mode = match trailing_slash.as_str() {
-            "strip" => TrailingSlash::Trim,     // Remove trailing slashes
-            "append" => TrailingSlash::Always,  // Add trailing slashes
-            _ => TrailingSlash::MergeOnly,      // "keep" - no trailing slash changes
-        };
+        // Use MergeOnly for NormalizePath (only normalizes // -> /)
+        // Trailing slash handling is done via Starlette-style redirect in handler
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(app_state_arc.clone()))
                 .app_data(web::PayloadConfig::new(max_payload_size))
-                .wrap(NormalizePath::new(normalize_mode))
+                .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
                 .wrap(CorsMiddleware::new())
                 .wrap(CompressionMiddleware::new())
                 .default_service(web::to(handler)),
@@ -542,6 +538,29 @@ async fn handle_test_request_internal(
             let path_params = route_match.path_params();
             (handler, path_params, handler_id)
         } else {
+            // No route found - check for trailing slash redirect FIRST
+            // Starlette-style: redirect to canonical URL if alternate path exists
+            if path != "/" {
+                let alternate_path = if path.ends_with('/') {
+                    path.trim_end_matches('/').to_string()
+                } else {
+                    format!("{}/", path)
+                };
+
+                // Try alternate path - if it matches, send 308 redirect
+                if router.find(method, &alternate_path).is_some() {
+                    let query = req.query_string();
+                    let location = if query.is_empty() {
+                        alternate_path
+                    } else {
+                        format!("{}?{}", alternate_path, query)
+                    };
+                    return HttpResponse::PermanentRedirect() // 308
+                        .insert_header(("Location", location))
+                        .finish();
+                }
+            }
+
             // Automatic OPTIONS handling
             if method == "OPTIONS" {
                 let available_methods = router.find_all_methods(path);

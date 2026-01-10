@@ -43,7 +43,7 @@ api = BoltAPI(
         title="My API",
         version="1.0.0",
         enabled=True,
-    )
+    ),
 )
 #
 # 2. Custom compression with specific settings:
@@ -80,6 +80,10 @@ class Item(msgspec.Struct):
     name: str
     price: float
     is_offer: bool | None = None
+
+@api.get("/items100", response_model=list[Item])
+async def items100() -> list[Item]:
+    return [Item(name=f"item{i}", price=float(i), is_offer=(i % 2 == 0)) for i in range(100)]
 
 
 # ============================================================================
@@ -437,10 +441,6 @@ async def read_item(item_id: int, q: str | None = None):
 async def update_item(item_id: int, item: Item) -> dict:
     return {"item_name": item.name, "item_id": item_id}
 
-
-@api.get("/items100", response_model=list[Item])
-async def items100() -> list[Item]:
-    return [Item(name=f"item{i}", price=float(i), is_offer=(i % 2 == 0)) for i in range(100)]
 
 
 # ==== Benchmarks: JSON parsing/validation & slow async op ====

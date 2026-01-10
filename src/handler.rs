@@ -376,6 +376,30 @@ pub async fn handle_request(
             };
             (path_params, handler_id)
         } else {
+            // No route found - check for trailing slash redirect FIRST
+            // This only runs when route doesn't match (minimal overhead)
+            // Starlette-style: redirect to canonical URL if alternate path exists
+            if path != "/" {
+                let alternate_path = if path.ends_with('/') {
+                    path.trim_end_matches('/').to_string()
+                } else {
+                    format!("{}/", path)
+                };
+
+                // Try alternate path - if it matches, send 308 redirect
+                if router.find(method, &alternate_path).is_some() {
+                    let query = req.query_string();
+                    let location = if query.is_empty() {
+                        alternate_path
+                    } else {
+                        format!("{}?{}", alternate_path, query)
+                    };
+                    return HttpResponse::PermanentRedirect() // 308
+                        .insert_header(("Location", location))
+                        .finish();
+                }
+            }
+
             // No explicit handler found - check for automatic OPTIONS
             if method == "OPTIONS" {
                 let available_methods = router.find_all_methods(path);

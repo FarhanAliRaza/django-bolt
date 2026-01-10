@@ -302,7 +302,12 @@ class Command(BaseCommand):
         merged_api._register_auth_backends()
 
         # Start the server (all handlers go through async dispatch with thread pool for sync)
-        _core.start_server_async(merged_api._dispatch, options["host"], options["port"], compression_config)
+        _core.start_server_async(
+            merged_api._dispatch,
+            options["host"],
+            options["port"],
+            compression_config,
+        )
 
     def autodiscover_apis(self):
         """Discover BoltAPI instances from installed apps.
@@ -429,6 +434,8 @@ class Command(BaseCommand):
 
         # Create a new merged API without logging (handlers will use their original APIs)
         merged = BoltAPI(enable_logging=False)
+        # Preserve trailing_slash from first API (routes are pre-normalized by their original API)
+        merged.trailing_slash = apis[0][1].trailing_slash
         route_map = {}  # Track conflicts
 
         # Map handler_id -> original API instance (preserves per-API context)
@@ -441,6 +448,8 @@ class Command(BaseCommand):
             self.stdout.write(f"[django-bolt] Merging API from {api_path}")
 
             for method, path, old_handler_id, handler in api._routes:
+                # Keep routes with their original trailing slash (based on each API's setting)
+                # Redirect-on-mismatch handles both URLs at runtime (Starlette-style)
                 route_key = f"{method} {path}"
 
                 if route_key in route_map:
@@ -477,6 +486,7 @@ class Command(BaseCommand):
 
             # Merge WebSocket routes from this API
             for path, old_ws_handler_id, ws_handler in api._websocket_routes:
+                # Keep routes with their original trailing slash (based on each API's setting)
                 ws_route_key = f"WS {path}"
 
                 if ws_route_key in route_map:

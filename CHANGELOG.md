@@ -2,7 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.5.0] - Unreleased
+## [0.5.1]
+
+### Changed
+
+- **Starlette-style trailing slash redirects** - When a request URL doesn't match a route, Django-Bolt now checks if the alternate path (with/without trailing slash) exists. If found, returns a **308 Permanent Redirect** to the canonical URL. This means both URLs work, with the non-canonical one redirecting.
+- **Mixed trailing_slash settings** - When auto-discovering multiple `api.py` files, each API's routes now keep their own `trailing_slash` format. Different apps can use different conventions without conflict.
+
+### Fixed
+
+- **Trailing slash with multiple APIs** - Fixed issue where APIs with different `trailing_slash` settings would conflict when merged. Each API now respects its own setting.
+
+### Documentation
+
+- Updated routing docs with trailing slash redirect behavior and multi-API examples.
+
+## [0.5.0]
 
 ### Added
 

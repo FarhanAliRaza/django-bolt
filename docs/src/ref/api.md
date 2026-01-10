@@ -44,13 +44,15 @@ BoltAPI(
 
 #### Trailing slash modes
 
-The `trailing_slash` parameter controls how route paths are normalized:
+The `trailing_slash` parameter controls how route paths are normalized at registration time:
 
 | Mode | Description | Example |
 |------|-------------|---------|
 | `"strip"` | Remove trailing slashes (default) | `/users/` → `/users` |
 | `"append"` | Add trailing slashes | `/users` → `/users/` |
 | `"keep"` | No normalization, keep paths as-is | `/users/` → `/users/` |
+
+**Runtime behavior:** When a request doesn't match a route, Django-Bolt checks if the alternate path (with/without trailing slash) exists. If found, returns a **308 Permanent Redirect** to the canonical URL.
 
 ```python
 # Default: strip trailing slashes
@@ -59,6 +61,8 @@ api = BoltAPI()
 @api.get("/users/")  # Registered as /users
 async def list_users():
     return []
+# GET /users  → 200 OK
+# GET /users/ → 308 Redirect to /users
 
 # Append trailing slashes (Django convention)
 api = BoltAPI(trailing_slash="append")
@@ -66,6 +70,8 @@ api = BoltAPI(trailing_slash="append")
 @api.get("/users")  # Registered as /users/
 async def list_users():
     return []
+# GET /users/  → 200 OK
+# GET /users   → 308 Redirect to /users/
 
 # Keep paths as defined
 api = BoltAPI(trailing_slash="keep")
@@ -74,6 +80,8 @@ api = BoltAPI(trailing_slash="keep")
 async def list_users():
     return []
 ```
+
+**Multiple APIs:** When auto-discovering multiple `api.py` files, each API's routes keep their own trailing slash format. Different apps can use different conventions.
 
 ### Route decorators
 

@@ -23,6 +23,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from asgiref.sync import async_to_sync
+from django.utils.deprecation import MiddlewareMixin
 
 from ..middleware_response import MiddlewareResponse
 
@@ -505,8 +506,14 @@ def _is_django_builtin_middleware(middleware_class: type) -> bool:
     Third-party middleware might do blocking I/O (database queries, HTTP calls)
     in their hooks, so we need to use sync_to_async for safety.
     """
-    module = middleware_class.__module__
-    return any(module.startswith(prefix) for prefix in _DJANGO_SAFE_MIDDLEWARE_PREFIXES)
+    if not issubclass(middleware_class, MiddlewareMixin):
+        return False
+
+    for base in middleware_class.__mro__:
+        module = base.__module__
+        if any(module.startswith(prefix) for prefix in _DJANGO_SAFE_MIDDLEWARE_PREFIXES):
+            return True
+    return False
 
 
 class DjangoMiddlewareStack:

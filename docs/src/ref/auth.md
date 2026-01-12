@@ -73,16 +73,62 @@ APIKeyAuthentication(
 
 ### SessionAuthentication
 
-!!! warning "In Development"
+!!! warning "Performance"
 
-    Session authentication is not yet implemented. This is a placeholder for future functionality.
+    Session authentication has higher overhead than JWT or API key authentication. It requires Python execution for every request to validate sessions and load user data from the database.
 
-Django session authentication.
+!!! note "Middleware Required"
+
+    Session authentication requires Django middleware to be configured. You must include `SessionMiddleware` and `AuthenticationMiddleware` in your middleware stack using `DjangoMiddlewareStack`:
 
 ```python
-from django_bolt.auth import SessionAuthentication
 
-SessionAuthentication()
+from django_bolt import BoltAPI
+from django_bolt.middleware.django_adapter import DjangoMiddlewareStack
+from django_bolt.middleware.middleware import SessionMiddleware, AuthenticationMiddleware
+
+api = BoltAPI(
+    middleware=[
+        DjangoMiddlewareStack([
+            SessionMiddleware, # must come before `AuthenticationMiddleware`. 
+            AuthenticationMiddleware,
+        ])
+    ]
+    )
+```
+#### Usage
+
+```python
+from django.contrib.auth import alogin, alogout
+from django_bolt.exceptions import Unauthorized
+import msgspec
+
+class LoginRequest(msgspec.Struct):
+    username: str
+    password: str
+
+@api.post("/login")
+async def login(request, credentials: LoginRequest):
+    user = await authenticate_user(credentials.username, credentials.password)
+    if not user:
+        raise Unauthorized(detail="Invalid credentials")
+    
+    await alogin(request, user)
+    return {"status": "ok"}
+
+@api.post("/logout", auth=[SessionAuthentication()], guards=[IsAuthenticated()])
+async def logout(request):
+    await alogout(request)
+    return {"status": "ok"}
+```
+
+#### Session Cookie Name
+
+The session cookie name defaults to `"sessionid"` but can be customized via Django's `SESSION_COOKIE_NAME` setting:
+
+```python
+# settings.py
+SESSION_COOKIE_NAME = "custom_sessionid"
 ```
 
 ## Permission guards

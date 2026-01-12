@@ -7,7 +7,6 @@ extractor functions that avoid runtime type checking.
 
 from __future__ import annotations
 
-import fnmatch
 import inspect
 from collections.abc import Callable, Sequence
 from typing import Any, get_args, get_origin
@@ -15,9 +14,9 @@ from typing import Any, get_args, get_origin
 import msgspec
 from asgiref.sync import sync_to_async
 
-from .datastructures import UploadFile
-from .exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
-from .typing import (
+from ..datastructures import UploadFile
+from ..exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
+from ..typing import (
     FieldDefinition,
     HandlerMetadata,
     is_msgspec_struct,
@@ -27,7 +26,6 @@ from .typing import (
 )
 
 __all__ = [
-    "convert_primitive",
     "create_extractor",
     "create_extractor_for_field",
     "create_path_extractor",
@@ -54,60 +52,18 @@ def get_msgspec_decoder(type_: Any) -> msgspec.json.Decoder:
     return _DECODER_CACHE[type_]
 
 
-def convert_primitive(value: str, annotation: Any) -> Any:
-    """
-    Convert string value to the appropriate type based on annotation.
-
-    Args:
-        value: Raw string value from request
-        annotation: Target type annotation
-
-    Returns:
-        Converted value
-    """
-    tp = unwrap_optional(annotation)
-
-    if tp is str or tp is Any or tp is None or tp is inspect._empty:
-        return value
-
-    if tp is int:
-        try:
-            return int(value)
-        except ValueError as e:
-            raise HTTPException(422, detail=f"Invalid integer value: '{value}'") from e
-
-    if tp is float:
-        try:
-            return float(value)
-        except ValueError as e:
-            raise HTTPException(422, detail=f"Invalid float value: '{value}'") from e
-
-    if tp is bool:
-        v = value.lower()
-        if v in ("1", "true", "t", "yes", "y", "on"):
-            return True
-        if v in ("0", "false", "f", "no", "n", "off"):
-            return False
-        return bool(value)
-
-    # Fallback: try msgspec decode for JSON in value
-    try:
-        return msgspec.json.decode(value.encode())
-    except Exception:
-        return value
-
-
 def create_path_extractor(name: str, annotation: Any, alias: str | None = None) -> Callable:
-    """Create a pre-compiled extractor for path parameters."""
-    key = alias or name
+    """Create a pre-compiled extractor for path parameters.
 
-    def converter(v):
-        return convert_primitive(str(v), annotation)
+    Note: Rust pre-converts values to typed Python objects (int, float, bool,
+    str, uuid.UUID, decimal.Decimal, datetime, date, time) for both HTTP and WebSocket.
+    """
+    key = alias or name
 
     def extract(params_map: dict[str, Any]) -> Any:
         if key not in params_map:
             raise HTTPException(status_code=422, detail=f"Missing required path parameter: {key}")
-        return converter(params_map[key])
+        return params_map[key]
 
     return extract
 
@@ -118,30 +74,32 @@ def create_query_extractor(name: str, annotation: Any, default: Any, alias: str 
     Supports both individual fields and Struct/Serializer types.
     When annotation is a msgspec.Struct or Serializer, extracts all struct
     fields from the query parameters and constructs the struct instance.
+
+    Note: Rust pre-converts values to typed Python objects (int, float, bool,
+    str, uuid.UUID, decimal.Decimal, datetime, date, time) for both HTTP and WebSocket.
     """
     # Check if annotation is a Struct/Serializer type
     unwrapped = unwrap_optional(annotation)
     if is_msgspec_struct(unwrapped):
         return _create_param_struct_extractor(unwrapped, default, "query parameter")
 
-    # Individual field extraction (original behavior)
+    # Individual field extraction
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
-
-    def converter(v):
-        return convert_primitive(str(v), annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
 
         def extract(query_map: dict[str, Any]) -> Any:
-            return converter(query_map[key]) if key in query_map else default_value
+            if key in query_map:
+                return query_map[key]
+            return default_value
     else:
 
         def extract(query_map: dict[str, Any]) -> Any:
             if key not in query_map:
                 raise HTTPException(status_code=422, detail=f"Missing required query parameter: {key}")
-            return converter(query_map[key])
+            return query_map[key]
 
     return extract
 
@@ -152,32 +110,34 @@ def create_header_extractor(name: str, annotation: Any, default: Any, alias: str
     Supports both individual fields and Struct/Serializer types.
     When annotation is a msgspec.Struct or Serializer, extracts all struct
     fields from the headers and constructs the struct instance.
+
+    Note: Rust pre-converts values to typed Python objects (int, float, bool,
+    str, uuid.UUID, decimal.Decimal, datetime, date, time) for both HTTP and WebSocket.
     """
     # Check if annotation is a Struct/Serializer type
     unwrapped = unwrap_optional(annotation)
     if is_msgspec_struct(unwrapped):
         return _create_header_struct_extractor(unwrapped, default)
 
-    # Individual field extraction (original behavior)
+    # Individual field extraction
     # Convert underscores to hyphens for HTTP header lookup
     # e.g., x_custom -> x-custom, content_type -> content-type
     key = (alias or name).lower().replace("_", "-")
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
 
-    def converter(v):
-        return convert_primitive(str(v), annotation)
-
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
 
         def extract(headers_map: dict[str, str]) -> Any:
-            return converter(headers_map[key]) if key in headers_map else default_value
+            if key in headers_map:
+                return headers_map[key]
+            return default_value
     else:
 
         def extract(headers_map: dict[str, str]) -> Any:
             if key not in headers_map:
                 raise HTTPException(status_code=422, detail=f"Missing required header: {key}")
-            return converter(headers_map[key])
+            return headers_map[key]
 
     return extract
 
@@ -188,30 +148,32 @@ def create_cookie_extractor(name: str, annotation: Any, default: Any, alias: str
     Supports both individual fields and Struct/Serializer types.
     When annotation is a msgspec.Struct or Serializer, extracts all struct
     fields from the cookies and constructs the struct instance.
+
+    Note: Rust pre-converts values to typed Python objects (int, float, bool,
+    str, uuid.UUID, decimal.Decimal, datetime, date, time) for both HTTP and WebSocket.
     """
     # Check if annotation is a Struct/Serializer type
     unwrapped = unwrap_optional(annotation)
     if is_msgspec_struct(unwrapped):
         return _create_param_struct_extractor(unwrapped, default, "cookie")
 
-    # Individual field extraction (original behavior)
+    # Individual field extraction
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
-
-    def converter(v):
-        return convert_primitive(str(v), annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
 
         def extract(cookies_map: dict[str, str]) -> Any:
-            return converter(cookies_map[key]) if key in cookies_map else default_value
+            if key in cookies_map:
+                return cookies_map[key]
+            return default_value
     else:
 
         def extract(cookies_map: dict[str, str]) -> Any:
             if key not in cookies_map:
                 raise HTTPException(status_code=422, detail=f"Missing required cookie: {key}")
-            return converter(cookies_map[key])
+            return cookies_map[key]
 
     return extract
 
@@ -222,30 +184,29 @@ def create_form_extractor(name: str, annotation: Any, default: Any, alias: str |
     Supports both individual fields and Struct/Serializer types.
     When annotation is a msgspec.Struct or Serializer, extracts all struct
     fields from the form data and constructs the struct instance.
+
+    Note: Rust pre-converts values to typed Python objects (int, float, bool, str).
     """
     # Check if annotation is a Struct/Serializer type
     unwrapped = unwrap_optional(annotation)
     if is_msgspec_struct(unwrapped):
         return _create_param_struct_extractor(unwrapped, default, "form field")
 
-    # Individual field extraction (original behavior)
+    # Individual field extraction
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
-
-    def converter(v):
-        return convert_primitive(str(v), annotation)
 
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
 
         def extract(form_map: dict[str, Any]) -> Any:
-            return converter(form_map[key]) if key in form_map else default_value
+            return form_map.get(key, default_value)
     else:
 
         def extract(form_map: dict[str, Any]) -> Any:
             if key not in form_map:
                 raise HTTPException(status_code=422, detail=f"Missing required form field: {key}")
-            return converter(form_map[key])
+            return form_map[key]
 
     return extract
 
@@ -299,7 +260,6 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
 
             for field_info in fields_info:
                 field_name = field_info["name"]
-                field_type = field_info["type"]
 
                 if field_info["is_upload_file"]:
                     # Handle UploadFile field from files_map
@@ -332,12 +292,8 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
                         )
                     # If not required and not present, let msgspec use the default
                 elif field_name in param_map:
-                    # Regular form field
-                    value = param_map[field_name]
-                    if isinstance(value, str):
-                        converted[field_name] = convert_primitive(value, field_type)
-                    else:
-                        converted[field_name] = value
+                    # Regular form field - Rust pre-converts to typed values
+                    converted[field_name] = param_map[field_name]
                 elif field_info["required"]:
                     raise HTTPException(status_code=422, detail=f"Missing required {param_type}: {field_name}")
 
@@ -355,14 +311,10 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
             converted = {}
             for field_info in fields_info:
                 field_name = field_info["name"]
-                field_type = field_info["type"]
 
                 if field_name in param_map:
-                    value = param_map[field_name]
-                    if isinstance(value, str):
-                        converted[field_name] = convert_primitive(value, field_type)
-                    else:
-                        converted[field_name] = value
+                    # Rust pre-converts to typed values
+                    converted[field_name] = param_map[field_name]
                 elif field_info["required"]:
                     raise HTTPException(status_code=422, detail=f"Missing required {param_type}: {field_name}")
 
@@ -381,6 +333,8 @@ def _create_header_struct_extractor(struct_type: type, default: Any) -> Callable
     Similar to _create_param_struct_extractor but converts field names from
     snake_case to kebab-case for HTTP header lookup.
 
+    Note: Rust pre-converts values to typed Python objects (int, float, bool, str).
+
     Args:
         struct_type: The msgspec.Struct or Serializer class
         default: Default value if the entire struct is optional
@@ -388,6 +342,8 @@ def _create_header_struct_extractor(struct_type: type, default: Any) -> Callable
     Returns:
         Extractor function that takes headers_map and returns struct instance
     """
+    _ = default  # Reserved for future optional struct support
+
     # Pre-compute field info at registration time
     # Include the kebab-case header name for lookup
     fields_info = []
@@ -396,24 +352,19 @@ def _create_header_struct_extractor(struct_type: type, default: Any) -> Callable
             {
                 "name": field.name,
                 "header_name": field.name.lower().replace("_", "-"),
-                "type": field.type,
                 "required": field.required,
-                "default": field.default,
             }
         )
 
     def extract(headers_map: dict[str, str]) -> Any:
-        # Convert header values to appropriate types
         converted = {}
         for field_info in fields_info:
             field_name = field_info["name"]
             header_name = field_info["header_name"]
-            field_type = field_info["type"]
 
             if header_name in headers_map:
-                # Convert string value to appropriate type
-                value = headers_map[header_name]
-                converted[field_name] = convert_primitive(value, field_type)
+                # Rust pre-converts to typed values
+                converted[field_name] = headers_map[header_name]
             elif field_info["required"]:
                 raise HTTPException(status_code=422, detail=f"Missing required header: {header_name}")
             # If not in headers_map and not required, let msgspec use the default
@@ -427,78 +378,15 @@ def _create_header_struct_extractor(struct_type: type, default: Any) -> Callable
     return extract
 
 
-def _validate_upload_file(
-    upload: UploadFile,
-    field_name: str,
-    max_size: int | None,
-    min_size: int | None,
-    allowed_types: Sequence[str] | None,
-) -> None:
-    """
-    Validate an UploadFile against constraints.
-
-    Args:
-        upload: The UploadFile to validate
-        field_name: Field name for error messages
-        max_size: Maximum file size in bytes
-        min_size: Minimum file size in bytes
-        allowed_types: Allowed MIME types (supports wildcards like 'image/*')
-
-    Raises:
-        RequestValidationError: If validation fails
-    """
-    if max_size is not None and upload.size > max_size:
-        raise RequestValidationError(
-            errors=[
-                {
-                    "type": "file_too_large",
-                    "loc": ("body", field_name),
-                    "msg": f"File exceeds maximum size of {max_size} bytes",
-                    "input": {"filename": upload.filename, "size": upload.size},
-                    "ctx": {"max_size": max_size, "actual_size": upload.size},
-                }
-            ]
-        )
-
-    if min_size is not None and upload.size < min_size:
-        raise RequestValidationError(
-            errors=[
-                {
-                    "type": "file_too_small",
-                    "loc": ("body", field_name),
-                    "msg": f"File is below minimum size of {min_size} bytes",
-                    "input": {"filename": upload.filename, "size": upload.size},
-                    "ctx": {"min_size": min_size, "actual_size": upload.size},
-                }
-            ]
-        )
-
-    if allowed_types is not None:
-        content_type = upload.content_type
-        # Check if content type matches any allowed pattern (supports wildcards like 'image/*')
-        if not any(fnmatch.fnmatch(content_type, pattern) for pattern in allowed_types):
-            raise RequestValidationError(
-                errors=[
-                    {
-                        "type": "file_invalid_content_type",
-                        "loc": ("body", field_name),
-                        "msg": f"Invalid content type '{content_type}'",
-                        "input": {"filename": upload.filename, "content_type": content_type},
-                        "ctx": {"allowed_types": list(allowed_types), "actual_type": content_type},
-                    }
-                ]
-            )
-
-
 def create_file_extractor(
     name: str,
     annotation: Any,
     default: Any,
     alias: str | None = None,
-    max_size: int | None = None,
-    min_size: int | None = None,
-    allowed_types: Sequence[str] | None = None,
-    max_files: int | None = None,
+    max_size: int | None = None,  # Validated in Rust
+    min_size: int | None = None,  # Validated in Rust
+    allowed_types: Sequence[str] | None = None,  # Validated in Rust
+    max_files: int | None = None,  # Validated in Rust
 ) -> Callable:
     """
     Create a pre-compiled extractor for file uploads with UploadFile support.
@@ -506,19 +394,26 @@ def create_file_extractor(
     Supports both the new UploadFile type and legacy dict annotations for
     backward compatibility.
 
+    Note: File validation (max_size, min_size, allowed_types, max_files) is now
+    handled in Rust at parse time. This function only creates UploadFile objects
+    from the pre-validated file data.
+
     Args:
         name: Parameter name
         annotation: Type annotation (UploadFile, list[UploadFile], dict, list[dict])
         default: Default value
         alias: Alternative field name
-        max_size: Maximum file size in bytes
-        min_size: Minimum file size in bytes
-        allowed_types: Allowed MIME types (supports wildcards)
-        max_files: Maximum number of files for list types
+        max_size: Maximum file size in bytes (validated in Rust)
+        min_size: Minimum file size in bytes (validated in Rust)
+        allowed_types: Allowed MIME types (validated in Rust)
+        max_files: Maximum number of files (validated in Rust)
 
     Returns:
         Extractor function
     """
+    # Silence unused parameter warnings - these are passed to Rust via metadata
+    _ = max_size, min_size, allowed_types, max_files
+
     key = alias or name
     optional = default is not inspect.Parameter.empty or is_optional(annotation)
 
@@ -531,9 +426,6 @@ def create_file_extractor(
     # Use is_upload_file_type helper which handles all cases including Optional
     expects_upload_file = is_upload_file_type(annotation)
 
-    # Pre-compute validation params
-    has_validation = max_size is not None or min_size is not None or allowed_types is not None
-
     if optional:
         default_value = None if default is inspect.Parameter.empty else default
 
@@ -545,23 +437,7 @@ def create_file_extractor(
 
             if expects_upload_file:
                 if isinstance(file_info, list):
-                    # Validate max_files
-                    if max_files is not None and len(file_info) > max_files:
-                        raise RequestValidationError(
-                            errors=[
-                                {
-                                    "type": "file_too_many",
-                                    "loc": ("body", key),
-                                    "msg": "Too many files uploaded",
-                                    "input": {"count": len(file_info)},
-                                    "ctx": {"max_files": max_files, "actual_count": len(file_info)},
-                                }
-                            ]
-                        )
                     uploads = [UploadFile.from_file_info(f) for f in file_info]
-                    if has_validation:
-                        for upload in uploads:
-                            _validate_upload_file(upload, key, max_size, min_size, allowed_types)
                     # Track for auto-cleanup
                     if "_upload_files" not in files_map:
                         files_map["_upload_files"] = []
@@ -569,8 +445,6 @@ def create_file_extractor(
                     return uploads if expects_list else uploads[0]
                 else:
                     upload = UploadFile.from_file_info(file_info)
-                    if has_validation:
-                        _validate_upload_file(upload, key, max_size, min_size, allowed_types)
                     # Track for auto-cleanup
                     if "_upload_files" not in files_map:
                         files_map["_upload_files"] = []
@@ -602,23 +476,7 @@ def create_file_extractor(
 
             if expects_upload_file:
                 if isinstance(file_info, list):
-                    # Validate max_files
-                    if max_files is not None and len(file_info) > max_files:
-                        raise RequestValidationError(
-                            errors=[
-                                {
-                                    "type": "file_too_many",
-                                    "loc": ("body", key),
-                                    "msg": "Too many files uploaded",
-                                    "input": {"count": len(file_info)},
-                                    "ctx": {"max_files": max_files, "actual_count": len(file_info)},
-                                }
-                            ]
-                        )
                     uploads = [UploadFile.from_file_info(f) for f in file_info]
-                    if has_validation:
-                        for upload in uploads:
-                            _validate_upload_file(upload, key, max_size, min_size, allowed_types)
                     # Track for auto-cleanup
                     if "_upload_files" not in files_map:
                         files_map["_upload_files"] = []
@@ -626,8 +484,6 @@ def create_file_extractor(
                     return uploads if expects_list else uploads[0]
                 else:
                     upload = UploadFile.from_file_info(file_info)
-                    if has_validation:
-                        _validate_upload_file(upload, key, max_size, min_size, allowed_types)
                     # Track for auto-cleanup
                     if "_upload_files" not in files_map:
                         files_map["_upload_files"] = []

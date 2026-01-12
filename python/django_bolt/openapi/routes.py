@@ -111,6 +111,10 @@ class OpenAPIRouteRegistrar:
         # If using main API, routes include the full path
         route_prefix = "" if use_django_auth else self.api.openapi_config.path
 
+        # When registering on main API (not using django_auth), skip the API prefix
+        # so docs are at absolute paths (e.g., /docs/*) regardless of API prefix
+        skip_prefix = not use_django_auth
+
         # Always register JSON endpoint
         json_plugin = JsonRenderPlugin()
 
@@ -124,7 +128,9 @@ class OpenAPIRouteRegistrar:
                 raise Exception(f"Failed to generate OpenAPI JSON schema: {type(e).__name__}: {str(e)}") from e
 
         openapi_json_handler = self._apply_django_auth(openapi_json_handler)
-        docs_api.get(f"{route_prefix}/openapi.json", guards=guards, auth=auth)(openapi_json_handler)
+        docs_api._route_decorator(
+            "GET", f"{route_prefix}/openapi.json", guards=guards, auth=auth, _skip_prefix=skip_prefix
+        )(openapi_json_handler)
 
         # Always register YAML endpoints
         yaml_plugin = YamlRenderPlugin()
@@ -136,7 +142,9 @@ class OpenAPIRouteRegistrar:
             return PlainText(rendered, status_code=200, headers={"content-type": yaml_plugin.media_type})
 
         openapi_yaml_handler = self._apply_django_auth(openapi_yaml_handler)
-        docs_api.get(f"{route_prefix}/openapi.yaml", guards=guards, auth=auth)(openapi_yaml_handler)
+        docs_api._route_decorator(
+            "GET", f"{route_prefix}/openapi.yaml", guards=guards, auth=auth, _skip_prefix=skip_prefix
+        )(openapi_yaml_handler)
 
         async def openapi_yml_handler(request):
             """Serve OpenAPI schema as YAML (alternative extension)."""
@@ -145,13 +153,15 @@ class OpenAPIRouteRegistrar:
             return PlainText(rendered, status_code=200, headers={"content-type": yaml_plugin.media_type})
 
         openapi_yml_handler = self._apply_django_auth(openapi_yml_handler)
-        docs_api.get(f"{route_prefix}/openapi.yml", guards=guards, auth=auth)(openapi_yml_handler)
+        docs_api._route_decorator(
+            "GET", f"{route_prefix}/openapi.yml", guards=guards, auth=auth, _skip_prefix=skip_prefix
+        )(openapi_yml_handler)
 
         # Register UI plugin routes
-        self._register_ui_plugins(docs_api, route_prefix)
+        self._register_ui_plugins(docs_api, route_prefix, skip_prefix)
 
         # Add root redirect to default plugin
-        self._register_root_redirect(docs_api, route_prefix)
+        self._register_root_redirect(docs_api, route_prefix, skip_prefix)
 
         # If using separate docs API, mount it at the docs path
         if use_django_auth and self._docs_api is not None:
@@ -172,7 +182,7 @@ class OpenAPIRouteRegistrar:
 
         return self.api._openapi_schema
 
-    def _register_ui_plugins(self, docs_api, route_prefix: str) -> None:
+    def _register_ui_plugins(self, docs_api, route_prefix: str, skip_prefix: bool) -> None:
         """Register UI plugin routes (Swagger UI, ReDoc, etc.)."""
         # Schema URL is always the full path (for the UI to fetch)
         schema_url = f"{self.api.openapi_config.path}/openapi.json"
@@ -201,9 +211,11 @@ class OpenAPIRouteRegistrar:
 
                 handler = make_handler(plugin)
                 handler = self._apply_django_auth(handler)
-                docs_api.get(full_path, guards=guards, auth=auth)(handler)
+                docs_api._route_decorator(
+                    "GET", full_path, guards=guards, auth=auth, _skip_prefix=skip_prefix
+                )(handler)
 
-    def _register_root_redirect(self, docs_api, route_prefix: str) -> None:
+    def _register_root_redirect(self, docs_api, route_prefix: str, skip_prefix: bool) -> None:
         """Register root path to serve default UI directly.
 
         Serves the default UI at the root path instead of redirecting.
@@ -238,4 +250,6 @@ class OpenAPIRouteRegistrar:
 
             handler = make_root_handler(plugin, schema_url)
             handler = self._apply_django_auth(handler)
-            docs_api.get(root_path, guards=guards, auth=auth)(handler)
+            docs_api._route_decorator(
+                "GET", root_path, guards=guards, auth=auth, _skip_prefix=skip_prefix
+            )(handler)

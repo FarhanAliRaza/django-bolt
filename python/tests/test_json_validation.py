@@ -15,9 +15,10 @@ import msgspec
 import pytest
 
 from django_bolt import BoltAPI
-from django_bolt.binding import _DECODER_CACHE, convert_primitive, create_body_extractor, get_msgspec_decoder
+from django_bolt._kwargs import create_body_extractor, get_msgspec_decoder
+from django_bolt._kwargs.extractors import _DECODER_CACHE
 from django_bolt.error_handlers import handle_exception, msgspec_validation_error_to_dict
-from django_bolt.exceptions import HTTPException, RequestValidationError
+from django_bolt.exceptions import RequestValidationError
 
 
 class UserCreate(msgspec.Struct):
@@ -342,45 +343,11 @@ class TestRequestValidationErrorHandling:
 
 
 class TestTypeCoercionEdgeCases:
-    """Test edge cases in type coercion and conversion."""
+    """Test edge cases in type coercion and conversion.
 
-    def test_boolean_coercion_from_string(self):
-        """Test boolean coercion from string query params."""
-        # True values
-        assert convert_primitive("true", bool) is True
-        assert convert_primitive("True", bool) is True
-        assert convert_primitive("1", bool) is True
-        assert convert_primitive("yes", bool) is True
-        assert convert_primitive("on", bool) is True
-
-        # False values
-        assert convert_primitive("false", bool) is False
-        assert convert_primitive("False", bool) is False
-        assert convert_primitive("0", bool) is False
-        assert convert_primitive("no", bool) is False
-        assert convert_primitive("off", bool) is False
-
-    def test_number_coercion_errors(self):
-        """Test that invalid number strings raise errors."""
-        # Invalid int - now raises HTTPException(422) instead of ValueError
-        with pytest.raises(HTTPException) as exc_info:
-            convert_primitive("not_a_number", int)
-        assert exc_info.value.status_code == 422
-
-        # Invalid float - now raises HTTPException(422) instead of ValueError
-        with pytest.raises(HTTPException) as exc_info:
-            convert_primitive("not_a_float", float)
-        assert exc_info.value.status_code == 422
-
-    def test_empty_string_coercion(self):
-        """Test coercion of empty strings."""
-        # Empty string for string type should be empty string
-        assert convert_primitive("", str) == ""
-
-        # Empty string for int should fail - now raises HTTPException(422)
-        with pytest.raises(HTTPException) as exc_info:
-            convert_primitive("", int)
-        assert exc_info.value.status_code == 422
+    Note: Type coercion for basic types (int, float, bool) is now done in Rust.
+    The convert_primitive function has been removed - Rust handles all coercion.
+    """
 
     def test_optional_fields_with_none(self):
         """Test that optional fields handle None correctly."""

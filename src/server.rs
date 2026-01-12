@@ -1,6 +1,8 @@
 use actix_http::KeepAlive;
 use actix_web::{
-    self as aw, middleware::NormalizePath, web, App, HttpRequest, HttpResponse, HttpServer,
+    self as aw,
+    middleware::{NormalizePath, TrailingSlash},
+    web, App, HttpRequest, HttpResponse, HttpServer,
 };
 use ahash::AHashMap;
 use pyo3::prelude::*;
@@ -361,7 +363,9 @@ pub fn start_server_async(
                         let mut app = App::new()
                             .app_data(web::Data::new(app_state.clone()))
                             .app_data(web::PayloadConfig::new(max_payload_size)) // Configure max request body size from BOLT_MAX_UPLOAD_SIZE
-                            .wrap(NormalizePath::trim()) // Strip trailing slashes before routing
+                            // MergeOnly: only normalize // -> / (not trailing slashes)
+                            // Trailing slash redirects are handled in handler.rs on 404
+                            .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
                             .wrap(CorsMiddleware::new()) // Add CORS headers to all responses
                             .wrap(CompressionMiddleware::new()); // Respects Content-Encoding: identity from skip_compression
 

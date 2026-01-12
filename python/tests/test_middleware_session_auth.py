@@ -22,7 +22,7 @@ class LoginRequest(msgspec.Struct):
     password: str
 
 
-@pytest.fixture
+@pytest.fixture(autouse=False)
 def api_factory(settings):
     settings.AUTH_USER_MODEL = "django_bolt.User"
 

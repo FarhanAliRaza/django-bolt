@@ -180,3 +180,147 @@ api.mount("/api/v1", users_api)
 ```
 
 Routes from `users_api` are now available at `/api/v1/users`.
+
+## Trailing slash handling
+
+Django-Bolt normalizes trailing slashes at route registration time and uses **Starlette-style redirects** at runtime. By default, trailing slashes are stripped from paths:
+
+```python
+api = BoltAPI()
+
+@api.get("/users/")  # Registered as /users
+async def list_users():
+    return []
+```
+
+### Trailing slash modes
+
+You can control this behavior with the `trailing_slash` parameter:
+
+| Mode | Description | Example |
+|------|-------------|---------|
+| `"strip"` | Remove trailing slashes (default) | `/users/` → `/users` |
+| `"append"` | Add trailing slashes | `/users` → `/users/` |
+| `"keep"` | No normalization | `/users/` → `/users/` |
+
+### Runtime redirect behavior
+
+When a request URL doesn't exactly match a registered route, Django-Bolt checks if the alternate path (with or without trailing slash) exists. If it does, a **308 Permanent Redirect** is returned to the canonical URL:
+
+```python
+api = BoltAPI(trailing_slash="append")
+
+@api.get("/users")  # Registered as /users/
+async def list_users():
+    return []
+
+# GET /users   → 308 Redirect to /users/
+# GET /users/  → 200 OK (canonical URL)
+```
+
+This Starlette-style approach means:
+- **Both URLs work** - users can access either, but one redirects
+- **SEO-friendly** - search engines see the redirect and index the canonical URL
+- **Minimal overhead** - redirect check only happens when route doesn't match
+
+### Strip mode (default)
+
+The default mode removes trailing slashes, which produces clean URLs:
+
+```python
+api = BoltAPI()  # trailing_slash="strip" is the default
+
+@api.get("/users/")   # Registered as /users
+@api.get("/items")    # Registered as /items
+
+# GET /users/  → 308 Redirect to /users
+# GET /users   → 200 OK
+```
+
+### Append mode
+
+Use append mode to follow Django's URL convention where paths end with slashes:
+
+```python
+api = BoltAPI(trailing_slash="append")
+
+@api.get("/users")    # Registered as /users/
+@api.get("/items/")   # Registered as /items/
+
+# GET /users   → 308 Redirect to /users/
+# GET /users/  → 200 OK
+```
+
+### Keep mode
+
+Use keep mode when you need explicit control over each path:
+
+```python
+api = BoltAPI(trailing_slash="keep")
+
+@api.get("/users")    # Registered as /users
+@api.get("/items/")   # Registered as /items/
+
+# GET /users/  → 308 Redirect to /users (if /users exists)
+# GET /items   → 308 Redirect to /items/ (if /items/ exists)
+```
+
+### Multiple APIs with different settings
+
+When Django-Bolt auto-discovers and merges multiple `api.py` files, **each API's routes keep their own trailing slash format**. This allows different apps to use different conventions:
+
+```python
+# myproject/api.py
+api = BoltAPI(trailing_slash="append")
+
+@api.get("/items")  # Registered as /items/
+async def list_items():
+    return []
+
+# users/api.py
+api = BoltAPI()  # Default: trailing_slash="strip"
+
+@api.get("/users")  # Registered as /users
+async def list_users():
+    return []
+```
+
+After merging:
+- `GET /items` → 308 Redirect to `/items/`
+- `GET /items/` → 200 OK
+- `GET /users/` → 308 Redirect to `/users`
+- `GET /users` → 200 OK
+
+Each route respects its original API's `trailing_slash` setting because routes are normalized at registration time, before the merge happens.
+
+### Mounted APIs
+
+When mounting APIs with `api.mount()`, the **parent's** `trailing_slash` setting is applied to all child routes:
+
+```python
+parent = BoltAPI(trailing_slash="append")
+child = BoltAPI(trailing_slash="strip")  # Child's setting is IGNORED when mounted
+
+@child.get("/users")  # Child normalizes to /users
+async def list_users():
+    return []
+
+parent.mount("/api", child)
+# Route is /api/users/ (parent's "append" mode is applied)
+```
+
+This differs from auto-discovery, where each API keeps its own setting.
+
+## URL prefix
+
+Apply a prefix to all routes using the `prefix` parameter:
+
+```python
+api = BoltAPI(prefix="/api/v1")
+
+@api.get("/users")  # Accessible at /api/v1/users
+async def list_users():
+    return []
+```
+
+This is useful for versioning your API or grouping routes under a common path.

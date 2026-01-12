@@ -1,30 +1,94 @@
+use actix_multipart::Multipart;
 use actix_web::http::header::{HeaderName, HeaderValue};
 use actix_web::{http::StatusCode, web, HttpRequest, HttpResponse};
 use ahash::AHashMap;
 use bytes::Bytes;
 use futures_util::stream;
+use futures_util::StreamExt;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyTuple};
+use pyo3::sync::PyOnceLock;
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
+use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
 use crate::error;
+use crate::form_parsing::{
+    parse_multipart, parse_urlencoded, FileContent, FileInfo, FormParseResult, ValidationError,
+    DEFAULT_MAX_PARTS, DEFAULT_MEMORY_LIMIT,
+};
 use crate::middleware;
 use crate::middleware::auth::populate_auth_context;
 use crate::request::PyRequest;
+use crate::request_pipeline::validate_typed_params;
 use crate::response_builder;
 use crate::responses;
 use crate::router::parse_query_string;
 use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
 use crate::streaming::{create_python_stream, create_sse_stream};
+use crate::type_coercion::{params_to_py_dict, CoercedValue};
 use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
+
+// Cache Python classes for type construction (avoids repeated imports)
+static UUID_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static DECIMAL_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static DATETIME_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static DATE_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static TIME_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+
+fn get_uuid_class(py: Python<'_>) -> &Py<PyAny> {
+    UUID_CLASS.get_or_init(py, || {
+        py.import("uuid").unwrap().getattr("UUID").unwrap().unbind()
+    })
+}
+
+fn get_decimal_class(py: Python<'_>) -> &Py<PyAny> {
+    DECIMAL_CLASS.get_or_init(py, || {
+        py.import("decimal")
+            .unwrap()
+            .getattr("Decimal")
+            .unwrap()
+            .unbind()
+    })
+}
+
+fn get_datetime_class(py: Python<'_>) -> &Py<PyAny> {
+    DATETIME_CLASS.get_or_init(py, || {
+        py.import("datetime")
+            .unwrap()
+            .getattr("datetime")
+            .unwrap()
+            .unbind()
+    })
+}
+
+fn get_date_class(py: Python<'_>) -> &Py<PyAny> {
+    DATE_CLASS.get_or_init(py, || {
+        py.import("datetime")
+            .unwrap()
+            .getattr("date")
+            .unwrap()
+            .unbind()
+    })
+}
+
+fn get_time_class(py: Python<'_>) -> &Py<PyAny> {
+    TIME_CLASS.get_or_init(py, || {
+        py.import("datetime")
+            .unwrap()
+            .getattr("time")
+            .unwrap()
+            .unbind()
+    })
+}
 
 // Reuse the global Python asyncio event loop created at server startup (TASK_LOCALS)
 
 /// Build an HTTP response for a file path.
 /// Handles both small files (loaded into memory) and large files (streamed).
+/// Note: Not inlined as it's async and relatively large
 pub async fn build_file_response(
     file_path: &str,
     status: StatusCode,
@@ -112,6 +176,8 @@ pub async fn build_file_response(
 }
 
 /// Handle Python errors and convert to HTTP response
+/// OPTIMIZATION: #[inline(never)] on error path - keeps hot path code smaller
+#[inline(never)]
 pub fn handle_python_error(
     py: Python<'_>,
     err: PyErr,
@@ -138,6 +204,8 @@ pub fn handle_python_error(
 /// Extract headers from request with validation
 /// OPTIMIZATION: HeaderName::as_str() already returns lowercase (http crate canonical form)
 /// so we skip the redundant to_ascii_lowercase() call (~50ns saved per header)
+/// OPTIMIZATION: #[inline] on hot path - called on every request
+#[inline]
 pub fn extract_headers(
     req: &HttpRequest,
     max_header_size: usize,
@@ -162,9 +230,118 @@ pub fn extract_headers(
     Ok(headers)
 }
 
+/// Build HTTP 422 response for validation errors
+pub fn build_validation_error_response(error: &ValidationError) -> HttpResponse {
+    let body = serde_json::json!({
+        "detail": [error.to_json()]
+    });
+    HttpResponse::UnprocessableEntity()
+        .content_type("application/json")
+        .body(body.to_string())
+}
+
+/// Convert CoercedValue to Python object
+///
+/// Constructs actual Python typed objects (uuid.UUID, decimal.Decimal, datetime, etc.)
+/// instead of strings, eliminating double-parsing on the Python side.
+pub fn coerced_value_to_py(py: Python<'_>, value: &CoercedValue) -> Py<PyAny> {
+    match value {
+        // Primitives - direct conversion
+        CoercedValue::Int(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
+        CoercedValue::Float(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
+        CoercedValue::Bool(v) => v.into_pyobject(py).unwrap().to_owned().unbind().into_any(),
+        CoercedValue::String(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
+
+        // UUID: construct Python uuid.UUID object
+        CoercedValue::Uuid(v) => get_uuid_class(py).call1(py, (v.to_string(),)).unwrap(),
+
+        // Decimal: construct Python decimal.Decimal object
+        CoercedValue::Decimal(v) => get_decimal_class(py).call1(py, (v.to_string(),)).unwrap(),
+
+        // DateTime (with timezone): construct Python datetime.datetime
+        CoercedValue::DateTime(v) => {
+            let iso_str = v.to_rfc3339().replace('Z', "+00:00");
+            get_datetime_class(py)
+                .call_method1(py, "fromisoformat", (iso_str,))
+                .unwrap()
+        }
+
+        // NaiveDateTime: construct Python datetime.datetime (no timezone)
+        CoercedValue::NaiveDateTime(v) => get_datetime_class(py)
+            .call_method1(py, "fromisoformat", (v.to_string(),))
+            .unwrap(),
+
+        // Date: construct Python datetime.date
+        CoercedValue::Date(v) => get_date_class(py)
+            .call_method1(py, "fromisoformat", (v.to_string(),))
+            .unwrap(),
+
+        // Time: construct Python datetime.time
+        CoercedValue::Time(v) => get_time_class(py)
+            .call_method1(py, "fromisoformat", (v.to_string(),))
+            .unwrap(),
+
+        CoercedValue::Null => py.None(),
+    }
+}
+
+/// Convert FileInfo to Python dict
+pub fn file_info_to_py(py: Python<'_>, file: &FileInfo) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("filename", &file.filename)?;
+    dict.set_item("content_type", &file.content_type)?;
+    dict.set_item("size", file.size)?;
+
+    match &file.content {
+        FileContent::Memory(bytes) => {
+            dict.set_item("content", PyBytes::new(py, bytes))?;
+            dict.set_item("temp_path", py.None())?;
+        }
+        FileContent::Disk(temp_file) => {
+            // For disk-spooled files, pass the temp path instead of content
+            dict.set_item("content", py.None())?;
+            dict.set_item("temp_path", temp_file.path().to_string_lossy().to_string())?;
+        }
+    }
+
+    Ok(dict.unbind())
+}
+
+/// Convert FormParseResult to Python dicts
+pub fn form_result_to_py(
+    py: Python<'_>,
+    result: &FormParseResult,
+) -> PyResult<(Py<PyDict>, Py<PyDict>)> {
+    // Convert form_map
+    let form_dict = PyDict::new(py);
+    for (key, value) in &result.form_map {
+        form_dict.set_item(key, coerced_value_to_py(py, value))?;
+    }
+
+    // Convert files_map - each field can have multiple files
+    let files_dict = PyDict::new(py);
+    for (field_name, files) in &result.files_map {
+        if files.len() == 1 {
+            // Single file - store directly
+            let file_dict = file_info_to_py(py, &files[0])?;
+            files_dict.set_item(field_name, file_dict)?;
+        } else {
+            // Multiple files - store as list
+            let file_list = PyList::empty(py);
+            for file in files {
+                let file_dict = file_info_to_py(py, file)?;
+                file_list.append(file_dict)?;
+            }
+            files_dict.set_item(field_name, file_list)?;
+        }
+    }
+
+    Ok((form_dict.unbind(), files_dict.unbind()))
+}
+
 pub async fn handle_request(
     req: HttpRequest,
-    body: web::Bytes,
+    mut payload: web::Payload,
     state: web::Data<Arc<AppState>>,
 ) -> HttpResponse {
     // Keep as &str - no allocation, only clone on error paths
@@ -180,9 +357,49 @@ pub async fn handle_request(
     let (path_params, handler_id) = {
         if let Some(route_match) = router.find(method, path) {
             let handler_id = route_match.handler_id();
-            let path_params = route_match.path_params(); // No allocation for static routes
+            let raw_params = route_match.path_params(); // No allocation for static routes
+
+            // URL-decode path parameters for consistency with query string parsing
+            // This ensures /items/hello%20world correctly yields id="hello world"
+            let path_params: AHashMap<String, String> = if raw_params.is_empty() {
+                raw_params
+            } else {
+                raw_params
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let decoded = urlencoding::decode(&v)
+                            .unwrap_or_else(|_| std::borrow::Cow::Borrowed(&v))
+                            .into_owned();
+                        (k, decoded)
+                    })
+                    .collect()
+            };
             (path_params, handler_id)
         } else {
+            // No route found - check for trailing slash redirect FIRST
+            // This only runs when route doesn't match (minimal overhead)
+            // Starlette-style: redirect to canonical URL if alternate path exists
+            if path != "/" {
+                let alternate_path = if path.ends_with('/') {
+                    path.trim_end_matches('/').to_string()
+                } else {
+                    format!("{}/", path)
+                };
+
+                // Try alternate path - if it matches, send 308 redirect
+                if router.find(method, &alternate_path).is_some() {
+                    let query = req.query_string();
+                    let location = if query.is_empty() {
+                        alternate_path
+                    } else {
+                        format!("{}?{}", alternate_path, query)
+                    };
+                    return HttpResponse::PermanentRedirect() // 308
+                        .insert_header(("Location", location))
+                        .finish();
+                }
+            }
+
             // No explicit handler found - check for automatic OPTIONS
             if method == "OPTIONS" {
                 let available_methods = router.find_all_methods(path);
@@ -241,6 +458,17 @@ pub async fn handle_request(
     } else {
         AHashMap::new()
     };
+
+    // Type validation for path and query parameters (Rust-native, no GIL)
+    // This validates parameter types before GIL acquisition, returning 422 for invalid types
+    // Performance: Eliminates Python's convert_primitive() overhead for invalid requests
+    if let Some(ref route_meta) = route_metadata {
+        if let Some(response) =
+            validate_typed_params(&path_params, &query_params, &route_meta.param_types)
+        {
+            return response;
+        }
+    }
 
     // Optimization: Check if handler needs headers
     // Headers are still needed for auth/rate limiting middleware, so we extract them for Rust
@@ -323,6 +551,118 @@ pub async fn handle_request(
         None
     };
 
+    // Optimization: Only parse cookies if handler needs them
+    // Cookie parsing can be expensive for requests with many cookies
+    let needs_cookies = route_metadata
+        .as_ref()
+        .map(|m| m.needs_cookies)
+        .unwrap_or(true);
+
+    let cookies = if needs_cookies {
+        parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()))
+    } else {
+        AHashMap::new()
+    };
+
+    // Determine if form parsing is needed and get content type
+    let needs_form_parsing = route_metadata
+        .as_ref()
+        .map(|m| m.needs_form_parsing)
+        .unwrap_or(false);
+
+    let content_type = headers
+        .get("content-type")
+        .map(|s| s.as_str())
+        .unwrap_or("");
+
+    let is_multipart = content_type.starts_with("multipart/form-data");
+    let is_urlencoded = content_type.starts_with("application/x-www-form-urlencoded");
+
+    // Read body from payload (before form parsing consumes it for multipart)
+    // For multipart, we need the payload stream directly
+    let (body, form_result): (Vec<u8>, Option<FormParseResult>) =
+        if needs_form_parsing && is_multipart {
+            // Multipart form parsing - uses the payload stream directly
+            let form_type_hints = route_metadata
+                .as_ref()
+                .map(|m| &m.form_type_hints)
+                .cloned()
+                .unwrap_or_default();
+            let file_constraints = route_metadata
+                .as_ref()
+                .map(|m| &m.file_constraints)
+                .cloned()
+                .unwrap_or_default();
+            let max_upload_size = route_metadata
+                .as_ref()
+                .map(|m| m.max_upload_size)
+                .unwrap_or(1024 * 1024);
+            let memory_spool_threshold = route_metadata
+                .as_ref()
+                .map(|m| m.memory_spool_threshold)
+                .unwrap_or(DEFAULT_MEMORY_LIMIT);
+
+            // Create Multipart from the payload
+            let multipart = Multipart::new(req.headers(), payload);
+
+            match parse_multipart(
+                multipart,
+                &form_type_hints,
+                &file_constraints,
+                max_upload_size,
+                memory_spool_threshold,
+                DEFAULT_MAX_PARTS,
+            )
+            .await
+            {
+                Ok(result) => (Vec::new(), Some(result)),
+                Err(validation_error) => {
+                    return build_validation_error_response(&validation_error);
+                }
+            }
+        } else {
+            // Read payload as bytes (for non-multipart requests)
+            let mut body_bytes = web::BytesMut::new();
+            while let Some(chunk) = payload.next().await {
+                match chunk {
+                    Ok(data) => body_bytes.extend_from_slice(&data),
+                    Err(e) => {
+                        return HttpResponse::BadRequest()
+                            .content_type("application/json")
+                            .body(format!(
+                                "{{\"error\": \"Failed to read request body: {}\"}}",
+                                e
+                            ));
+                    }
+                }
+            }
+            let body = body_bytes.freeze();
+
+            // URL-encoded form parsing
+            if needs_form_parsing && is_urlencoded {
+                let form_type_hints = route_metadata
+                    .as_ref()
+                    .map(|m| &m.form_type_hints)
+                    .cloned()
+                    .unwrap_or_default();
+
+                match parse_urlencoded(&body, &form_type_hints) {
+                    Ok(form_map) => {
+                        let result = FormParseResult {
+                            form_map,
+                            files_map: HashMap::new(),
+                        };
+                        (body.to_vec(), Some(result))
+                    }
+                    Err(validation_error) => {
+                        return build_validation_error_response(&validation_error);
+                    }
+                }
+            } else {
+                (body.to_vec(), None)
+            }
+        };
+
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
 
@@ -359,18 +699,40 @@ pub async fn handle_request(
             AHashMap::new()
         };
 
+        // Get type hints for type coercion
+        let param_types = route_metadata
+            .as_ref()
+            .map(|m| &m.param_types)
+            .cloned()
+            .unwrap_or_default();
+
+        // Create typed dicts - convert values to Python types
+        let path_params_dict = params_to_py_dict(py, &path_params, &param_types)?;
+        let query_params_dict = params_to_py_dict(py, &query_params, &param_types)?;
+        let headers_dict = params_to_py_dict(py, &headers_for_python, &param_types)?;
+        let cookies_dict = params_to_py_dict(py, &cookies, &param_types)?;
+
+        // Create form_map and files_map from form parsing result
+        let (form_map_dict, files_map_dict) = if let Some(ref result) = form_result {
+            form_result_to_py(py, result)?
+        } else {
+            (PyDict::new(py).unbind(), PyDict::new(py).unbind())
+        };
+
         let request = PyRequest {
             method: method_owned.clone(),
             path: path_owned.clone(),
-            body: body.to_vec(),
-            path_params, // For static routes, this is already empty from RouteMatch::Static
-            query_params,
-            headers: headers_for_python,
-            cookies,
+            body: body.clone(),
+            path_params: path_params_dict.unbind(),
+            query_params: query_params_dict.unbind(),
+            headers: headers_dict.unbind(),
+            cookies: cookies_dict.unbind(),
             context,
             user: None,
             auser: None,
             state: PyDict::new(py).unbind(), // Empty state dict for middleware and dynamic attributes
+            form_map: form_map_dict,
+            files_map: files_map_dict,
         };
         let request_obj = Py::new(py, request)?;
 
@@ -514,19 +876,22 @@ pub async fn handle_request(
                     let obj = result_obj.bind(py);
                     let is_streaming = (|| -> PyResult<bool> {
                         let m = py.import("django_bolt.responses")?;
-                        let cls = m.getattr("StreamingResponse")?;
+                        // OPTIMIZATION: pyo3::intern!() caches Python string objects
+                        let cls = m.getattr(pyo3::intern!(py, "StreamingResponse"))?;
                         obj.is_instance(&cls)
                     })()
                     .unwrap_or(false);
-                    if !is_streaming && !obj.hasattr("content").unwrap_or(false) {
+                    // OPTIMIZATION: Use interned strings for attribute checks
+                    if !is_streaming && !obj.hasattr(pyo3::intern!(py, "content")).unwrap_or(false)
+                    {
                         return None;
                     }
                     let status_code: u16 = obj
-                        .getattr("status_code")
+                        .getattr(pyo3::intern!(py, "status_code"))
                         .and_then(|v| v.extract())
                         .unwrap_or(200);
                     let mut headers: Vec<(String, String)> = Vec::new();
-                    if let Ok(hobj) = obj.getattr("headers") {
+                    if let Ok(hobj) = obj.getattr(pyo3::intern!(py, "headers")) {
                         if let Ok(hdict) = hobj.cast::<PyDict>() {
                             for (k, v) in hdict {
                                 if let (Ok(ks), Ok(vs)) =
@@ -538,7 +903,7 @@ pub async fn handle_request(
                         }
                     }
                     let media_type: String = obj
-                        .getattr("media_type")
+                        .getattr(pyo3::intern!(py, "media_type"))
                         .and_then(|v| v.extract())
                         .unwrap_or_else(|_| "application/octet-stream".to_string());
                     let has_ct = headers
@@ -547,13 +912,13 @@ pub async fn handle_request(
                     if !has_ct {
                         headers.push(("content-type".to_string(), media_type.clone()));
                     }
-                    let content_obj: Py<PyAny> = match obj.getattr("content") {
+                    let content_obj: Py<PyAny> = match obj.getattr(pyo3::intern!(py, "content")) {
                         Ok(c) => c.unbind(),
                         Err(_) => return None,
                     };
                     // Extract pre-computed is_async_generator metadata (detected at StreamingResponse instantiation)
                     let is_async_generator: bool = obj
-                        .getattr("is_async_generator")
+                        .getattr(pyo3::intern!(py, "is_async_generator"))
                         .and_then(|v| v.extract())
                         .unwrap_or(false);
                     Some((

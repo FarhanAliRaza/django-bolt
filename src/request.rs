@@ -1,4 +1,3 @@
-use ahash::AHashMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString};
 
@@ -7,35 +6,48 @@ pub struct PyRequest {
     pub method: String,
     pub path: String,
     pub body: Vec<u8>,
-    pub path_params: AHashMap<String, String>,
-    pub query_params: AHashMap<String, String>,
-    pub headers: AHashMap<String, String>,
-    pub cookies: AHashMap<String, String>,
+    /// Path parameters - pre-typed by Rust (int, float, bool, str, etc.)
+    pub path_params: Py<PyDict>,
+    /// Query parameters - pre-typed by Rust (int, float, bool, str, etc.)
+    pub query_params: Py<PyDict>,
+    /// Headers - pre-typed by Rust (int, float, bool, str, etc.)
+    pub headers: Py<PyDict>,
+    /// Cookies - pre-typed by Rust (int, float, bool, str, etc.)
+    pub cookies: Py<PyDict>,
     pub context: Option<Py<PyDict>>, // Middleware context data
     // None if no auth context or user not found
     pub user: Option<Py<PyAny>>,
     pub auser: Option<Py<PyAny>>,
     pub state: Py<PyDict>, // Arbitrary state for middleware AND dynamic attributes (e.g. _messages)
+    /// Form data - pre-typed by Rust (int, float, bool, str, etc.)
+    pub form_map: Py<PyDict>,
+    /// Files data - dict of {field_name: {filename, content, content_type, size, temp_path?}}
+    pub files_map: Py<PyDict>,
 }
 
 #[pymethods]
 impl PyRequest {
+    /// OPTIMIZATION: #[inline] on hot path getters
     #[getter]
+    #[inline]
     fn method(&self) -> &str {
         &self.method
     }
 
     #[getter]
+    #[inline]
     fn path(&self) -> &str {
         &self.path
     }
 
     #[getter]
+    #[inline]
     fn body<'py>(&self, py: Python<'py>) -> Py<PyAny> {
         PyBytes::new(py, &self.body).into_any().unbind()
     }
 
     #[getter]
+    #[inline]
     fn context<'py>(&self, py: Python<'py>) -> Py<PyAny> {
         match &self.context {
             Some(ctx) => ctx.clone_ref(py).into_any(),
@@ -75,42 +87,36 @@ impl PyRequest {
     }
 
     /// Get headers as a dict for middleware access.
+    /// Values are pre-typed by Rust (int, float, bool, str).
     ///
     /// Example:
     ///     auth_header = request.headers.get("authorization")
     #[getter]
+    #[inline]
     fn headers<'py>(&self, py: Python<'py>) -> Py<PyDict> {
-        let d = PyDict::new(py);
-        for (k, v) in &self.headers {
-            let _ = d.set_item(k, v);
-        }
-        d.unbind()
+        self.headers.clone_ref(py)
     }
 
     /// Get cookies as a dict for middleware access.
+    /// Values are pre-typed by Rust (int, float, bool, str).
     ///
     /// Example:
     ///     session_id = request.cookies.get("session_id")
     #[getter]
+    #[inline]
     fn cookies<'py>(&self, py: Python<'py>) -> Py<PyDict> {
-        let d = PyDict::new(py);
-        for (k, v) in &self.cookies {
-            let _ = d.set_item(k, v);
-        }
-        d.unbind()
+        self.cookies.clone_ref(py)
     }
 
     /// Get query params as a dict for middleware access.
+    /// Values are pre-typed by Rust (int, float, bool, str).
     ///
     /// Example:
-    ///     page = request.query.get("page", "1")
+    ///     page = request.query.get("page", 1)  # Returns int directly
     #[getter]
+    #[inline]
     fn query<'py>(&self, py: Python<'py>) -> Py<PyDict> {
-        let d = PyDict::new(py);
-        for (k, v) in &self.query_params {
-            let _ = d.set_item(k, v);
-        }
-        d.unbind()
+        self.query_params.clone_ref(py)
     }
 
     /// Get the state dict for middleware to store arbitrary data.
@@ -122,8 +128,32 @@ impl PyRequest {
     ///     request.state["request_id"] = "abc123"
     ///     request.state["tenant"] = tenant_obj
     #[getter]
+    #[inline]
     fn state<'py>(&self, py: Python<'py>) -> Py<PyDict> {
         self.state.clone_ref(py)
+    }
+
+    /// Get form data as a dict for parameter access.
+    /// Values are pre-typed by Rust (int, float, bool, str).
+    ///
+    /// Example:
+    ///     username = request.form.get("username")
+    ///     age = request.form.get("age")  # Returns int directly
+    #[getter]
+    #[inline]
+    fn form<'py>(&self, py: Python<'py>) -> Py<PyDict> {
+        self.form_map.clone_ref(py)
+    }
+
+    /// Get files as a dict for file access.
+    /// Each file entry contains: filename, content, content_type, size, temp_path (if spooled to disk).
+    ///
+    /// Example:
+    ///     avatar = request.files.get("avatar")  # {"filename": "photo.jpg", ...}
+    #[getter]
+    #[inline]
+    fn files<'py>(&self, py: Python<'py>) -> Py<PyDict> {
+        self.files_map.clone_ref(py)
     }
 
     /// Get the async user loader (Django-style).
@@ -162,14 +192,18 @@ impl PyRequest {
     ///     /users?page=2&limit=10
     ///
     /// This matches Django's HttpRequest.get_full_path() method.
-    fn get_full_path(&self) -> String {
-        if self.query_params.is_empty() {
+    fn get_full_path(&self, py: Python<'_>) -> String {
+        let query_dict = self.query_params.bind(py);
+        if query_dict.is_empty() {
             self.path.clone()
         } else {
-            let query_string: String = self
-                .query_params
+            let query_string: String = query_dict
                 .iter()
-                .map(|(k, v)| format!("{}={}", k, v))
+                .filter_map(|(k, v)| {
+                    let key = k.extract::<String>().ok()?;
+                    let val = v.str().ok()?.to_string();
+                    Some(format!("{}={}", key, val))
+                })
                 .collect::<Vec<_>>()
                 .join("&");
             format!("{}?{}", self.path, query_string)
@@ -194,32 +228,40 @@ impl PyRequest {
     /// This matches Django's HttpRequest.build_absolute_uri() method.
     /// Uses Host header to determine the scheme and host.
     #[pyo3(signature = (location=None))]
-    fn build_absolute_uri(&self, location: Option<&str>) -> String {
+    fn build_absolute_uri(&self, py: Python<'_>, location: Option<&str>) -> String {
+        let headers_dict = self.headers.bind(py);
+
         // Get host from headers (or use default)
-        let host = self
-            .headers
-            .get("host")
-            .map(|s| s.as_str())
-            .unwrap_or("localhost");
+        let host = headers_dict
+            .get_item("host")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<String>().ok())
+            .unwrap_or_else(|| "localhost".to_string());
 
         // Determine scheme (check for X-Forwarded-Proto or default to http)
-        let scheme = self
-            .headers
-            .get("x-forwarded-proto")
-            .map(|s| s.as_str())
-            .unwrap_or("http");
+        let scheme = headers_dict
+            .get_item("x-forwarded-proto")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<String>().ok())
+            .unwrap_or_else(|| "http".to_string());
 
         // If location is provided, use it; otherwise use current path
         let path = location.unwrap_or_else(|| &self.path);
 
         // Build full URL
-        if self.query_params.is_empty() || location.is_some() {
+        let query_dict = self.query_params.bind(py);
+        if query_dict.is_empty() || location.is_some() {
             format!("{}://{}{}", scheme, host, path)
         } else {
-            let query_string: String = self
-                .query_params
+            let query_string: String = query_dict
                 .iter()
-                .map(|(k, v)| format!("{}={}", k, v))
+                .filter_map(|(k, v)| {
+                    let key = k.extract::<String>().ok()?;
+                    let val = v.str().ok()?.to_string();
+                    Some(format!("{}={}", key, val))
+                })
                 .collect::<Vec<_>>()
                 .join("&");
             format!("{}://{}{}?{}", scheme, host, path, query_string)
@@ -232,34 +274,10 @@ impl PyRequest {
             "method" => PyString::new(py, &self.method).into_any().unbind(),
             "path" => PyString::new(py, &self.path).into_any().unbind(),
             "body" => PyBytes::new(py, &self.body).into_any().unbind(),
-            "params" => {
-                let d = PyDict::new(py);
-                for (k, v) in &self.path_params {
-                    let _ = d.set_item(k, v);
-                }
-                d.into_any().unbind()
-            }
-            "query" => {
-                let d = PyDict::new(py);
-                for (k, v) in &self.query_params {
-                    let _ = d.set_item(k, v);
-                }
-                d.into_any().unbind()
-            }
-            "headers" => {
-                let d = PyDict::new(py);
-                for (k, v) in &self.headers {
-                    let _ = d.set_item(k, v);
-                }
-                d.into_any().unbind()
-            }
-            "cookies" => {
-                let d = PyDict::new(py);
-                for (k, v) in &self.cookies {
-                    let _ = d.set_item(k, v);
-                }
-                d.into_any().unbind()
-            }
+            "params" => self.path_params.clone_ref(py).into_any(),
+            "query" => self.query_params.clone_ref(py).into_any(),
+            "headers" => self.headers.clone_ref(py).into_any(),
+            "cookies" => self.cookies.clone_ref(py).into_any(),
             "auth" | "context" => match &self.context {
                 Some(ctx) => ctx.clone_ref(py).into_any(),
                 None => default.unwrap_or_else(|| py.None()),
@@ -273,34 +291,10 @@ impl PyRequest {
             "method" => Ok(PyString::new(py, &self.method).into_any().unbind()),
             "path" => Ok(PyString::new(py, &self.path).into_any().unbind()),
             "body" => Ok(PyBytes::new(py, &self.body).into_any().unbind()),
-            "params" => {
-                let d = PyDict::new(py);
-                for (k, v) in &self.path_params {
-                    let _ = d.set_item(k, v);
-                }
-                Ok(d.into_any().unbind())
-            }
-            "query" => {
-                let d = PyDict::new(py);
-                for (k, v) in &self.query_params {
-                    let _ = d.set_item(k, v);
-                }
-                Ok(d.into_any().unbind())
-            }
-            "headers" => {
-                let d = PyDict::new(py);
-                for (k, v) in &self.headers {
-                    let _ = d.set_item(k, v);
-                }
-                Ok(d.into_any().unbind())
-            }
-            "cookies" => {
-                let d = PyDict::new(py);
-                for (k, v) in &self.cookies {
-                    let _ = d.set_item(k, v);
-                }
-                Ok(d.into_any().unbind())
-            }
+            "params" => Ok(self.path_params.clone_ref(py).into_any()),
+            "query" => Ok(self.query_params.clone_ref(py).into_any()),
+            "headers" => Ok(self.headers.clone_ref(py).into_any()),
+            "cookies" => Ok(self.cookies.clone_ref(py).into_any()),
             "context" => Ok(match &self.context {
                 Some(ctx) => ctx.clone_ref(py).into_any(),
                 None => py.None(),

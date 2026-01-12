@@ -11,7 +11,7 @@
 
 use actix_web::dev::Service;
 use actix_web::http::header::HeaderValue;
-use actix_web::middleware::NormalizePath;
+use actix_web::middleware::{NormalizePath, TrailingSlash};
 use actix_web::{test, web, App, HttpRequest, HttpResponse};
 use ahash::AHashMap;
 use bytes::Bytes;
@@ -23,12 +23,22 @@ use pyo3::types::PyDict;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::form_parsing::{
+    parse_multipart, parse_urlencoded, FormParseResult, DEFAULT_MAX_PARTS, DEFAULT_MEMORY_LIMIT,
+};
 use crate::metadata::{CorsConfig, RouteMetadata};
 use crate::middleware::compression::CompressionMiddleware;
 use crate::middleware::cors::CorsMiddleware;
 use crate::router::Router;
 use crate::state::{AppState, TASK_LOCALS};
 use crate::websocket::WebSocketRouter;
+use actix_multipart::Multipart;
+use futures_util::StreamExt;
+use std::collections::HashMap;
+
+use crate::handler::{coerced_value_to_py, form_result_to_py};
+use crate::request_pipeline::validate_typed_params;
+use crate::type_coercion::{coerce_param, params_to_py_dict, TYPE_STRING};
 
 /// One-time initialization flag for async runtime
 static ASYNC_RUNTIME_INITIALIZED: std::sync::Once = std::sync::Once::new();
@@ -110,6 +120,8 @@ pub struct TestAppState {
     pub global_cors_config: Option<CorsConfig>,
     pub debug: bool,
     pub max_payload_size: usize,
+    /// Trailing slash handling mode: "strip", "append", or "keep"
+    pub trailing_slash: String,
 }
 
 /// Registry for test app instances
@@ -217,12 +229,13 @@ fn parse_cors_config_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<CorsConfig>
 
 /// Create a test app instance and return its ID
 #[pyfunction]
-#[pyo3(signature = (dispatch, debug, cors_config=None))]
+#[pyo3(signature = (dispatch, debug, cors_config=None, trailing_slash=None))]
 pub fn create_test_app(
     py: Python<'_>,
     dispatch: Py<PyAny>,
     debug: bool,
     cors_config: Option<&Bound<'_, PyDict>>,
+    trailing_slash: Option<String>,
 ) -> PyResult<u64> {
     let global_cors_config = if let Some(cors_dict) = cors_config {
         Some(parse_cors_config_from_dict(cors_dict)?)
@@ -247,6 +260,7 @@ pub fn create_test_app(
         global_cors_config,
         debug,
         max_payload_size,
+        trailing_slash: trailing_slash.unwrap_or_else(|| "strip".to_string()),
     };
 
     let id = TEST_ID_GEN.fetch_add(1, Ordering::Relaxed);
@@ -379,7 +393,7 @@ pub fn test_request(
 
     runtime_handle.block_on(async {
         // Read test app state
-        let (router, route_metadata, dispatch, global_cors_config, debug, max_payload_size) = {
+        let (router, route_metadata, dispatch, global_cors_config, debug, max_payload_size, _trailing_slash) = {
             let state = app_state.read();
             (
                 state.router.clone(),
@@ -388,6 +402,7 @@ pub fn test_request(
                 state.global_cors_config.clone(),
                 state.debug,
                 state.max_payload_size,
+                state.trailing_slash.clone(),
             )
         };
 
@@ -409,19 +424,22 @@ pub fn test_request(
         let metadata_for_handler = route_metadata.clone();
 
         // Create the test handler that uses per-instance state
-        let handler = move |req: HttpRequest, body: web::Bytes| {
+        // Use web::Payload to support multipart form parsing (which needs the stream)
+        let handler = move |req: HttpRequest, payload: web::Payload| {
             let router = router_for_handler.clone();
             let metadata = metadata_for_handler.clone();
 
-            async move { handle_test_request_internal(req, body, router, metadata).await }
+            async move { handle_test_request_internal(req, payload, router, metadata).await }
         };
 
         // Create Actix test service with production middleware stack
+        // Use MergeOnly for NormalizePath (only normalizes // -> /)
+        // Trailing slash handling is done via Starlette-style redirect in handler
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(app_state_arc.clone()))
                 .app_data(web::PayloadConfig::new(max_payload_size))
-                .wrap(NormalizePath::trim())
+                .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
                 .wrap(CorsMiddleware::new())
                 .wrap(CompressionMiddleware::new())
                 .default_service(web::to(handler)),
@@ -486,7 +504,7 @@ pub fn test_request(
 /// This mirrors the production `handle_request` but uses the provided router and metadata.
 async fn handle_test_request_internal(
     req: HttpRequest,
-    body: web::Bytes,
+    mut payload: web::Payload,
     router: Arc<Router>,
     route_metadata: Arc<AHashMap<usize, RouteMetadata>>,
 ) -> HttpResponse {
@@ -520,6 +538,29 @@ async fn handle_test_request_internal(
             let path_params = route_match.path_params();
             (handler, path_params, handler_id)
         } else {
+            // No route found - check for trailing slash redirect FIRST
+            // Starlette-style: redirect to canonical URL if alternate path exists
+            if path != "/" {
+                let alternate_path = if path.ends_with('/') {
+                    path.trim_end_matches('/').to_string()
+                } else {
+                    format!("{}/", path)
+                };
+
+                // Try alternate path - if it matches, send 308 redirect
+                if router.find(method, &alternate_path).is_some() {
+                    let query = req.query_string();
+                    let location = if query.is_empty() {
+                        alternate_path
+                    } else {
+                        format!("{}?{}", alternate_path, query)
+                    };
+                    return HttpResponse::PermanentRedirect() // 308
+                        .insert_header(("Location", location))
+                        .finish();
+                }
+            }
+
             // Automatic OPTIONS handling
             if method == "OPTIONS" {
                 let available_methods = router.find_all_methods(path);
@@ -555,6 +596,15 @@ async fn handle_test_request_internal(
     } else {
         AHashMap::new()
     };
+
+    // Validate typed parameters before GIL acquisition
+    if let Some(ref meta) = route_meta {
+        if let Some(response) =
+            validate_typed_params(&path_params, &query_params, &meta.param_types)
+        {
+            return response;
+        }
+    }
 
     // Extract headers
     let needs_headers = route_meta.as_ref().map(|m| m.needs_headers).unwrap_or(true);
@@ -620,6 +670,116 @@ async fn handle_test_request_internal(
         AHashMap::new()
     };
 
+    // Form parsing (URL-encoded and multipart)
+    let needs_form_parsing = route_meta
+        .as_ref()
+        .map(|m| m.needs_form_parsing)
+        .unwrap_or(false);
+
+    let content_type = headers
+        .get("content-type")
+        .map(|s| s.as_str())
+        .unwrap_or("");
+
+    let is_multipart = content_type.starts_with("multipart/form-data");
+    let is_urlencoded = content_type.starts_with("application/x-www-form-urlencoded");
+
+    // Read body from payload (before form parsing consumes it for multipart)
+    let (body, form_result): (Vec<u8>, Option<FormParseResult>) =
+        if needs_form_parsing && is_multipart {
+            // Multipart form parsing - uses the payload stream directly
+            let form_type_hints = route_meta
+                .as_ref()
+                .map(|m| &m.form_type_hints)
+                .cloned()
+                .unwrap_or_default();
+            let file_constraints = route_meta
+                .as_ref()
+                .map(|m| &m.file_constraints)
+                .cloned()
+                .unwrap_or_default();
+            let max_upload_size = route_meta
+                .as_ref()
+                .map(|m| m.max_upload_size)
+                .unwrap_or(1024 * 1024);
+            let memory_spool_threshold = route_meta
+                .as_ref()
+                .map(|m| m.memory_spool_threshold)
+                .unwrap_or(DEFAULT_MEMORY_LIMIT);
+
+            // Create Multipart from the payload
+            let multipart = Multipart::new(req.headers(), payload);
+
+            match parse_multipart(
+                multipart,
+                &form_type_hints,
+                &file_constraints,
+                max_upload_size,
+                memory_spool_threshold,
+                DEFAULT_MAX_PARTS,
+            )
+            .await
+            {
+                Ok(result) => (Vec::new(), Some(result)),
+                Err(validation_error) => {
+                    // Return HTTP 422 for validation errors
+                    let body = serde_json::json!({
+                        "detail": [validation_error.to_json()]
+                    });
+                    return HttpResponse::UnprocessableEntity()
+                        .content_type("application/json")
+                        .body(body.to_string());
+                }
+            }
+        } else {
+            // Read payload as bytes (for non-multipart requests)
+            let mut body_bytes = web::BytesMut::new();
+            while let Some(chunk) = payload.next().await {
+                match chunk {
+                    Ok(data) => body_bytes.extend_from_slice(&data),
+                    Err(e) => {
+                        return HttpResponse::BadRequest()
+                            .content_type("application/json")
+                            .body(format!(
+                                "{{\"error\": \"Failed to read request body: {}\"}}",
+                                e
+                            ));
+                    }
+                }
+            }
+            let body = body_bytes.freeze();
+
+            // URL-encoded form parsing
+            if needs_form_parsing && is_urlencoded {
+                let form_type_hints = route_meta
+                    .as_ref()
+                    .map(|m| &m.form_type_hints)
+                    .cloned()
+                    .unwrap_or_default();
+
+                match parse_urlencoded(&body, &form_type_hints) {
+                    Ok(form_map) => {
+                        let result = FormParseResult {
+                            form_map,
+                            files_map: HashMap::new(),
+                        };
+                        (body.to_vec(), Some(result))
+                    }
+                    Err(validation_error) => {
+                        // Return HTTP 422 for validation errors
+                        let body = serde_json::json!({
+                            "detail": [validation_error.to_json()]
+                        });
+                        return HttpResponse::UnprocessableEntity()
+                            .content_type("application/json")
+                            .body(body.to_string());
+                    }
+                }
+            } else {
+                (body.to_vec(), None)
+            }
+        };
+
     let is_head_request = method == "HEAD";
 
     // Execute handler using run_coroutine_threadsafe to submit to background event loop
@@ -643,18 +803,41 @@ async fn handle_test_request_internal(
             AHashMap::new()
         };
 
+        // Get param_types from route metadata for typed conversion
+        let param_types = route_meta
+            .as_ref()
+            .map(|m| &m.param_types)
+            .cloned()
+            .unwrap_or_default();
+
+        // Create typed dicts - convert values to Python types
+        let path_params_dict = params_to_py_dict(py, &path_params, &param_types)?;
+        let query_params_dict = params_to_py_dict(py, &query_params, &param_types)?;
+        let headers_dict = params_to_py_dict(py, &headers_for_python, &param_types)?;
+        let cookies_dict = params_to_py_dict(py, &cookies, &param_types)?;
+
+        // Create form_map and files_map from form parsing result
+        let (form_map_dict, files_map_dict) = if let Some(ref result) = form_result {
+            form_result_to_py(py, result)
+                .unwrap_or_else(|_| (PyDict::new(py).unbind(), PyDict::new(py).unbind()))
+        } else {
+            (PyDict::new(py).unbind(), PyDict::new(py).unbind())
+        };
+
         let request = PyRequest {
             method: method.to_string(),
             path: path.to_string(),
             body: body.to_vec(),
-            path_params,
-            query_params,
-            headers: headers_for_python,
-            cookies,
+            path_params: path_params_dict.unbind(),
+            query_params: query_params_dict.unbind(),
+            headers: headers_dict.unbind(),
+            cookies: cookies_dict.unbind(),
             context,
             user: None,
             auser: None,
             state: PyDict::new(py).unbind(),
+            form_map: form_map_dict,
+            files_map: files_map_dict,
         };
         let request_obj = Py::new(py, request)?;
 
@@ -1107,16 +1290,62 @@ pub fn handle_test_websocket(
         final_auth_ctx = auth_ctx;
     }
 
-    // Build path_params dict
+    // Get param_types from route metadata for type coercion
+    let param_types = app
+        .route_metadata
+        .get(&handler_id)
+        .map(|m| &m.param_types)
+        .cloned()
+        .unwrap_or_default();
+
+    // Build path_params dict with type coercion
     let path_params_dict = pyo3::types::PyDict::new(py);
     for (k, v) in path_params.iter() {
-        path_params_dict.set_item(k, v)?;
+        let type_hint = param_types.get(k).copied().unwrap_or(TYPE_STRING);
+        match coerce_param(v, type_hint) {
+            Ok(coerced) => {
+                let py_value = coerced_value_to_py(py, &coerced);
+                path_params_dict.set_item(k, py_value)?;
+            }
+            Err(_) => {
+                path_params_dict.set_item(k, v)?;
+            }
+        }
     }
 
     // Build scope dict
     let scope_dict = pyo3::types::PyDict::new(py);
     scope_dict.set_item("type", "websocket")?;
     scope_dict.set_item("path", &path)?;
+
+    // Parse and coerce query parameters
+    let query_dict = pyo3::types::PyDict::new(py);
+    if let Some(ref qs) = query_string {
+        if !qs.is_empty() {
+            for pair in qs.split('&') {
+                if let Some((key, value)) = pair.split_once('=') {
+                    let decoded_key = urlencoding::decode(key).unwrap_or_default();
+                    let decoded_value = urlencoding::decode(value).unwrap_or_default();
+
+                    let type_hint = param_types
+                        .get(decoded_key.as_ref())
+                        .copied()
+                        .unwrap_or(TYPE_STRING);
+
+                    match coerce_param(&decoded_value, type_hint) {
+                        Ok(coerced) => {
+                            let py_value = coerced_value_to_py(py, &coerced);
+                            query_dict.set_item(decoded_key.as_ref(), py_value)?;
+                        }
+                        Err(_) => {
+                            query_dict.set_item(decoded_key.as_ref(), decoded_value.as_ref())?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    scope_dict.set_item("query_params", query_dict)?;
 
     let qs_bytes = query_string.as_ref().map(|s| s.as_bytes()).unwrap_or(b"");
     scope_dict.set_item("query_string", pyo3::types::PyBytes::new(py, qs_bytes))?;

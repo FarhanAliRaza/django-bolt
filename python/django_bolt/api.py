@@ -19,6 +19,7 @@ except ImportError:
 
 
 # Import local modules
+from django.core.signals import request_finished, request_started
 from django.utils.functional import SimpleLazyObject
 
 from . import _json
@@ -220,8 +221,40 @@ class BoltAPI:
         # Handler-to-API mapping for merged APIs (initialized here to avoid hasattr in hot path)
         self._handler_api_map: dict[int, BoltAPI] = {}
 
+        # Signal emission - disabled by default for performance
+        # Enable with BOLT_EMIT_SIGNALS = True in Django settings
+        self._emit_signals = (
+            getattr(django_settings, "BOLT_EMIT_SIGNALS", False)
+            if django_settings
+            else False
+        )
+
         # Register this instance globally for autodiscovery
         _BOLT_API_REGISTRY.append(self)
+
+        # Signal support: wrap _dispatch when enabled
+        # This is done at init time (not per-request) for zero overhead when disabled
+        if self._emit_signals:
+            _original_dispatch = self._dispatch
+
+            async def _dispatch_with_signals(handler, request, handler_id=None):
+                """Dispatch wrapper that emits Django signals."""
+                await request_started.asend(
+                    sender=BoltAPI,
+                    scope={
+                        "type": "http",
+                        "method": request.get("method", "GET"),
+                        "path": request.get("path", "/"),
+                        "query_string": request.get("query_string", b""),
+                        "headers": request.get("headers", {}),
+                    },
+                )
+                try:
+                    return await _original_dispatch(handler, request, handler_id)
+                finally:
+                    await request_finished.asend(sender=BoltAPI)
+
+            self._dispatch = _dispatch_with_signals
 
     def get(
         self,

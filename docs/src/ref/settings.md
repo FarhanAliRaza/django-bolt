@@ -160,6 +160,33 @@ LOGGING = {
 }
 ```
 
+## Django signals settings
+
+### BOLT_EMIT_SIGNALS
+
+Enable Django `request_started` and `request_finished` signal emission.
+
+```python
+BOLT_EMIT_SIGNALS = True
+```
+
+**Default:** `False`
+
+Django-Bolt disables signals by default for maximum performance. Enable this setting when:
+
+- Using `CONN_MAX_AGE` with a value other than `None` (required for connection recycling)
+- Using third-party packages that depend on request signals (e.g., django-debug-toolbar)
+- Implementing custom signal receivers for request lifecycle events
+
+!!! warning "Required for CONN_MAX_AGE"
+    If you set `CONN_MAX_AGE=600` (or any non-None value), you **must** enable signals for Django to properly close old connections:
+    ```python
+    CONN_MAX_AGE = 600
+    BOLT_EMIT_SIGNALS = True  # Required!
+    ```
+
+See [Django Signals](../topics/signals.md) for detailed documentation.
+
 ## runbolt command options
 
 The `runbolt` management command accepts these options:
@@ -239,3 +266,4 @@ api = BoltAPI(
 | `BOLT_MAX_UPLOAD_SIZE` | `int` | `1048576` | Max upload size (bytes) |
 | `BOLT_MEMORY_SPOOL_THRESHOLD` | `int` | `1048576` | Memory threshold before disk spooling (bytes) |
 | `BOLT_ALLOWED_FILE_PATHS` | `list[str]` | `None` | File serving whitelist |
+| `BOLT_EMIT_SIGNALS` | `bool` | `False` | Enable Django request signals |

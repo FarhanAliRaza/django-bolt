@@ -115,6 +115,71 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
+## Database connections
+
+Django Bolt disables Django's `request_started` and `request_finished` signals by default for performance. These signals normally trigger database connection cleanup after each request.
+
+Without signals, you should use connection pooling. Django [recommends connection pooling over persistent connections](https://docs.djangoproject.com/en/5.1/ref/databases/#persistent-connections) for async applications.
+
+### Option 1: psycopg pool (recommended)
+
+Django 5.1+ has native connection pooling support with psycopg:
+
+```python
+# settings.py
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "mydb",
+        "USER": "myuser",
+        "PASSWORD": "mypassword",
+        "HOST": "localhost",
+        "OPTIONS": {
+            "pool": {
+                "min_size": 2,
+                "max_size": 10,
+            }
+        },
+    }
+}
+```
+
+Requires `psycopg[pool]` (`pip install "psycopg[pool]"`). Note: This does not work with psycopg2.
+
+### Option 2: PgBouncer (external pooler)
+
+```python
+# settings.py
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "mydb",
+        "HOST": "/var/run/pgbouncer",  # Unix socket to PgBouncer
+        "PORT": "6432",
+    }
+}
+```
+
+[PgBouncer](https://www.pgbouncer.org/) runs as a separate service and manages connections across all Django processes.
+
+### Option 3: Enable signals
+
+If you need Django's connection management (e.g., `CONN_MAX_AGE=600`), enable signals:
+
+```python
+# settings.py
+BOLT_EMIT_SIGNALS = True
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "mydb",
+        "CONN_MAX_AGE": 600,  # Close after 600s idle
+    }
+}
+```
+
+See [Django Signals](../topics/signals.md) for more details.
+
 ## Performance tuning
 
 ### Socket backlog

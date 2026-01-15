@@ -68,6 +68,7 @@ nav = [
     { "Class-Based Views" = "topics/class-based-views.md" },
     { "Dependencies" = "topics/dependencies.md" },
     { "Middleware" = "topics/middleware.md" },
+    { "Django Signals" = "topics/signals.md" },
     { "Error Handling" = "topics/error-handling.md" },
     { "Logging" = "topics/logging.md" },
     { "Health Checks" = "topics/health-checks.md" },

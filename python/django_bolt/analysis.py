@@ -201,6 +201,14 @@ class HandlerAnalysis:
     failure_reason: str | None = None
     """Reason for analysis failure if any"""
 
+    def merge(self, other: HandlerAnalysis):
+        self.uses_orm = self.uses_orm or other.uses_orm
+        self.has_blocking_io = self.has_blocking_io or other.has_blocking_io
+        self.orm_operations.update(other.orm_operations)
+        self.blocking_operations.update(other.blocking_operations)
+        if other.analysis_failed:
+            self.analysis_failed = True
+
     @property
     def is_blocking(self) -> bool:
         """Whether handler is likely to block (any ORM usage or blocking I/O)."""
@@ -250,8 +258,10 @@ class OrmVisitor(ast.NodeVisitor):
     2. The method is called directly on .objects (e.g., User.objects.get())
     """
 
-    def __init__(self) -> None:
+    def __init__(self, current_globals, visited=None) -> None:
         self.analysis = HandlerAnalysis()
+        self.current_globals = current_globals
+        self.visited = visited if visited is not None else set()
         self._in_objects_chain = False
 
     def _check_for_objects_chain(self, node: ast.AST) -> bool:
@@ -315,17 +325,26 @@ class OrmVisitor(ast.NodeVisitor):
             if func_name in BLOCKING_IO_FUNCTIONS:
                 self.analysis.has_blocking_io = True
                 self.analysis.blocking_operations.add(func_name)
+            else:
+                self._resolve_and_recurse(func_name, self.current_globals)
 
         # Check for method calls on blocking modules
         elif isinstance(node.func, ast.Attribute):
-            # e.g., requests.get(), time.sleep()
-            if isinstance(node.func.value, ast.Name):
-                module_name = node.func.value.id
-                method_name = node.func.attr
+            method_name = node.func.attr
 
-                if module_name in BLOCKING_IO_MODULES:
+            # a. Module calls (requests.get)
+            if isinstance(node.func.value, ast.Name):
+                module_or_class_name = node.func.value.id
+                if module_or_class_name in BLOCKING_IO_MODULES:
                     self.analysis.has_blocking_io = True
-                    self.analysis.blocking_operations.add(f"{module_name}.{method_name}")
+                    self.analysis.blocking_operations.add(f"{module_or_class_name}.{method_name}")
+                else:
+                    # Static/Class method calls
+                    self._try_traverse_class_method(module_or_class_name, method_name)
+            # b.Class instantiation calls (Class().method())
+            if isinstance(node.func.value, ast.Call) and isinstance(node.func.value.func, ast.Name):
+                class_name = node.func.value.func.id
+                self._try_traverse_class_method(class_name, method_name)
 
         self.generic_visit(node)
 
@@ -353,6 +372,42 @@ class OrmVisitor(ast.NodeVisitor):
 
         self.generic_visit(node)
 
+    def _try_traverse_class_method(self, class_name, method_name):
+        if class_name in self.current_globals:
+            cls_obj = self.current_globals[class_name]
+
+            if inspect.isclass(cls_obj) and hasattr(cls_obj, method_name):
+                method_obj = getattr(cls_obj, method_name)
+                self._recurse_into_object(method_obj)
+
+    def _resolve_and_recurse(self, name, scope):
+        """Looks up a simple function name and recurses."""
+        if name in scope:
+            obj = scope[name]
+            if inspect.isfunction(obj):
+                self._recurse_into_object(obj)
+
+    def _recurse_into_object(self, obj):
+        """Parse source of called object and merge its analysis results."""
+        if obj in self.visited:
+            return
+
+        self.visited.add(obj)
+
+        try:
+            obj = inspect.unwrap(obj)
+
+            src = textwrap.dedent(inspect.getsource(obj))
+            tree = ast.parse(src)
+
+            sub_visitor = OrmVisitor(obj.__globals__, self.visited)
+            sub_visitor.visit(tree)
+
+            self.analysis.merge(sub_visitor.analysis)
+
+        except (OSError, TypeError, SyntaxError):
+            pass
+
 
 def analyze_handler(fn: Callable[..., Any]) -> HandlerAnalysis:
     """
@@ -369,9 +424,10 @@ def analyze_handler(fn: Callable[..., Any]) -> HandlerAnalysis:
     """
     analysis = HandlerAnalysis()
 
+    unwraped_source = inspect.unwrap(fn)
     # Try to get source code
     try:
-        source = inspect.getsource(fn)
+        source = inspect.getsource(unwraped_source)
     except (OSError, TypeError) as e:
         # Can't get source (e.g., built-in, C extension, or lambda)
         analysis.analysis_failed = True
@@ -391,7 +447,7 @@ def analyze_handler(fn: Callable[..., Any]) -> HandlerAnalysis:
 
     # Find the function definition and analyze only its body (not decorators)
     # This prevents false positives from decorator names like @api.delete("/m")
-    visitor = OrmVisitor()
+    visitor = OrmVisitor(unwraped_source.__globals__)
 
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

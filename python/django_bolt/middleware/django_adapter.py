@@ -22,6 +22,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from asgiref.sync import async_to_sync
+from django.utils.module_loading import import_string
 
 from ..middleware_response import MiddlewareResponse
 
@@ -475,7 +476,7 @@ _SKIP_HEADERS = frozenset(("content-type", "content-length"))
 
 # Known-safe Django middleware modules that don't do blocking I/O in hooks
 # These get the fast path (direct calls without sync_to_async)
-_DJANGO_SAFE_MIDDLEWARE_PREFIXES = frozenset(
+_DJANGO_MIDDLEWARE_PREFIXES = frozenset(
     [
         "django.middleware.",  # security, common, csrf, clickjacking, gzip, locale, http
         "django.contrib.sessions.",  # SessionMiddleware
@@ -485,6 +486,13 @@ _DJANGO_SAFE_MIDDLEWARE_PREFIXES = frozenset(
         "django.contrib.redirects.",  # RedirectFallbackMiddleware
         "django.contrib.sites.",  # CurrentSiteMiddleware
         "django.contrib.admindocs.",  # XViewMiddleware
+    ]
+)
+_DJANGO_UNSAFE_MIDDLEWARES = frozenset(
+    [
+        "django.contrib.sessions.middleware.SessionMiddleware",  # SessionMiddleware
+        "django.contrib.auth.middleware.AuthenticationMiddleware",  # AuthenticationMiddleware, etc.
+        "django.contrib.messages.middleware.MessageMiddleware",  # MessageMiddleware
     ]
 )
 
@@ -502,7 +510,7 @@ def _is_django_builtin_middleware(middleware_class: type) -> bool:
     in their hooks, so we need to use sync_to_async for safety.
     """
     module = middleware_class.__module__
-    return any(module.startswith(prefix) for prefix in _DJANGO_SAFE_MIDDLEWARE_PREFIXES)
+    return any(module.startswith(prefix) for prefix in _DJANGO_MIDDLEWARE_PREFIXES)
 
 
 class DjangoMiddlewareStack:
@@ -535,6 +543,7 @@ class DjangoMiddlewareStack:
 
     __slots__ = (
         "middleware_classes",
+        "middleware_unsafe_classes",
         "get_response",
         "_django_hook_middleware",  # Django built-in: fast path (direct calls)
         "_thirdparty_hook_middleware",  # Third-party: safe path (sync_to_async)
@@ -573,6 +582,7 @@ class DjangoMiddlewareStack:
         self._thirdparty_process_request = []
         self._thirdparty_process_response_reversed = []
         self._thirdparty_process_view = []
+        self.middleware_unsafe_classes = [import_string(middleware) for middleware in _DJANGO_UNSAFE_MIDDLEWARES]
 
     def _create_middleware_instance(self, get_response: Callable) -> None:
         """
@@ -679,7 +689,12 @@ class DjangoMiddlewareStack:
 
         # 2. Run Django built-in process_request hooks DIRECTLY (fast path - no blocking I/O)
         for middleware in self._django_process_request:
-            response = middleware.process_request(django_request)
+            is_unsafe_middleare = self._is_unsafe_middeware(middleware)
+
+            if is_unsafe_middleare:
+                response = await sync_to_async(middleware.process_request, thread_sensitive=True)(django_request)
+            else:
+                response = middleware.process_request(django_request)
             if response is not None:
                 return _to_bolt_response(response)
 
@@ -699,7 +714,13 @@ class DjangoMiddlewareStack:
 
         # Run Django built-in process_view hooks (includes CsrfViewMiddleware)
         for middleware in self._django_process_view:
-            response = middleware.process_view(django_request, _csrf_callback, _EMPTY_TUPLE, _EMPTY_DICT)
+            is_unsafe_middleare = self._is_unsafe_middeware(middleware)
+            if is_unsafe_middleare:
+                response = await sync_to_async(middleware.process_view, thread_sensitive=True)(
+                    django_request, _csrf_callback, _EMPTY_TUPLE, _EMPTY_DICT
+                )
+            else:
+                response = middleware.process_view(django_request, _csrf_callback, _EMPTY_TUPLE, _EMPTY_DICT)
             if response is not None:
                 return _to_bolt_response(response)
 
@@ -739,7 +760,13 @@ class DjangoMiddlewareStack:
 
         # 7. Run Django built-in process_response hooks DIRECTLY (reverse order)
         for middleware in self._django_process_response_reversed:
-            django_response = middleware.process_response(django_request, django_response)
+            is_unsafe_middleare = self._is_unsafe_middeware(middleware)
+            if is_unsafe_middleare:
+                django_response = await sync_to_async(middleware.process_response, thread_sensitive=True)(
+                    django_request, django_response
+                )
+            else:
+                django_response = middleware.process_response(django_request, django_response)
 
         # 8. Single Django→Bolt conversion at the end
         return _to_bolt_response(django_response)
@@ -747,6 +774,14 @@ class DjangoMiddlewareStack:
     def __repr__(self) -> str:
         names = [cls.__name__ for cls in self.middleware_classes]
         return f"DjangoMiddlewareStack([{', '.join(names)}])"
+
+    def _is_unsafe_middeware(self, middleware):
+        is_unsafe_middleare = False
+        for unsafe_middleware in self.middleware_unsafe_classes:
+            if isinstance(middleware, unsafe_middleware):
+                is_unsafe_middleare = True
+                break
+        return is_unsafe_middleare
 
 
 # ============================================================================

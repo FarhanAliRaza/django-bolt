@@ -290,7 +290,7 @@ class TestClient(httpx.Client):
 
         # Create test app instance with full CORS config
         # Pass trailing_slash setting to configure NormalizePath middleware
-        trailing_slash = getattr(api, 'trailing_slash', 'strip')
+        trailing_slash = getattr(api, "trailing_slash", "strip")
         self.app_id = _core.create_test_app(api._dispatch, False, cors_config, trailing_slash)
 
         # Register routes
@@ -502,7 +502,7 @@ class AsyncTestClient(httpx.AsyncClient):
             cors_config = TestClient._read_cors_settings_from_django()
 
         # Create test app instance with trailing_slash setting
-        trailing_slash = getattr(api, 'trailing_slash', 'strip')
+        trailing_slash = getattr(api, "trailing_slash", "strip")
         self.app_id = _core.create_test_app(api._dispatch, False, cors_config, trailing_slash)
 
         # Register routes

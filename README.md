@@ -163,7 +163,6 @@ Contributions welcome! Here's how:
 ### Areas That Need Help
 
 - Testing and fixing bugs
-- Serlialization layer
 - Add extension support (adding lifecycle events, making di comprehensive)
 - Cleaning up code.
 - More examples, tutorials, and docs.

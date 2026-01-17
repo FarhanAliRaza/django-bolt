@@ -211,9 +211,7 @@ class OpenAPIRouteRegistrar:
 
                 handler = make_handler(plugin)
                 handler = self._apply_django_auth(handler)
-                docs_api._route_decorator(
-                    "GET", full_path, guards=guards, auth=auth, _skip_prefix=skip_prefix
-                )(handler)
+                docs_api._route_decorator("GET", full_path, guards=guards, auth=auth, _skip_prefix=skip_prefix)(handler)
 
     def _register_root_redirect(self, docs_api, route_prefix: str, skip_prefix: bool) -> None:
         """Register root path to serve default UI directly.
@@ -250,6 +248,4 @@ class OpenAPIRouteRegistrar:
 
             handler = make_root_handler(plugin, schema_url)
             handler = self._apply_django_auth(handler)
-            docs_api._route_decorator(
-                "GET", root_path, guards=guards, auth=auth, _skip_prefix=skip_prefix
-            )(handler)
+            docs_api._route_decorator("GET", root_path, guards=guards, auth=auth, _skip_prefix=skip_prefix)(handler)

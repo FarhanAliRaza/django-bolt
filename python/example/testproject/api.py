@@ -81,6 +81,7 @@ class Item(msgspec.Struct):
     price: float
     is_offer: bool | None = None
 
+
 @api.get("/items100", response_model=list[Item])
 async def items100() -> list[Item]:
     return [Item(name=f"item{i}", price=float(i), is_offer=(i % 2 == 0)) for i in range(100)]
@@ -440,7 +441,6 @@ async def read_item(item_id: int, q: str | None = None):
 @api.put("/items/{item_id}", response_model=dict)
 async def update_item(item_id: int, item: Item) -> dict:
     return {"item_name": item.name, "item_id": item_id}
-
 
 
 # ==== Benchmarks: JSON parsing/validation & slow async op ====

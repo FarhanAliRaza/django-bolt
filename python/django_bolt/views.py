@@ -136,6 +136,7 @@ class APIView:
                     view_instance.request = kwargs["request"]
 
                 return await bound_method(*args, **kwargs)
+
         else:
             # Create sync wrapper for sync methods
             def view_handler(*args, **kwargs):
@@ -148,6 +149,8 @@ class APIView:
                     view_instance.request = kwargs["request"]
 
                 return bound_method(*args, **kwargs)
+
+        view_handler.__wrapped__ = method_handler
 
         # Attach the signature (for parameter extraction)
         view_handler.__signature__ = new_sig

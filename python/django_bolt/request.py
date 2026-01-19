@@ -80,6 +80,11 @@ class Request(Protocol):
         """Async user getter (Django-style)"""
         ...
 
+    @auser.setter
+    def auser(self, value: Any) -> None:
+        """Set async user callable (used by Django's alogin/alogout)"""
+        ...
+
 
 __all__ = [
     "Request",

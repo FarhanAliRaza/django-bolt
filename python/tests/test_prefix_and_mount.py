@@ -53,9 +53,7 @@ class TestMountPathNormalization:
         main_api.mount("/mount", sub_api)
 
         registered_paths = [path for _method, path, _handler_id, _handler in main_api._routes]
-        assert "/mount/endpoint" in registered_paths, (
-            f"Expected '/mount/endpoint' in routes, got: {registered_paths}"
-        )
+        assert "/mount/endpoint" in registered_paths, f"Expected '/mount/endpoint' in routes, got: {registered_paths}"
 
     def test_mount_with_trailing_slash_stripped(self):
         """Mount path with trailing slash should have it stripped."""
@@ -70,23 +68,19 @@ class TestMountPathNormalization:
         main_api.mount("/mount/", sub_api)
 
         registered_paths = [path for _method, path, _handler_id, _handler in main_api._routes]
-        assert "/mount/endpoint" in registered_paths, (
-            f"Expected '/mount/endpoint' in routes, got: {registered_paths}"
-        )
+        assert "/mount/endpoint" in registered_paths, f"Expected '/mount/endpoint' in routes, got: {registered_paths}"
         # Should NOT have double slash
-        assert "/mount//endpoint" not in registered_paths, (
-            f"Invalid path with double slash found: {registered_paths}"
-        )
+        assert "/mount//endpoint" not in registered_paths, f"Invalid path with double slash found: {registered_paths}"
 
     def test_mount_various_path_formats(self):
         """Test that various mount path formats are normalized correctly."""
         test_cases = [
-            ("mount", "/mount/endpoint"),          # No leading slash
-            ("/mount", "/mount/endpoint"),         # With leading slash
-            ("mount/", "/mount/endpoint"),         # Trailing slash only
-            ("/mount/", "/mount/endpoint"),        # Both slashes
-            ("api/v1", "/api/v1/endpoint"),        # Nested path no leading
-            ("/api/v1", "/api/v1/endpoint"),       # Nested path with leading
+            ("mount", "/mount/endpoint"),  # No leading slash
+            ("/mount", "/mount/endpoint"),  # With leading slash
+            ("mount/", "/mount/endpoint"),  # Trailing slash only
+            ("/mount/", "/mount/endpoint"),  # Both slashes
+            ("api/v1", "/api/v1/endpoint"),  # Nested path no leading
+            ("/api/v1", "/api/v1/endpoint"),  # Nested path with leading
         ]
 
         for mount_path, expected_route in test_cases:
@@ -101,8 +95,7 @@ class TestMountPathNormalization:
 
             registered_paths = [path for _method, path, _handler_id, _handler in main_api._routes]
             assert expected_route in registered_paths, (
-                f"Mount path '{mount_path}' should result in route '{expected_route}', "
-                f"got: {registered_paths}"
+                f"Mount path '{mount_path}' should result in route '{expected_route}', got: {registered_paths}"
             )
 
     def test_mounted_routes_are_accessible(self):
@@ -139,7 +132,7 @@ class TestOpenAPIDocsWithPrefix:
             openapi_config=OpenAPIConfig(
                 title="Test API",
                 version="1.0.0",
-            )
+            ),
         )
 
         @api.get("/items")
@@ -176,7 +169,7 @@ class TestOpenAPIDocsWithPrefix:
             openapi_config=OpenAPIConfig(
                 title="Test API",
                 version="1.0.0",
-            )
+            ),
         )
 
         @api.get("/items")
@@ -201,7 +194,7 @@ class TestOpenAPIDocsWithPrefix:
                 title="Test API",
                 version="1.0.0",
                 render_plugins=[SwaggerRenderPlugin()],
-            )
+            ),
         )
 
         @api.get("/items")
@@ -231,7 +224,7 @@ class TestOpenAPIDocsWithPrefix:
             openapi_config=OpenAPIConfig(
                 title="Test API",
                 version="1.0.0",
-            )
+            ),
         )
 
         @api.get("/items")
@@ -243,9 +236,7 @@ class TestOpenAPIDocsWithPrefix:
         with TestClient(api) as client:
             # API route should be at prefixed path
             response = client.get("/api/items")
-            assert response.status_code == 200, (
-                f"API route should be at /api/items, got {response.status_code}"
-            )
+            assert response.status_code == 200, f"API route should be at /api/items, got {response.status_code}"
             assert response.json() == {"items": ["item1", "item2"]}
 
             # API route should NOT be at unprefixed path
@@ -262,7 +253,7 @@ class TestOpenAPIDocsWithPrefix:
                 title="Test API",
                 version="1.0.0",
                 path="/api-docs",  # Custom docs path
-            )
+            ),
         )
 
         @api.get("/items")
@@ -274,9 +265,7 @@ class TestOpenAPIDocsWithPrefix:
         with TestClient(api) as client:
             # Docs should be at custom path (absolute)
             response = client.get("/api-docs/openapi.json")
-            assert response.status_code == 200, (
-                f"Expected docs at /api-docs/openapi.json, got {response.status_code}"
-            )
+            assert response.status_code == 200, f"Expected docs at /api-docs/openapi.json, got {response.status_code}"
 
             # Should NOT be at /api/api-docs (prefixed)
             response = client.get("/api/api-docs/openapi.json")
@@ -291,7 +280,7 @@ class TestOpenAPIDocsWithPrefix:
             openapi_config=OpenAPIConfig(
                 title="Test API",
                 version="1.0.0",
-            )
+            ),
         )
 
         @api.get("/items")
@@ -307,9 +296,7 @@ class TestOpenAPIDocsWithPrefix:
             # Docs routes should NOT appear in schema
             paths = list(schema["paths"].keys())
             docs_paths = [p for p in paths if "docs" in p or "openapi" in p]
-            assert len(docs_paths) == 0, (
-                f"OpenAPI schema should not include docs routes, found: {docs_paths}"
-            )
+            assert len(docs_paths) == 0, f"OpenAPI schema should not include docs routes, found: {docs_paths}"
 
             # API routes should appear
             assert "/api/items" in paths, f"API routes should be in schema: {paths}"
@@ -328,15 +315,11 @@ class TestEmptyRouteRegistration:
 
         registered_paths = [path for _method, path, _handler_id, _handler in api._routes]
         # Empty route "" should be normalized to "/"
-        assert "/" in registered_paths, (
-            f"Empty route should be normalized to '/', got: {registered_paths}"
-        )
+        assert "/" in registered_paths, f"Empty route should be normalized to '/', got: {registered_paths}"
 
         with TestClient(api) as client:
             response = client.get("/")
-            assert response.status_code == 200, (
-                f"Empty route should be accessible at /, got {response.status_code}"
-            )
+            assert response.status_code == 200, f"Empty route should be accessible at /, got {response.status_code}"
             assert response.json() == {"message": "root"}
 
     def test_empty_route_with_prefix(self):
@@ -381,9 +364,7 @@ class TestEmptyRouteRegistration:
 
         registered_paths = [path for _method, path, _handler_id, _handler in main_api._routes]
         # Route "/" mounted at "/sub" = "/sub/" -> normalized to "/sub"
-        assert "/sub" in registered_paths, (
-            f"Empty route in mounted API should be at '/sub', got: {registered_paths}"
-        )
+        assert "/sub" in registered_paths, f"Empty route in mounted API should be at '/sub', got: {registered_paths}"
 
         with TestClient(main_api) as client:
             response = client.get("/sub")
@@ -410,9 +391,7 @@ class TestEmptyRouteRegistration:
 
         registered_paths = [path for _method, path, _handler_id, _handler in main_api._routes]
         # Mount "sub" normalized to "/sub", + "/" = "/sub/" -> normalized to "/sub"
-        assert "/sub" in registered_paths, (
-            f"Empty route in mounted API should be at '/sub', got: {registered_paths}"
-        )
+        assert "/sub" in registered_paths, f"Empty route in mounted API should be at '/sub', got: {registered_paths}"
 
         with TestClient(main_api) as client:
             response = client.get("/sub")
@@ -431,9 +410,7 @@ class TestEmptyRouteRegistration:
 
         with TestClient(api) as client:
             response = client.get("/")
-            assert response.status_code == 200, (
-                f"Slash route should be accessible at /, got {response.status_code}"
-            )
+            assert response.status_code == 200, f"Slash route should be accessible at /, got {response.status_code}"
             assert response.json() == {"message": "root with slash"}
 
     def test_slash_route_with_prefix(self):
@@ -524,9 +501,7 @@ class TestTrailingSlashSetting:
             return {"users": []}
 
         registered_paths = [path for _method, path, _handler_id, _handler in api._routes]
-        assert "/users/" in registered_paths, (
-            f"'append' mode should add trailing slash, got: {registered_paths}"
-        )
+        assert "/users/" in registered_paths, f"'append' mode should add trailing slash, got: {registered_paths}"
         assert "/users" not in registered_paths
 
         with TestClient(api) as client:

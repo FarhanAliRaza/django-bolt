@@ -369,9 +369,10 @@ def analyze_handler(fn: Callable[..., Any]) -> HandlerAnalysis:
     """
     analysis = HandlerAnalysis()
 
+    unwraped_source = inspect.unwrap(fn)
     # Try to get source code
     try:
-        source = inspect.getsource(fn)
+        source = inspect.getsource(unwraped_source)
     except (OSError, TypeError) as e:
         # Can't get source (e.g., built-in, C extension, or lambda)
         analysis.analysis_failed = True

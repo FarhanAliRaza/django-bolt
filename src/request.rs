@@ -179,6 +179,17 @@ impl PyRequest {
         }
     }
 
+    /// Set the async user loader (Django-style).
+    ///
+    /// This allows Django's alogin()/alogout() functions to set request.auser
+    /// just like in standard Django.
+    #[setter]
+    fn set_auser(&mut self, py: Python<'_>, value: Py<PyAny>) -> PyResult<()> {
+        let state_dict = self.state.bind(py);
+        state_dict.set_item("auser", value)?;
+        Ok(())
+    }
+
     /// Get the full path with query string (Django-compatible).
     ///
     /// Example:

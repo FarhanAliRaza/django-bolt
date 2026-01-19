@@ -1216,3 +1216,109 @@ class TestMultipleCookieHeaders:
 
             # Should have no cookies (HeaderAddingMiddleware doesn't set cookies)
             assert cookie_count == 0, f"Expected no Set-Cookie headers, got {cookie_count}"
+
+
+# =============================================================================
+# Test auser Setter for Django alogin() Compatibility
+# =============================================================================
+
+
+@pytest.mark.django_db
+class TestAuserSetter:
+    """Tests for PyRequest.auser setter used by Django's alogin()."""
+
+    def test_auser_setter_basic(self):
+        """
+        Test that request.auser can be set and retrieved.
+
+        Django's alogin() sets request.auser to a coroutine function.
+        This test verifies the setter works correctly.
+        """
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.contrib.auth.middleware.AuthenticationMiddleware",
+            ]
+        )
+
+        @api.get("/test-auser-setter")
+        async def test_auser_setter(request):
+            # Create a custom async user loader
+            async def custom_auser():
+                return "custom_user_value"
+
+            # Set auser (this is what Django's alogin() does)
+            request.auser = custom_auser
+
+            # Verify we can retrieve it
+            retrieved_auser = request.auser
+            assert retrieved_auser is custom_auser
+
+            # Verify it returns expected value when awaited
+            result = await retrieved_auser()
+            return {"status": "ok", "auser_result": result}
+
+        with TestClient(api) as client:
+            response = client.get("/test-auser-setter")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "ok"
+            assert data["auser_result"] == "custom_user_value"
+
+    def test_auser_setter_with_django_alogin(self):
+        """
+        Test that Django's alogin() can set request.auser without error.
+
+        Before fix: AttributeError: attribute 'auser' is not writable
+        After fix: alogin() works correctly
+        """
+        from django.contrib.auth import alogin, alogout
+        from django.contrib.auth.models import User
+
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.contrib.auth.middleware.AuthenticationMiddleware",
+            ]
+        )
+
+        @api.post("/test-alogin")
+        async def test_alogin_handler(request):
+            # Create or get a test user
+            user, _ = await User.objects.aget_or_create(
+                username="test_alogin_user",
+                defaults={"email": "test@example.com"},
+            )
+
+            # This should NOT raise AttributeError anymore
+            # Django's alogin() internally does: request.auser = auser
+            await alogin(request, user)
+
+            # Verify the user is logged in
+            logged_in_user = await request.auser()
+            return {
+                "status": "ok",
+                "user_id": user.id,
+                "logged_in_as": logged_in_user.username if hasattr(logged_in_user, "username") else str(logged_in_user),
+            }
+
+        @api.post("/test-alogout")
+        async def test_alogout_handler(request):
+            # This also uses request.auser setter
+            await alogout(request)
+            return {"status": "ok", "logged_out": True}
+
+        with TestClient(api) as client:
+            # Test alogin
+            response = client.post("/test-alogin")
+            assert response.status_code == 200, f"alogin failed: {response.text}"
+            data = response.json()
+            assert data["status"] == "ok"
+            assert data["logged_in_as"] == "test_alogin_user"
+
+            # Test alogout (also uses request.auser setter)
+            response = client.post("/test-alogout")
+            assert response.status_code == 200, f"alogout failed: {response.text}"
+            data = response.json()
+            assert data["status"] == "ok"
+            assert data["logged_out"] is True

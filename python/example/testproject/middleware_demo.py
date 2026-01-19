@@ -1,11 +1,16 @@
 from typing import Annotated
 
+import msgspec
 from django.contrib import messages  # noqa: PLC0415
+from django.contrib.auth import alogin
+from django.contrib.auth.models import User
+from django.views.decorators.csrf import csrf_exempt
 
 from django_bolt import BoltAPI, Request
 from django_bolt.middleware import BaseMiddleware, TimingMiddleware
 from django_bolt.params import Form
 from django_bolt.shortcuts import render
+from django_bolt.views import APIView
 
 
 class RequestIdMiddleware:
@@ -148,3 +153,178 @@ async def middleware_demo(request: Request, test: Annotated[str, Form("test")]):
             "tenant_id": request.state.get("tenant_id"),
         },
     )
+
+
+# =============================================================================
+# TEST ENDPOINTS FOR PR #93 - Middleware Safety & AST Analysis Issues
+# =============================================================================
+# These endpoints demonstrate the issues fixed in PR #93:
+# 1. Unsafe middleware (Session, Auth, Message) causing SynchronousOnlyOperation
+# 2. AST analyzer missing ORM calls in nested function calls
+# 3. APIView.as_view() wrapper hiding ORM detection from AST analyzer
+
+
+class RequestSerializer(msgspec.Struct):
+    """Simple request body for testing."""
+
+    username: str
+
+
+class UserService:
+    """Service class that performs ORM operations - AST may miss these."""
+
+    def sync_get_user(self, request):
+        """Sync method that does ORM - called from handler."""
+        # AST analyzer may not detect this ORM call when called from handler
+        user = User.objects.filter(username="test").first()
+        return user
+
+    async def async_get_user(self, request):
+        """Async method that does ORM - called from handler."""
+        user = await User.objects.filter(username="test").afirst()
+        return user
+
+
+# Singleton service instance
+_user_service = UserService()
+
+
+# -----------------------------------------------------------------------------
+# Issue 1: Unsafe middleware causing SynchronousOnlyOperation
+# -----------------------------------------------------------------------------
+# SessionMiddleware, AuthenticationMiddleware, MessageMiddleware perform
+# blocking I/O but were classified as "safe". This causes SynchronousOnlyOperation
+# when used with async handlers that do ORM operations.
+
+
+@middleware_api.post("/test/async-orm")
+@csrf_exempt
+async def test_async_orm(request: Request, data: RequestSerializer):
+    """
+    Test async handler with ORM + Django middleware.
+
+    Before fix: SynchronousOnlyOperation because Session/Auth/Message middleware
+    ran synchronously in the async context.
+
+    After fix: Middleware wrapped with sync_to_async, ORM works correctly.
+
+    Test with:
+        curl -X POST http://localhost:8001/middleware/test/async-orm \
+             -H "Content-Type: application/json" \
+             -d '{"username": "testuser"}'
+    """
+    # This ORM call should work after the middleware safety fix
+    user = await User.objects.filter(username=data.username).afirst()
+
+    if user:
+        # This also requires middleware to be properly async-wrapped
+        await alogin(request, user)
+        logged_in_user = await request.auser()
+        return {"status": "ok", "user_id": user.id, "logged_in": True, "logged_in_user" : logged_in_user.id }
+
+    return {"status": "ok", "user": None, "logged_in": False}
+
+
+# -----------------------------------------------------------------------------
+# Issue 2: AST analyzer missing ORM in nested function calls
+# -----------------------------------------------------------------------------
+# The AST analyzer inspects handler source but doesn't follow calls into
+# other functions/methods. ORM operations in service classes are missed.
+
+
+@middleware_api.post("/test/sync-nested-orm")
+@csrf_exempt
+def test_sync_nested_orm(request: Request, data: RequestSerializer):
+    """
+    Test sync handler calling service with ORM.
+
+    The AST analyzer may not detect the ORM call inside UserService.sync_get_user()
+    because it doesn't recursively analyze called functions.
+
+    Test with:
+        curl -X POST http://localhost:8000/middleware/test/sync-nested-orm \
+             -H "Content-Type: application/json" \
+             -d '{"username": "testuser"}'
+    """
+    # ORM call is hidden inside service method - AST may miss this
+    user = _user_service.sync_get_user(request)
+
+    if user:
+        return {"status": "ok", "user_id": user.id, "source": "service"}
+
+    return {"status": "ok", "user": None}
+
+
+@middleware_api.post("/test/async-nested-orm")
+@csrf_exempt
+async def test_async_nested_orm(request: Request, data: RequestSerializer):
+    """
+    Test async handler calling async service with ORM.
+
+    Test with:
+        curl -X POST http://localhost:8000/middleware/test/async-nested-orm \
+             -H "Content-Type: application/json" \
+             -d '{"username": "testuser"}'
+    """
+    # ORM call is hidden inside async service method
+    user = await _user_service.async_get_user(request)
+
+    if user:
+        return {"status": "ok", "user_id": user.id, "source": "async_service"}
+
+    return {"status": "ok", "user": None}
+
+
+# -----------------------------------------------------------------------------
+# Issue 3: APIView.as_view() wrapper hiding ORM from AST analyzer
+# -----------------------------------------------------------------------------
+# APIView.as_view() creates a wrapper function. The AST analyzer inspects
+# the wrapper (view_handler) instead of the actual method (post/get/etc).
+# This causes uses_orm to always be False for CBVs.
+
+
+@middleware_api.view("/test/cbv-sync-orm")
+class CBVSyncORMView(APIView):
+    """
+    Class-based view with sync ORM operations.
+
+    Before fix: AST analyzer sees view_handler wrapper, misses ORM in post().
+    HandlerAnalysis(uses_orm=False, ...)
+
+    After fix: inspect.unwrap() reveals the actual method, ORM detected.
+    HandlerAnalysis(uses_orm=True, orm_operations={'all', 'comprehension_all'}, ...)
+
+    Test with:
+        curl -X POST http://localhost:8000/middleware/test/cbv-sync-orm \
+             -H "Content-Type: application/json" \
+             -d '{"username": "testuser"}'
+    """
+
+    def post(self, request: Request, data: RequestSerializer):
+        """Sync POST with ORM - should be detected by AST."""
+        # Direct ORM call in CBV method
+        users = User.objects.all()
+        # List comprehension over queryset
+        result = [user.id for user in users]
+        return {"status": "ok", "user_ids": result[:5]}  # Limit for response
+
+
+@middleware_api.view("/test/cbv-async-orm")
+class CBVAsyncORMView(APIView):
+    """
+    Class-based view with async ORM operations.
+
+    Test with:
+        curl -X POST http://localhost:8000/middleware/test/cbv-async-orm \
+             -H "Content-Type: application/json" \
+             -d '{"username": "testuser"}'
+    """
+
+    async def post(self, request: Request, data: RequestSerializer):
+        """Async POST with ORM - should be detected by AST."""
+        user = await User.objects.filter(username=data.username).afirst()
+
+        if user:
+            return {"status": "ok", "user_id": user.id}
+
+        return {"status": "ok", "user": None}

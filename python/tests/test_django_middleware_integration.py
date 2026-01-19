@@ -491,14 +491,17 @@ class TestMiddlewareCategorization:
 
     def test_django_builtin_uses_fast_path(self):
         """
-        Test that Django built-in middleware uses fast path (direct calls).
+        Test that Django safe built-in middleware uses fast path (direct calls).
 
-        Django's SessionMiddleware and AuthMiddleware have hooks but are
-        safe to call directly without sync_to_async.
+        Only middleware that doesn't do blocking I/O (like CommonMiddleware)
+        uses the fast path. SessionMiddleware, AuthenticationMiddleware, and
+        MessageMiddleware are now routed through sync_to_async because they
+        can perform blocking database I/O (e.g., session.save()).
         """
-        # Verify classification
-        assert _is_django_builtin_middleware(SessionMiddleware) is True
+        # Verify classification - CommonMiddleware is safe (no blocking I/O)
         assert _is_django_builtin_middleware(CommonMiddleware) is True
+        # SessionMiddleware is NOT safe (can do blocking I/O in process_response)
+        assert _is_django_builtin_middleware(SessionMiddleware) is False
 
         # Test through HTTP cycle
         api = BoltAPI(
@@ -627,20 +630,32 @@ class TestMiddlewareCategorizationUnit:
     """Unit tests for middleware categorization helper functions."""
 
     def test_is_django_builtin_middleware_sessions(self):
-        """Test SessionMiddleware is recognized as Django built-in."""
-        assert _is_django_builtin_middleware(SessionMiddleware) is True
+        """Test SessionMiddleware is NOT recognized as Django safe built-in.
+
+        SessionMiddleware can do blocking database I/O in process_response
+        when saving the session, so it needs sync_to_async wrapping.
+        """
+        assert _is_django_builtin_middleware(SessionMiddleware) is False
 
     def test_is_django_builtin_middleware_common(self):
-        """Test CommonMiddleware is recognized as Django built-in."""
+        """Test CommonMiddleware is recognized as Django safe built-in."""
         assert _is_django_builtin_middleware(CommonMiddleware) is True
 
     def test_is_django_builtin_middleware_auth(self):
-        """Test AuthenticationMiddleware is recognized as Django built-in."""
-        assert _is_django_builtin_middleware(AuthenticationMiddleware) is True
+        """Test AuthenticationMiddleware is NOT recognized as Django safe built-in.
+
+        AuthenticationMiddleware can do blocking database I/O when loading
+        the user, so it needs sync_to_async wrapping.
+        """
+        assert _is_django_builtin_middleware(AuthenticationMiddleware) is False
 
     def test_is_django_builtin_middleware_messages(self):
-        """Test MessageMiddleware is recognized as Django built-in."""
-        assert _is_django_builtin_middleware(MessageMiddleware) is True
+        """Test MessageMiddleware is NOT recognized as Django safe built-in.
+
+        MessageMiddleware can do blocking database I/O when storing messages,
+        so it needs sync_to_async wrapping.
+        """
+        assert _is_django_builtin_middleware(MessageMiddleware) is False
 
     def test_is_django_builtin_middleware_thirdparty(self):
         """Test third-party middleware is NOT recognized as Django built-in."""
@@ -649,10 +664,14 @@ class TestMiddlewareCategorizationUnit:
         assert _is_django_builtin_middleware(HeaderAddingMiddleware) is False
 
     def test_stack_categorizes_middleware_correctly(self):
-        """Test DjangoMiddlewareStack correctly categorizes middleware."""
+        """Test DjangoMiddlewareStack correctly categorizes middleware.
+
+        SessionMiddleware is now categorized as third-party (needs sync_to_async)
+        because it can do blocking database I/O.
+        """
         stack = DjangoMiddlewareStack(
             [
-                SessionMiddleware,  # Django built-in with hooks
+                SessionMiddleware,  # Now third-party (can do blocking I/O)
                 HookBasedThirdPartyMiddleware,  # Third-party with hooks
                 CallOnlyMiddleware,  # __call__-only
             ]
@@ -664,9 +683,9 @@ class TestMiddlewareCategorizationUnit:
 
         stack._create_middleware_instance(dummy)
 
-        # Verify categorization
-        assert len(stack._django_hook_middleware) == 1  # SessionMiddleware
-        assert len(stack._thirdparty_hook_middleware) == 1  # HookBasedThirdPartyMiddleware
+        # Verify categorization - SessionMiddleware is now in thirdparty
+        assert len(stack._django_hook_middleware) == 0  # No Django safe middleware
+        assert len(stack._thirdparty_hook_middleware) == 2  # SessionMiddleware + HookBasedThirdPartyMiddleware
         assert stack._call_middleware_chain is not None  # CallOnlyMiddleware in chain
 
     def test_stack_no_call_only_middleware(self):

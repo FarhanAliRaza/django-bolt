@@ -1,5 +1,0 @@
- foward slashes are normalized and have to fix it for djanog admin and docs url to have uniform flow
-
- add more tests for type coercing with decimal and complicated money related shit
- and too long string for dates type stuff make it fully secure
-

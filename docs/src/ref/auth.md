@@ -71,18 +71,60 @@ APIKeyAuthentication(
 | `header`          | `str`      | `"x-api-key"` | Header containing key      |
 | `key_permissions` | `dict`     | `None`        | Key to permissions mapping |
 
-### SessionAuthentication
 
-!!! warning "In Development"
+### Session Authentication
 
-    Session authentication is not yet implemented. This is a placeholder for future functionality.
+!!! warning "Performance Impact"
 
-Django session authentication.
+    Session authentication requires Django's session middleware and database/cache lookups on every request. This is **significantly slower** than JWT or API key authentication because it:
+    
+    - Touches the ORM/database to load session data
+    - Requires Python execution
+
+    **Use JWT authentication for APIs when possible.** 
 
 ```python
-from django_bolt.auth import SessionAuthentication
+from django_bolt.auth import SessionAuthentication, IsAuthenticated
 
-SessionAuthentication()
+@api.get("/profile", auth=[SessionAuthentication()], guards=[IsAuthenticated()])
+async def profile(request):
+    user = await request.auser()  # Loaded from session
+    return {"username": user.username}
+```
+
+#### Storing data in sessions
+
+To store custom data in Django sessions within django-bolt handlers:
+
+```python
+from django_bolt.auth import SessionAuthentication, IsAuthenticated
+
+@api.post("/cart/{item_id}", auth=[SessionAuthentication()], guards=[IsAuthenticated()])
+def add_to_cart(request, item_id: int):
+    # Store data in session
+    cart = request.session.get('cart', [])
+    cart.append(item_id)
+    request.session['cart'] = cart
+    request.session.modified = True
+    
+    return {"cart": cart}
+
+@api.get("/cart", auth=[SessionAuthentication()])
+async def get_cart(request):
+    cart = request.session.aget('cart', [])
+    return {"cart": cart}
+```
+
+#### Configuration
+
+Session authentication respects Django's session settings:
+
+```python
+# settings.py
+
+# Cookie name (default: 'sessionid')
+SESSION_COOKIE_NAME = 'sessionid'
+...
 ```
 
 ## Permission guards

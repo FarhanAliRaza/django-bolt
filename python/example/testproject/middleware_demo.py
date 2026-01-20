@@ -220,7 +220,7 @@ async def test_async_orm(request: Request, data: RequestSerializer):
         # This also requires middleware to be properly async-wrapped
         await alogin(request, user)
         logged_in_user = await request.auser()
-        return {"status": "ok", "user_id": user.id, "logged_in": True, "logged_in_user" : logged_in_user.id }
+        return {"status": "ok", "user_id": user.id, "logged_in": True, "logged_in_user": logged_in_user.id}
 
     return {"status": "ok", "user": None, "logged_in": False}
 

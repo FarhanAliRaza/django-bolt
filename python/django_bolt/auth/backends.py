@@ -294,9 +294,9 @@ class SessionAuthentication(BaseAuthentication):
         return "session"
 
     def to_metadata(self) -> dict[str, Any]:
-        return {
-            "type": "session",
-        }
+        session_cookie_name = settings.SESSION_COOKIE_NAME
+
+        return {"type": "session", "session_cookie_name": session_cookie_name}
 
     async def get_user(self, user_id: str | None, auth_context: dict[str, Any]) -> Any | None:
         """

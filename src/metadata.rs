@@ -556,6 +556,13 @@ fn parse_auth_backend(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<A
                 key_permissions,
             })
         }
+        "session" => {
+            let cookie_name = dict
+                .get("session_cookie_name")
+                .and_then(|c| c.extract::<String>(py).ok())
+                .unwrap_or_else(|| "sessionid".to_string());
+            Some(AuthBackend::Session { cookie_name })
+        }
         _ => None,
     }
 }

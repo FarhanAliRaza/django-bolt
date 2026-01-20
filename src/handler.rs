@@ -516,9 +516,24 @@ pub async fn handle_request(
         }
     }
 
+    let needs_cookies = route_metadata
+        .as_ref()
+        .map(|m| m.needs_cookies)
+        .unwrap_or(true);
+
+    let cookies = if needs_cookies {
+        parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()))
+    } else {
+        AHashMap::new()
+    };
     // Execute authentication and guards using shared validation logic
     let auth_ctx = if let Some(ref route_meta) = route_metadata {
-        match validate_auth_and_guards(&headers, &route_meta.auth_backends, &route_meta.guards) {
+        match validate_auth_and_guards(
+            &headers,
+            &route_meta.auth_backends,
+            &cookies,
+            &route_meta.guards,
+        ) {
             AuthGuardResult::Allow(ctx) => ctx,
             AuthGuardResult::Unauthorized => {
                 // CORS headers will be added by CorsMiddleware

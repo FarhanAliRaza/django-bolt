@@ -223,11 +223,7 @@ class BoltAPI:
 
         # Signal emission - disabled by default for performance
         # Enable with BOLT_EMIT_SIGNALS = True in Django settings
-        self._emit_signals = (
-            getattr(django_settings, "BOLT_EMIT_SIGNALS", False)
-            if django_settings
-            else False
-        )
+        self._emit_signals = getattr(django_settings, "BOLT_EMIT_SIGNALS", False) if django_settings else False
 
         # Register this instance globally for autodiscovery
         _BOLT_API_REGISTRY.append(self)

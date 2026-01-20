@@ -393,7 +393,15 @@ pub fn test_request(
 
     runtime_handle.block_on(async {
         // Read test app state
-        let (router, route_metadata, dispatch, global_cors_config, debug, max_payload_size, _trailing_slash) = {
+        let (
+            router,
+            route_metadata,
+            dispatch,
+            global_cors_config,
+            debug,
+            max_payload_size,
+            _trailing_slash,
+        ) = {
             let state = app_state.read();
             (
                 state.router.clone(),
@@ -640,9 +648,20 @@ async fn handle_test_request_internal(
         }
     }
 
+    let needs_cookies = route_metadata
+        .get(&handler_id)
+        .map(|m| m.needs_cookies)
+        .unwrap_or(true);
+
+    let cookies = if needs_cookies {
+        parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()))
+    } else {
+        AHashMap::new()
+    };
+
     // Auth and guards
     let auth_ctx = if let Some(ref meta) = route_meta {
-        match validate_auth_and_guards(&headers, &meta.auth_backends, &meta.guards) {
+        match validate_auth_and_guards(&headers, &meta.auth_backends, &cookies, &meta.guards) {
             AuthGuardResult::Allow(ctx) => ctx,
             AuthGuardResult::Unauthorized => return responses::error_401(),
             AuthGuardResult::Forbidden => return responses::error_403(),
@@ -1175,6 +1194,20 @@ pub fn handle_test_websocket(
         header_map.insert(name.to_lowercase(), value.clone());
     }
 
+    let mut cookie_map: AHashMap<String, String> = AHashMap::new();
+    if let Some(cookie_header) = header_map.get("cookie") {
+        for pair in cookie_header.split(';') {
+            let pair = pair.trim();
+            if let Some(eq_pos) = pair.find('=') {
+                let (key, value) = pair.split_at(eq_pos);
+                let value = &value[1..];
+                if !key.is_empty() {
+                    cookie_map.insert(key.to_string(), value.to_string());
+                }
+            }
+        }
+    }
+
     // Origin validation for WebSocket
     let origin = header_map.get("origin");
     if let Some(origin_value) = origin {
@@ -1236,10 +1269,12 @@ pub fn handle_test_websocket(
         }
     }
 
+    let mut final_auth_ctx = None;
+
     // Auth and guards for WebSocket
     if let Some(route_meta) = app.route_metadata.get(&handler_id) {
         let auth_ctx = if !route_meta.auth_backends.is_empty() {
-            authenticate(&header_map, &route_meta.auth_backends)
+            authenticate(&header_map, &route_meta.auth_backends, &cookie_map)
         } else {
             None
         };
@@ -1259,6 +1294,7 @@ pub fn handle_test_websocket(
                 }
             }
         }
+        final_auth_ctx = auth_ctx;
     }
 
     // Get param_types from route metadata for type coercion
@@ -1330,17 +1366,8 @@ pub fn handle_test_websocket(
 
     // Parse cookies
     let cookies_dict = pyo3::types::PyDict::new(py);
-    for (k, v) in headers.iter() {
-        if k.to_lowercase() == "cookie" {
-            for pair in v.split(';') {
-                let pair = pair.trim();
-                if let Some(eq_pos) = pair.find('=') {
-                    let key = &pair[..eq_pos];
-                    let value = &pair[eq_pos + 1..];
-                    cookies_dict.set_item(key, value)?;
-                }
-            }
-        }
+    for (k, v) in &cookie_map {
+        cookies_dict.set_item(k, v)?;
     }
     scope_dict.set_item("cookies", cookies_dict)?;
 
@@ -1348,18 +1375,10 @@ pub fn handle_test_websocket(
     scope_dict.set_item("client", client_tuple)?;
 
     // Add auth context if present
-    if let Some(route_meta) = app.route_metadata.get(&handler_id) {
-        let auth_ctx = if !route_meta.auth_backends.is_empty() {
-            authenticate(&header_map, &route_meta.auth_backends)
-        } else {
-            None
-        };
-
-        if let Some(ref auth) = auth_ctx {
-            let ctx_dict = pyo3::types::PyDict::new(py);
-            crate::middleware::auth::populate_auth_context(&ctx_dict.clone().unbind(), auth, py);
-            scope_dict.set_item("auth_context", ctx_dict)?;
-        }
+    if let Some(ref auth) = final_auth_ctx {
+        let ctx_dict = pyo3::types::PyDict::new(py);
+        crate::middleware::auth::populate_auth_context(&ctx_dict.clone().unbind(), auth, py);
+        scope_dict.set_item("auth_context", ctx_dict)?;
     }
 
     Ok((

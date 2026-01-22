@@ -69,6 +69,7 @@ nav = [
     { "Dependencies" = "topics/dependencies.md" },
     { "Middleware" = "topics/middleware.md" },
     { "Django Signals" = "topics/signals.md" },
+    { "Lifecycle Hooks" = "topics/lifecycle.md" },
     { "Error Handling" = "topics/error-handling.md" },
     { "Logging" = "topics/logging.md" },
     { "Health Checks" = "topics/health-checks.md" },

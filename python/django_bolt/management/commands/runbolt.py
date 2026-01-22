@@ -1,3 +1,4 @@
+import atexit
 import contextlib
 import importlib
 import os
@@ -300,6 +301,42 @@ class Command(BaseCommand):
         # Register authentication backends for user resolution (request.user loading)
         # CRITICAL: Must be called BEFORE starting server so backends are available for user loading
         merged_api._register_auth_backends()
+
+        # Execute lifecycle startup hooks for the main API only (first discovered API)
+        # This is the project-level api.py where settings file is located
+        main_api = apis[0][1] if apis else None
+        if main_api and main_api._lifecycle.has_startup_handlers:
+            if process_id is not None:
+                self.stdout.write(f"[django-bolt] Process {process_id}: Running startup hooks...")
+            else:
+                self.stdout.write("[django-bolt] Running startup hooks...")
+            try:
+                main_api._lifecycle.run_startup_sync()
+                if process_id is not None:
+                    self.stdout.write(f"[django-bolt] Process {process_id}: Startup hooks completed")
+                else:
+                    self.stdout.write(self.style.SUCCESS("[django-bolt] Startup hooks completed"))
+            except Exception as e:
+                self.stderr.write(self.style.ERROR(f"[django-bolt] Startup hook failed: {e}"))
+                raise
+
+        # Register shutdown hooks to run on server exit (only for main API)
+        if main_api and main_api._lifecycle.has_shutdown_handlers:
+            def run_shutdown_hooks():
+                try:
+                    if process_id is not None:
+                        self.stdout.write(f"\n[django-bolt] Process {process_id}: Running shutdown hooks...")
+                    else:
+                        self.stdout.write("\n[django-bolt] Running shutdown hooks...")
+                    main_api._lifecycle.run_shutdown_sync()
+                    if process_id is not None:
+                        self.stdout.write(f"[django-bolt] Process {process_id}: Shutdown hooks completed")
+                    else:
+                        self.stdout.write("[django-bolt] Shutdown hooks completed")
+                except Exception as e:
+                    self.stderr.write(f"[django-bolt] Shutdown hook error: {e}")
+
+            atexit.register(run_shutdown_hooks)
 
         # Start the server (all handlers go through async dispatch with thread pool for sync)
         _core.start_server_async(

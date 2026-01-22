@@ -38,6 +38,7 @@ from .concurrency import sync_to_thread
 from .decorators import ActionHandler
 from .error_handlers import handle_exception
 from .exceptions import HTTPException
+from .lifecycle import LifecycleHooks
 from .logging.middleware import LoggingMiddleware, create_logging_middleware
 from .middleware import CompressionConfig
 from .middleware.compiler import add_optimization_flags_to_metadata, compile_middleware_meta
@@ -228,6 +229,9 @@ class BoltAPI:
             if django_settings
             else False
         )
+
+        # Lifecycle hooks (startup/shutdown events)
+        self._lifecycle = LifecycleHooks()
 
         # Register this instance globally for autodiscovery
         _BOLT_API_REGISTRY.append(self)
@@ -521,6 +525,84 @@ class BoltAPI:
 
             return fn
 
+        return decorator
+
+    def on_startup(self, func: Callable | None = None) -> Callable:
+        """
+        Register a startup event handler.
+
+        Startup handlers run before the server starts accepting requests.
+        Use for initialization tasks like loading ML models, connecting to
+        external services, warming caches, etc.
+
+        Usage:
+            # As a decorator
+            @api.on_startup
+            async def load_ml_model():
+                global model
+                model = load_model("path/to/model")
+
+            # With sync functions
+            @api.on_startup
+            def setup_logging():
+                logging.basicConfig(level=logging.INFO)
+
+            # Or register directly
+            api.on_startup(my_startup_function)
+
+        Note:
+            Only startup handlers on the main API (project-level api.py)
+            are executed. Sub-app hooks are ignored to avoid duplicate
+            initialization in autodiscovery.
+        """
+        def decorator(fn: Callable) -> Callable:
+            self._lifecycle.register_startup(fn)
+            return fn
+
+        if func is not None:
+            # Called as @api.on_startup without parentheses
+            return decorator(func)
+
+        # Called as @api.on_startup() with parentheses
+        return decorator
+
+    def on_shutdown(self, func: Callable | None = None) -> Callable:
+        """
+        Register a shutdown event handler.
+
+        Shutdown handlers run after the server stops accepting requests.
+        Use for cleanup tasks like closing database connections, flushing
+        buffers, releasing resources, etc.
+
+        Usage:
+            # As a decorator
+            @api.on_shutdown
+            async def close_connections():
+                await db.close()
+                await redis.close()
+
+            # With sync functions
+            @api.on_shutdown
+            def cleanup():
+                temp_files.cleanup()
+
+            # Or register directly
+            api.on_shutdown(my_shutdown_function)
+
+        Note:
+            Shutdown handlers are executed best-effort. Individual handler
+            failures are logged but don't prevent other handlers from running.
+            Only shutdown handlers on the main API are executed.
+        """
+        def decorator(fn: Callable) -> Callable:
+            self._lifecycle.register_shutdown(fn)
+            return fn
+
+        if func is not None:
+            # Called as @api.on_shutdown without parentheses
+            return decorator(func)
+
+        # Called as @api.on_shutdown() with parentheses
         return decorator
 
     def view(

@@ -78,6 +78,9 @@ from .decorators import action
 # Enums module
 from .enums import FileSize, MediaType
 
+# Lifecycle module
+from .lifecycle import LifecycleHooks
+
 # Middleware module
 from .middleware import (
     BaseMiddleware,
@@ -178,6 +181,8 @@ __all__ = [
     # Enums
     "MediaType",
     "FileSize",
+    # Lifecycle
+    "LifecycleHooks",
     # Router
     "Router",
     # Types

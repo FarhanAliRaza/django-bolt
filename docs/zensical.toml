@@ -66,6 +66,7 @@ nav = [
     { "Authentication" = "topics/authentication.md" },
     { "Permissions" = "topics/permissions.md" },
     { "Class-Based Views" = "topics/class-based-views.md" },
+    { "Pagination" = "topics/pagination.md" },
     { "Dependencies" = "topics/dependencies.md" },
     { "Middleware" = "topics/middleware.md" },
     { "Django Signals" = "topics/signals.md" },

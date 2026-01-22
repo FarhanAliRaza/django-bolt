@@ -53,6 +53,7 @@ from .openapi import (
 )
 from .openapi.routes import OpenAPIRouteRegistrar
 from .openapi.schema_generator import SchemaGenerator
+from .pagination import extract_pagination_item_type
 from .router import Router
 from .serialization import serialize_response
 from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
@@ -925,6 +926,13 @@ class BoltAPI:
                 # Pre-compute field names for QuerySet optimization (registration time only)
                 response_meta = extract_response_metadata(final_response_type)
                 meta.update(response_meta)
+
+            # If handler is paginated, extract and store the item serializer
+            # This enables @paginate to use Serializer.dump_many() for efficient serialization
+            if getattr(fn, "__paginated__", False) and final_response_type is not None:
+                item_type = extract_pagination_item_type(final_response_type)
+                if item_type is not None:
+                    fn.__serializer_class__ = item_type
 
             if status_code is not None:
                 meta["default_status_code"] = int(status_code)

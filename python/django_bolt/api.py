@@ -53,6 +53,7 @@ from .openapi import (
 )
 from .openapi.routes import OpenAPIRouteRegistrar
 from .openapi.schema_generator import SchemaGenerator
+from .pagination import extract_pagination_item_type
 from .router import Router
 from .serialization import serialize_response
 from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
@@ -727,11 +728,18 @@ class BoltAPI:
                 if merged_status_code is None:
                     merged_status_code = action_status_code
 
+                # Check for response_model on the method or original handler
+                method_response_model = getattr(action_method, "response_model", None)
+                if method_response_model is None:
+                    original = getattr(handler, "__original_handler__", None)
+                    if original is not None:
+                        method_response_model = getattr(original, "response_model", None)
+
                 # Register the route
                 route_decorator = self._route_decorator(
                     http_method,
                     route_path,
-                    response_model=None,
+                    response_model=method_response_model,
                     status_code=merged_status_code,
                     guards=merged_guards,
                     auth=merged_auth,
@@ -925,6 +933,17 @@ class BoltAPI:
                 # Pre-compute field names for QuerySet optimization (registration time only)
                 response_meta = extract_response_metadata(final_response_type)
                 meta.update(response_meta)
+
+            # If handler is paginated, extract and store the item serializer
+            # This enables @paginate to use Serializer.dump_many() for efficient serialization
+            if getattr(fn, "__paginated__", False) and final_response_type is not None:
+                item_type = extract_pagination_item_type(final_response_type)
+                if item_type is not None:
+                    fn.__serializer_class__ = item_type
+                    # For ViewSet methods wrapped by as_view(), also set on the original handler
+                    original = getattr(fn, "__original_handler__", None)
+                    if original is not None:
+                        original.__serializer_class__ = item_type
 
             if status_code is not None:
                 meta["default_status_code"] = int(status_code)

@@ -16,6 +16,7 @@ from asgiref.sync import sync_to_async
 
 from ..datastructures import UploadFile
 from ..exceptions import HTTPException, RequestValidationError, parse_msgspec_decode_error
+from ..pagination import PaginatedResponse
 from ..typing import (
     FieldDefinition,
     HandlerMetadata,
@@ -725,6 +726,11 @@ def coerce_to_response_type(value: Any, annotation: Any, meta: HandlerMetadata |
     Returns:
         Coerced value
     """
+    # Skip validation for PaginatedResponse - pagination decorator handles serialization
+    # PaginatedResponse is a msgspec.Struct that serializes directly
+    if isinstance(value, PaginatedResponse):
+        return value
+
     # Handle Django QuerySets - convert to list using .values()
     # Works for both sync and async handlers (sync handlers run in thread pool)
     if meta and "response_field_names" in meta and hasattr(value, "_iterable_class") and hasattr(value, "model"):

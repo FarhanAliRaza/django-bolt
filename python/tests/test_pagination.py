@@ -93,7 +93,7 @@ def test_page_number_pagination_first_page(sample_articles):
         assert data["has_next"] is True
         assert data["has_previous"] is False
         assert data["next_page"] == 2
-        assert data["previous_page"] is None
+        assert data.get("previous_page") is None
 
         # Check first item (ordered by -created_at)
         assert data["items"][0]["title"] == "Article 50"
@@ -147,7 +147,7 @@ def test_page_number_pagination_last_page(sample_articles):
         assert len(data["items"]) == 10
         assert data["has_next"] is False
         assert data["has_previous"] is True
-        assert data["next_page"] is None
+        assert data.get("next_page") is None
         assert data["previous_page"] == 4
 
 
@@ -567,7 +567,7 @@ def test_cursor_pagination_last_page(sample_articles):
             if not data["has_next"]:
                 # Last page
                 assert data["has_previous"] is True
-                assert data["next_cursor"] is None
+                assert data.get("next_cursor") is None
                 break
 
             cursor = data["next_cursor"]
@@ -677,7 +677,7 @@ def test_cursor_pagination_empty_results(db):
         assert len(data["items"]) == 0
         assert data["has_next"] is False
         assert data["has_previous"] is False
-        assert data["next_cursor"] is None
+        assert data.get("next_cursor") is None
 
 
 @pytest.mark.django_db(transaction=True)

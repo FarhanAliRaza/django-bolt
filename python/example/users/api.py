@@ -10,6 +10,7 @@ from django_bolt.pagination import (
     PageNumberPagination,
     paginate,
 )
+from django_bolt.serializers import Serializer
 from django_bolt.views import APIView, ModelViewSet, ViewSet
 
 from .models import User
@@ -18,7 +19,7 @@ api = BoltAPI(prefix="/users")
 
 
 # ============================================================================
-# Schemas
+# Schemas (msgspec.Struct - for backward compatibility)
 # ============================================================================
 
 
@@ -34,6 +35,35 @@ class UserFull(msgspec.Struct):
 class UserMini(msgspec.Struct):
     id: int
     username: str
+
+
+# ============================================================================
+# Serializers (Bolt Serializer - recommended for pagination)
+# ============================================================================
+
+
+class UserListSerializer(msgspec.Struct):
+    """
+    Serializer for user list view - only includes fields needed for listing.
+
+    Using Bolt Serializer with @paginate enables efficient batch serialization
+    via dump_many(), which is faster than converting each item individually.
+    """
+
+    id: int
+    username: str
+    email: str
+
+
+class UserDetailSerializer(Serializer):
+    """Serializer for user detail view - includes all fields."""
+
+    id: int
+    username: str
+    email: str
+    first_name: str
+    last_name: str
+    is_active: bool
 
 
 class UserCreate(msgspec.Struct):
@@ -183,26 +213,78 @@ class UserFull10ViewSet(APIView):
 # ============================================================================
 
 
-# 1. Functional View with PageNumberPagination
-@api.get("/paginated")
-@paginate(PageNumberPagination)
-async def list_users_paginated() -> list[UserMini]:
+# Custom pagination class for examples
+class SmallPagePagination(PageNumberPagination):
+    """Custom pagination with smaller page size."""
+
+    page_size = 10
+    max_page_size = 50
+    page_size_query_param = "page_size"  # Allow client to customize page size
+
+
+# ----------------------------------------------------------------------------
+# 1. Pagination with Bolt Serializer (RECOMMENDED)
+#    - Uses response_model to specify serializer
+#    - Automatically uses dump_many() for efficient batch serialization
+#    - Only declared fields are included in response
+# ----------------------------------------------------------------------------
+
+
+@api.get("/paginated", )
+@paginate(SmallPagePagination)
+async def list_users_paginated(request):
     """
-    List users with page number pagination.
+    List users with page number pagination and Bolt Serializer.
+
+    The serializer automatically filters fields - only id, username, email
+    are included in the response, even though the queryset fetches all fields.
 
     Query params:
         - page: Page number (default: 1)
-        - page_size: Items per page (default: 100, max: 1000)
+        - page_size: Items per page (default: 10, max: 50)
 
     Example: GET /users/paginated?page=2&page_size=20
+
+    Response:
+        {
+            "items": [{"id": 1, "username": "john", "email": "john@example.com"}, ...],
+            "total": 100,
+            "page": 2,
+            "page_size": 20,
+            "total_pages": 5,
+            "has_next": true,
+            "has_previous": true,
+            "next_page": 3,
+            "previous_page": 1
+        }
     """
-    return User.objects.only("id", "username")
+    return User.objects.all()
 
 
-# 2. Functional View with LimitOffsetPagination
-@api.get("/paginated-offset")
+# ----------------------------------------------------------------------------
+# 2. Pagination with return type annotation (alternative syntax)
+# ----------------------------------------------------------------------------
+
+
+@api.get("/paginated-typed")
+@paginate(SmallPagePagination)
+async def list_users_typed(request) -> list[UserListSerializer]:
+    """
+    Same as above but using return type annotation instead of response_model.
+
+    Both approaches work identically - choose based on preference.
+    """
+    return User.objects.all()
+
+
+# ----------------------------------------------------------------------------
+# 3. LimitOffset Pagination with Serializer
+# ----------------------------------------------------------------------------
+
+
+@api.get("/paginated-offset", response_model=list[UserListSerializer])
 @paginate(LimitOffsetPagination)
-async def list_users_offset(request) -> list[UserMini]:
+async def list_users_offset(request):
     """
     List users with limit-offset pagination.
 
@@ -211,92 +293,135 @@ async def list_users_offset(request) -> list[UserMini]:
         - offset: Starting position (default: 0)
 
     Example: GET /users/paginated-offset?limit=20&offset=40
+
+    Response:
+        {
+            "items": [...],
+            "total": 100,
+            "limit": 20,
+            "offset": 40,
+            "has_next": true,
+            "has_previous": true
+        }
     """
-    return User.objects.only("id", "username")
+    return User.objects.all()
 
 
-# 3. Functional View with CursorPagination
-@api.get("/paginated-cursor")
-@paginate(CursorPagination)
-async def list_users_cursor(request) -> list[UserMini]:
+# ----------------------------------------------------------------------------
+# 4. Cursor Pagination with Serializer
+# ----------------------------------------------------------------------------
+
+
+class UserCursorPagination(CursorPagination):
+    """Cursor pagination ordered by creation date."""
+
+    page_size = 20
+    ordering = "-id"  # Most recent first
+
+
+@api.get("/paginated-cursor", response_model=list[UserListSerializer])
+@paginate(UserCursorPagination)
+async def list_users_cursor(request):
     """
     List users with cursor-based pagination.
 
+    Cursor pagination is ideal for infinite scroll or real-time feeds
+    because it's stable even when new items are added.
+
     Query params:
-        - cursor: Opaque cursor string (optional)
-        - page_size: Items per page (default: 100, max: 1000)
+        - cursor: Opaque cursor string (optional, omit for first page)
+        - page_size: Items per page (default: 20)
 
-    Example: GET /users/paginated-cursor?page_size=20&cursor=eyJ2IjoxMDB9
+    Example: GET /users/paginated-cursor?cursor=eyJ2IjoxMDB9
+
+    Response:
+        {
+            "items": [...],
+            "page_size": 20,
+            "has_next": true,
+            "has_previous": true,
+            "next_cursor": "eyJ2Ijo4MH0=",
+            "previous_cursor": null
+        }
     """
-    return User.objects.only("id", "username")
+    return User.objects.all()
 
 
-# 4. Custom Pagination Class
-class SmallPagePagination(PageNumberPagination):
-    """Custom pagination with smaller page size"""
+# ----------------------------------------------------------------------------
+# 5. Pagination with msgspec.Struct (backward compatible)
+#    - Works with plain msgspec.Struct (not just Bolt Serializer)
+#    - Fields are extracted based on struct field declarations
+# ----------------------------------------------------------------------------
 
-    page_size = 10
-    max_page_size = 50
 
-
-@api.get("/paginated-small")
+@api.get("/paginated-msgspec", response_model=list[UserMini])
 @paginate(SmallPagePagination)
-async def list_users_small_pages(request) -> list[UserMini]:
+async def list_users_msgspec(request):
     """
-    List users with custom small page size.
+    Pagination also works with plain msgspec.Struct.
 
-    Example: GET /users/paginated-small?page=2
+    Only id and username are included (as declared in UserMini).
+    """
+    return User.objects.all()
+
+
+# ----------------------------------------------------------------------------
+# 6. Pagination without serializer (backward compatible fallback)
+#    - When no response_model is specified, all model fields are dumped
+#    - Not recommended for production (may expose sensitive fields)
+# ----------------------------------------------------------------------------
+
+
+@api.get("/paginated-legacy")
+@paginate(SmallPagePagination)
+async def list_users_legacy(request):
+    """
+    Pagination without serializer - all model fields are included.
+
+    WARNING: This may expose sensitive fields. Always use a serializer
+    in production to control which fields are returned.
     """
     return User.objects.only("id", "username")
 
 
-# 5. Class-Based View (ViewSet) with Pagination
+# ----------------------------------------------------------------------------
+# 7. Class-Based View (ViewSet) with Pagination
+# ----------------------------------------------------------------------------
+
+
 @api.viewset("/api-paginated")
 class UserPaginatedViewSet(ViewSet):
     """
-    ViewSet with automatic pagination on list action.
+    ViewSet with pagination using @paginate decorator on list method.
 
     Routes:
         - GET /users/api-paginated -> list (paginated)
         - GET /users/api-paginated/{id} -> retrieve (not paginated)
-
-    Query params for list:
-        - page: Page number (default: 1)
-        - page_size: Items per page (default: 20)
     """
 
-    queryset = User.objects.only("id", "username", "email")
-    pagination_class = PageNumberPagination
+    queryset = User.objects.all()
 
-    async def list(self, request) -> list[UserMini]:
-        """List all users with pagination."""
-        qs = await self.get_queryset()
+    @paginate(SmallPagePagination)
+    async def list(self, request) -> list[UserListSerializer]:
+        """
+        List all users with pagination.
 
-        # Apply pagination (returns PaginatedResponse if pagination_class is set)
-        paginated = await self.paginate_queryset(qs)
+        Using @paginate decorator with return type annotation
+        automatically handles serialization.
+        """
+        return await self.get_queryset()
 
-        # If pagination is disabled, we'd need to manually convert queryset
-        # But with pagination enabled, we get PaginatedResponse with items
-        if hasattr(paginated, "items"):
-            # Convert items to UserMini schema
-            paginated.items = [UserMini(id=user.id, username=user.username) async for user in paginated.items]
-
-        return paginated
-
-    async def retrieve(self, request, id: int) -> UserFull:
+    async def retrieve(self, request, id: int) -> UserDetailSerializer:
         """Retrieve a single user by ID (not paginated)."""
         user = await self.get_object(id=id)
-        return UserFull(
-            id=user.id,
-            username=user.username,
-            email=user.email,
-            first_name=user.first_name,
-            last_name=user.last_name,
-            is_active=user.is_active,
-        )
+        return UserDetailSerializer.from_model(user)
 
 
-# 6. ModelViewSet with Pagination
+# ----------------------------------------------------------------------------
+# 8. ModelViewSet with Pagination
+# ----------------------------------------------------------------------------
+
+
 @api.viewset("/model-paginated")
 class UserModelPaginatedViewSet(ModelViewSet):
     """
@@ -312,12 +437,12 @@ class UserModelPaginatedViewSet(ModelViewSet):
 
     Query params for list:
         - page: Page number (default: 1)
-        - page_size: Items per page (default: 25)
+        - page_size: Items per page (default: 10)
     """
 
     queryset = User.objects.all()
-    serializer_class = UserFull
-    list_serializer_class = UserMini
+    serializer_class = UserFull  # For detail/create/update views
+    list_serializer_class = UserMini  # For list view
     pagination_class = SmallPagePagination
 
     # list(), retrieve(), create(), update(), partial_update(), destroy()

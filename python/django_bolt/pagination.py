@@ -26,7 +26,7 @@ import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from functools import wraps
-from typing import Any, TypeVar
+from typing import Any, TypeVar, get_args, get_origin
 
 import msgspec
 from asgiref.sync import sync_to_async
@@ -40,44 +40,84 @@ __all__ = [
     "CursorPagination",
     "PaginatedResponse",
     "paginate",
+    "extract_pagination_item_type",
 ]
 
 T = TypeVar("T")
 
 
-class PaginatedResponse[T](msgspec.Struct):
+class PaginatedResponse[T](msgspec.Struct, omit_defaults=True):
     """
     Standard paginated response structure.
+
+    Uses omit_defaults=True so only relevant fields are included in response:
+    - PageNumberPagination: page, page_size, total_pages, next_page, previous_page
+    - LimitOffsetPagination: limit, offset
+    - CursorPagination: next_cursor, previous_cursor
 
     Attributes:
         items: List of paginated items
         total: Total number of items across all pages
+        has_next: Whether there is a next page (always included)
+        has_previous: Whether there is a previous page (always included)
         page: Current page number (for PageNumber pagination)
         page_size: Number of items per page
         total_pages: Total number of pages
-        has_next: Whether there is a next page
-        has_previous: Whether there is a previous page
         next_page: Next page number (None if no next page)
         previous_page: Previous page number (None if no previous page)
     """
 
+    # Required fields (always included in response)
     items: list[T]
     total: int
+    has_next: bool  # No default = always included
+    has_previous: bool  # No default = always included
+
+    # PageNumber pagination fields (included when set)
     page: int | None = None
     page_size: int | None = None
     total_pages: int | None = None
-    has_next: bool = False
-    has_previous: bool = False
     next_page: int | None = None
     previous_page: int | None = None
 
-    # For LimitOffset pagination
+    # LimitOffset pagination fields (included when set)
     limit: int | None = None
     offset: int | None = None
 
-    # For Cursor pagination
+    # Cursor pagination fields (included when set)
     next_cursor: str | None = None
     previous_cursor: str | None = None
+
+
+def extract_pagination_item_type(response_type: Any) -> type | None:
+    """
+    Extract item type from list[T] or PaginatedResponse[T] for pagination.
+
+    This is used by the route decorator to determine the serializer class
+    when a handler is decorated with @paginate and has a response_model
+    like list[UserSerializer] or PaginatedResponse[UserSerializer].
+
+    Args:
+        response_type: Type annotation (e.g., list[UserSerializer])
+
+    Returns:
+        The item type (e.g., UserSerializer), or None if not extractable
+    """
+    origin = get_origin(response_type)
+    args = get_args(response_type)
+
+    if not args:
+        return None
+
+    # Handle list[T]
+    if origin is list:
+        return args[0]
+
+    # Handle PaginatedResponse[T]
+    if origin is PaginatedResponse:
+        return args[0]
+
+    return None
 
 
 class PaginationBase(ABC):
@@ -97,6 +137,9 @@ class PaginationBase(ABC):
 
     # Name of the page size query parameter
     page_size_query_param: str | None = None
+
+    # Serializer class for item serialization (set at runtime by paginate wrapper)
+    serializer_class: type | None = None
 
     @abstractmethod
     async def get_page_params(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -133,56 +176,102 @@ class PaginationBase(ABC):
         Handles both sync and async querysets.
 
         Args:
-            queryset: Django QuerySet
+            queryset: Django QuerySet or list
 
         Returns:
             Total count
         """
+        # Check if it's a plain list first (Python list.count() requires an argument)
+        if isinstance(queryset, (list, tuple)):
+            return len(queryset)
         # Check if queryset has acount (async count)
         if hasattr(queryset, "acount"):
             return await queryset.acount()
-        # Fallback to sync count wrapped in sync_to_async
-        elif hasattr(queryset, "count"):
+        # Fallback to sync count wrapped in sync_to_async (for Django QuerySet)
+        elif hasattr(queryset, "count") and callable(queryset.count):
             return await sync_to_async(queryset.count)()
-        # For lists or other iterables
+        # For other iterables
         else:
             return len(queryset)
 
+    def _serialize_items(self, items: list[Any]) -> list[dict]:
+        """
+        Serialize items using efficient batch serialization.
+
+        Supports:
+        - Bolt Serializer: from_model() + dump_many() (fastest)
+        - msgspec.Struct: msgspec.structs.asdict() for each item
+        - Fallback: _model_to_dict() for backwards compatibility
+
+        Args:
+            items: List of raw items (Django models or dicts)
+
+        Returns:
+            List of dictionaries ready for JSON serialization
+        """
+        if not items:
+            return []
+
+        if self.serializer_class is None:
+            # Backwards compatibility: use _model_to_dict fallback
+            return [self._model_to_dict(item) for item in items]
+
+        # Check if items are already dicts (e.g., from values() queryset)
+        # In this case, just extract the fields we need
+        first_item = items[0]
+        if isinstance(first_item, dict):
+            # Items are dicts - extract only the fields declared in serializer
+            if hasattr(self.serializer_class, "__struct_fields__"):
+                fields = self.serializer_class.__struct_fields__
+                return [{field: item.get(field) for field in fields} for item in items]
+            return items  # Return dicts as-is if no fields info
+
+        # Bolt Serializer - use from_model + dump_many for efficiency
+        if getattr(self.serializer_class, "__is_bolt_serializer__", False):
+            serializer_instances = [self.serializer_class.from_model(item) for item in items]
+            return self.serializer_class.dump_many(serializer_instances)
+
+        # Plain msgspec.Struct - extract fields from model instances
+        if hasattr(self.serializer_class, "__struct_fields__"):
+            fields = self.serializer_class.__struct_fields__
+            return [{field: getattr(item, field, None) for field in fields} for item in items]
+
+        # Fallback for unknown serializer types
+        return [self._model_to_dict(item) for item in items]
+
     async def _evaluate_queryset_slice(self, queryset: Any) -> list[Any]:
         """
-        Evaluate a queryset slice to a list.
+        Evaluate a queryset slice to a list of raw items.
 
         Handles both sync and async querysets.
-        Converts Django model instances to dicts for serialization.
+        Serialization is done separately via _serialize_items() for efficiency.
 
         Args:
             queryset: Django QuerySet or iterable
 
         Returns:
-            List of items (Django models converted to dicts)
+            List of raw items (Django models or dicts from values())
         """
         items = []
 
         # Check if it's an async iterable (has __aiter__)
         if hasattr(queryset, "__aiter__"):
             async for item in queryset:
-                items.append(self._model_to_dict(item))
+                items.append(item)
             return items
         # Check if it's a Django QuerySet with async support
         elif hasattr(queryset, "_iterable_class") and hasattr(queryset, "model"):
             # It's a QuerySet - check if we can iterate async
             try:
                 async for item in queryset:
-                    items.append(self._model_to_dict(item))
+                    items.append(item)
                 return items
             except TypeError:
                 # Not async iterable, use sync_to_async
-                raw_items = await sync_to_async(list)(queryset)
-                return [self._model_to_dict(item) for item in raw_items]
+                return await sync_to_async(list)(queryset)
         # Regular iterable or list
         else:
-            result = list(queryset)
-            return [self._model_to_dict(item) for item in result]
+            return list(queryset)
 
     def _model_to_dict(self, item: Any) -> Any:
         """
@@ -304,8 +393,11 @@ class PageNumberPagination(PaginationBase):
         # Calculate offset
         offset = (page_number - 1) * page_size
 
-        # Slice queryset
-        items = await self._evaluate_queryset_slice(queryset[offset : offset + page_size])
+        # Slice queryset and get raw items
+        raw_items = await self._evaluate_queryset_slice(queryset[offset : offset + page_size])
+
+        # Serialize items using efficient batch serialization
+        items = self._serialize_items(raw_items)
 
         # Build response
         return PaginatedResponse(
@@ -389,8 +481,11 @@ class LimitOffsetPagination(PaginationBase):
         # Get total count
         total = await self._get_queryset_count(queryset)
 
-        # Slice queryset
-        items = await self._evaluate_queryset_slice(queryset[offset : offset + limit])
+        # Slice queryset and get raw items
+        raw_items = await self._evaluate_queryset_slice(queryset[offset : offset + limit])
+
+        # Serialize items using efficient batch serialization
+        items = self._serialize_items(raw_items)
 
         # Calculate page info
         has_next = (offset + limit) < total
@@ -511,18 +606,18 @@ class CursorPagination(PaginationBase):
             ordered_qs = ordered_qs.filter(**filter_kwargs)
 
         # Fetch page_size + 1 items to determine if there's a next page
-        items = await self._evaluate_queryset_slice(ordered_qs[: page_size + 1])
+        raw_items = await self._evaluate_queryset_slice(ordered_qs[: page_size + 1])
 
         # Check if there are more items
-        has_next = len(items) > page_size
+        has_next = len(raw_items) > page_size
         if has_next:
-            items = items[:page_size]  # Trim to page_size
+            raw_items = raw_items[:page_size]  # Trim to page_size
 
-        # Generate next cursor from last item
+        # Generate next cursor from last raw item (before serialization)
         next_cursor = None
-        if has_next and items:
-            last_item = items[-1]
-            # Items are now dicts (converted from models), so use dict access
+        if has_next and raw_items:
+            last_item = raw_items[-1]
+            # Items are raw (Django models or dicts from values()), get cursor value
             if isinstance(last_item, dict):
                 last_value = last_item.get(ordering_field)
             else:
@@ -530,6 +625,9 @@ class CursorPagination(PaginationBase):
 
             if last_value is not None:
                 next_cursor = self._encode_cursor(last_value)
+
+        # Serialize items using efficient batch serialization
+        items = self._serialize_items(raw_items)
 
         return PaginatedResponse(
             items=items,
@@ -548,11 +646,20 @@ def paginate(pagination_class: type[PaginationBase] = PageNumberPagination):
     The decorated handler should return a Django QuerySet or list.
     The decorator will automatically apply pagination and return a PaginatedResponse.
 
+    When used with response_model or return type annotation like list[UserSerializer],
+    the serializer will be used for efficient batch serialization via dump_many().
+
     Args:
         pagination_class: Pagination class to use (default: PageNumberPagination)
 
     Example:
-        @api.get("/users")
+        from django_bolt.serializers import Serializer
+
+        class UserSerializer(Serializer):
+            id: int
+            name: str
+
+        @api.get("/users", response_model=list[UserSerializer])
         @paginate(PageNumberPagination)
         async def list_users():
             return User.objects.all()
@@ -575,6 +682,11 @@ def paginate(pagination_class: type[PaginationBase] = PageNumberPagination):
 
         @wraps(handler)
         async def wrapper(*args, **kwargs):
+            # Get serializer class set by route decorator (if any)
+            # This enables efficient batch serialization via Serializer.dump_many()
+            serializer_class = getattr(wrapper, "__serializer_class__", None)
+            paginator.serializer_class = serializer_class
+
             # Extract request from args/kwargs
             # Request can be in:
             # 1. kwargs['request'] - most common

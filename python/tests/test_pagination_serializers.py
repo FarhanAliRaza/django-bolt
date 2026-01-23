@@ -11,6 +11,7 @@ import pytest
 from django_bolt import BoltAPI, PageNumberPagination, LimitOffsetPagination, CursorPagination, paginate
 from django_bolt.serializers import Serializer
 from django_bolt.testing import TestClient
+from django_bolt.views import ViewSet
 
 from .test_models import Article
 
@@ -473,6 +474,144 @@ def test_paginate_with_values_queryset_uses_fallback(sample_articles):
         assert "id" in first_item
         assert "title" in first_item
         assert "author" in first_item
+
+
+# ============================================================================
+# Tests: ViewSet with Pagination and Serializers
+# ============================================================================
+
+
+@pytest.mark.django_db(transaction=True)
+def test_viewset_pagination_with_return_type_serializer(sample_articles):
+    """Test ViewSet with @paginate decorator and return type annotation serializer."""
+    api = BoltAPI()
+
+    class SmallPagePagination(PageNumberPagination):
+        page_size = 10
+
+    @api.viewset("/articles")
+    class ArticleViewSet(ViewSet):
+        queryset = Article.objects.all()
+
+        @paginate(SmallPagePagination)
+        async def list(self, request) -> list[ArticleListSerializer]:
+            return await self.get_queryset()
+
+    with TestClient(api) as client:
+        response = client.get("/articles?page=1")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert len(data["items"]) == 10
+        assert data["total"] == 25
+        assert data["page"] == 1
+
+        # Verify serializer respects field declarations
+        first_item = data["items"][0]
+        assert "id" in first_item
+        assert "title" in first_item
+        assert "author" in first_item
+        # These fields should NOT be present (not declared in ArticleListSerializer)
+        assert "content" not in first_item
+        assert "is_published" not in first_item
+
+        # Verify page 2 has different items
+        response2 = client.get("/articles?page=2")
+        assert response2.status_code == 200
+        data2 = response2.json()
+        assert data2["page"] == 2
+
+        page1_ids = {item["id"] for item in data["items"]}
+        page2_ids = {item["id"] for item in data2["items"]}
+        assert page1_ids.isdisjoint(page2_ids), "Page 2 should have different items"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_viewset_pagination_with_response_model_serializer(sample_articles):
+    """Test ViewSet with @paginate decorator and response_model serializer."""
+    api = BoltAPI()
+
+    class SmallPagePagination(PageNumberPagination):
+        page_size = 10
+
+    # Define class first without decorator to avoid name collision
+    # Inside class body, 'list' refers to the method, not Python's builtin
+    class _ArticleViewSet(ViewSet):
+        queryset = Article.objects.all()
+
+        @paginate(SmallPagePagination)
+        async def list(self, request):
+            return await self.get_queryset()
+
+    # Set response_model AFTER class definition where 'list' is the builtin
+    _ArticleViewSet.list.response_model = list[ArticleListSerializer]
+
+    # Now register the viewset
+    api.viewset("/articles")(_ArticleViewSet)
+
+    with TestClient(api) as client:
+        response = client.get("/articles?page=1")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert len(data["items"]) == 10
+
+        # Verify serializer respects field declarations
+        first_item = data["items"][0]
+        assert "id" in first_item
+        assert "title" in first_item
+        assert "author" in first_item
+        assert "content" not in first_item
+        assert "is_published" not in first_item
+
+
+@pytest.mark.django_db(transaction=True)
+def test_viewset_cursor_pagination_with_serializer(sample_articles):
+    """Test ViewSet with CursorPagination and serializer."""
+    api = BoltAPI()
+
+    class SmallCursorPagination(CursorPagination):
+        page_size = 5
+        ordering = "-id"
+
+    @api.viewset("/articles")
+    class ArticleViewSet(ViewSet):
+        queryset = Article.objects.all()
+
+        @paginate(SmallCursorPagination)
+        async def list(self, request) -> list[ArticleListSerializer]:
+            return await self.get_queryset()
+
+    with TestClient(api) as client:
+        all_ids = set()
+        cursor = None
+        page_count = 0
+
+        # Navigate through all pages
+        while True:
+            url = "/articles" if cursor is None else f"/articles?cursor={cursor}"
+            response = client.get(url)
+            assert response.status_code == 200
+
+            data = response.json()
+            page_count += 1
+
+            # Verify serializer on each page
+            if data["items"]:
+                first_item = data["items"][0]
+                assert "content" not in first_item
+                assert "is_published" not in first_item
+
+            page_ids = {item["id"] for item in data["items"]}
+            assert all_ids.isdisjoint(page_ids), f"Page {page_count} has duplicate items"
+            all_ids.update(page_ids)
+
+            if not data["has_next"]:
+                break
+            cursor = data["next_cursor"]
+
+        assert page_count == 5  # 25 items / 5 per page
+        assert len(all_ids) == 25
 
 
 if __name__ == "__main__":

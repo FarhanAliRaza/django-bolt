@@ -307,6 +307,40 @@ async def get_preferences(cookies: Annotated[SessionCookies, Cookie()]):
 
 ## File uploads
 
+### File size limits: global vs per-view
+
+There are two levels of file size validation in Django-Bolt:
+
+- **Global limit**: Set by `BOLT_MAX_UPLOAD_SIZE` in your Django settings. This is the maximum file size the server will accept for any upload. If a file exceeds this, the request is rejected with a 413 error before your view runs.
+- **Per-view limit**: Set by the `max_size` argument to the `File()` parameter in your view. This allows you to set a stricter limit for a specific endpoint, but it can never exceed the global limit.
+
+**Example:**
+
+```python
+# settings.py
+BOLT_MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+
+# In your view
+from django_bolt import FileSize, UploadFile
+from django_bolt.param_functions import File
+from typing import Annotated
+
+@api.post("/upload")
+async def upload_file(
+    file: Annotated[
+        UploadFile | None,
+        File(max_size=FileSize.MB_10),  # 10 MB per-view limit
+    ] = None,
+):
+    return {"filename": file.filename, "size": file.size}
+```
+
+In this example, files over 10 MB are rejected by the view, and files over 50 MB are rejected by the server. If you set `File(max_size=...)` higher than `BOLT_MAX_UPLOAD_SIZE`, the global limit always wins.
+
+!!! warning
+    The global limit (`BOLT_MAX_UPLOAD_SIZE`) is enforced **before** your view handler runs. You cannot override it in your view. Always set it to the maximum file size your server should ever accept.
+
+
 Django-Bolt provides the `UploadFile` class for handling file uploads with Django integration.
 
 ### Basic file upload

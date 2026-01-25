@@ -418,3 +418,61 @@ class CustomTestMediaType(Middleware):
         self.call_count += 1
         response = await self.get_response(request)
         return response
+
+
+def test_streaming_response_with_django_middleware():
+    """Test that StreamingResponse works correctly with Django middleware enabled.
+
+    This test verifies that the Django middleware adapter correctly passes through
+    StreamingResponse without attempting to convert its generator content to bytes.
+    Previously, the adapter would call str() on the generator, producing:
+    '<async_generator object ... at 0x...>'
+    """
+    # Create API with Django middleware enabled
+    # Using a list of middleware that won't interfere with the response
+    api = BoltAPI(
+        django_middleware=["django.middleware.common.CommonMiddleware"],
+    )
+
+    @api.get("/stream-django")
+    async def stream_with_django():
+        async def generate():
+            for i in range(3):
+                await asyncio.sleep(0.001)
+                yield f"django-{i}\n"
+
+        return StreamingResponse(generate(), media_type="text/plain")
+
+    client = TestClient(api, use_http_layer=True)
+    response = client.get("/stream-django")
+
+    assert response.status_code == 200
+    # Verify the content is the actual streamed data, not a string representation
+    # of the generator like '<async_generator object ...>'
+    assert response.content == b"django-0\ndjango-1\ndjango-2\n"
+    assert b"async_generator" not in response.content
+
+
+def test_streaming_response_sse_with_django_middleware():
+    """Test that SSE StreamingResponse works correctly with Django middleware."""
+    api = BoltAPI(
+        django_middleware=["django.middleware.common.CommonMiddleware"],
+    )
+
+    @api.get("/sse-django")
+    async def sse_with_django():
+        async def generate():
+            yield "event: message\ndata: hello\n\n"
+            await asyncio.sleep(0.001)
+            yield "event: update\ndata: world\n\n"
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
+
+    client = TestClient(api, use_http_layer=True)
+    response = client.get("/sse-django")
+
+    assert response.status_code == 200
+    assert response.headers.get("content-type", "").startswith("text/event-stream")
+    assert b"event: message" in response.content
+    assert b"data: hello" in response.content
+    assert b"async_generator" not in response.content

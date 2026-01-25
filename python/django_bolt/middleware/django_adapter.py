@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from asgiref.sync import async_to_sync
 
 from ..middleware_response import MiddlewareResponse
+from ..responses import StreamingResponse
 
 # Use "django_bolt" logger directly (not "django_bolt.middleware") because
 # Django's LOGGING config often sets propagate=False on "django_bolt",
@@ -548,6 +549,15 @@ class DjangoMiddlewareStack:
             bolt_response = await self.get_response(request)
             django_response = _to_django_response(bolt_response)
 
+        # IMPORTANT: Skip process_response hooks for StreamingResponse
+        # Django middleware process_response hooks expect HttpResponse with .streaming
+        # and .has_header() attributes which StreamingResponse doesn't have.
+        # StreamingResponse will be handled by Rust's streaming layer directly.
+        from ..responses import StreamingResponse
+
+        if isinstance(django_response, StreamingResponse):
+            return django_response
+
         # 6. Run third-party process_response hooks via sync_to_async (reverse order)
         for middleware in self._thirdparty_process_response_reversed:
             django_response = await sync_to_async(middleware.process_response, thread_sensitive=True)(
@@ -707,9 +717,20 @@ def _to_django_response(response: Response) -> HttpResponse:
     """Convert Bolt Response/MiddlewareResponse to Django HttpResponse.
 
     Also handles Django HttpResponse pass-through (from decorators like @login_required).
+
+    IMPORTANT: StreamingResponse is NOT converted - it's passed through as-is
+    because its content is a generator, not bytes. The caller must check for
+    StreamingResponse and handle it specially.
     """
     # Fast path: if already a Django HttpResponse, return as-is
     if isinstance(response, HttpResponse):
+        return response
+
+    # StreamingResponse must be passed through without conversion
+    # Its content is a generator (not bytes), so converting would break streaming
+    # Import here to avoid circular import
+    if isinstance(response, StreamingResponse):
+        # Return as-is - the caller must handle StreamingResponse specially
         return response
 
     # Handle different response types
@@ -740,7 +761,19 @@ def _to_django_response(response: Response) -> HttpResponse:
 
 
 def _to_bolt_response(django_response: HttpResponse) -> MiddlewareResponse:
-    """Convert Django HttpResponse to MiddlewareResponse for chain compatibility."""
+    """Convert Django HttpResponse to MiddlewareResponse for chain compatibility.
+
+    IMPORTANT: StreamingResponse is passed through as-is (not converted to MiddlewareResponse)
+    because it needs special handling in the Rust layer for streaming.
+    """
+    # StreamingResponse must be passed through without conversion
+    # Import here to avoid circular import
+    from ..responses import StreamingResponse
+
+    if isinstance(django_response, StreamingResponse):
+        # Return as-is - the response chain must handle StreamingResponse specially
+        return django_response
+
     headers = dict(django_response.items())
 
     # IMPORTANT: Extract cookies from django_response.cookies into dedicated list

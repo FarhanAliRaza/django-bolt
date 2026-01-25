@@ -1120,6 +1120,9 @@ class BoltAPI:
 
                 # Serialize response to tuple format
                 response_tuple = await serialize_response(result, _meta)
+                # StreamingResponse is returned directly (not a tuple) - pass through
+                if hasattr(response_tuple, "content") and hasattr(response_tuple, "media_type"):
+                    return response_tuple
                 # Convert to MiddlewareResponse for middleware compatibility
                 return MiddlewareResponse.from_tuple(response_tuple)
 
@@ -1132,9 +1135,13 @@ class BoltAPI:
                     # DjangoMiddleware: call _create_middleware_instance with get_response
                     middleware_cls._create_middleware_instance(chain)
                     chain = middleware_cls
-                else:
+                elif isinstance(middleware_cls, type):
                     # Regular middleware class: instantiate with get_response
                     chain = middleware_cls(chain)
+                else:
+                    # Middleware is already an instance: set get_response and use directly
+                    middleware_cls.get_response = chain
+                    chain = middleware_cls
 
             api._middleware_chain = chain
             api._middleware_chain_built = True
@@ -1151,6 +1158,9 @@ class BoltAPI:
             # Execute through the cached chain
             middleware_response = await api._middleware_chain(request)
 
+            # StreamingResponse is returned directly - pass through without to_tuple()
+            if hasattr(middleware_response, "content") and hasattr(middleware_response, "media_type"):
+                return middleware_response
             # Convert back to tuple format for return
             return middleware_response.to_tuple()
         finally:

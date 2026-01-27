@@ -74,6 +74,17 @@ impl AuthContext {
             permissions,
         }
     }
+
+    pub fn from_session(_cookie_name: &str) -> Self {
+        AuthContext {
+            user_id: Some("session_user".to_string()),
+            is_staff: false,
+            is_superuser: false,
+            backend: "session".to_string(),
+            claims: None,
+            permissions: HashSet::new(),
+        }
+    }
 }
 
 /// Authentication backend configuration
@@ -91,6 +102,10 @@ pub enum AuthBackend {
         header: String,
         key_permissions: HashMap<String, Vec<String>>,
     },
+
+    Session {
+        cookie_name: String,
+    },
 }
 
 /// Authenticate using configured backends and return AuthContext
@@ -98,6 +113,7 @@ pub enum AuthBackend {
 pub fn authenticate(
     headers: &AHashMap<String, String>,
     backends: &[AuthBackend],
+    cookies: &AHashMap<String, String>,
 ) -> Option<AuthContext> {
     for backend in backends {
         match backend {
@@ -126,6 +142,13 @@ pub fn authenticate(
             } => {
                 if let Some(ctx) = try_api_key_auth(headers, api_keys, header, key_permissions) {
                     return Some(ctx);
+                }
+            }
+            AuthBackend::Session { cookie_name } => {
+                if let Some(value) = cookies.get(cookie_name) {
+                    if !value.is_empty() {
+                        return Some(AuthContext::from_session(cookie_name));
+                    }
                 }
             }
         }

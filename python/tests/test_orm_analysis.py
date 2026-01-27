@@ -16,6 +16,9 @@ from django_bolt.analysis import (
     analyze_handler,
     warn_blocking_handler,
 )
+from django_bolt.api import BoltAPI
+from django_bolt.request import Request
+from django_bolt.views import APIView
 
 
 # Test handler functions for analysis
@@ -296,3 +299,69 @@ class TestHandlerAnalysisProperties:
         """Test is_blocking returns False when neither present."""
         analysis = HandlerAnalysis()
         assert analysis.is_blocking is False
+
+
+def get_handler(api, method, path):
+    for route_method, route_path, handler_id, _ in api._routes:
+        if route_method == method and route_path == path:
+            return api._handlers.get(handler_id)
+    return None
+
+
+class TestRequestSessionAnalyst:
+    api = BoltAPI(
+        django_middleware=[
+            "django.contrib.sessions.middleware.SessionMiddleware",
+        ]
+    )
+
+    @api.get("/sync_handler")
+    def sync_handler(request):
+        request.session["foo"] = "bar"
+        return {"status": "ok"}
+
+    @api.get("/async_handler")
+    async def async_handler(request):
+        foo = await request.session.aget("bar", [])
+        foo.append(123)
+        await request.session.aset("bar", foo)
+
+    @api.view("/cbv_sync_handler")
+    class CBVSyncView(APIView):
+        def post(self, request: Request):
+            foo = request.session["bar"]
+            foo = ["user_1"]
+            request.session["bar"] = foo
+            return {"status": "ok"}
+
+    @api.view("/cbv_async_handler")
+    class CBVASyncView(APIView):
+        async def patch(self, request: Request):
+            foo = await request.session.aget("bar", [])
+            foo.append("user_1")
+            await request.session.aset("bar", foo)
+            return {"status": "ok"}
+
+    def test_analyze_sync_handler_detects_session_usage(self):
+        handler = get_handler(self.api, "GET", "/sync_handler")
+        analysis = analyze_handler(handler)
+        assert analysis.uses_orm is True
+        assert analysis.is_blocking is True
+
+    def test_analyze_async_handler_detects_session_usage(self):
+        handler = get_handler(self.api, "GET", "/async_handler")
+        analysis = analyze_handler(handler)
+        assert analysis.uses_orm is True
+        assert analysis.is_blocking is True
+
+    def test_analyze_cbv_async_handler_detects_session_usage(self):
+        handler = get_handler(self.api, "PATCH", "/cbv_async_handler")
+        analysis = analyze_handler(handler)
+        assert analysis.uses_orm is True
+        assert analysis.is_blocking is True
+
+    def test_analyze_cbv_sync_handler_detects_session_usage(self):
+        handler = get_handler(self.api, "POST", "/cbv_sync_handler")
+        analysis = analyze_handler(handler)
+        assert analysis.uses_orm is True
+        assert analysis.is_blocking is True

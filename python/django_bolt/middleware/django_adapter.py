@@ -136,9 +136,8 @@ class DjangoMiddleware:
 
         # Check if this is chain building call (get_response is a callable)
         # vs initial configuration (middleware_class is a type or string)
-        is_get_response_callable = (
-            callable(middleware_class_or_get_response)
-            and not isinstance(middleware_class_or_get_response, (type, str))
+        is_get_response_callable = callable(middleware_class_or_get_response) and not isinstance(
+            middleware_class_or_get_response, (type, str)
         )
         if is_get_response_callable:
             raise TypeError(
@@ -593,6 +592,7 @@ def _to_django_request(request: Request) -> HttpRequest:
     # Note: When django_middleware is enabled, needs_cookies=True is set at registration
     # time, ensuring Rust always parses and passes cookies to Python
     django_request.COOKIES = dict(request.cookies) if request.cookies else {}
+    django_request.session = getattr(request, "session", None)
 
     # Query params - only create mutable QueryDict if we have params
     if request.query:

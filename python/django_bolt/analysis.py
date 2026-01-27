@@ -290,6 +290,10 @@ class OrmVisitor(ast.NodeVisitor):
         if attr_name in ORM_MANAGER_ATTRS:
             self.analysis.uses_orm = True
 
+        if attr_name == "session" and isinstance(node.value, ast.Name) and node.value.id in ("request", "req"):
+            self.analysis.uses_orm = True
+            self.analysis.orm_operations.add("request.session")
+
         # Check for ORM method calls - ONLY if in an .objects chain
         # This reduces false positives like dict.get(), response.get(), etc.
         is_in_objects_chain = self._check_for_objects_chain(node)

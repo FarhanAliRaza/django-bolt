@@ -793,13 +793,30 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 f"Consider using separate serializers with ID-only fields for deeply nested relationships."
             )
 
+        # Ensure field configs are collected (populates __source_mapping__)
+        # This is normally done lazily in __post_init__, but we need it before creating the instance
+        if not cls.__field_configs_collected__:
+            cls._lazy_collect_field_configs()
+
         # Use cached nested field metadata (no expensive introspection!)
         data = {}
-        for field_name in cls.__struct_fields__:
-            if not hasattr(instance, field_name):
-                continue
+        source_mapping = cls.__source_mapping__
 
-            value = getattr(instance, field_name)
+        for field_name in cls.__struct_fields__:
+            # Check if this field has a source mapping (field uses a different model attribute)
+            source = source_mapping.get(field_name)
+
+            if source:
+                # Use the source path to get the value from the model
+                value = cls._get_value_from_source(instance, source)
+                if value is None and not hasattr(instance, source.split(".")[0]):
+                    # Source attribute doesn't exist on the model - skip this field
+                    continue
+            else:
+                # No source mapping - use field name directly
+                if not hasattr(instance, field_name):
+                    continue
+                value = getattr(instance, field_name)
 
             # Check if this field has a nested serializer (from cache!)
             nested_config = cls.__nested_fields__.get(field_name)

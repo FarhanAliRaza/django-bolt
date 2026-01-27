@@ -154,7 +154,7 @@ class APIView:
 
         # Attach the signature (for parameter extraction)
         view_handler.__signature__ = new_sig
-        view_handler.__annotations__ = {k: v for k, v in method_handler.__annotations__.items() if k != "self"}
+        view_handler.__annotations__ = {k: v for k, v in inspect.get_annotations(method_handler).items() if k != "self"}
 
         # Preserve docstring and name
         view_handler.__name__ = f"{cls.__name__}.{action_name}"

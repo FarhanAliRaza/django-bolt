@@ -5,6 +5,8 @@ Verifies that @paginate decorator correctly uses serializers from response_model
 or return type annotation for efficient batch serialization.
 """
 
+from __future__ import annotations
+
 import msgspec
 import pytest
 

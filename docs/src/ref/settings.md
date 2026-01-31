@@ -71,7 +71,7 @@ BOLT_CORS_MAX_AGE = 86400  # 24 hours
 
 ### BOLT_MAX_UPLOAD_SIZE
 
-Maximum file upload size in bytes. Requests exceeding this limit will be rejected with a 413 error.
+Maximum file upload size in bytes. Requests exceeding this limit will be rejected with a 413 error **before** any per-view validation occurs.
 
 ```python
 BOLT_MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
@@ -85,11 +85,22 @@ from django_bolt import FileSize
 BOLT_MAX_UPLOAD_SIZE = FileSize.MB_10
 ```
 
-!!! note
-    This is the global limit. You can set per-endpoint limits using the `File()` parameter:
+!!! warning "Global vs Per-View Limits"
+    `BOLT_MAX_UPLOAD_SIZE` is a **global server limit**. You cannot override it in individual views. If a file upload exceeds this value, the request is rejected before your view handler runs.
+
+    The `max_size` argument in the `File()` parameter is for **per-view validation**. It allows you to set a stricter limit for a specific endpoint, but it can never increase the global limit. For example:
     ```python
-    file: Annotated[UploadFile, File(max_size=FileSize.MB_5)]
+    # settings.py
+    BOLT_MAX_UPLOAD_SIZE = FileSize.MB_50  # 50 MB global limit
+
+    # In your view
+    file: Annotated[UploadFile, File(max_size=FileSize.MB_1)]  # 1 MB per-view limit
     ```
+    In this case, files over 1 MB are rejected by the view, and files over 50 MB are rejected by the server.
+
+    **If you set `File(max_size=...)` higher than `BOLT_MAX_UPLOAD_SIZE`, the global limit always takes precedence.**
+
+    This distinction is important for security and resource management. Always set `BOLT_MAX_UPLOAD_SIZE` to the maximum file size your server should ever accept, and use `File(max_size=...)` for endpoint-specific needs.
 
 ### BOLT_MEMORY_SPOOL_THRESHOLD
 

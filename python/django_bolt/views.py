@@ -154,7 +154,7 @@ class APIView:
 
         # Attach the signature (for parameter extraction)
         view_handler.__signature__ = new_sig
-        view_handler.__annotations__ = {k: v for k, v in method_handler.__annotations__.items() if k != "self"}
+        view_handler.__annotations__ = {k: v for k, v in inspect.get_annotations(method_handler).items() if k != "self"}
 
         # Preserve docstring and name
         view_handler.__name__ = f"{cls.__name__}.{action_name}"
@@ -169,6 +169,14 @@ class APIView:
             view_handler.__bolt_auth__ = cls.auth
         if cls.status_code is not None:
             view_handler.__bolt_status_code__ = cls.status_code
+
+        # Copy pagination attributes from method handler (for @paginate decorator)
+        if hasattr(method_handler, "__paginated__"):
+            view_handler.__paginated__ = method_handler.__paginated__
+        if hasattr(method_handler, "__pagination_class__"):
+            view_handler.__pagination_class__ = method_handler.__pagination_class__
+        # Store reference to the paginate wrapper so serializer_class can be propagated
+        view_handler.__original_handler__ = method_handler
 
         return view_handler
 

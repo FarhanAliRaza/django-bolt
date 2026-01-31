@@ -830,7 +830,7 @@ class BoltAPI:
                     params = list(sig.parameters.values())[1:]  # Skip 'self'
                     custom_action_handler.__signature__ = sig.replace(parameters=params)
                     custom_action_handler.__annotations__ = {
-                        k: v for k, v in unbound_fn.__annotations__.items() if k != "self"
+                        k: v for k, v in inspect.get_annotations(unbound_fn).items() if k != "self"
                     }
                     custom_action_handler.__name__ = f"{view_cls.__name__}.{name}"
                     custom_action_handler.__doc__ = unbound_fn.__doc__

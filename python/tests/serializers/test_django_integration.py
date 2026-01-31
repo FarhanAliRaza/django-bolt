@@ -51,7 +51,7 @@ from django_bolt.serializers.types import (
 )
 
 # Import test models
-from tests.test_models import Author, BlogPost, Comment, Tag, User, UserProfile  # noqa: PLC0415
+from tests.test_models import Article, Author, BlogPost, Comment, Tag, User, UserProfile  # noqa: PLC0415
 
 # =============================================================================
 # Serializers for testing
@@ -2328,3 +2328,200 @@ class TestComprehensiveSerializer:
         list_results = ComprehensiveProductSerializer.use("list").dump_many(products)
         for result in list_results:
             assert set(result.keys()) == {"id", "name", "sku", "price", "is_active"}
+
+
+# =============================================================================
+# Tests for field() source parameter with from_model()
+# =============================================================================
+
+
+class TestFromModelWithSource:
+    """Test that from_model() correctly handles field(source=...) to map
+    serializer field names to different model attribute names.
+
+    Bug: When using field(source="model_attr"), from_model() was checking
+    hasattr(instance, field_name) where field_name is the serializer field,
+    not the source attribute. This caused validation errors when the source
+    attribute exists but the serializer field name doesn't match.
+    """
+
+    @pytest.mark.django_db
+    def test_from_model_with_simple_source(self):
+        """Test from_model with source mapping to a different attribute name."""
+
+        class AuthorWithRenamedEmail(Serializer):
+            """Serializer that renames 'email' to 'email_address' in API."""
+
+            id: int
+            name: str
+            email_address: str = field(source="email")  # API uses email_address, model uses email
+
+        author = Author.objects.create(
+            name="Test Author",
+            email="test@example.com",
+        )
+
+        # from_model should use 'email' attribute (source) to populate 'email_address' field
+        serializer = AuthorWithRenamedEmail.from_model(author)
+
+        assert serializer.id == author.id
+        assert serializer.name == "Test Author"
+        assert serializer.email_address == "test@example.com"
+
+    @pytest.mark.django_db
+    def test_from_model_with_source_and_read_only(self):
+        """Test from_model with source combined with read_only."""
+
+        class UserWithSourceAndReadOnly(Serializer):
+            """Serializer with source and read_only combined."""
+
+            id: int = field(read_only=True)
+            username: str
+            mail: str = field(source="email", read_only=True)  # Renamed + read_only
+
+        user = User.objects.create(
+            username="testuser",
+            email="test@example.com",
+            password_hash="hash",
+        )
+
+        serializer = UserWithSourceAndReadOnly.from_model(user)
+
+        assert serializer.id == user.id
+        assert serializer.username == "testuser"
+        assert serializer.mail == "test@example.com"
+
+        # Verify dump excludes write_only but includes read_only
+        result = serializer.dump()
+        assert result["mail"] == "test@example.com"
+
+    @pytest.mark.django_db
+    def test_from_model_with_multiple_source_fields(self):
+        """Test from_model with multiple fields using source."""
+
+        class ArticleRenamedFields(Serializer):
+            """Serializer with multiple renamed fields."""
+
+            id: int
+            headline: str = field(source="title")  # title -> headline
+            body: str = field(source="content")  # content -> body
+            writer: str = field(source="author")  # author -> writer
+
+        article = Article.objects.create(
+            title="Original Title",
+            content="Original Content",
+            author="John Doe",
+        )
+
+        serializer = ArticleRenamedFields.from_model(article)
+
+        assert serializer.id == article.id
+        assert serializer.headline == "Original Title"
+        assert serializer.body == "Original Content"
+        assert serializer.writer == "John Doe"
+
+    @pytest.mark.django_db
+    def test_from_model_with_nested_source_path(self):
+        """Test from_model with dot-notation source for nested access."""
+
+        class PostWithAuthorName(Serializer):
+            """Serializer that flattens author.name to author_name."""
+
+            id: int
+            title: str
+            author_name: str = field(source="author.name")  # Nested path
+
+        author = Author.objects.create(
+            name="Nested Author",
+            email="nested@example.com",
+        )
+        post = BlogPost.objects.create(
+            title="Test Post",
+            content="Content",
+            author=author,
+        )
+        post = BlogPost.objects.select_related("author").get(id=post.id)
+
+        serializer = PostWithAuthorName.from_model(post)
+
+        assert serializer.id == post.id
+        assert serializer.title == "Test Post"
+        assert serializer.author_name == "Nested Author"
+
+    @pytest.mark.django_db
+    def test_from_model_source_with_optional_field(self):
+        """Test from_model with source on optional field."""
+
+        class AuthorWithOptionalRename(Serializer):
+            """Serializer with optional field using source."""
+
+            id: int
+            name: str
+            biography: str | None = field(source="bio", default=None)
+
+        # Author with bio
+        author_with_bio = Author.objects.create(
+            name="Author With Bio",
+            email="bio@example.com",
+            bio="A detailed biography",
+        )
+        serializer = AuthorWithOptionalRename.from_model(author_with_bio)
+        assert serializer.biography == "A detailed biography"
+
+        # Author without bio (empty string)
+        author_no_bio = Author.objects.create(
+            name="Author Without Bio",
+            email="nobio@example.com",
+            bio="",
+        )
+        serializer = AuthorWithOptionalRename.from_model(author_no_bio)
+        assert serializer.biography == ""
+
+    @pytest.mark.django_db
+    def test_from_model_source_field_not_in_output_when_write_only(self):
+        """Test that source fields with write_only are excluded from dump."""
+
+        class UserWithWriteOnlySource(Serializer):
+            """Serializer with write_only source field."""
+
+            id: int
+            username: str
+            secret_hash: str = field(source="password_hash", write_only=True)
+
+        user = User.objects.create(
+            username="testuser",
+            email="test@example.com",
+            password_hash="supersecret",
+        )
+
+        serializer = UserWithWriteOnlySource.from_model(user)
+
+        # Field should be populated
+        assert serializer.secret_hash == "supersecret"
+
+        # But excluded from dump
+        result = serializer.dump()
+        assert "secret_hash" not in result
+
+    @pytest.mark.django_db
+    def test_from_model_source_preserves_field_type(self):
+        """Test that source mapping preserves correct field type."""
+
+        class UserWithBooleanSource(Serializer):
+            """Serializer that renames boolean field."""
+
+            id: int
+            username: str
+            activated: bool = field(source="is_active")
+
+        user = User.objects.create(
+            username="testuser",
+            email="test@example.com",
+            password_hash="hash",
+            is_active=True,
+        )
+
+        serializer = UserWithBooleanSource.from_model(user)
+
+        assert serializer.activated is True
+        assert isinstance(serializer.activated, bool)

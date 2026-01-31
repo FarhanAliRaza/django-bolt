@@ -70,7 +70,7 @@ def get_websocket_param_name(func: Callable[..., Any]) -> str | None:
     hints = {}
 
     with contextlib.suppress(Exception):
-        hints = func.__annotations__.copy() if hasattr(func, "__annotations__") else {}
+        hints = inspect.get_annotations(func)
 
     for param_name, param in sig.parameters.items():
         # Check annotation

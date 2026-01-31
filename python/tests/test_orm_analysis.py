@@ -325,6 +325,7 @@ class TestRequestSessionAnalyst:
         foo = await request.session.aget("bar", [])
         foo.append(123)
         await request.session.aset("bar", foo)
+        return {"status": "ok"}
 
     @api.view("/cbv_sync_handler")
     class CBVSyncView(APIView):

@@ -46,7 +46,7 @@ rebuild: (kill port) clean build
 
 # Run development server with auto-reload
 run-dev:
-    uv run python python/example/manage.py runbolt --dev --port 8001
+    uv run python python/example/manage.py runbolt --dev
 
 # Run Python tests (verbose)
 test-py:

@@ -217,7 +217,7 @@ async def show_context(request):
         "user_id": context.get("user_id"),
         "is_staff": context.get("is_staff"),
         "is_superuser": context.get("is_superuser"),
-        "auth_backend": context.get("auth_backend"),  # "jwt" or "api_key"
+        "auth_backend": context.get("auth_backend"),  # "jwt", "api_key", or "session"
         "permissions": context.get("permissions", []),
         "auth_claims": context.get("auth_claims", {}),  # JWT only
     }

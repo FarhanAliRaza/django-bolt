@@ -111,7 +111,7 @@ def add_to_cart(request, item_id: int):
 
 @api.get("/cart", auth=[SessionAuthentication()])
 async def get_cart(request):
-    cart = request.session.aget('cart', [])
+    cart = await request.session.aget('cart', [])
     return {"cart": cart}
 ```
 
@@ -311,7 +311,7 @@ After authentication, `request.context` contains:
 | `user_id`      | `str`       | User identifier                 |
 | `is_staff`     | `bool`      | Staff status                    |
 | `is_superuser` | `bool`      | Superuser status                |
-| `auth_backend` | `str`       | Backend name (`jwt`, `api_key`) |
+| `auth_backend` | `str`       | Backend name (`jwt`, `api_key`, `session`) |
 | `permissions`  | `list[str]` | User permissions                |
 | `auth_claims`  | `dict`      | JWT claims (JWT only)           |
 

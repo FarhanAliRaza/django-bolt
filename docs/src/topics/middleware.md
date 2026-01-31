@@ -270,22 +270,21 @@ Django middleware sets attributes on the request that are automatically synced t
 ```python
 @api.get("/profile")
 async def profile(request):
-    # User from AuthenticationMiddleware
-    user = request.user
+    # User from AuthenticationMiddleware (async)
+    user = await request.auser()
 
     # Session from SessionMiddleware
-    session = request.state.get("session")
+    session = request.session
+    theme = await session.aget("theme", "light")
 
     # Messages from MessageMiddleware
     messages = request.state.get("_messages")
 
-    # META dict for template compatibility
-    meta = request.state.get("META")
-
     return {
-        "user": str(user),
+        "username": user.username if user.is_authenticated else "anonymous",
         "authenticated": user.is_authenticated,
-        "session_key": session.session_key if session else None,
+        "session_key": session.session_key,
+        "theme": theme,
     }
 ```
 
@@ -293,8 +292,9 @@ Available synced attributes:
 
 | Attribute | Source | Access |
 |-----------|--------|--------|
-| User | AuthenticationMiddleware | `request.user` |
-| Session | SessionMiddleware | `request.state["session"]` |
+| User (async) | AuthenticationMiddleware | `await request.auser()` |
+| User (sync) | AuthenticationMiddleware | `request.user` |
+| Session | SessionMiddleware | `request.session` |
 | Messages | MessageMiddleware | `request.state["_messages"]` |
 | META | All middleware | `request.state["META"]` |
 | CSRF token | CsrfViewMiddleware | `request.state["_csrf_token"]` |

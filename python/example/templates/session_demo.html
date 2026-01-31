@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Session Demo</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        max-width: 800px;
+        margin: 40px auto;
+        padding: 20px;
+      }
+      .session-data {
+        background: #e3f2fd;
+        padding: 16px;
+        border-radius: 4px;
+        margin: 16px 0;
+      }
+      .session-data code {
+        background: #bbdefb;
+        padding: 2px 6px;
+        border-radius: 2px;
+      }
+      .success {
+        background: #e8f5e9;
+        border-left: 4px solid #4caf50;
+        padding: 12px 16px;
+        margin: 8px 0;
+      }
+      form {
+        margin: 20px 0;
+        padding: 16px;
+        background: #f5f5f5;
+        border-radius: 4px;
+      }
+      input[type="text"] {
+        padding: 8px;
+        margin: 4px 0;
+        width: 200px;
+      }
+      button {
+        padding: 8px 16px;
+        background: #2196f3;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #1976d2;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Django Session Demo</h1>
+
+    <div class="session-data">
+      <h3>Current Session Data</h3>
+      <p><strong>Session Key:</strong> <code>{{ session_key|default:"No session" }}</code></p>
+      <p><strong>my_key:</strong> <code>{{ my_key|default:"Not set" }}</code></p>
+      <p><strong>counter:</strong> <code>{{ counter }}</code></p>
+      <p><strong>custom_value:</strong> <code>{{ custom_value|default:"Not set" }}</code></p>
+    </div>
+
+    {% if message %}
+    <div class="success">{{ message }}</div>
+    {% endif %}
+
+    <form method="post">
+      {% csrf_token %}
+      <h3>Set Session Value</h3>
+      <p>
+        <label>Key: <input name="key" type="text" value="custom_value" /></label>
+      </p>
+      <p>
+        <label>Value: <input name="value" type="text" placeholder="Enter value" /></label>
+      </p>
+      <button type="submit">Save to Session</button>
+    </form>
+
+    <form method="post" action="?action=increment">
+      {% csrf_token %}
+      <h3>Increment Counter</h3>
+      <button type="submit">Increment Counter (+1)</button>
+    </form>
+
+    <div class="session-data">
+      <h3>User Info</h3>
+      <p><strong>User:</strong> <code>{{ user_info }}</code></p>
+    </div>
+
+    {% if not is_authenticated %}
+    <form method="post" action="?action=login">
+      {% csrf_token %}
+      <h3>Login</h3>
+      <p>
+        <label>Username: <input name="username" type="text" placeholder="Enter username" /></label>
+      </p>
+      <button type="submit">Login</button>
+    </form>
+    {% else %}
+    <form method="post" action="?action=logout">
+      {% csrf_token %}
+      <h3>Logout</h3>
+      <button type="submit">Logout</button>
+    </form>
+    {% endif %}
+  </body>
+</html>

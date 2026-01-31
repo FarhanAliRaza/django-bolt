@@ -60,7 +60,6 @@ from .auth import (
     IsStaff,
     # Authentication backends
     JWTAuthentication,
-    SessionAuthentication,
     # JWT Token & Utilities
     Token,
     create_jwt_for_user,
@@ -130,7 +129,6 @@ from .types import (
     APIKeyAuth,
     DjangoModel,
     JWTClaims,
-    SessionAuth,
     TimingState,
     TracingState,
     UserType,
@@ -187,7 +185,6 @@ __all__ = [
     "DjangoModel",
     "JWTClaims",
     "APIKeyAuth",
-    "SessionAuth",
     "TimingState",
     "TracingState",
     # Views
@@ -213,7 +210,6 @@ __all__ = [
     # Auth - Authentication
     "JWTAuthentication",
     "APIKeyAuthentication",
-    "SessionAuthentication",
     "AuthContext",
     # Auth - Guards/Permissions
     "AllowAny",

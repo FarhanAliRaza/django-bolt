@@ -187,6 +187,171 @@ APIKeyAuthentication(
 )
 ```
 
+## Session authentication
+
+Django-Bolt integrates with Django's session-based authentication via middleware. This is ideal when you're already using Django's auth system or need browser-based authentication with cookies.
+
+### Setup
+
+Enable Django middleware to use sessions:
+
+```python
+from django_bolt import BoltAPI
+
+# Load session and auth middleware from Django settings
+api = BoltAPI(django_middleware=True)
+
+# Or explicitly specify middleware
+api = BoltAPI(django_middleware=[
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+])
+```
+
+### Login and logout
+
+Use Django's async login/logout functions:
+
+```python
+from typing import Annotated
+from django.contrib.auth import alogin, alogout
+from django.contrib.auth.models import User
+from django_bolt import Request
+from django_bolt.params import Form
+
+@api.post("/login")
+async def login(
+    request: Request,
+    username: Annotated[str, Form()],
+    password: Annotated[str, Form()],
+):
+    user = await User.objects.filter(username=username).afirst()
+    if user and user.check_password(password):
+        await alogin(request, user)
+        return {"status": "logged in", "username": user.username}
+    return {"status": "invalid credentials"}
+
+@api.post("/logout")
+async def logout(request: Request):
+    await alogout(request)
+    return {"status": "logged out"}
+```
+
+### Accessing the authenticated user
+
+Use `request.auser()` for async user access:
+
+```python
+@api.get("/me")
+async def me(request: Request):
+    user = await request.auser()
+    if user.is_authenticated:
+        return {"username": user.username, "email": user.email}
+    return {"anonymous": True}
+```
+
+### Working with session data
+
+Django sessions support async operations. Use `aget`, `aset`, and other async methods:
+
+```python
+@api.post("/preferences")
+async def save_preferences(request: Request, theme: str = "light"):
+    session = request.session
+
+    # Async read with default
+    visits = await session.aget("visit_count", 0)
+
+    # Async write
+    await session.aset("visit_count", visits + 1)
+    await session.aset("theme", theme)
+
+    return {"visits": visits + 1, "theme": theme}
+
+@api.get("/preferences")
+async def get_preferences(request: Request):
+    session = request.session
+    return {
+        "theme": await session.aget("theme", "light"),
+        "visits": await session.aget("visit_count", 0),
+    }
+```
+
+### Async session methods
+
+| Method | Description |
+|--------|-------------|
+| `await session.aget(key, default)` | Get a value from the session |
+| `await session.aset(key, value)` | Set a value in the session |
+| `await session.apop(key, default)` | Remove and return a value |
+| `await session.akeys()` | Get all session keys |
+| `await session.aitems()` | Get all session items |
+| `await session.aflush()` | Delete session and create new one |
+| `await session.acycle_key()` | Regenerate session key (keeps data) |
+| `session.session_key` | Get session key (sync, no DB access) |
+| `session.clear()` | Clear session data (sync, no DB access) |
+
+!!! warning "Use async methods in async handlers"
+    Always use async methods (`aget`, `aset`, etc.) in async handlers. Using sync methods like `session["key"]` or `session.get()` raises `SynchronousOnlyOperation`.
+
+### When to use session vs JWT
+
+| Feature | Session Auth | JWT Auth |
+|---------|-------------|----------|
+| Storage | Server-side (DB/cache) | Client-side (token) |
+| Logout | Immediate (delete session) | Requires revocation store |
+| Scalability | Requires shared session store | Stateless, scales easily |
+| Use case | Browser apps, traditional web | APIs, mobile apps, SPAs |
+
+### Using Django decorators
+
+With `django_middleware=True`, Django's authentication decorators work directly:
+
+```python
+from django.contrib.auth.decorators import login_required, permission_required
+
+api = BoltAPI(django_middleware=True)
+
+@api.get("/dashboard")
+@login_required
+async def dashboard(request: Request):
+    """Protected by @login_required - redirects to login if not authenticated."""
+    user = await request.auser()
+    return {"welcome": user.username}
+
+@api.get("/admin/users")
+@permission_required("auth.view_user", raise_exception=True)
+async def admin_users(request: Request):
+    """Protected by @permission_required - returns 403 without permission."""
+    users = await User.objects.all().avalues_list("username", flat=True)
+    return {"users": list(users)}
+
+@api.get("/reports")
+@permission_required("reports.view_report", login_url="/login/")
+async def reports(request: Request):
+    """Redirects to custom login URL if no permission."""
+    return {"reports": [...]}
+```
+
+Available Django decorators:
+
+| Decorator | Description |
+|-----------|-------------|
+| `@login_required` | Redirects to login page if not authenticated |
+| `@login_required(login_url="/custom/")` | Custom login URL |
+| `@permission_required("app.perm")` | Requires specific permission |
+| `@permission_required("app.perm", raise_exception=True)` | Returns 403 instead of redirect |
+| `@user_passes_test(lambda u: u.is_staff)` | Custom test function |
+
+!!! tip "Decorator order"
+    Place Django decorators **after** the route decorator:
+    ```python
+    @api.get("/path")      # First: route decorator
+    @login_required        # Second: auth decorator
+    async def view():
+        ...
+    ```
+
 ## Combining authentication methods
 
 Accept multiple authentication methods:

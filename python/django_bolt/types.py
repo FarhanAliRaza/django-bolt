@@ -23,7 +23,7 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    pass
+    from django.contrib.sessions.backends.base import SessionBase
 
 
 @runtime_checkable
@@ -364,6 +364,24 @@ class Request(Protocol):
         """
         ...
 
+    @property
+    def session(self) -> "SessionBase":
+        """
+        Django session object (requires SessionMiddleware).
+
+        Use async methods in async handlers:
+
+        Example:
+            ```python
+            @api.post("/counter")
+            async def counter(request: Request):
+                count = await request.session.aget("count", 0)
+                await request.session.aset("count", count + 1)
+                return {"count": count + 1}
+            ```
+        """
+        ...
+
     # Methods
     @overload
     def get(self, key: str) -> Any:
@@ -510,25 +528,6 @@ class APIKeyAuth(TypedDict, total=False):
     metadata: NotRequired[dict[str, Any]]
 
 
-class SessionAuth(TypedDict, total=False):
-    """
-    Session-based authentication context.
-
-    Use this as the AuthT type parameter for session-authenticated requests.
-
-    Example:
-        @api.get("/dashboard")
-        async def dashboard(request: Request[User, SessionAuth, dict]) -> dict:
-            session_key = request.auth["session_key"]
-            return {"session": session_key}
-    """
-
-    session_key: str
-    user_id: int
-    created_at: str
-    last_activity: str
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Custom State Type Examples
 # ═══════════════════════════════════════════════════════════════════════════
@@ -598,8 +597,6 @@ __all__ = [
     "JWTClaims",
     # API Key Types
     "APIKeyAuth",
-    # Session Types
-    "SessionAuth",
     # State Types
     "TimingState",
     "TracingState",

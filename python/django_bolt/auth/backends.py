@@ -5,7 +5,7 @@ Provides DRF-inspired authentication classes that are compiled to Rust types
 for zero-GIL performance in the hot path.
 
 The authentication flow:
-1. Python defines auth backends (JWT, API key, session)
+1. Python defines auth backends (JWT, API key)
 2. Backends compile to metadata dicts via to_metadata()
 3. Rust parses metadata at registration time
 4. Rust validates tokens/keys without GIL on each request
@@ -263,77 +263,6 @@ class APIKeyAuthentication(BaseAuthentication):
             "header": self.header.lower(),
             "key_permissions": {k: list(v) for k, v in self.key_permissions.items()},
         }
-
-
-class SessionAuthentication(BaseAuthentication):
-    """
-    Django session authentication.
-
-    Uses Django's session framework to authenticate users.
-    This requires Django to be configured and session middleware enabled.
-
-    Note: This has higher overhead than JWT/API key auth as it requires
-    Python execution for every request.
-    """
-
-    # Class-level cached User model - resolved once on first use
-    _user_model: type | None = None
-
-    @classmethod
-    def _get_user_model(cls) -> type:
-        """Get User model, caching at class level after first call."""
-        if cls._user_model is None:
-            cls._user_model = get_user_model()
-        return cls._user_model
-
-    def __init__(self):
-        pass
-
-    @property
-    def scheme_name(self) -> str:
-        return "session"
-
-    def to_metadata(self) -> dict[str, Any]:
-        return {
-            "type": "session",
-        }
-
-    async def get_user(self, user_id: str | None, auth_context: dict[str, Any]) -> Any | None:
-        """
-        Load user from database using the user_id from session.
-
-        The user_id should be the primary key of the user in the database.
-        """
-        if not user_id:
-            return None
-        User = self._get_user_model()
-
-        try:
-            return await User.objects.aget(pk=user_id)
-        except User.DoesNotExist:
-            return None
-        except Exception as e:
-            print(f"Error loading user {user_id} in SessionAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
-            return None
-
-    def get_user_sync(self, user_id: str | None) -> Any | None:
-        """
-        Synchronously load user from database using the user_id from session.
-
-        This method does the actual DB query. Thread pool wrapping is handled
-        by user_loader.load_user_sync() based on the handler's async context.
-        """
-        if not user_id:
-            return None
-        User = self._get_user_model()
-
-        try:
-            return User.objects.get(pk=user_id)
-        except User.DoesNotExist:
-            return None
-        except Exception as e:
-            print(f"Error loading user {user_id} in SessionAuthentication: {type(e).__name__}: {e}", file=sys.stderr)
-            return None
 
 
 def get_default_authentication_classes() -> list[BaseAuthentication]:

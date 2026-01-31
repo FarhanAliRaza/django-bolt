@@ -7,10 +7,14 @@ and IDE autocomplete.
 """
 
 from typing import (
+    TYPE_CHECKING,
     Any,
     Protocol,
     runtime_checkable,
 )
+
+if TYPE_CHECKING:
+    from django.contrib.sessions.backends.base import SessionBase
 
 
 @runtime_checkable
@@ -83,6 +87,11 @@ class Request(Protocol):
     @auser.setter
     def auser(self, value: Any) -> None:
         """Set async user callable (used by Django's alogin/alogout)"""
+        ...
+
+    @property
+    def session(self) -> "SessionBase":
+        """Django session (requires SessionMiddleware)"""
         ...
 
 

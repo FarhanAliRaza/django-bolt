@@ -2,7 +2,7 @@ from typing import Annotated
 
 import msgspec
 from django.contrib import messages  # noqa: PLC0415
-from django.contrib.auth import alogin
+from django.contrib.auth import alogin, alogout
 from django.contrib.auth.models import User
 from django.views.decorators.csrf import csrf_exempt
 
@@ -307,6 +307,115 @@ class CBVSyncORMView(APIView):
         # List comprehension over queryset
         result = [user.id for user in users]
         return {"status": "ok", "user_ids": result[:5]}  # Limit for response
+
+
+# -----------------------------------------------------------------------------
+# Session Demo - HTML-based session testing
+# -----------------------------------------------------------------------------
+# These endpoints test Django's built-in session data saving/reading
+# using HTML templates (browser-based testing with cookies)
+
+
+@middleware_api.get("/session")
+async def session_demo_get(request: Request):
+    """
+    Display session data.
+
+    Test in browser: http://localhost:8001/middleware/session
+    """
+    user = await request.auser()
+    user_info = f"{user.username} (id={user.id})" if user.is_authenticated else "Anonymous"
+
+    # Read session data using Django's native async session methods
+    session = request.session
+    session_key = session.session_key
+    my_key = await session.aget("my_key")
+    counter = await session.aget("counter", 0)
+    custom_value = await session.aget("custom_value")
+
+    return render(
+        request,
+        "session_demo.html",
+        {
+            "session_key": session_key,
+            "my_key": my_key,
+            "counter": counter,
+            "custom_value": custom_value,
+            "user_info": user_info,
+            "is_authenticated": user.is_authenticated,
+        },
+    )
+
+
+@middleware_api.post("/session")
+async def session_demo_post(
+    request: Request,
+    action: str = "",
+    username: Annotated[str, Form("username")] = "",
+    key: Annotated[str, Form("key")] = "",
+    value: Annotated[str, Form("value")] = "",
+):
+    """
+    Save data to session, login, or logout.
+
+    Test in browser: http://localhost:8001/middleware/session
+    """
+    message = None
+
+    if action == "login":
+        if username:
+            user = await User.objects.filter(username=username).afirst()
+            if user:
+                await alogin(request, user)
+                message = f"Logged in as {user.username}"
+            else:
+                message = f"User '{username}' not found"
+        else:
+            message = "No username provided"
+
+    elif action == "logout":
+        await alogout(request)
+        message = "Logged out"
+
+    elif action == "increment":
+        session = request.session
+        counter = await session.aget("counter", 0)
+        await session.aset("counter", counter + 1)
+        message = f"Counter incremented to {counter + 1}"
+
+    else:
+        # Set custom session value
+        session_key_name = key or "custom_value"
+
+        if session_key_name and value:
+            await request.session.aset(session_key_name, value)
+            message = f"Saved '{session_key_name}' = '{value}' to session"
+        else:
+            message = "No value provided"
+
+    user = await request.auser()
+    user_info = f"{user.username} (id={user.id})" if user.is_authenticated else "Anonymous"
+
+    # Read session data using Django's native async session methods
+    session = request.session
+    session_key = session.session_key
+    my_key = await session.aget("my_key")
+    counter = await session.aget("counter", 0)
+    custom_value = await session.aget("custom_value")
+
+    return render(
+        request,
+        "session_demo.html",
+        {
+            "session_key": session_key,
+            "my_key": my_key,
+            "counter": counter,
+            "custom_value": custom_value,
+            "user_info": user_info,
+            "is_authenticated": user.is_authenticated,
+            "message": message,
+        },
+    )
 
 
 @middleware_api.view("/test/cbv-async-orm")

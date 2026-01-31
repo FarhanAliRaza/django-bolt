@@ -140,15 +140,7 @@ async def get_me(request: CustomRequest):
     The request.user property is automatically populated by the authentication
     system and contains the Django User instance for the authenticated user.
     """
-    # Debug logging
-    context = request.get("context", {})
-    user_id = context.get("user_id")
-    auth_backend = context.get("auth_backend")
-    print(f"DEBUG: user_id={user_id}, auth_backend={auth_backend}", flush=True)
-
     user = request.user
-    print(f"DEBUG: request.user={user}, type={type(user)}", flush=True)
-
     if not user:
         return {"error": "User not authenticated"}
 

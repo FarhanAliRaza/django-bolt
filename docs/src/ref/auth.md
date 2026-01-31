@@ -71,20 +71,6 @@ APIKeyAuthentication(
 | `header`          | `str`      | `"x-api-key"` | Header containing key      |
 | `key_permissions` | `dict`     | `None`        | Key to permissions mapping |
 
-### SessionAuthentication
-
-!!! warning "In Development"
-
-    Session authentication is not yet implemented. This is a placeholder for future functionality.
-
-Django session authentication.
-
-```python
-from django_bolt.auth import SessionAuthentication
-
-SessionAuthentication()
-```
-
 ## Permission guards
 
 ### AllowAny

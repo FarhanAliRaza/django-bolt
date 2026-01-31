@@ -49,6 +49,8 @@ async def profile(request: Request):
 The `Request` type provides:
 
 - `request.user` - Authenticated user (lazy loaded)
+- `request.session` - Django session (requires SessionMiddleware)
+- `await request.auser()` - Async user getter
 - `request.context` - Authentication context dict
 - `request.get(key, default)` - Get request property
 - `request[key]` - Access request property
@@ -169,6 +171,86 @@ async def get_session(
     session_id: Annotated[str, Cookie(alias="sessionid")]
 ):
     return {"session_id": session_id}
+```
+
+## Sessions
+
+Access Django sessions when using `django_middleware=True` or `DjangoMiddleware(SessionMiddleware)`.
+
+### Reading and writing session data
+
+Use Django's async session methods in async handlers:
+
+```python
+@api.post("/counter")
+async def increment_counter(request: Request):
+    session = request.session
+
+    # Async read with default
+    count = await session.aget("count", 0)
+
+    # Async write
+    await session.aset("count", count + 1)
+
+    return {"count": count + 1}
+```
+
+### Available async methods
+
+| Method | Description |
+|--------|-------------|
+| `await session.aget(key, default)` | Get a session value |
+| `await session.aset(key, value)` | Set a session value |
+| `await session.apop(key, default)` | Remove and return a value |
+| `await session.akeys()` | Get all session keys |
+| `await session.aitems()` | Get all key-value pairs |
+| `await session.aflush()` | Delete session and create new |
+| `await session.acycle_key()` | Regenerate key, keep data |
+
+### Sync properties (no DB access)
+
+These are safe to use in async handlers as they don't access the database:
+
+```python
+session_key = request.session.session_key  # Current session key
+request.session.clear()  # Clear cached data
+```
+
+!!! warning "Use async methods in async handlers"
+    Using sync methods like `session["key"]` or `session.get()` in async handlers will raise `SynchronousOnlyOperation`. Always use `aget`, `aset`, etc.
+
+### Complete example
+
+```python
+from django_bolt import BoltAPI, Request
+from django.contrib.auth import alogin, alogout
+
+api = BoltAPI(django_middleware=True)
+
+@api.post("/login")
+async def login(request: Request, username: str, password: str):
+    user = await User.objects.filter(username=username).afirst()
+    if user and user.check_password(password):
+        await alogin(request, user)
+        await request.session.aset("login_time", str(datetime.now()))
+        return {"status": "ok"}
+    return {"status": "error"}
+
+@api.get("/profile")
+async def profile(request: Request):
+    user = await request.auser()
+    if not user.is_authenticated:
+        return {"error": "not logged in"}
+
+    return {
+        "username": user.username,
+        "login_time": await request.session.aget("login_time"),
+    }
+
+@api.post("/logout")
+async def logout(request: Request):
+    await alogout(request)
+    return {"status": "logged out"}
 ```
 
 ## Form data

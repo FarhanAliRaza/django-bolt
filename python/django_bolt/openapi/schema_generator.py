@@ -588,8 +588,6 @@ class SchemaGenerator:
                 security.append({"BearerAuth": []})
             elif "APIKey" in backend_name:
                 security.append({"ApiKeyAuth": []})
-            elif "Session" in backend_name:
-                security.append({"SessionAuth": []})
 
         return security or None
 

@@ -27,6 +27,9 @@ DEBUG = False
 
 ALLOWED_HOSTS = ["*"]
 
+# BOLT_EMIT_SIGNALS =True
+
+
 # Application definition
 
 INSTALLED_APPS = [

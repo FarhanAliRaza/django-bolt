@@ -18,7 +18,6 @@ from django_bolt.auth import (
     APIKeyAuthentication,
     IsAuthenticated,
     JWTAuthentication,
-    SessionAuthentication,
 )
 from django_bolt.exceptions import HTTPException
 from django_bolt.testing import TestClient
@@ -250,38 +249,6 @@ class TestCustomAuthBackendUserLoading:
             response = client.get("/admin/data", headers={"X-API-Key": "unknown-key"})
 
             # Should still be rejected (key not in valid set)
-            assert response.status_code == 401
-
-
-class TestSessionUserLoading:
-    """Test request.user loading with session authentication."""
-
-    @pytest.mark.django_db(transaction=True)
-    def test_session_authentication_structure(self):
-        """Test that session authentication is properly configured."""
-        api = BoltAPI()
-
-        # Create a test user with explicit commit
-        User.objects.create(username="sessionuser")
-
-        @api.get(
-            "/session-test",
-            auth=[SessionAuthentication()],
-            guards=[IsAuthenticated()],
-        )
-        async def session_endpoint(request):
-            """Endpoint with session auth."""
-            user_obj = request.user
-            return {
-                "user_loaded": user_obj is not None,
-                "username": user_obj.username if user_obj else None,
-            }
-
-        # Can't easily test session auth without browser cookies,
-        # but we can verify the endpoint exists
-        with TestClient(api) as client:
-            response = client.get("/session-test")
-            # Should fail without valid session
             assert response.status_code == 401
 
 

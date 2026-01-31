@@ -88,7 +88,7 @@ class _SerializerMeta(StructMeta):
         return super().__new__(mcs, name, bases, namespace, **kwargs)
 
 
-class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
+class Serializer(msgspec.Struct, metaclass=_SerializerMeta):  # type: ignore[misc]
     """
     Enhanced msgspec.Struct with validation and Django model integration.
 
@@ -809,8 +809,8 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             if source:
                 # Use the source path to get the value from the model
                 value = cls._get_value_from_source(instance, source)
+                # Skip if source root attribute doesn't exist (vs. exists but is None)
                 if value is None and not hasattr(instance, source.split(".")[0]):
-                    # Source attribute doesn't exist on the model - skip this field
                     continue
             else:
                 # No source mapping - use field name directly

@@ -51,7 +51,7 @@ from django_bolt.serializers.types import (
 )
 
 # Import test models
-from tests.test_models import Author, BlogPost, Comment, Tag, User, UserProfile  # noqa: PLC0415
+from tests.test_models import Article, Author, BlogPost, Comment, Tag, User, UserProfile  # noqa: PLC0415
 
 # =============================================================================
 # Serializers for testing
@@ -2406,8 +2406,6 @@ class TestFromModelWithSource:
             headline: str = field(source="title")  # title -> headline
             body: str = field(source="content")  # content -> body
             writer: str = field(source="author")  # author -> writer
-
-        from tests.test_models import Article
 
         article = Article.objects.create(
             title="Original Title",

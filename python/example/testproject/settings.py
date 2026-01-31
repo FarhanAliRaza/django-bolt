@@ -26,7 +26,7 @@ SECRET_KEY = "django-insecure-8l7jd)6zngu@-^(&lt=q3smdfx4rcuu9tp3&6&y)ovqm%y=20t
 DEBUG = False
 
 ALLOWED_HOSTS = ["*"]
-BOLT_EMIT_SIGNALS = True
+# BOLT_EMIT_SIGNALS = True
 
 # Application definition
 
@@ -218,4 +218,4 @@ MIDDLEWARE += [
 ]
 
 
-BOLT_MAX_UPLOAD_SIZE = 30 * 1024 * 1024  # 10 mb
+BOLT_MAX_UPLOAD_SIZE = 30 * 1024 * 1024  # 30 MB

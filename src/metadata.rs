@@ -207,6 +207,7 @@ pub struct RouteMetadata {
     // These are computed in Python at route registration time via static analysis
     pub needs_query: bool,
     pub needs_headers: bool,
+    // true if handler has Cookie() params OR session auth is configured
     pub needs_cookies: bool,
     #[allow(dead_code)] // Reserved for future optimization
     pub needs_path_params: bool,
@@ -303,12 +304,17 @@ impl RouteMetadata {
             .and_then(|v| v.extract::<bool>().ok())
             .unwrap_or(true);
 
-        let needs_cookies = py_meta
+        // needs_cookies is true if handler has Cookie() params OR session auth is configured
+        let needs_cookies_from_handler = py_meta
             .get_item("needs_cookies")
             .ok()
             .flatten()
             .and_then(|v| v.extract::<bool>().ok())
             .unwrap_or(true);
+        let has_session_auth = auth_backends
+            .iter()
+            .any(|b| matches!(b, AuthBackend::Session { .. }));
+        let needs_cookies = needs_cookies_from_handler || has_session_auth;
 
         let needs_path_params = py_meta
             .get_item("needs_path_params")

@@ -140,15 +140,7 @@ async def get_me(request: CustomRequest):
     The request.user property is automatically populated by the authentication
     system and contains the Django User instance for the authenticated user.
     """
-    # Debug logging
-    context = request.get("context", {})
-    user_id = context.get("user_id")
-    auth_backend = context.get("auth_backend")
-    print(f"DEBUG: user_id={user_id}, auth_backend={auth_backend}", flush=True)
-
     user = request.user
-    print(f"DEBUG: request.user={user}, type={type(user)}", flush=True)
-
     if not user:
         return {"error": "User not authenticated"}
 
@@ -343,55 +335,37 @@ def read_root_sync():
 
 @api.get("/10k-json")
 async def read_10k():
-    """
-    Endpoint that returns 10k JSON objects.
-
-    """
+    """Endpoint that returns 10k JSON objects."""
     return test_data.JSON_10K
 
 
 @api.get("/1k-json")
 async def read_1k():
-    """
-    Endpoint that returns 10k JSON objects.
-
-    """
+    """Endpoint that returns 1k JSON objects."""
     return test_data.JSON_1K
 
 
 @api.get("/100k-json")
 async def read_100k():
-    """
-    Endpoint that returns 10k JSON objects.
-
-    """
+    """Endpoint that returns 100k JSON objects."""
     return test_data.JSON_100K
 
 
 @api.get("/500k-json")
-async def read_100k():
-    """
-    Endpoint that returns 10k JSON objects.
-
-    """
+async def read_500k():
+    """Endpoint that returns 500k JSON objects."""
     return test_data.JSON_500K
 
 
 @api.get("/1m-json")
-async def read_100k():
-    """
-    Endpoint that returns 10k JSON objects.
-
-    """
+async def read_1m():
+    """Endpoint that returns 1M JSON objects."""
     return test_data.JSON_1M
 
 
 @api.get("/sync-10k-json")
 def read_10k_sync():
-    """
-    Sync version: Endpoint that returns 10k JSON objects.
-
-    """
+    """Sync version: Endpoint that returns 10k JSON objects."""
     return test_data.JSON_10K
 
 
@@ -402,34 +376,15 @@ class UserMiniSerializer(Serializer):
 
 @api.get("/sync-users", response_model=list[UserMiniSerializer])
 def read_users_sync():
-    """
-    Sync version: Endpoint that returns 10k JSON objects.
-
-    """
+    """Sync version: Endpoint that returns up to 100 users."""
     users = User.objects.all()[0:100]
-
     return users
-
-
-# @api.get("/sync-users")
-# def read_10k_sync() -> list[UserMini]:
-#     """
-#     Sync version: Endpoint that returns 10k JSON objects.
-
-#     """
-#     users = User.objects.all()[0:100]
-
-#     return users
 
 
 @api.get("/async-users")
 async def read_users_async() -> list[UserMini]:
-    """
-    Async version: Endpoint that returns 10k JSON objects.
-
-    """
+    """Async version: Endpoint that returns up to 100 users."""
     users = User.objects.all()[0:100]
-
     return users
 
 

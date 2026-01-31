@@ -480,7 +480,16 @@ pub async fn handle_websocket_upgrade_with_handler(
             headers.insert(key.as_str().to_owned(), v.to_owned());
         }
     }
-    let cookies = parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()));
+
+    // needs_cookies is pre-computed at registration (includes session auth check)
+    let route_meta_ref = ROUTE_METADATA.get().and_then(|meta| meta.get(&handler_id));
+    let needs_cookies = route_meta_ref.map(|m| m.needs_cookies).unwrap_or(true);
+
+    let cookies = if needs_cookies {
+        parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()))
+    } else {
+        AHashMap::new()
+    };
     // Get peer address for rate limiting
     let peer_addr = req.peer_addr().map(|addr| addr.ip().to_string());
 

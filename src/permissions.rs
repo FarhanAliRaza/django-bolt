@@ -32,8 +32,18 @@ pub fn evaluate_guards(guards: &[Guard], auth_ctx: Option<&AuthContext>) -> Guar
                 return GuardResult::Allow;
             }
             Guard::IsAuthenticated => {
-                if auth_ctx.is_none() || auth_ctx.unwrap().user_id.is_none() {
-                    return GuardResult::Unauthorized;
+                match auth_ctx {
+                    None => return GuardResult::Unauthorized,
+                    Some(ctx) if ctx.is_session_auth() => {
+                        // Session auth: cookie was present, Python will validate user
+                        // Allow through - Django SessionMiddleware does real authentication
+                    }
+                    Some(ctx) if ctx.user_id.is_none() => {
+                        return GuardResult::Unauthorized;
+                    }
+                    Some(_) => {
+                        // JWT/API key with valid user_id - allow
+                    }
                 }
             }
             Guard::IsSuperuser => match auth_ctx {

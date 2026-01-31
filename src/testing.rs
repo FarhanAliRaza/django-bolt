@@ -39,6 +39,7 @@ use std::collections::HashMap;
 use crate::handler::{coerced_value_to_py, form_result_to_py};
 use crate::request_pipeline::validate_typed_params;
 use crate::type_coercion::{coerce_param, params_to_py_dict, TYPE_STRING};
+use crate::validation::parse_cookies_inline;
 
 /// One-time initialization flag for async runtime
 static ASYNC_RUNTIME_INITIALIZED: std::sync::Once = std::sync::Once::new();
@@ -648,8 +649,9 @@ async fn handle_test_request_internal(
         }
     }
 
-    let needs_cookies = route_metadata
-        .get(&handler_id)
+    // needs_cookies is pre-computed at registration (includes session auth check)
+    let needs_cookies = route_meta
+        .as_ref()
         .map(|m| m.needs_cookies)
         .unwrap_or(true);
 
@@ -668,14 +670,6 @@ async fn handle_test_request_internal(
         }
     } else {
         None
-    };
-
-    // Cookies
-    let needs_cookies = route_meta.as_ref().map(|m| m.needs_cookies).unwrap_or(true);
-    let cookies = if needs_cookies {
-        parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()))
-    } else {
-        AHashMap::new()
     };
 
     // Form parsing (URL-encoded and multipart)
@@ -1194,20 +1188,6 @@ pub fn handle_test_websocket(
         header_map.insert(name.to_lowercase(), value.clone());
     }
 
-    let mut cookie_map: AHashMap<String, String> = AHashMap::new();
-    if let Some(cookie_header) = header_map.get("cookie") {
-        for pair in cookie_header.split(';') {
-            let pair = pair.trim();
-            if let Some(eq_pos) = pair.find('=') {
-                let (key, value) = pair.split_at(eq_pos);
-                let value = &value[1..];
-                if !key.is_empty() {
-                    cookie_map.insert(key.to_string(), value.to_string());
-                }
-            }
-        }
-    }
-
     // Origin validation for WebSocket
     let origin = header_map.get("origin");
     if let Some(origin_value) = origin {
@@ -1270,6 +1250,16 @@ pub fn handle_test_websocket(
     }
 
     let mut final_auth_ctx = None;
+
+    // needs_cookies is pre-computed at registration (includes session auth check)
+    let route_meta_ref = app.route_metadata.get(&handler_id);
+    let needs_cookies = route_meta_ref.map(|m| m.needs_cookies).unwrap_or(true);
+
+    let cookie_map = if needs_cookies {
+        parse_cookies_inline(header_map.get("cookie").map(|s| s.as_str()))
+    } else {
+        AHashMap::new()
+    };
 
     // Auth and guards for WebSocket
     if let Some(route_meta) = app.route_metadata.get(&handler_id) {

@@ -75,15 +75,30 @@ impl AuthContext {
         }
     }
 
-    pub fn from_session(_cookie_name: &str) -> Self {
+    /// Backend identifier for session authentication
+    pub const SESSION_BACKEND: &'static str = "session";
+
+    /// Create AuthContext for session auth.
+    ///
+    /// NOTE: This only indicates the session cookie was present.
+    /// The actual user is loaded by Python's Django SessionMiddleware.
+    /// We set user_id=None because Rust cannot validate sessions.
+    #[inline]
+    pub fn from_session() -> Self {
         AuthContext {
-            user_id: Some("session_user".to_string()),
+            user_id: None, // Real user loaded by Python SessionMiddleware
             is_staff: false,
             is_superuser: false,
-            backend: "session".to_string(),
+            backend: Self::SESSION_BACKEND.to_string(),
             claims: None,
             permissions: HashSet::new(),
         }
+    }
+
+    /// Check if this context is from session authentication
+    #[inline]
+    pub fn is_session_auth(&self) -> bool {
+        self.backend == Self::SESSION_BACKEND
     }
 }
 
@@ -110,6 +125,7 @@ pub enum AuthBackend {
 
 /// Authenticate using configured backends and return AuthContext
 /// Returns None if no authentication was successful
+#[inline]
 pub fn authenticate(
     headers: &AHashMap<String, String>,
     backends: &[AuthBackend],
@@ -145,9 +161,10 @@ pub fn authenticate(
                 }
             }
             AuthBackend::Session { cookie_name } => {
+                // Only check cookie presence - Python validates the actual session
                 if let Some(value) = cookies.get(cookie_name) {
                     if !value.is_empty() {
-                        return Some(AuthContext::from_session(cookie_name));
+                        return Some(AuthContext::from_session());
                     }
                 }
             }

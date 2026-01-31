@@ -516,6 +516,7 @@ pub async fn handle_request(
         }
     }
 
+    // needs_cookies is pre-computed at registration (includes session auth check)
     let needs_cookies = route_metadata
         .as_ref()
         .map(|m| m.needs_cookies)
@@ -526,6 +527,7 @@ pub async fn handle_request(
     } else {
         AHashMap::new()
     };
+
     // Execute authentication and guards using shared validation logic
     let auth_ctx = if let Some(ref route_meta) = route_metadata {
         match validate_auth_and_guards(
@@ -546,19 +548,6 @@ pub async fn handle_request(
         }
     } else {
         None
-    };
-
-    // Optimization: Only parse cookies if handler needs them
-    // Cookie parsing can be expensive for requests with many cookies
-    let needs_cookies = route_metadata
-        .as_ref()
-        .map(|m| m.needs_cookies)
-        .unwrap_or(true);
-
-    let cookies = if needs_cookies {
-        parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()))
-    } else {
-        AHashMap::new()
     };
 
     // Determine if form parsing is needed and get content type

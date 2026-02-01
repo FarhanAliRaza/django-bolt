@@ -1,4 +1,3 @@
-use actix_files::Files;
 use actix_http::KeepAlive;
 use actix_web::{
     self as aw,
@@ -22,6 +21,7 @@ use crate::state::{
     AppState, StaticFilesConfig, GLOBAL_ROUTER, GLOBAL_WEBSOCKET_ROUTER, ROUTE_METADATA,
     ROUTE_METADATA_TEMP, TASK_LOCALS,
 };
+use crate::static_files::handle_static_file;
 use crate::websocket::{
     handle_websocket_upgrade_with_handler, is_websocket_upgrade, WebSocketRouter,
 };
@@ -475,19 +475,16 @@ pub fn start_server_async(
                                 .to(websocket_not_found_handler),
                         );
 
-                        // Register static files service (if configured via Django settings)
-                        // Serves files from STATIC_ROOT and STATICFILES_DIRS at STATIC_URL
+                        // Register static files handler (if configured via Django settings)
+                        // Uses a custom handler that:
+                        // 1. Searches configured directories in order (fast path)
+                        // 2. Falls back to Django's staticfiles finders (for app static files like admin)
                         if let Some(ref config) = app_state.static_files_config {
-                            // Register a Files service for each configured directory
-                            // actix-files handles ETag, Last-Modified, Range requests, and MIME types
-                            for dir in &config.directories {
-                                app = app.service(
-                                    Files::new(&config.url_prefix, dir)
-                                        .prefer_utf8(true)
-                                        .use_etag(true)
-                                        .use_last_modified(true),
-                                );
-                            }
+                            let static_dirs = web::Data::new(config.directories.clone());
+                            let static_route = format!("{}{{path:.*}}", config.url_prefix);
+                            app = app
+                                .app_data(static_dirs)
+                                .route(&static_route, web::get().to(handle_static_file));
                         }
 
                         // Default service handles all unmatched HTTP requests

@@ -85,7 +85,23 @@ class _SerializerMeta(StructMeta):
     def __new__(mcs, name: str, bases: tuple, namespace: dict, **kwargs):
         # Force kw_only=True for all Serializer subclasses
         kwargs.setdefault("kw_only", True)
-        return super().__new__(mcs, name, bases, namespace, **kwargs)
+        cls = super().__new__(mcs, name, bases, namespace, **kwargs)
+
+        # Build rename map (e.g., {"user_name": "userName"} for rename="camel").
+        # Done here because __struct_fields__ isn't available in __init_subclass__.
+        rename_map: dict[str, str] = {}
+        if hasattr(cls, "__struct_fields__"):
+            try:
+                for fi in msgspec_structs.fields(cls):
+                    if fi.encode_name != fi.name:
+                        rename_map[fi.name] = fi.encode_name
+            except NameError:
+                # Forward reference not resolvable yet; deferred to
+                # _lazy_collect_field_configs on first instance creation.
+                pass
+        cls.__rename_map__ = rename_map
+
+        return cls
 
 
 class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
@@ -164,6 +180,9 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
     __dump_fast_path__: ClassVar[bool] = True
     # Track if any field is a Serializer type (requires recursive dump)
     __has_serializer_fields__: ClassVar[bool] = False
+    # Rename mapping: Python field name -> encoded name (e.g., "user_name" -> "userName")
+    # Populated when msgspec rename= is used (e.g., rename="camel")
+    __rename_map__: ClassVar[dict[str, str]] = {}
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Collect validators and cache type hints when a subclass is created."""
@@ -462,6 +481,17 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         # Update the has_field_markers flag based on actual _FieldMarker defaults found
         cls.__has_field_markers__ = bool(field_configs)
 
+        # Build rename map if deferred from _SerializerMeta.__new__ (forward reference)
+        if not cls.__rename_map__:
+            rename_map: dict[str, str] = {}
+            try:
+                for fi in msgspec_structs.fields(cls):
+                    if fi.encode_name != fi.name:
+                        rename_map[fi.name] = fi.encode_name
+            except NameError:
+                pass
+            cls.__rename_map__ = rename_map
+
         # Recalculate __dump_fast_path__ now that we have the actual field configs
         # This is needed because write_only fields from _FieldMarker weren't available
         # in __init_subclass__ when __dump_fast_path__ was first computed
@@ -641,16 +671,18 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         """
         errors: list[dict[str, Any]] = []
         annotations = get_type_hints(cls, include_extras=True)
+        rename_map = cls.__rename_map__
 
         for field_name in cls.__struct_fields__:
-            if field_name not in data:
+            data_key = rename_map.get(field_name, field_name) if rename_map else field_name
+            if data_key not in data:
                 # Missing field - msgspec will handle this
                 continue
 
             try:
                 field_type = annotations.get(field_name, Any)
                 # Validate this field individually
-                msgspec.convert(data[field_name], type=field_type, strict=False)
+                msgspec.convert(data[data_key], type=field_type, strict=False)
             except MsgspecValidationError as e:
                 # Extract field path from error message if present
                 error_msg = str(e)
@@ -658,9 +690,9 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
                 if match:
                     # Nested field path like "address.city"
                     nested_path = match.group(1)
-                    loc = ["body", field_name, *nested_path.split(".")]
+                    loc = ["body", data_key, *nested_path.split(".")]
                 else:
-                    loc = ["body", field_name]
+                    loc = ["body", data_key]
 
                 errors.append(
                     {
@@ -1283,10 +1315,11 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             user.dump()  # {"id": 1, "name": "John", "email": None}
             user.dump(exclude_none=True)  # {"id": 1, "name": "John"}
         """
-        # FAST PATH: If no special handling is needed, use msgspec.structs.asdict directly
-        # This is significantly faster than iterating through fields in Python
+        # FAST PATH: use msgspec native methods (significantly faster than Python iteration)
         cls = self.__class__
         if cls.__dump_fast_path__ and not exclude_none and not exclude_defaults and not exclude_unset and not by_alias:
+            if cls.__rename_map__:
+                return msgspec.to_builtins(self)
             return msgspec_structs.asdict(self)
 
         # SLOW PATH: Need special handling
@@ -1317,6 +1350,7 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
         field_configs = cls.__field_configs__
         has_computed = cls.__has_computed_fields__
         computed_fields = cls.__computed_fields__
+        rename_map = cls.__rename_map__
 
         # Use pre-computed default values map (computed once per class, not per call)
         default_values = None
@@ -1357,10 +1391,11 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             if default_values is not None and field_name in default_values and value == default_values[field_name]:
                 continue
 
-            # Use alias if by_alias and alias is defined
             output_key = field_name
             if by_alias and field_config and field_config.alias:
                 output_key = field_config.alias
+            elif rename_map:
+                output_key = rename_map.get(field_name, field_name)
 
             # Handle nested serializers
             if isinstance(value, Serializer):
@@ -1466,10 +1501,11 @@ class Serializer(msgspec.Struct, metaclass=_SerializerMeta):
             users = [UserSerializer.from_model(u) for u in User.objects.all()]
             UserSerializer.dump_many(users)
         """
-        # FAST PATH: If no special handling is needed, use msgspec.structs.asdict directly
-        # This is significantly faster than iterating through fields in Python
+        # FAST PATH: use msgspec native methods (significantly faster than Python iteration)
         if cls.__dump_fast_path__ and not exclude_none and not exclude_defaults and not exclude_unset and not by_alias:
-            # Use msgspec's optimized asdict - much faster than Python iteration
+            if cls.__rename_map__:
+                _to_builtins = msgspec.to_builtins
+                return [_to_builtins(instance) for instance in instances]
             _asdict = msgspec_structs.asdict
             return [_asdict(instance) for instance in instances]
 

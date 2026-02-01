@@ -417,6 +417,7 @@ pub fn test_request(
             global_compression_config: None,
             router: Some(router.clone()),
             route_metadata: Some(route_metadata.clone()),
+            static_files_config: None, // Static files not used in test infrastructure
         });
 
         // Clone the Arc values for the handler closure

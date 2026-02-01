@@ -15,6 +15,7 @@ mod responses;
 mod router;
 mod server;
 mod state;
+mod static_files;
 mod streaming;
 mod testing;
 mod type_coercion;

@@ -74,6 +74,18 @@ def pytest_configure(config):
                                 "django.template.loaders.locmem.Loader",
                                 {
                                     "test_dashboard.html": "<html><body><h1>{{ title }}</h1></body></html>",
+                                    "test_static_page.html": """{% load static %}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+</head>
+<body>
+    <h1>{{ title }}</h1>
+    <script src="{% static 'js/app.js' %}"></script>
+</body>
+</html>""",
                                 },
                             ),
                         ],

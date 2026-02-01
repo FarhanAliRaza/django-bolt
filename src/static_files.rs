@@ -1,132 +1,22 @@
 //! Static file serving with Django integration.
 //!
-//! Provides efficient static file serving that:
-//! 1. Searches configured directories in order (fast path)
-//! 2. Falls back to Django's staticfiles finders (for app static files like admin)
-//! 3. Supports ETag, Last-Modified, and Range requests
+//! Uses actix-files for efficient file serving with proper HTTP semantics:
+//! - Streaming (memory efficient for large files)
+//! - ETag and Last-Modified headers
+//! - If-None-Match / If-Modified-Since support (304 responses)
+//! - Range requests for resumable downloads
+//! - Content-Type detection
+//!
+//! File lookup order:
+//! 1. Configured directories (STATIC_ROOT, STATICFILES_DIRS) - fast path
+//! 2. Django's staticfiles finders (for app static files like admin)
 
-use actix_web::{http::header, web, HttpRequest, HttpResponse};
+use actix_files::NamedFile;
+use actix_web::{web, HttpRequest};
 use pyo3::prelude::*;
-use std::fs::{self, File};
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
-/// MIME type detection for common static file types
-fn guess_content_type(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("css") => "text/css; charset=utf-8",
-        Some("js") | Some("mjs") => "application/javascript; charset=utf-8",
-        Some("json") => "application/json; charset=utf-8",
-        Some("html") | Some("htm") => "text/html; charset=utf-8",
-        Some("xml") => "application/xml; charset=utf-8",
-        Some("txt") => "text/plain; charset=utf-8",
-        Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("gif") => "image/gif",
-        Some("svg") => "image/svg+xml",
-        Some("ico") => "image/x-icon",
-        Some("webp") => "image/webp",
-        Some("avif") => "image/avif",
-        Some("woff") => "font/woff",
-        Some("woff2") => "font/woff2",
-        Some("ttf") => "font/ttf",
-        Some("otf") => "font/otf",
-        Some("eot") => "application/vnd.ms-fontobject",
-        Some("map") => "application/json",
-        Some("pdf") => "application/pdf",
-        Some("zip") => "application/zip",
-        Some("gz") => "application/gzip",
-        Some("mp4") => "video/mp4",
-        Some("webm") => "video/webm",
-        Some("mp3") => "audio/mpeg",
-        Some("ogg") => "audio/ogg",
-        Some("wav") => "audio/wav",
-        _ => "application/octet-stream",
-    }
-}
-
-/// Generate ETag from file metadata
-fn generate_etag(metadata: &fs::Metadata) -> String {
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let size = metadata.len();
-    format!("\"{:x}-{:x}\"", modified, size)
-}
-
-/// Format Last-Modified header value
-fn format_http_date(system_time: SystemTime) -> String {
-    use std::time::Duration;
-    let duration = system_time
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO);
-    let secs = duration.as_secs();
-
-    // Simple HTTP date formatting (RFC 7231)
-    let days = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hours = time_of_day / 3600;
-    let minutes = (time_of_day % 3600) / 60;
-    let seconds = time_of_day % 60;
-
-    // Calculate year, month, day from days since epoch
-    let mut remaining_days = days as i64;
-    let mut year = 1970i32;
-
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if remaining_days < days_in_year {
-            break;
-        }
-        remaining_days -= days_in_year;
-        year += 1;
-    }
-
-    let leap = is_leap_year(year);
-    let days_in_months: [i64; 12] = if leap {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-
-    let mut month = 0usize;
-    for (i, &days_in_month) in days_in_months.iter().enumerate() {
-        if remaining_days < days_in_month {
-            month = i;
-            break;
-        }
-        remaining_days -= days_in_month;
-    }
-
-    let day = remaining_days + 1;
-    let weekday = ((days + 4) % 7) as usize; // Jan 1, 1970 was Thursday
-
-    let weekday_names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    let month_names = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-
-    format!(
-        "{}, {:02} {} {} {:02}:{:02}:{:02} GMT",
-        weekday_names[weekday],
-        day,
-        month_names[month],
-        year,
-        hours,
-        minutes,
-        seconds
-    )
-}
-
-fn is_leap_year(year: i32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-}
-
-/// Find a static file in the configured directories
+/// Find a static file in the configured directories (fast path)
 fn find_in_directories(relative_path: &str, directories: &[String]) -> Option<PathBuf> {
     // Security: prevent directory traversal
     if relative_path.contains("..") || relative_path.starts_with('/') {
@@ -168,116 +58,61 @@ fn find_with_django_finders(relative_path: &str) -> Option<PathBuf> {
     })
 }
 
-/// Serve a static file with proper HTTP caching headers
-fn serve_file(path: &Path, req: &HttpRequest) -> HttpResponse {
-    // Read file metadata
-    let metadata = match fs::metadata(path) {
-        Ok(m) => m,
-        Err(_) => return HttpResponse::NotFound().body("File not found"),
-    };
-
-    let etag = generate_etag(&metadata);
-    let last_modified = metadata.modified().ok();
-
-    // Check If-None-Match (ETag)
-    if let Some(if_none_match) = req.headers().get(header::IF_NONE_MATCH) {
-        if let Ok(client_etag) = if_none_match.to_str() {
-            if client_etag == etag || client_etag == "*" {
-                return HttpResponse::NotModified()
-                    .insert_header((header::ETAG, etag))
-                    .finish();
-            }
-        }
-    }
-
-    // Check If-Modified-Since
-    if let (Some(if_modified_since), Some(modified)) = (
-        req.headers().get(header::IF_MODIFIED_SINCE),
-        last_modified.as_ref(),
-    ) {
-        // Simple check: if the header exists and file hasn't changed, return 304
-        // A full implementation would parse the date, but ETag check above handles most cases
-        if if_modified_since.to_str().is_ok() {
-            // For simplicity, rely on ETag for cache validation
-        }
-        let _ = modified; // Suppress unused warning
-    }
-
-    // Read file content
-    let mut file = match File::open(path) {
-        Ok(f) => f,
-        Err(_) => return HttpResponse::InternalServerError().body("Failed to open file"),
-    };
-
-    let mut content = Vec::with_capacity(metadata.len() as usize);
-    if file.read_to_end(&mut content).is_err() {
-        return HttpResponse::InternalServerError().body("Failed to read file");
-    }
-
-    // Build response with caching headers
-    let content_type = guess_content_type(path);
-    let mut response = HttpResponse::Ok();
-
-    response
-        .insert_header((header::CONTENT_TYPE, content_type))
-        .insert_header((header::ETAG, etag))
-        .insert_header((header::CACHE_CONTROL, "public, max-age=31536000, immutable"));
-
-    if let Some(modified) = last_modified {
-        response.insert_header((header::LAST_MODIFIED, format_http_date(modified)));
-    }
-
-    response.body(content)
-}
-
 /// Handler for static file requests
+///
+/// Uses actix-files NamedFile which provides:
+/// - Streaming responses (memory efficient)
+/// - Automatic ETag generation
+/// - Last-Modified headers
+/// - Conditional request handling (304 Not Modified)
+/// - Range request support
+/// - Content-Type detection
 pub async fn handle_static_file(
-    req: HttpRequest,
+    _req: HttpRequest,
     path: web::Path<String>,
     directories: web::Data<Vec<String>>,
-) -> HttpResponse {
+) -> actix_web::Result<NamedFile> {
     let relative_path = path.into_inner();
 
     // Security check
     if relative_path.contains("..") || relative_path.starts_with('/') {
-        return HttpResponse::BadRequest().body("Invalid path");
+        return Err(actix_web::error::ErrorBadRequest("Invalid path"));
     }
 
     // First, try to find in configured directories (fast path)
     if let Some(file_path) = find_in_directories(&relative_path, directories.as_ref()) {
-        return serve_file(&file_path, &req);
+        return NamedFile::open_async(&file_path).await.map_err(|e| {
+            eprintln!(
+                "[django-bolt] Failed to open static file {:?}: {}",
+                file_path, e
+            );
+            actix_web::error::ErrorNotFound("File not found")
+        });
     }
 
     // Fall back to Django's staticfiles finders (for app static files like admin)
     if let Some(file_path) = find_with_django_finders(&relative_path) {
-        return serve_file(&file_path, &req);
+        return NamedFile::open_async(&file_path).await.map_err(|e| {
+            eprintln!(
+                "[django-bolt] Failed to open static file {:?}: {}",
+                file_path, e
+            );
+            actix_web::error::ErrorNotFound("File not found")
+        });
     }
 
-    HttpResponse::NotFound().body(format!("Static file not found: {}", relative_path))
+    Err(actix_web::error::ErrorNotFound(format!(
+        "Static file not found: {}",
+        relative_path
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::{self, File};
     use std::io::Write;
     use tempfile::TempDir;
-
-    #[test]
-    fn test_guess_content_type() {
-        assert_eq!(
-            guess_content_type(Path::new("style.css")),
-            "text/css; charset=utf-8"
-        );
-        assert_eq!(
-            guess_content_type(Path::new("app.js")),
-            "application/javascript; charset=utf-8"
-        );
-        assert_eq!(guess_content_type(Path::new("image.png")), "image/png");
-        assert_eq!(
-            guess_content_type(Path::new("unknown.xyz")),
-            "application/octet-stream"
-        );
-    }
 
     #[test]
     fn test_find_in_directories() {
@@ -310,18 +145,57 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_etag() {
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("test.txt");
-        let mut file = File::create(&file_path).unwrap();
-        file.write_all(b"test content").unwrap();
+    fn test_find_in_multiple_directories() {
+        let dir1 = TempDir::new().unwrap();
+        let dir2 = TempDir::new().unwrap();
 
-        let metadata = fs::metadata(&file_path).unwrap();
-        let etag = generate_etag(&metadata);
+        // Create file only in dir1
+        let mut file1 = File::create(dir1.path().join("file1.txt")).unwrap();
+        file1.write_all(b"content1").unwrap();
 
-        // ETag should be quoted and contain hex values
-        assert!(etag.starts_with('"'));
-        assert!(etag.ends_with('"'));
-        assert!(etag.contains('-'));
+        // Create file only in dir2
+        let mut file2 = File::create(dir2.path().join("file2.txt")).unwrap();
+        file2.write_all(b"content2").unwrap();
+
+        let directories = vec![
+            dir1.path().to_string_lossy().to_string(),
+            dir2.path().to_string_lossy().to_string(),
+        ];
+
+        // Should find file1 in dir1
+        let result = find_in_directories("file1.txt", &directories);
+        assert!(result.is_some());
+        assert!(result.unwrap().to_string_lossy().contains("file1.txt"));
+
+        // Should find file2 in dir2
+        let result = find_in_directories("file2.txt", &directories);
+        assert!(result.is_some());
+        assert!(result.unwrap().to_string_lossy().contains("file2.txt"));
+    }
+
+    #[test]
+    fn test_directory_priority() {
+        let dir1 = TempDir::new().unwrap();
+        let dir2 = TempDir::new().unwrap();
+
+        // Create same-named file in both directories
+        let mut file1 = File::create(dir1.path().join("shared.txt")).unwrap();
+        file1.write_all(b"from_dir1").unwrap();
+
+        let mut file2 = File::create(dir2.path().join("shared.txt")).unwrap();
+        file2.write_all(b"from_dir2").unwrap();
+
+        // dir1 should take priority (listed first)
+        let directories = vec![
+            dir1.path().to_string_lossy().to_string(),
+            dir2.path().to_string_lossy().to_string(),
+        ];
+
+        let result = find_in_directories("shared.txt", &directories);
+        assert!(result.is_some());
+
+        // Verify it's from dir1
+        let content = fs::read_to_string(result.unwrap()).unwrap();
+        assert_eq!(content, "from_dir1");
     }
 }

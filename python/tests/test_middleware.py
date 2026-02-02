@@ -17,6 +17,7 @@ import pytest
 from django_bolt import BoltAPI
 from django_bolt.auth import APIKeyAuthentication, IsAuthenticated, JWTAuthentication
 from django_bolt.middleware import Middleware, cors, rate_limit, skip_middleware
+from django_bolt.testing import TestClient
 
 
 # Test models
@@ -145,20 +146,6 @@ class TestMiddlewareDecorators:
 class TestGlobalMiddleware:
     """Test global middleware configuration"""
 
-    def test_global_middleware_config(self):
-        """Test setting global middleware via BoltAPI constructor"""
-        api = BoltAPI(
-            middleware_config={
-                "cors": {"origins": ["*"], "credentials": False},
-                "rate_limit": {"rps": 1000, "burst": 2000, "key": "ip"},
-            }
-        )
-
-        assert "cors" in api.middleware_config
-        assert "rate_limit" in api.middleware_config
-        assert api.middleware_config["cors"]["origins"] == ["*"]
-        assert api.middleware_config["rate_limit"]["rps"] == 1000
-
     def test_global_middleware_instances(self):
         """Test setting global middleware instances (Python middleware)"""
         # Create custom Python middleware instances
@@ -175,9 +162,10 @@ class TestMiddlewareMetadata:
 
     def test_middleware_metadata_compilation(self):
         """Test that middleware metadata is compiled correctly"""
-        api = BoltAPI(middleware_config={"cors": {"origins": ["*"]}})
+        api = BoltAPI()
 
         @api.get("/test")
+        @cors(origins=["*"])
         @rate_limit(rps=100)
         async def test_endpoint():
             return {"status": "ok"}
@@ -188,18 +176,20 @@ class TestMiddlewareMetadata:
         meta = api._handler_middleware[handler_id]
 
         assert "middleware" in meta
-        assert len(meta["middleware"]) == 2  # Global CORS + route rate_limit
+        assert len(meta["middleware"]) == 2  # CORS + rate_limit from decorators
 
         # Check types
         types = [m["type"] for m in meta["middleware"]]
         assert "cors" in types
         assert "rate_limit" in types
 
-    def test_skip_global_middleware(self):
-        """Test skipping global middleware on specific routes"""
-        api = BoltAPI(middleware_config={"cors": {"origins": ["*"]}, "rate_limit": {"rps": 100}})
+    def test_skip_middleware(self):
+        """Test that skip_middleware removes middleware from compiled metadata"""
+        api = BoltAPI()
 
         @api.get("/no-cors")
+        @cors(origins=["*"])
+        @rate_limit(rps=100)
         @skip_middleware("cors")
         async def no_cors_endpoint():
             return {"status": "ok"}
@@ -207,10 +197,38 @@ class TestMiddlewareMetadata:
         handler_id = 0
         meta = api._handler_middleware[handler_id]
 
-        # Should only have rate_limit, not cors
+        # skip_middleware("cors") removes cors from the middleware list
         assert len(meta["middleware"]) == 1
         assert meta["middleware"][0]["type"] == "rate_limit"
         assert "cors" in meta["skip"]
+
+    def test_skip_middleware_runtime_with_testclient(self):
+        """Test that skip_middleware actually skips middleware at runtime using TestClient."""
+        api = BoltAPI()
+
+        # Route WITH @cors but also @skip_middleware("cors") - CORS should be skipped
+        @api.get("/skip-cors")
+        @cors(origins=["https://example.com"])
+        @skip_middleware("cors")
+        async def skip_cors_endpoint():
+            return {"message": "no cors headers"}
+
+        # Route WITH @cors but NO skip - CORS should work
+        @api.get("/with-cors")
+        @cors(origins=["https://example.com"])
+        async def with_cors_endpoint():
+            return {"message": "has cors headers"}
+
+        with TestClient(api, use_http_layer=True) as client:
+            # Request to endpoint with skipped CORS - should NOT have CORS headers
+            response = client.get("/skip-cors", headers={"Origin": "https://example.com"})
+            assert response.status_code == 200
+            assert "Access-Control-Allow-Origin" not in response.headers
+
+            # Request to endpoint with CORS - should have CORS headers
+            response = client.get("/with-cors", headers={"Origin": "https://example.com"})
+            assert response.status_code == 200
+            assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com"
 
 
 class TestMiddlewareExecution:
@@ -415,14 +433,13 @@ if __name__ == "__main__":
 
     print("\nTesting global middleware...")
     test_global = TestGlobalMiddleware()
-    test_global.test_global_middleware_config()
     test_global.test_global_middleware_instances()
     print("✓ Global middleware tests passed")
 
     print("\nTesting middleware metadata...")
     test_meta = TestMiddlewareMetadata()
     test_meta.test_middleware_metadata_compilation()
-    test_meta.test_skip_global_middleware()
+    test_meta.test_skip_middleware()
     print("✓ Metadata tests passed")
 
     print("\nTesting JWT generation...")

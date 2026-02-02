@@ -90,7 +90,6 @@ def compile_middleware_meta(
     method: str,
     path: str,
     global_middleware: list[Any],
-    global_middleware_config: dict[str, Any],
     guards: list[Any] | None = None,
     auth: list[Any] | None = None,
 ) -> dict[str, Any] | None:
@@ -114,18 +113,10 @@ def compile_middleware_meta(
         if mw_dict and mw_dict.get("type") not in skip_middleware:
             all_middleware.append(mw_dict)
 
-    # Add global config-based middleware
-    if global_middleware_config:
-        for mw_type, config in global_middleware_config.items():
-            if mw_type not in skip_middleware:
-                mw_dict = {"type": mw_type}
-                mw_dict.update(config)
-                all_middleware.append(mw_dict)
-
-    # Add handler-specific middleware
+    # Add handler-specific middleware (also filtered by skip_middleware)
     for mw in handler_middleware:
         mw_dict = middleware_to_dict(mw)
-        if mw_dict:
+        if mw_dict and mw_dict.get("type") not in skip_middleware:
             all_middleware.append(mw_dict)
 
     # Compile authentication backends

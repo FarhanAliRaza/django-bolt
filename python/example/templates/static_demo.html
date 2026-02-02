@@ -145,6 +145,22 @@
           <li>Memory-efficient streaming</li>
         </ul>
       </div>
+
+      <div class="static-example">
+        <h3>CSP Violation Test</h3>
+        <p>The following should be blocked by Content-Security-Policy (check browser console):</p>
+        <!-- This inline script violates script-src 'self' - no 'unsafe-inline' -->
+        <button onclick="alert('This should be blocked by CSP!')">Click me (inline handler - should fail)</button>
+        <script>
+          // This inline script should also be blocked
+          console.log('Inline script executed - CSP violation if you see this!');
+        </script>
+        <!-- External script from CDN violates script-src 'self' -->
+        <script src="https://cdn.example.com/malicious.js"></script>
+        <!-- External image from different origin should be blocked by img-src 'self' data: -->
+        <img src="https://example.com/tracking-pixel.gif" alt="External image - should be blocked">
+        <p><small>Check browser DevTools console for CSP violation errors.</small></p>
+      </div>
     </div>
   </body>
 </html>

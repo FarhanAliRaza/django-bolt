@@ -231,8 +231,11 @@ pub fn start_server_async(
             let mut directories: Vec<String> = Vec::new();
 
             // Get STATIC_ROOT (primary location for collected static files)
+            // STATIC_ROOT can be a Path object, so convert via str()
             if let Ok(static_root) = settings.getattr("STATIC_ROOT") {
-                if let Ok(root_str) = static_root.extract::<String>() {
+                let root_str = static_root.extract::<String>()
+                    .or_else(|_| static_root.call_method0("__str__").and_then(|s| s.extract::<String>()));
+                if let Ok(root_str) = root_str {
                     if !root_str.is_empty() {
                         directories.push(root_str);
                     }
@@ -260,68 +263,54 @@ pub fn start_server_async(
         // Read CSP configuration from Django settings
         // Supports both Django 6.0+ native CSP (SECURE_CSP) and django-csp (CONTENT_SECURITY_POLICY)
         // CSP header is built once at startup for static files (no nonce support for static files)
-        let csp_header = (|| -> Option<String> {
-            Python::attach(|py| {
-                let django_conf = py.import("django.conf").ok()?;
-                let settings = django_conf.getattr("settings").ok()?;
+        let csp_header: Option<String> = (|| -> Option<String> {
+            use std::collections::HashMap;
 
-                // Try Django 6.0+ native CSP first (SECURE_CSP), then django-csp (CONTENT_SECURITY_POLICY)
-                let csp_dict = settings
-                    .getattr("SECURE_CSP")
-                    .or_else(|_| settings.getattr("CONTENT_SECURITY_POLICY"))
-                    .ok()?;
+            let django_conf = py.import("django.conf").ok()?;
+            let settings = django_conf.getattr("settings").ok()?;
 
-                // Skip if None or not a dict
-                if csp_dict.is_none() {
-                    return None;
+            // Try Django 6.0+ native CSP first (SECURE_CSP), then django-csp (CONTENT_SECURITY_POLICY)
+            let csp_directives: HashMap<String, Vec<String>> = match settings.getattr("SECURE_CSP") {
+                Ok(csp) if !csp.is_none() => {
+                    csp.extract().ok()?
                 }
-
-                // For django-csp 4.0+, the format is {"DIRECTIVES": {"directive": [sources]}}
-                // For Django 6.0+, the format is {"directive": [sources]}
-                let directives_dict = if let Ok(directives) = csp_dict.get_item("DIRECTIVES") {
-                    // django-csp format
+                _ => {
+                    // Try django-csp format: {"DIRECTIVES": {...}}
+                    let content_csp = settings.getattr("CONTENT_SECURITY_POLICY").ok()?;
+                    if content_csp.is_none() {
+                        return None;
+                    }
+                    let directives = content_csp.get_item("DIRECTIVES").ok()?;
                     if directives.is_none() {
                         return None;
                     }
-                    directives
-                } else {
-                    // Django native format - dict is already the directives
-                    csp_dict
-                };
-
-                // Build CSP header string from directives
-                let mut csp_parts: Vec<String> = Vec::new();
-
-                if let Ok(items) = directives_dict.call_method0("items") {
-                    if let Ok(iter) = items.iter() {
-                        for item_result in iter {
-                            if let Ok(item) = item_result {
-                                if let Ok((key, value)) = item.extract::<(String, Vec<String>)>() {
-                                    // Skip nonce-related directives for static files (can't inject nonces)
-                                    // Filter out CSP.NONCE sentinel values
-                                    let filtered_sources: Vec<String> = value
-                                        .into_iter()
-                                        .filter(|s| !s.contains("CSP_NONCE_SENTINEL"))
-                                        .collect();
-
-                                    if !filtered_sources.is_empty() {
-                                        csp_parts.push(format!("{} {}", key, filtered_sources.join(" ")));
-                                    } else if key == "upgrade-insecure-requests" || key == "block-all-mixed-content" {
-                                        // Boolean directives (no sources needed)
-                                        csp_parts.push(key);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    directives.extract().ok()?
                 }
+            };
 
-                if csp_parts.is_empty() {
-                    None
-                } else {
-                    Some(csp_parts.join("; "))
+            // Build CSP header string from directives
+            let mut csp_parts: Vec<String> = Vec::new();
+
+            for (directive, sources) in csp_directives {
+                // Filter out CSP.NONCE sentinel values (can't inject nonces for static files)
+                let filtered_sources: Vec<String> = sources
+                    .into_iter()
+                    .filter(|s| !s.contains("CSP_NONCE_SENTINEL"))
+                    .collect();
+
+                if !filtered_sources.is_empty() {
+                    csp_parts.push(format!("{} {}", directive, filtered_sources.join(" ")));
+                } else if directive == "upgrade-insecure-requests" || directive == "block-all-mixed-content" {
+                    // Boolean directives (no sources needed)
+                    csp_parts.push(directive);
                 }
-            })
+            }
+
+            if csp_parts.is_empty() {
+                None
+            } else {
+                Some(csp_parts.join("; "))
+            }
         })();
 
         (debug, max_header_size, max_payload_size, cors_data, static_data, csp_header)
@@ -452,23 +441,11 @@ pub fn start_server_async(
 
         if valid_dirs.is_empty() {
             eprintln!(
-                "[django-bolt] Static files: No valid directories found for {}",
+                "[django-bolt] Warning: Static files: No valid directories found for {}",
                 url_prefix
             );
             None
         } else {
-            eprintln!(
-                "[django-bolt] Static files: serving {} from {} director{}",
-                url_prefix,
-                valid_dirs.len(),
-                if valid_dirs.len() == 1 { "y" } else { "ies" }
-            );
-            for dir in &valid_dirs {
-                eprintln!("[django-bolt]   - {}", dir);
-            }
-            if let Some(ref csp) = csp_header {
-                eprintln!("[django-bolt] Static files CSP: {}", csp);
-            }
             Some(StaticFilesConfig {
                 url_prefix,
                 directories: valid_dirs,

@@ -12,7 +12,7 @@
 //! 2. Django's staticfiles finders (for app static files like admin)
 
 use actix_files::NamedFile;
-use actix_web::{web, HttpRequest};
+use actix_web::{http::header, web, HttpRequest, HttpResponse};
 use pyo3::prelude::*;
 use std::path::{Path, PathBuf};
 
@@ -67,44 +67,58 @@ fn find_with_django_finders(relative_path: &str) -> Option<PathBuf> {
 /// - Conditional request handling (304 Not Modified)
 /// - Range request support
 /// - Content-Type detection
+/// - CSP headers from Django settings (pre-built at server startup)
 pub async fn handle_static_file(
-    _req: HttpRequest,
+    req: HttpRequest,
     path: web::Path<String>,
     directories: web::Data<Vec<String>>,
-) -> actix_web::Result<NamedFile> {
+    csp_header: web::Data<Option<String>>,
+) -> actix_web::Result<HttpResponse> {
+    // Strip leading slash if present (route captures include it)
     let relative_path = path.into_inner();
+    let relative_path = relative_path.trim_start_matches('/');
 
     // Security check
-    if relative_path.contains("..") || relative_path.starts_with('/') {
+    if relative_path.contains("..") {
         return Err(actix_web::error::ErrorBadRequest("Invalid path"));
     }
 
-    // First, try to find in configured directories (fast path)
-    if let Some(file_path) = find_in_directories(&relative_path, directories.as_ref()) {
-        return NamedFile::open_async(&file_path).await.map_err(|e| {
-            eprintln!(
-                "[django-bolt] Failed to open static file {:?}: {}",
-                file_path, e
-            );
-            actix_web::error::ErrorNotFound("File not found")
-        });
+    // Try to find the file (fast path first, then Django finders)
+    let file_path = find_in_directories(&relative_path, directories.as_ref())
+        .or_else(|| find_with_django_finders(&relative_path));
+
+    let file_path = match file_path {
+        Some(p) => p,
+        None => {
+            return Err(actix_web::error::ErrorNotFound(format!(
+                "Static file not found: {}",
+                relative_path
+            )));
+        }
+    };
+
+    // Open the file using NamedFile for proper HTTP semantics
+    // Use sync reads for files under 256KB (faster for typical static assets)
+    // See: https://github.com/actix/actix-web/pull/3706
+    let named_file = NamedFile::open_async(&file_path)
+        .await
+        .map_err(|_| actix_web::error::ErrorNotFound("File not found"))?
+        .read_mode_threshold(256 * 1024); // 256KB threshold for sync reads
+
+    // Convert NamedFile to HttpResponse and add CSP header if configured
+    let mut response = named_file.into_response(&req);
+
+    // Apply CSP header from Django settings (pre-built at server startup)
+    if let Some(ref csp) = csp_header.as_ref() {
+        response.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            header::HeaderValue::from_str(csp).unwrap_or_else(|_| {
+                header::HeaderValue::from_static("default-src 'self'")
+            }),
+        );
     }
 
-    // Fall back to Django's staticfiles finders (for app static files like admin)
-    if let Some(file_path) = find_with_django_finders(&relative_path) {
-        return NamedFile::open_async(&file_path).await.map_err(|e| {
-            eprintln!(
-                "[django-bolt] Failed to open static file {:?}: {}",
-                file_path, e
-            );
-            actix_web::error::ErrorNotFound("File not found")
-        });
-    }
-
-    Err(actix_web::error::ErrorNotFound(format!(
-        "Static file not found: {}",
-        relative_path
-    )))
+    Ok(response)
 }
 
 #[cfg(test)]

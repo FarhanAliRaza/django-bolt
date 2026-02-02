@@ -38,7 +38,7 @@ def api():
         )
         django.setup()
 
-    api = BoltAPI(middleware_config={"cors": {"origins": ["http://localhost:3000"], "credentials": True}})
+    api = BoltAPI()
 
     @api.get("/")
     async def root():

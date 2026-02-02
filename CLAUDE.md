@@ -454,7 +454,7 @@ uv run --with pytest pytest python/tests -s -vv
 
 - **Async and sync handler support**: The framework must handle both `async def` and `def` handlers, dispatching them correctly to Actix Web's runtime. Check `src/handler.rs` for implementation.
 - **Python-Rust bridge (PyO3)**: Handler execution crosses the GIL boundary. Minimize Python work in Rust hot paths. See `src/handler.rs` for GIL management patterns.
-- **Middleware compilation**: Python `middleware_config` dicts must be converted to Rust metadata structs at server startup. Implementation in `python/django_bolt/middleware/compiler.py` and `src/metadata.rs`.
+- **Middleware compilation**: Middleware decorators on handlers are converted to Rust metadata structs at server startup. Implementation in `python/django_bolt/middleware/compiler.py` and `src/metadata.rs`.
 - **Route autodiscovery**: Runs once at startup. No hot-reload in production (only in `--dev` mode). See `python/django_bolt/management/commands/runbolt.py`.
 - **Multi-process isolation**: Each process has independent Python interpreter and Django imports. State sharing must happen via Rust shared state (`src/state.rs`) or external mechanisms.
 

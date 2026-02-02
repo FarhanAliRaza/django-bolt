@@ -150,6 +150,20 @@ Override per-backend:
 JWTAuthentication(secret="custom-jwt-secret")
 ```
 
+### BOLT_AUTHENTICATION_CLASSES
+
+Default authentication backends applied to all endpoints.
+
+**Default:** `[]` (no authentication)
+
+### BOLT_DEFAULT_PERMISSION_CLASSES
+
+Default permission guards applied to all endpoints.
+
+**Default:** `[AllowAny()]` (all endpoints publicly accessible)
+
+See [Global authentication](../topics/authentication.md#global-authentication) for usage and examples.
+
 ## Logging settings
 
 Django-Bolt integrates with Django's logging system.
@@ -278,3 +292,5 @@ api = BoltAPI(
 | `BOLT_MEMORY_SPOOL_THRESHOLD` | `int` | `1048576` | Memory threshold before disk spooling (bytes) |
 | `BOLT_ALLOWED_FILE_PATHS` | `list[str]` | `None` | File serving whitelist |
 | `BOLT_EMIT_SIGNALS` | `bool` | `False` | Enable Django request signals |
+| `BOLT_AUTHENTICATION_CLASSES` | `list` | `[]` | Default authentication backends |
+| `BOLT_DEFAULT_PERMISSION_CLASSES` | `list` | `[AllowAny()]` | Default permission guards |

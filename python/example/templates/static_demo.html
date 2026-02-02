@@ -1,0 +1,150 @@
+{% load static %}
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="{% static 'admin/css/base.css' %}">
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        max-width: 900px;
+        margin: 40px auto;
+        padding: 20px;
+        background: #f5f5f5;
+      }
+      .container {
+        background: white;
+        padding: 24px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      }
+      h1 {
+        color: #333;
+        border-bottom: 2px solid #417690;
+        padding-bottom: 12px;
+      }
+      .static-example {
+        background: #f9f9f9;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 16px;
+        margin: 16px 0;
+      }
+      .static-example h3 {
+        margin-top: 0;
+        color: #417690;
+      }
+      code {
+        background: #e8e8e8;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 0.9em;
+      }
+      .file-list {
+        list-style: none;
+        padding: 0;
+      }
+      .file-list li {
+        padding: 8px 12px;
+        margin: 4px 0;
+        background: #fff;
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+      }
+      .file-list a {
+        color: #417690;
+        text-decoration: none;
+      }
+      .file-list a:hover {
+        text-decoration: underline;
+      }
+      .info-box {
+        background: #e3f2fd;
+        border-left: 4px solid #2196f3;
+        padding: 12px 16px;
+        margin: 16px 0;
+        border-radius: 0 4px 4px 0;
+      }
+      img.static-img {
+        max-width: 100px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        margin: 8px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>{{ title }}</h1>
+
+      <div class="info-box">
+        <strong>How it works:</strong> Static files are served directly by Actix (Rust)
+        for maximum performance. Django's <code>{% templatetag openblock %} static {% templatetag closeblock %}</code>
+        tag generates the correct URLs.
+      </div>
+
+      <div class="static-example">
+        <h3>Django Admin Static Files</h3>
+        <p>These files are served from Django's contrib.admin package:</p>
+        <ul class="file-list">
+          <li>
+            <a href="{% static 'admin/css/base.css' %}" target="_blank">
+              {% static 'admin/css/base.css' %}
+            </a>
+            <br><small>Admin base stylesheet (loaded in this page's &lt;head&gt;)</small>
+          </li>
+          <li>
+            <a href="{% static 'admin/css/forms.css' %}" target="_blank">
+              {% static 'admin/css/forms.css' %}
+            </a>
+            <br><small>Admin form styles</small>
+          </li>
+          <li>
+            <a href="{% static 'admin/js/core.js' %}" target="_blank">
+              {% static 'admin/js/core.js' %}
+            </a>
+            <br><small>Admin core JavaScript</small>
+          </li>
+          <li>
+            <a href="{% static 'admin/img/icon-yes.svg' %}" target="_blank">
+              {% static 'admin/img/icon-yes.svg' %}
+            </a>
+            <br><small>Admin icon (SVG)</small>
+          </li>
+        </ul>
+      </div>
+
+      <div class="static-example">
+        <h3>Image Preview</h3>
+        <p>Static images can be embedded directly:</p>
+        <img class="static-img" src="{% static 'admin/img/icon-addlink.svg' %}" alt="Add link icon">
+        <img class="static-img" src="{% static 'admin/img/icon-changelink.svg' %}" alt="Change link icon">
+        <img class="static-img" src="{% static 'admin/img/icon-deletelink.svg' %}" alt="Delete link icon">
+      </div>
+
+      <div class="static-example">
+        <h3>Configuration</h3>
+        <p>Current static settings:</p>
+        <ul>
+          <li><strong>STATIC_URL:</strong> <code>{{ static_url }}</code></li>
+          <li><strong>STATIC_ROOT:</strong> <code>{{ static_root|default:"Not configured" }}</code></li>
+        </ul>
+      </div>
+
+      <div class="static-example">
+        <h3>Performance Note</h3>
+        <p>
+          When running with <code>python manage.py runbolt</code>, static files are served
+          directly by Actix Web (Rust) without invoking Python handlers. This provides:
+        </p>
+        <ul>
+          <li>Automatic ETag and Last-Modified headers</li>
+          <li>304 Not Modified responses for cached files</li>
+          <li>Range request support for large files</li>
+          <li>Proper MIME type detection</li>
+          <li>Memory-efficient streaming</li>
+        </ul>
+      </div>
+    </div>
+  </body>
+</html>

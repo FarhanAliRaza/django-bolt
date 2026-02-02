@@ -141,7 +141,7 @@ pub fn start_server_async(
     });
 
     // Get configuration from Django settings ONCE at startup (not per-request)
-    let (debug, max_header_size, max_payload_size, cors_config_data, static_files_data) = Python::attach(|py| {
+    let (debug, max_header_size, max_payload_size, cors_config_data, static_files_data, csp_header) = Python::attach(|py| {
         let debug = (|| -> PyResult<bool> {
             let django_conf = py.import("django.conf")?;
             let settings = django_conf.getattr("settings")?;
@@ -257,7 +257,74 @@ pub fn start_server_async(
             Ok(Some((url_prefix, directories)))
         })().unwrap_or(None);
 
-        (debug, max_header_size, max_payload_size, cors_data, static_data)
+        // Read CSP configuration from Django settings
+        // Supports both Django 6.0+ native CSP (SECURE_CSP) and django-csp (CONTENT_SECURITY_POLICY)
+        // CSP header is built once at startup for static files (no nonce support for static files)
+        let csp_header = (|| -> Option<String> {
+            Python::attach(|py| {
+                let django_conf = py.import("django.conf").ok()?;
+                let settings = django_conf.getattr("settings").ok()?;
+
+                // Try Django 6.0+ native CSP first (SECURE_CSP), then django-csp (CONTENT_SECURITY_POLICY)
+                let csp_dict = settings
+                    .getattr("SECURE_CSP")
+                    .or_else(|_| settings.getattr("CONTENT_SECURITY_POLICY"))
+                    .ok()?;
+
+                // Skip if None or not a dict
+                if csp_dict.is_none() {
+                    return None;
+                }
+
+                // For django-csp 4.0+, the format is {"DIRECTIVES": {"directive": [sources]}}
+                // For Django 6.0+, the format is {"directive": [sources]}
+                let directives_dict = if let Ok(directives) = csp_dict.get_item("DIRECTIVES") {
+                    // django-csp format
+                    if directives.is_none() {
+                        return None;
+                    }
+                    directives
+                } else {
+                    // Django native format - dict is already the directives
+                    csp_dict
+                };
+
+                // Build CSP header string from directives
+                let mut csp_parts: Vec<String> = Vec::new();
+
+                if let Ok(items) = directives_dict.call_method0("items") {
+                    if let Ok(iter) = items.iter() {
+                        for item_result in iter {
+                            if let Ok(item) = item_result {
+                                if let Ok((key, value)) = item.extract::<(String, Vec<String>)>() {
+                                    // Skip nonce-related directives for static files (can't inject nonces)
+                                    // Filter out CSP.NONCE sentinel values
+                                    let filtered_sources: Vec<String> = value
+                                        .into_iter()
+                                        .filter(|s| !s.contains("CSP_NONCE_SENTINEL"))
+                                        .collect();
+
+                                    if !filtered_sources.is_empty() {
+                                        csp_parts.push(format!("{} {}", key, filtered_sources.join(" ")));
+                                    } else if key == "upgrade-insecure-requests" || key == "block-all-mixed-content" {
+                                        // Boolean directives (no sources needed)
+                                        csp_parts.push(key);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if csp_parts.is_empty() {
+                    None
+                } else {
+                    Some(csp_parts.join("; "))
+                }
+            })
+        })();
+
+        (debug, max_header_size, max_payload_size, cors_data, static_data, csp_header)
     });
 
     // Unpack CORS configuration data
@@ -399,9 +466,13 @@ pub fn start_server_async(
             for dir in &valid_dirs {
                 eprintln!("[django-bolt]   - {}", dir);
             }
+            if let Some(ref csp) = csp_header {
+                eprintln!("[django-bolt] Static files CSP: {}", csp);
+            }
             Some(StaticFilesConfig {
                 url_prefix,
                 directories: valid_dirs,
+                csp_header: csp_header.clone(),
             })
         }
     });
@@ -479,11 +550,14 @@ pub fn start_server_async(
                         // Uses a custom handler that:
                         // 1. Searches configured directories in order (fast path)
                         // 2. Falls back to Django's staticfiles finders (for app static files like admin)
+                        // 3. Applies CSP headers from Django settings (if configured)
                         if let Some(ref config) = app_state.static_files_config {
                             let static_dirs = web::Data::new(config.directories.clone());
+                            let static_csp = web::Data::new(config.csp_header.clone());
                             let static_route = format!("{}{{path:.*}}", config.url_prefix);
                             app = app
                                 .app_data(static_dirs)
+                                .app_data(static_csp)
                                 .route(&static_route, web::get().to(handle_static_file));
                         }
 

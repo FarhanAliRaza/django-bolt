@@ -437,3 +437,37 @@ class CBVAsyncORMView(APIView):
             return {"status": "ok", "user_id": user.id}
 
         return {"status": "ok", "user": None}
+
+
+# -----------------------------------------------------------------------------
+# Static Files Demo - Demonstrates Django {% static %} tag with Actix serving
+# -----------------------------------------------------------------------------
+
+
+@middleware_api.get("/static-demo")
+async def static_files_demo(request: Request):
+    """
+    Demonstrates static file serving with Django templates.
+
+    This endpoint renders a template that uses Django's {% static %} tag.
+    The actual static files are served directly by Actix (Rust) for
+    maximum performance, while Django handles URL generation.
+
+    Features demonstrated:
+    - Django's {% static %} template tag generates correct URLs
+    - Actix serves files with proper caching headers (ETag, Last-Modified)
+    - Admin static files (CSS, JS, images) served without Python overhead
+
+    Test in browser: http://localhost:8000/middleware/static-demo
+    """
+    from django.conf import settings
+
+    return render(
+        request,
+        "static_demo.html",
+        {
+            "title": "Static Files Demo",
+            "static_url": getattr(settings, "STATIC_URL", "/static/"),
+            "static_root": getattr(settings, "STATIC_ROOT", None),
+        },
+    )

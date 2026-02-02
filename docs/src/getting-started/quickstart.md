@@ -621,13 +621,17 @@ async def get_mission(mission_id: int):
     ...
 ```
 
-You can also configure API-level settings:
+You can also configure API-level settings via `OpenAPIConfig`:
 
 ```python
+from django_bolt.openapi import OpenAPIConfig
+
 api = BoltAPI(
-    title="Space Mission Tracker",
-    description="NASA-style mission control API",
-    version="1.0.0",
+    openapi_config=OpenAPIConfig(
+        title="Space Mission Tracker",
+        description="NASA-style mission control API",
+        version="1.0.0",
+    )
 )
 ```
 

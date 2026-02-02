@@ -24,9 +24,11 @@ BoltAPI(
     trailing_slash="strip",    # Trailing slash handling: "strip", "append", or "keep"
     openapi_config=None,       # OpenAPIConfig for documentation
     compression=None,          # CompressionConfig for response compression
-    default_auth=None,         # Default authentication backends
-    default_guards=None,       # Default permission guards
     middleware=None,           # List of middleware classes
+    middleware_config=None,    # Dict-based middleware configuration
+    django_middleware=None,    # Django middleware configuration
+    enable_logging=True,       # Enable request/response logging
+    logging_config=None,       # Custom logging configuration
 )
 ```
 
@@ -38,9 +40,11 @@ BoltAPI(
 | `trailing_slash` | `str` | `"strip"` | How to handle trailing slashes in route paths |
 | `openapi_config` | `OpenAPIConfig` | `None` | Configuration for OpenAPI documentation |
 | `compression` | `CompressionConfig` | `None` | Response compression settings |
-| `default_auth` | `list` | `None` | Default authentication backends for all routes |
-| `default_guards` | `list` | `None` | Default permission guards for all routes |
 | `middleware` | `list` | `None` | Middleware classes to apply |
+| `middleware_config` | `dict` | `None` | Dict-based middleware configuration |
+| `django_middleware` | `bool`, `list`, or `dict` | `None` | Django middleware configuration |
+| `enable_logging` | `bool` | `True` | Enable request/response logging |
+| `logging_config` | `LoggingConfig` | `None` | Custom logging configuration |
 
 #### Trailing slash modes
 

@@ -247,6 +247,25 @@ api = BoltAPI(
 )
 ```
 
+## Content Security Policy (CSP) settings
+
+Django-Bolt applies CSP headers to static files served by the Rust server using Django 6.0+'s native [`SECURE_CSP`](https://docs.djangoproject.com/en/6.0/ref/csp/) setting.
+
+### SECURE_CSP
+
+```python
+from django.utils.csp import CSP
+
+SECURE_CSP = {
+    "default-src": [CSP.SELF],
+    "script-src": [CSP.SELF],
+    "style-src": [CSP.SELF, CSP.UNSAFE_INLINE],
+    "img-src": [CSP.SELF, "data:"],
+}
+```
+
+See [Static Files - Content Security Policy](../topics/static-files.md#content-security-policy-csp) for full documentation.
+
 ## Compression settings
 
 Configure via `CompressionConfig`:
@@ -278,3 +297,4 @@ api = BoltAPI(
 | `BOLT_MEMORY_SPOOL_THRESHOLD` | `int` | `1048576` | Memory threshold before disk spooling (bytes) |
 | `BOLT_ALLOWED_FILE_PATHS` | `list[str]` | `None` | File serving whitelist |
 | `BOLT_EMIT_SIGNALS` | `bool` | `False` | Enable Django request signals |
+| `SECURE_CSP` | `dict` | `None` | CSP directives for static files ([Django 6.0+](https://docs.djangoproject.com/en/6.0/ref/csp/)) |

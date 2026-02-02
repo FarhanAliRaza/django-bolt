@@ -260,33 +260,20 @@ pub fn start_server_async(
             Ok(Some((url_prefix, directories)))
         })().unwrap_or(None);
 
-        // Read CSP configuration from Django settings
-        // Supports both Django 6.0+ native CSP (SECURE_CSP) and django-csp (CONTENT_SECURITY_POLICY)
+        // Read CSP configuration from Django settings (Django 6.0+ SECURE_CSP)
         // CSP header is built once at startup for static files (no nonce support for static files)
+        // See: https://docs.djangoproject.com/en/6.0/ref/csp/
         let csp_header: Option<String> = (|| -> Option<String> {
             use std::collections::HashMap;
 
             let django_conf = py.import("django.conf").ok()?;
             let settings = django_conf.getattr("settings").ok()?;
 
-            // Try Django 6.0+ native CSP first (SECURE_CSP), then django-csp (CONTENT_SECURITY_POLICY)
-            let csp_directives: HashMap<String, Vec<String>> = match settings.getattr("SECURE_CSP") {
-                Ok(csp) if !csp.is_none() => {
-                    csp.extract().ok()?
-                }
-                _ => {
-                    // Try django-csp format: {"DIRECTIVES": {...}}
-                    let content_csp = settings.getattr("CONTENT_SECURITY_POLICY").ok()?;
-                    if content_csp.is_none() {
-                        return None;
-                    }
-                    let directives = content_csp.get_item("DIRECTIVES").ok()?;
-                    if directives.is_none() {
-                        return None;
-                    }
-                    directives.extract().ok()?
-                }
-            };
+            let csp = settings.getattr("SECURE_CSP").ok()?;
+            if csp.is_none() {
+                return None;
+            }
+            let csp_directives: HashMap<String, Vec<String>> = csp.extract().ok()?;
 
             // Build CSP header string from directives
             let mut csp_parts: Vec<String> = Vec::new();

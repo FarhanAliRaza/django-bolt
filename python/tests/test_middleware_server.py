@@ -277,3 +277,49 @@ def test_streaming_cors_headers_applied(http_client):
     # CORS headers should be applied via middleware
     assert "access-control-allow-origin" in response.headers
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_streaming_with_custom_middleware_class():
+    """Test that StreamingResponse works when custom middleware CLASS is set on BoltAPI instance.
+
+    This tests the fix for: TypeError: cannot unpack non-iterable StreamingResponse object
+    at MiddlewareResponse.from_tuple()
+
+    The key is that middleware must be passed as a CLASS (not instance), so that
+    the middleware chain can instantiate it with get_response.
+    """
+    import asyncio
+
+    from django_bolt.middleware import Middleware
+
+    class CustomTestMiddleware(Middleware):
+        """Custom test middleware that just passes through."""
+
+        async def process_request(self, request):
+            response = await self.get_response(request)
+            # Optionally modify response headers
+            response.headers["X-Custom-Middleware"] = "applied"
+            return response
+
+    api = BoltAPI(
+        middleware=[CustomTestMiddleware],  # Pass CLASS, not instance
+    )
+
+    @api.get("/stream")
+    async def stream_endpoint():
+        async def generate():
+            for i in range(3):
+                await asyncio.sleep(0.001)
+                yield f"data: {i}\n"
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
+
+    with TestClient(api, use_http_layer=True) as client:
+        response = client.get("/stream")
+
+        assert response.status_code == 200
+        assert response.headers.get("content-type", "").startswith("text/event-stream")
+        # Verify custom middleware header was applied
+        assert response.headers.get("x-custom-middleware") == "applied"
+        # Verify streaming content is correct
+        assert response.content == b"data: 0\ndata: 1\ndata: 2\n"

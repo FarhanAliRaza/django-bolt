@@ -99,7 +99,6 @@ class BoltAPI:
         prefix: str = "",
         trailing_slash: str = "strip",
         middleware: list[Any] | None = None,
-        middleware_config: dict[str, Any] | None = None,
         django_middleware: bool | list[str] | dict[str, Any] | None = None,
         enable_logging: bool = True,
         logging_config: Any | None = None,
@@ -116,7 +115,6 @@ class BoltAPI:
                 - "append": Add trailing slashes (Django convention)
                 - "keep": No normalization, keep as registered
             middleware: List of Bolt middleware instances
-            middleware_config: Dict-based middleware configuration (legacy)
             django_middleware: Django middleware configuration. Can be:
                 - True: Use all middleware from settings.MIDDLEWARE (excluding CSRF, etc.)
                 - False/None: Don't use Django middleware
@@ -150,8 +148,6 @@ class BoltAPI:
         # Add custom middleware
         if middleware:
             self.middleware.extend(middleware)
-
-        self.middleware_config = middleware_config or {}
 
         # Logging configuration (opt-in, setup happens at server startup)
         self.enable_logging = enable_logging
@@ -505,7 +501,6 @@ class BoltAPI:
                 method="WEBSOCKET",
                 path=full_path,
                 global_middleware=self.middleware,
-                global_middleware_config=self.middleware_config or {},
                 guards=guards,
                 auth=auth,
             )
@@ -966,7 +961,7 @@ class BoltAPI:
 
             # Compile middleware metadata for this handler (including guards and auth)
             middleware_meta = compile_middleware_meta(
-                fn, method, full_path, self.middleware, self.middleware_config, guards=guards, auth=auth
+                fn, method, full_path, self.middleware, guards=guards, auth=auth
             )
 
             # Add optimization flags to middleware metadata

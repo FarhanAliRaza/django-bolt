@@ -192,23 +192,19 @@ def create_token_with_permissions(user):
 | `is_superuser` | Yes | `IsAdminUser` |
 | `permissions` | No (use `extra_claims`) | `HasPermission`, `HasAnyPermission`, `HasAllPermissions` |
 
-## Default guards
+## Per-route authentication and guards
 
-Set default guards for all endpoints:
+Authentication and guards are specified per-route using the `auth` and `guards` parameters:
 
 ```python
-api = BoltAPI(
-    default_auth=[JWTAuthentication()],
-    default_guards=[IsAuthenticated()]
-)
+from django_bolt.auth import JWTAuthentication, IsAuthenticated, AllowAny
 
-# All endpoints require authentication by default
-
-@api.get("/data")
+# Protected endpoint
+@api.get("/data", auth=[JWTAuthentication()], guards=[IsAuthenticated()])
 async def get_data():
     return {"protected": True}
 
-# Override for public endpoints
+# Public endpoint
 @api.get("/health", guards=[AllowAny()])
 async def health():
     return {"status": "ok"}

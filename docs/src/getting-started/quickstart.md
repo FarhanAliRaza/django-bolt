@@ -650,6 +650,7 @@ from msgspec import Meta
 
 from django_bolt import BoltAPI, Request
 from django_bolt.exceptions import HTTPException, NotFound
+from django_bolt.openapi import OpenAPIConfig
 from django_bolt.param_functions import File, Form, Header, Query
 from django_bolt.responses import HTML, PlainText, Redirect
 from django_bolt.serializers import Serializer, field_validator
@@ -658,9 +659,11 @@ from django_bolt.shortcuts import render
 from missions.models import Astronaut, Mission
 
 api = BoltAPI(
-    title="Space Mission Tracker",
-    description="NASA-style mission control API",
-    version="1.0.0",
+    openapi_config=OpenAPIConfig(
+        title="Space Mission Tracker",
+        description="NASA-style mission control API",
+        version="1.0.0",
+    )
 )
 
 

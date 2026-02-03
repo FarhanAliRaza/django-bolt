@@ -122,7 +122,8 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # Media files (User uploads)
 MEDIA_URL = "/media/"
@@ -219,6 +220,14 @@ MIDDLEWARE += [
     "django.middleware.csp.ContentSecurityPolicyMiddleware",
 ]
 
+# Content Security Policy for static files (Django 6.0+ format)
+# This is read at server startup and applied to all static file responses
+SECURE_CSP = {
+    "default-src": ["'self'"],
+    "script-src": ["'self'"],
+    "style-src": ["'self'", "'unsafe-inline'"],
+    "img-src": ["'self'", "data:"],
+}
 
 BOLT_MAX_UPLOAD_SIZE = 30 * 1024 * 1024  # 10 mb
 

@@ -252,6 +252,63 @@ class TestClient(httpx.Client):
             # Django not configured or settings not available
             return None
 
+    @staticmethod
+    def _read_static_files_settings_from_django() -> dict | None:
+        """Read static files settings from Django settings.
+
+        Returns:
+            Dict with static files config, or None if not configured.
+            Keys: url_prefix, directories, csp_header
+        """
+        try:
+            if not hasattr(settings, "STATIC_URL") or not settings.STATIC_URL:
+                return None
+
+            url_prefix = settings.STATIC_URL.rstrip("/")
+            if not url_prefix:
+                return None
+
+            directories = []
+
+            # Get STATIC_ROOT
+            if hasattr(settings, "STATIC_ROOT") and settings.STATIC_ROOT:
+                static_root = str(settings.STATIC_ROOT)
+                if static_root:
+                    directories.append(static_root)
+
+            # Get STATICFILES_DIRS
+            if hasattr(settings, "STATICFILES_DIRS"):
+                for d in settings.STATICFILES_DIRS:
+                    dir_str = str(d)
+                    if dir_str and dir_str not in directories:
+                        directories.append(dir_str)
+
+            if not directories:
+                return None
+
+            # Get CSP header if configured
+            csp_header = None
+            if hasattr(settings, "SECURE_CSP") and settings.SECURE_CSP:
+                # Build CSP header string from directives
+                csp_parts = []
+                for directive, sources in settings.SECURE_CSP.items():
+                    if sources:
+                        filtered = [s for s in sources if "CSP_NONCE_SENTINEL" not in s]
+                        if filtered:
+                            csp_parts.append(f"{directive} {' '.join(filtered)}")
+                    elif directive in ("upgrade-insecure-requests", "block-all-mixed-content"):
+                        csp_parts.append(directive)
+                if csp_parts:
+                    csp_header = "; ".join(csp_parts)
+
+            return {
+                "url_prefix": url_prefix,
+                "directories": directories,
+                "csp_header": csp_header,
+            }
+        except (ImportError, AttributeError):
+            return None
+
     def __init__(
         self,
         api: BoltAPI,
@@ -260,6 +317,7 @@ class TestClient(httpx.Client):
         cors_allowed_origins: list[str] | None = None,
         read_django_settings: bool = True,
         use_http_layer: bool = True,  # Ignored - kept for backward compatibility
+        static_files_config: dict | None = None,
         **kwargs: Any,
     ):
         """Initialize test client.
@@ -273,6 +331,9 @@ class TestClient(httpx.Client):
             read_django_settings: If True, read CORS settings from Django settings
                                  when cors_allowed_origins is None. Default True.
             use_http_layer: Ignored - all requests go through HTTP layer (Actix test utilities).
+            static_files_config: Static files configuration dict with keys:
+                                 url_prefix, directories, csp_header.
+                                 If None and read_django_settings=True, reads from Django settings.
             **kwargs: Additional arguments passed to httpx.Client
         """
         # use_http_layer is ignored - we always use the HTTP layer now
@@ -288,10 +349,16 @@ class TestClient(httpx.Client):
             # Read full CORS config from Django settings (same as production server)
             cors_config = self._read_cors_settings_from_django()
 
+        # Build static files config
+        static_config = static_files_config
+        if static_config is None and read_django_settings:
+            static_config = self._read_static_files_settings_from_django()
+
         # Create test app instance with full CORS config
         # Pass trailing_slash setting to configure NormalizePath middleware
         trailing_slash = getattr(api, "trailing_slash", "strip")
-        self.app_id = _core.create_test_app(api._dispatch, False, cors_config, trailing_slash)
+        debug = getattr(settings, "DEBUG", False) if settings else False
+        self.app_id = _core.create_test_app(api._dispatch, debug, cors_config, trailing_slash, static_config)
 
         # Register routes
         rust_routes = [(method, path, handler_id, handler) for method, path, handler_id, handler in api._routes]
@@ -481,6 +548,7 @@ class AsyncTestClient(httpx.AsyncClient):
         raise_server_exceptions: bool = True,
         cors_allowed_origins: list[str] | None = None,
         read_django_settings: bool = True,
+        static_files_config: dict | None = None,
         **kwargs: Any,
     ):
         """Initialize async test client.
@@ -491,6 +559,9 @@ class AsyncTestClient(httpx.AsyncClient):
             raise_server_exceptions: If True, raise exceptions from handlers
             cors_allowed_origins: Global CORS allowed origins for testing.
             read_django_settings: If True, read CORS settings from Django settings.
+            static_files_config: Static files configuration dict with keys:
+                                 url_prefix, directories, csp_header.
+                                 If None and read_django_settings=True, reads from Django settings.
             **kwargs: Additional arguments passed to httpx.AsyncClient
         """
         # Build CORS config dict for Rust
@@ -501,9 +572,15 @@ class AsyncTestClient(httpx.AsyncClient):
         elif read_django_settings:
             cors_config = TestClient._read_cors_settings_from_django()
 
+        # Build static files config
+        static_config = static_files_config
+        if static_config is None and read_django_settings:
+            static_config = TestClient._read_static_files_settings_from_django()
+
         # Create test app instance with trailing_slash setting
         trailing_slash = getattr(api, "trailing_slash", "strip")
-        self.app_id = _core.create_test_app(api._dispatch, False, cors_config, trailing_slash)
+        debug = getattr(settings, "DEBUG", False) if settings else False
+        self.app_id = _core.create_test_app(api._dispatch, debug, cors_config, trailing_slash, static_config)
 
         # Register routes
         rust_routes = [(method, path, handler_id, handler) for method, path, handler_id, handler in api._routes]

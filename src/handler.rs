@@ -37,6 +37,17 @@ static DECIMAL_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static DATETIME_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static DATE_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static TIME_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static STREAMING_RESPONSE_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+
+fn get_streaming_response_class(py: Python<'_>) -> &Py<PyAny> {
+    STREAMING_RESPONSE_CLASS.get_or_init(py, || {
+        py.import("django_bolt.responses")
+            .unwrap()
+            .getattr("StreamingResponse")
+            .unwrap()
+            .unbind()
+    })
+}
 
 fn get_uuid_class(py: Python<'_>) -> &Py<PyAny> {
     UUID_CLASS.get_or_init(py, || {
@@ -864,9 +875,8 @@ pub async fn handle_request(
                     }
                     // Extract body (element 2) and check if it's a StreamingResponse
                     let body_obj = tuple.get_item(2).ok()?;
-                    let m = py.import(pyo3::intern!(py, "django_bolt.responses")).ok()?;
-                    let streaming_cls = m.getattr(pyo3::intern!(py, "StreamingResponse")).ok()?;
-                    if !body_obj.is_instance(&streaming_cls).unwrap_or(false) {
+                    let streaming_cls = get_streaming_response_class(py);
+                    if !body_obj.is_instance(streaming_cls.bind(py)).unwrap_or(false) {
                         return None;
                     }
                     // It's a tuple with StreamingResponse body - extract tuple headers and streaming data
@@ -956,13 +966,9 @@ pub async fn handle_request(
                 }
                 let streaming = Python::attach(|py| {
                     let obj = result_obj.bind(py);
-                    let is_streaming = (|| -> PyResult<bool> {
-                        let m = py.import("django_bolt.responses")?;
-                        // OPTIMIZATION: pyo3::intern!() caches Python string objects
-                        let cls = m.getattr(pyo3::intern!(py, "StreamingResponse"))?;
-                        obj.is_instance(&cls)
-                    })()
-                    .unwrap_or(false);
+                    // Use cached StreamingResponse class to avoid repeated imports
+                    let streaming_cls = get_streaming_response_class(py);
+                    let is_streaming = obj.is_instance(streaming_cls.bind(py)).unwrap_or(false);
                     // OPTIMIZATION: Use interned strings for attribute checks
                     if !is_streaming && !obj.hasattr(pyo3::intern!(py, "content")).unwrap_or(false)
                     {

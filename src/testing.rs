@@ -956,7 +956,130 @@ async fn handle_test_request_internal(
                 return builder.body(response_body);
             }
 
-            // Streaming response path
+            // Check for tuple with StreamingResponse body (middleware path)
+            // This handles the case where serialize_response returns (status, headers, StreamingResponse)
+            let streaming_tuple = Python::attach(|py| {
+                let obj = result_obj.bind(py);
+                let tuple = obj.cast::<PyTuple>().ok()?;
+                if tuple.len() != 3 {
+                    return None;
+                }
+                // Extract body (element 2) and check if it's a StreamingResponse
+                let body_obj = tuple.get_item(2).ok()?;
+                let m = py.import(pyo3::intern!(py, "django_bolt.responses")).ok()?;
+                let streaming_cls = m.getattr(pyo3::intern!(py, "StreamingResponse")).ok()?;
+                if !body_obj.is_instance(&streaming_cls).unwrap_or(false) {
+                    return None;
+                }
+                // Extract tuple headers (from middleware) and streaming data
+                let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
+                let tuple_headers: Vec<(String, String)> = tuple
+                    .get_item(1)
+                    .ok()?
+                    .extract::<Vec<(String, String)>>()
+                    .ok()?;
+                let media_type: String = body_obj
+                    .getattr(pyo3::intern!(py, "media_type"))
+                    .and_then(|v| v.extract())
+                    .unwrap_or_else(|_| "application/octet-stream".to_string());
+                let content_obj: Py<PyAny> = body_obj
+                    .getattr(pyo3::intern!(py, "content"))
+                    .ok()?
+                    .unbind();
+                let is_async_generator: bool = body_obj
+                    .getattr(pyo3::intern!(py, "is_async_generator"))
+                    .and_then(|v| v.extract())
+                    .unwrap_or(false);
+                Some((status_code, tuple_headers, media_type, content_obj, is_async_generator))
+            });
+            if let Some((status_code, headers, media_type, content_obj, is_async_generator)) =
+                streaming_tuple
+            {
+                let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+
+                // For tests, collect streaming content synchronously
+                let collected_body = Python::attach(|py| -> Vec<u8> {
+                    let mut chunks: Vec<u8> = Vec::new();
+                    let content = content_obj.bind(py);
+
+                    if is_async_generator {
+                        // For async generators, use asyncio to collect
+                        let asyncio = match py.import("asyncio") {
+                            Ok(m) => m,
+                            Err(_) => return chunks,
+                        };
+
+                        let locals = PyDict::new(py);
+                        let code = pyo3::ffi::c_str!(
+                            r#"
+async def _collect_async_gen(gen):
+    result = []
+    async for item in gen:
+        if isinstance(item, bytes):
+            result.append(item)
+        elif isinstance(item, bytearray):
+            result.append(bytes(item))
+        elif isinstance(item, memoryview):
+            result.append(bytes(item))
+        elif isinstance(item, str):
+            result.append(item.encode('utf-8'))
+        else:
+            result.append(str(item).encode('utf-8'))
+    return b''.join(result)
+"#
+                        );
+                        if py.run(code, None, Some(&locals)).is_ok() {
+                            if let Ok(Some(collect_fn)) = locals.get_item("_collect_async_gen") {
+                                if let Ok(coro) = collect_fn.call1((content,)) {
+                                    if let Ok(result) = asyncio.call_method1("run", (coro,)) {
+                                        if let Ok(bytes) = result.extract::<Vec<u8>>() {
+                                            chunks = bytes;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Sync generator - iterate directly
+                        if let Ok(iter) = content.try_iter() {
+                            for item in iter {
+                                if let Ok(item) = item {
+                                    if let Ok(bytes) = item.extract::<Vec<u8>>() {
+                                        chunks.extend(bytes);
+                                    } else if let Ok(s) = item.extract::<String>() {
+                                        chunks.extend(s.as_bytes());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    chunks
+                });
+
+                let mut builder = HttpResponse::build(status);
+                for (k, v) in headers {
+                    builder.append_header((k, v));
+                }
+
+                // Add SSE-specific headers for text/event-stream
+                if media_type == "text/event-stream" {
+                    builder.insert_header(("X-Accel-Buffering", "no"));
+                    builder.insert_header(("Cache-Control", "no-cache, no-store, must-revalidate"));
+                    builder.insert_header(("Pragma", "no-cache"));
+                    builder.insert_header(("Expires", "0"));
+                }
+
+                if skip_compression {
+                    builder.append_header(("Content-Encoding", "identity"));
+                }
+                if skip_cors {
+                    builder.append_header(("x-bolt-skip-cors", "true"));
+                }
+
+                return builder.body(collected_body);
+            }
+
+            // Streaming response path (direct StreamingResponse object)
             let streaming = Python::attach(|py| {
                 let obj = result_obj.bind(py);
                 let is_streaming = (|| -> PyResult<bool> {

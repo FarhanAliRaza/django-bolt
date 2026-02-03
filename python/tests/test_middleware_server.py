@@ -9,7 +9,7 @@ import jwt
 import pytest
 from django.conf import settings  # noqa: PLC0415
 
-from django_bolt import BoltAPI
+from django_bolt import BoltAPI, StreamingResponse
 from django_bolt.auth import APIKeyAuthentication, IsAuthenticated, JWTAuthentication
 from django_bolt.middleware import cors, rate_limit
 from django_bolt.testing import TestClient
@@ -78,6 +78,36 @@ def api():
             "has_context": context is not None,
             "context_keys": list(context.keys()) if context and hasattr(context, "keys") else [],
         }
+
+    # Streaming endpoint with middleware (rate_limit)
+    @api.get("/stream-with-rate-limit")
+    @rate_limit(rps=10, burst=20)
+    async def stream_with_rate_limit():
+        def gen():
+            for i in range(3):
+                yield f"chunk{i},"
+
+        return StreamingResponse(gen(), media_type="text/plain")
+
+    # Streaming endpoint with CORS middleware
+    @api.get("/stream-with-cors")
+    @cors(origins=["http://localhost:3000"], credentials=True)
+    async def stream_with_cors():
+        async def agen():
+            for i in range(3):
+                yield f"async-chunk{i},"
+
+        return StreamingResponse(agen(), media_type="text/plain")
+
+    # SSE streaming with middleware
+    @api.get("/sse-with-cors")
+    @cors(origins=["http://localhost:3000"])
+    async def sse_with_cors():
+        def gen():
+            yield "data: message1\n\n"
+            yield "data: message2\n\n"
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     return api
 
@@ -204,3 +234,46 @@ def test_context_availability(client):
     # Just verify the endpoint works and returns expected structure
     assert "has_context" in data
     assert "context_keys" in data
+
+
+def test_streaming_with_rate_limit(client):
+    """Test StreamingResponse with rate_limit middleware.
+
+    This tests the fix for: TypeError: cannot unpack non-iterable StreamingResponse object
+    at MiddlewareResponse.from_tuple()
+
+    Prior to the fix, StreamingResponse would cause a runtime error when middleware
+    was configured because serialize_response returned a StreamingResponse directly
+    instead of a tuple format that middleware could process.
+    """
+    response = client.get("/stream-with-rate-limit")
+    assert response.status_code == 200
+    assert response.headers.get("content-type", "").startswith("text/plain")
+    assert response.content == b"chunk0,chunk1,chunk2,"
+
+
+def test_streaming_with_cors(client):
+    """Test async StreamingResponse with CORS middleware"""
+    response = client.get("/stream-with-cors", headers={"Origin": "http://localhost:3000"})
+    assert response.status_code == 200
+    assert response.headers.get("content-type", "").startswith("text/plain")
+    assert response.content == b"async-chunk0,async-chunk1,async-chunk2,"
+
+
+def test_sse_with_cors(client):
+    """Test SSE StreamingResponse with CORS middleware"""
+    response = client.get("/sse-with-cors", headers={"Origin": "http://localhost:3000"})
+    assert response.status_code == 200
+    assert response.headers.get("content-type", "").startswith("text/event-stream")
+    # SSE headers should be present
+    assert response.headers.get("x-accel-buffering", "").lower() == "no"
+    assert response.content == b"data: message1\n\ndata: message2\n\n"
+
+
+def test_streaming_cors_headers_applied(http_client):
+    """Test that CORS headers are applied to streaming responses via HTTP layer"""
+    response = http_client.get("/stream-with-cors", headers={"Origin": "http://localhost:3000"})
+    assert response.status_code == 200
+    # CORS headers should be applied via middleware
+    assert "access-control-allow-origin" in response.headers
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"

@@ -194,9 +194,9 @@ class TestRenameErrorCollection:
 
         errors = exc_info.value.errors()
         assert len(errors) >= 1
-        # Error location should use the camelCase key
+        # Error location should use the camelCase key (body, ageYears)
         error_locs = [tuple(e["loc"]) for e in errors]
-        assert any("ageYears" in loc for loc in error_locs)
+        assert ("body", "ageYears") in error_locs
 
     def test_rename_error_collection_json(self):
         """Validation errors from JSON input reference renamed field names."""
@@ -210,8 +210,9 @@ class TestRenameErrorCollection:
 
         errors = exc_info.value.errors()
         assert len(errors) >= 1
+        # Error location should use the camelCase key (body, ageYears)
         error_locs = [tuple(e["loc"]) for e in errors]
-        assert any("ageYears" in loc for loc in error_locs)
+        assert ("body", "ageYears") in error_locs
 
 
 # Module-level classes for nested tests (function-scoped classes can't resolve
@@ -290,6 +291,7 @@ class TestRenameBackwardCompat:
         # Fast path should be enabled (no rename, no computed fields, etc.)
         assert SimpleSerializer.__dump_fast_path__ is True
         assert SimpleSerializer.__rename_map__ == {}
+        assert SimpleSerializer.__has_rename__ is False
 
     def test_rename_keeps_fast_path_with_to_builtins(self):
         """Serializers with rename still use the fast path (via to_builtins)."""
@@ -300,6 +302,7 @@ class TestRenameBackwardCompat:
         # Fast path is still enabled — dump() uses to_builtins() instead of asdict()
         assert CamelSerializer.__dump_fast_path__ is True
         assert CamelSerializer.__rename_map__ == {"user_name": "userName"}
+        assert CamelSerializer.__has_rename__ is True
 
 
 class TestRenameWithFieldValidators:
@@ -338,18 +341,18 @@ class TestRenameWithFieldValidators:
                     raise ValueError("Invalid email")
                 return value
 
-        # Field validator errors are raised as RequestValidationError inside __post_init__,
-        # which msgspec wraps in a ValidationError. model_validate re-raises it.
-        # Catch either the wrapper or the inner error.
-        with pytest.raises(Exception) as exc_info:
+        # Field validator errors are raised as RequestValidationError inside __post_init__.
+        # msgspec wraps exceptions from __post_init__ in ValidationError, but model_validate
+        # extracts and re-raises the inner RequestValidationError.
+        with pytest.raises((RequestValidationError, msgspec.ValidationError)) as exc_info:
             CreateUser.model_validate({"userName": "Alice", "emailAddress": "bad-email"})
 
         exc = exc_info.value
-        # The inner cause should be a RequestValidationError
-        if hasattr(exc, "__cause__") and isinstance(exc.__cause__, RequestValidationError):
-            errors = exc.__cause__.errors()
-        elif isinstance(exc, RequestValidationError):
+        # Extract errors from either the direct exception or the wrapped cause
+        if isinstance(exc, RequestValidationError):
             errors = exc.errors()
+        elif hasattr(exc, "__cause__") and isinstance(exc.__cause__, RequestValidationError):
+            errors = exc.__cause__.errors()
         else:
             pytest.fail(f"Expected RequestValidationError, got {type(exc)}: {exc}")
 

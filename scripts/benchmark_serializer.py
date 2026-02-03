@@ -101,6 +101,40 @@ class PydanticAuthorSimple(BaseModel):
 
 
 # ============================================================================
+# Scenario 1b: With rename="camel" (camelCase field mapping)
+# ============================================================================
+class BoltAuthorCamel(Serializer, rename="camel"):
+    """django-bolt serializer with rename='camel' for camelCase output."""
+
+    id: int
+    user_name: Annotated[str, Meta(min_length=2)]
+    email_address: Annotated[str, Meta(pattern=r"^[^@]+@[^@]+\.[^@]+$")]
+    bio_text: str = ""
+
+
+class PydanticAuthorCamel(BaseModel):
+    """Pydantic model with alias_generator for camelCase output."""
+
+    id: int
+    user_name: str = Field(..., min_length=2, alias="userName")
+    email_address: str = Field(..., pattern=r"^[^@]+@[^@]+\.[^@]+$", alias="emailAddress")
+    bio_text: str = Field(default="", alias="bioText")
+
+    model_config = {"populate_by_name": True}
+
+
+# camelCase test data
+CAMEL_DATA = {
+    "id": 1,
+    "userName": "John Doe",
+    "emailAddress": "john@example.com",
+    "bioText": "Software developer",
+}
+
+CAMEL_JSON = '{"id": 1, "userName": "John Doe", "emailAddress": "john@example.com", "bioText": "Software developer"}'
+
+
+# ============================================================================
 # Scenario 2: With Custom Field Validators
 # ============================================================================
 class BoltAuthorWithValidators(Serializer):
@@ -369,6 +403,63 @@ def run_benchmarks():
     pydantic_time = timeit.timeit(lambda: pydantic_obj.model_dump_json(), number=iterations)
     print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
     print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
+    print_winner(bolt_time, pydantic_time)
+
+    # ========================================================================
+    # SCENARIO 1b: With rename="camel" (camelCase field mapping)
+    # ========================================================================
+    print("\n\n" + "=" * 80)
+    print("SCENARIO 1b: With rename='camel' (camelCase Field Mapping)")
+    print("=" * 80)
+
+    print("\n1. Dict -> Object Deserialization (camelCase input)")
+    print("-" * 80)
+    bolt_time = timeit.timeit(lambda: msgspec.convert(CAMEL_DATA, type=BoltAuthorCamel), number=iterations)
+    pydantic_time = timeit.timeit(lambda: PydanticAuthorCamel(**CAMEL_DATA), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
+    print_winner(bolt_time, pydantic_time)
+
+    print("\n2. JSON -> Object Deserialization (camelCase input)")
+    print("-" * 80)
+    bolt_time = timeit.timeit(lambda: msgspec.json.decode(CAMEL_JSON, type=BoltAuthorCamel), number=iterations)
+    pydantic_time = timeit.timeit(lambda: PydanticAuthorCamel.model_validate_json(CAMEL_JSON), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
+    print_winner(bolt_time, pydantic_time)
+
+    print("\n3. Object -> Dict Serialization (camelCase output)")
+    print("-" * 80)
+    bolt_camel_obj = msgspec.convert(CAMEL_DATA, type=BoltAuthorCamel)
+    pydantic_camel_obj = PydanticAuthorCamel(**CAMEL_DATA)
+
+    bolt_time = timeit.timeit(lambda: bolt_camel_obj.dump(), number=iterations)
+    pydantic_time = timeit.timeit(lambda: pydantic_camel_obj.model_dump(by_alias=True), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
+    print_winner(bolt_time, pydantic_time)
+
+    print("\n4. Object -> JSON Serialization (camelCase output)")
+    print("-" * 80)
+    bolt_time = timeit.timeit(lambda: msgspec.json.encode(bolt_camel_obj), number=iterations)
+    pydantic_time = timeit.timeit(lambda: pydantic_camel_obj.model_dump_json(by_alias=True), number=iterations)
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations / pydantic_time:,.0f} ops/sec)")
+    print_winner(bolt_time, pydantic_time)
+
+    print("\n5. dump_many with camelCase (100 instances)")
+    print("-" * 80)
+    bolt_camel_instances = [msgspec.convert(CAMEL_DATA, type=BoltAuthorCamel) for _ in range(100)]
+    pydantic_camel_instances = [PydanticAuthorCamel(**CAMEL_DATA) for _ in range(100)]
+    iterations_bulk = 10000
+
+    bolt_time = timeit.timeit(lambda: BoltAuthorCamel.dump_many(bolt_camel_instances), number=iterations_bulk)
+    pydantic_time = timeit.timeit(
+        lambda: [p.model_dump(by_alias=True) for p in pydantic_camel_instances], number=iterations_bulk
+    )
+    print(f"  Iterations: {iterations_bulk:,}")
+    print(f"  django-bolt: {bolt_time:.4f}s  ({iterations_bulk / bolt_time:,.0f} ops/sec)")
+    print(f"  Pydantic v2: {pydantic_time:.4f}s  ({iterations_bulk / pydantic_time:,.0f} ops/sec)")
     print_winner(bolt_time, pydantic_time)
 
     # ========================================================================

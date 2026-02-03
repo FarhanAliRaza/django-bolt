@@ -30,7 +30,7 @@ use crate::metadata::{CorsConfig, RouteMetadata};
 use crate::middleware::compression::CompressionMiddleware;
 use crate::middleware::cors::CorsMiddleware;
 use crate::router::Router;
-use crate::state::{AppState, TASK_LOCALS};
+use crate::state::{AppState, StaticFilesConfig, TASK_LOCALS};
 use crate::websocket::WebSocketRouter;
 use actix_multipart::Multipart;
 use futures_util::StreamExt;
@@ -38,6 +38,7 @@ use std::collections::HashMap;
 
 use crate::handler::{coerced_value_to_py, form_result_to_py};
 use crate::request_pipeline::validate_typed_params;
+use crate::static_files::handle_static_file;
 use crate::type_coercion::{coerce_param, params_to_py_dict, TYPE_STRING};
 
 /// One-time initialization flag for async runtime
@@ -122,6 +123,8 @@ pub struct TestAppState {
     pub max_payload_size: usize,
     /// Trailing slash handling mode: "strip", "append", or "keep"
     pub trailing_slash: String,
+    /// Static files configuration for testing static file serving
+    pub static_files_config: Option<StaticFilesConfig>,
 }
 
 /// Registry for test app instances
@@ -229,16 +232,46 @@ fn parse_cors_config_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<CorsConfig>
 
 /// Create a test app instance and return its ID
 #[pyfunction]
-#[pyo3(signature = (dispatch, debug, cors_config=None, trailing_slash=None))]
+#[pyo3(signature = (dispatch, debug, cors_config=None, trailing_slash=None, static_files_config=None))]
 pub fn create_test_app(
     py: Python<'_>,
     dispatch: Py<PyAny>,
     debug: bool,
     cors_config: Option<&Bound<'_, PyDict>>,
     trailing_slash: Option<String>,
+    static_files_config: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<u64> {
     let global_cors_config = if let Some(cors_dict) = cors_config {
         Some(parse_cors_config_from_dict(cors_dict)?)
+    } else {
+        None
+    };
+
+    // Parse static files config from Python dict
+    let static_config = if let Some(static_dict) = static_files_config {
+        let url_prefix: String = static_dict
+            .get_item("url_prefix")?
+            .map(|v| v.extract().unwrap_or_default())
+            .unwrap_or_else(|| "/static".to_string());
+
+        let directories: Vec<String> = static_dict
+            .get_item("directories")?
+            .map(|v| v.extract().unwrap_or_default())
+            .unwrap_or_default();
+
+        let csp_header: Option<String> = static_dict
+            .get_item("csp_header")?
+            .and_then(|v| v.extract().ok());
+
+        if !directories.is_empty() {
+            Some(StaticFilesConfig {
+                url_prefix,
+                directories,
+                csp_header,
+            })
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -261,6 +294,7 @@ pub fn create_test_app(
         debug,
         max_payload_size,
         trailing_slash: trailing_slash.unwrap_or_else(|| "strip".to_string()),
+        static_files_config: static_config,
     };
 
     let id = TEST_ID_GEN.fetch_add(1, Ordering::Relaxed);
@@ -393,7 +427,7 @@ pub fn test_request(
 
     runtime_handle.block_on(async {
         // Read test app state
-        let (router, route_metadata, dispatch, global_cors_config, debug, max_payload_size, _trailing_slash) = {
+        let (router, route_metadata, dispatch, global_cors_config, debug, max_payload_size, _trailing_slash, static_files_config) = {
             let state = app_state.read();
             (
                 state.router.clone(),
@@ -403,6 +437,7 @@ pub fn test_request(
                 state.debug,
                 state.max_payload_size,
                 state.trailing_slash.clone(),
+                state.static_files_config.clone(),
             )
         };
 
@@ -417,6 +452,7 @@ pub fn test_request(
             global_compression_config: None,
             router: Some(router.clone()),
             route_metadata: Some(route_metadata.clone()),
+            static_files_config: static_files_config.clone(),
         });
 
         // Clone the Arc values for the handler closure
@@ -435,16 +471,38 @@ pub fn test_request(
         // Create Actix test service with production middleware stack
         // Use MergeOnly for NormalizePath (only normalizes // -> /)
         // Trailing slash handling is done via Starlette-style redirect in handler
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(app_state_arc.clone()))
-                .app_data(web::PayloadConfig::new(max_payload_size))
-                .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
-                .wrap(CorsMiddleware::new())
-                .wrap(CompressionMiddleware::new())
-                .default_service(web::to(handler)),
-        )
-        .await;
+        let app = if let Some(ref config) = static_files_config {
+            // With static files: register static file handler before default service
+            let static_dirs = web::Data::new(config.directories.clone());
+            let static_csp = web::Data::new(config.csp_header.clone());
+            let static_route = format!("{}{{path:.*}}", config.url_prefix);
+
+            test::init_service(
+                App::new()
+                    .app_data(web::Data::new(app_state_arc.clone()))
+                    .app_data(web::PayloadConfig::new(max_payload_size))
+                    .app_data(static_dirs)
+                    .app_data(static_csp)
+                    .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
+                    .wrap(CorsMiddleware::new())
+                    .wrap(CompressionMiddleware::new())
+                    .route(&static_route, web::get().to(handle_static_file))
+                    .default_service(web::to(handler)),
+            )
+            .await
+        } else {
+            // Without static files: just the default handler
+            test::init_service(
+                App::new()
+                    .app_data(web::Data::new(app_state_arc.clone()))
+                    .app_data(web::PayloadConfig::new(max_payload_size))
+                    .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
+                    .wrap(CorsMiddleware::new())
+                    .wrap(CompressionMiddleware::new())
+                    .default_service(web::to(handler)),
+            )
+            .await
+        };
 
         // Build full URI
         let uri = if let Some(qs) = query_string {

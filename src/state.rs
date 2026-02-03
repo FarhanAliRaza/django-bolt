@@ -10,6 +10,14 @@ use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
 use crate::router::Router;
 use crate::websocket::WebSocketRouter;
 
+/// Configuration for serving static files via Actix
+#[derive(Clone, Debug)]
+pub struct StaticFilesConfig {
+    pub url_prefix: String,          // URL prefix (e.g., "/static")
+    pub directories: Vec<String>,    // List of directories to serve from
+    pub csp_header: Option<String>,  // Pre-built Content-Security-Policy header from Django settings
+}
+
 pub struct AppState {
     pub dispatch: Py<PyAny>,
     pub debug: bool,
@@ -19,6 +27,7 @@ pub struct AppState {
     pub global_compression_config: Option<CompressionConfig>, // Global compression configuration used by middleware
     pub router: Option<Arc<Router>>, // Router (used by test infrastructure, optional in production)
     pub route_metadata: Option<Arc<AHashMap<usize, RouteMetadata>>>, // Route metadata (used by test infrastructure)
+    pub static_files_config: Option<StaticFilesConfig>, // Static files configuration from Django settings
 }
 
 pub static GLOBAL_ROUTER: OnceCell<Arc<Router>> = OnceCell::new();

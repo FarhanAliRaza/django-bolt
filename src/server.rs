@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::handler::handle_request;
@@ -17,9 +18,10 @@ use crate::middleware::compression::CompressionMiddleware;
 use crate::middleware::cors::CorsMiddleware;
 use crate::router::Router;
 use crate::state::{
-    AppState, GLOBAL_ROUTER, GLOBAL_WEBSOCKET_ROUTER, ROUTE_METADATA, ROUTE_METADATA_TEMP,
-    TASK_LOCALS,
+    AppState, StaticFilesConfig, GLOBAL_ROUTER, GLOBAL_WEBSOCKET_ROUTER, ROUTE_METADATA,
+    ROUTE_METADATA_TEMP, TASK_LOCALS,
 };
+use crate::static_files::handle_static_file;
 use crate::websocket::{
     handle_websocket_upgrade_with_handler, is_websocket_upgrade, WebSocketRouter,
 };
@@ -139,7 +141,7 @@ pub fn start_server_async(
     });
 
     // Get configuration from Django settings ONCE at startup (not per-request)
-    let (debug, max_header_size, max_payload_size, cors_config_data) = Python::attach(|py| {
+    let (debug, max_header_size, max_payload_size, cors_config_data, static_files_data, csp_header) = Python::attach(|py| {
         let debug = (|| -> PyResult<bool> {
             let django_conf = py.import("django.conf")?;
             let settings = django_conf.getattr("settings")?;
@@ -201,7 +203,104 @@ pub fn start_server_async(
             Ok((origins, origin_regexes, allow_all, credentials, methods, headers, expose_headers, max_age))
         })().unwrap_or_else(|_| (vec![], vec![], false, false, None, None, None, None));
 
-        (debug, max_header_size, max_payload_size, cors_data)
+        // Read static files configuration from Django settings
+        // STATIC_URL: URL prefix for static files (e.g., "/static/")
+        // STATIC_ROOT: Directory where collectstatic gathers files
+        // STATICFILES_DIRS: Additional directories to search for static files
+        let static_data = (|| -> PyResult<Option<(String, Vec<String>)>> {
+            let django_conf = py.import("django.conf")?;
+            let settings = django_conf.getattr("settings")?;
+
+            // Get STATIC_URL (required for static serving)
+            let static_url = match settings.getattr("STATIC_URL") {
+                Ok(url) => url.extract::<String>().ok(),
+                Err(_) => None,
+            };
+
+            let static_url = match static_url {
+                Some(url) => url,
+                None => return Ok(None), // No static URL configured
+            };
+
+            // Normalize URL prefix (remove trailing slash for actix-files)
+            let url_prefix = static_url.trim_end_matches('/').to_string();
+            if url_prefix.is_empty() {
+                return Ok(None); // Invalid static URL
+            }
+
+            let mut directories: Vec<String> = Vec::new();
+
+            // Get STATIC_ROOT (primary location for collected static files)
+            // STATIC_ROOT can be a Path object, so convert via str()
+            if let Ok(static_root) = settings.getattr("STATIC_ROOT") {
+                let root_str = static_root.extract::<String>()
+                    .or_else(|_| static_root.call_method0("__str__").and_then(|s| s.extract::<String>()));
+                if let Ok(root_str) = root_str {
+                    if !root_str.is_empty() {
+                        directories.push(root_str);
+                    }
+                }
+            }
+
+            // Get STATICFILES_DIRS (additional directories)
+            if let Ok(static_dirs) = settings.getattr("STATICFILES_DIRS") {
+                if let Ok(dirs) = static_dirs.extract::<Vec<String>>() {
+                    for dir in dirs {
+                        if !dir.is_empty() && !directories.contains(&dir) {
+                            directories.push(dir);
+                        }
+                    }
+                }
+            }
+
+            if directories.is_empty() {
+                return Ok(None); // No static directories configured
+            }
+
+            Ok(Some((url_prefix, directories)))
+        })().unwrap_or(None);
+
+        // Read CSP configuration from Django settings (Django 6.0+ SECURE_CSP)
+        // CSP header is built once at startup for static files (no nonce support for static files)
+        // See: https://docs.djangoproject.com/en/6.0/ref/csp/
+        let csp_header: Option<String> = (|| -> Option<String> {
+            use std::collections::HashMap;
+
+            let django_conf = py.import("django.conf").ok()?;
+            let settings = django_conf.getattr("settings").ok()?;
+
+            let csp = settings.getattr("SECURE_CSP").ok()?;
+            if csp.is_none() {
+                return None;
+            }
+            let csp_directives: HashMap<String, Vec<String>> = csp.extract().ok()?;
+
+            // Build CSP header string from directives
+            let mut csp_parts: Vec<String> = Vec::new();
+
+            for (directive, sources) in csp_directives {
+                // Filter out CSP.NONCE sentinel values (can't inject nonces for static files)
+                let filtered_sources: Vec<String> = sources
+                    .into_iter()
+                    .filter(|s| !s.contains("CSP_NONCE_SENTINEL"))
+                    .collect();
+
+                if !filtered_sources.is_empty() {
+                    csp_parts.push(format!("{} {}", directive, filtered_sources.join(" ")));
+                } else if directive == "upgrade-insecure-requests" || directive == "block-all-mixed-content" {
+                    // Boolean directives (no sources needed)
+                    csp_parts.push(directive);
+                }
+            }
+
+            if csp_parts.is_empty() {
+                None
+            } else {
+                Some(csp_parts.join("; "))
+            }
+        })();
+
+        (debug, max_header_size, max_payload_size, cors_data, static_data, csp_header)
     });
 
     // Unpack CORS configuration data
@@ -319,6 +418,29 @@ pub fn start_server_async(
         })
     });
 
+    // Build static files configuration
+    let static_files_config = static_files_data.and_then(|(url_prefix, directories)| {
+        // Filter to only existing directories
+        let valid_dirs: Vec<String> = directories
+            .into_iter()
+            .filter(|dir| Path::new(dir).is_dir())
+            .collect();
+
+        if valid_dirs.is_empty() {
+            eprintln!(
+                "[django-bolt] Warning: Static files: No valid directories found for {}",
+                url_prefix
+            );
+            None
+        } else {
+            Some(StaticFilesConfig {
+                url_prefix,
+                directories: valid_dirs,
+                csp_header: csp_header.clone(),
+            })
+        }
+    });
+
     let app_state = Arc::new(AppState {
         dispatch: dispatch.into(),
         debug,
@@ -328,6 +450,7 @@ pub fn start_server_async(
         global_compression_config: global_compression_config.clone(),
         router: None,         // Production uses GLOBAL_ROUTER
         route_metadata: None, // Production uses ROUTE_METADATA
+        static_files_config: static_files_config.clone(),
     });
 
     py.detach(|| {
@@ -386,6 +509,21 @@ pub fn start_server_async(
                                 .guard(actix_web::guard::fn_guard(is_websocket_upgrade_guard))
                                 .to(websocket_not_found_handler),
                         );
+
+                        // Register static files handler (if configured via Django settings)
+                        // Uses a custom handler that:
+                        // 1. Searches configured directories in order (fast path)
+                        // 2. Falls back to Django's staticfiles finders (for app static files like admin)
+                        // 3. Applies CSP headers from Django settings (if configured)
+                        if let Some(ref config) = app_state.static_files_config {
+                            let static_dirs = web::Data::new(config.directories.clone());
+                            let static_csp = web::Data::new(config.csp_header.clone());
+                            let static_route = format!("{}{{path:.*}}", config.url_prefix);
+                            app = app
+                                .app_data(static_dirs)
+                                .app_data(static_csp)
+                                .route(&static_route, web::get().to(handle_static_file));
+                        }
 
                         // Default service handles all unmatched HTTP requests
                         app.default_service(web::to(handle_request))

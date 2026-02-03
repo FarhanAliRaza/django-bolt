@@ -223,13 +223,13 @@ MIDDLEWARE += [
 BOLT_MAX_UPLOAD_SIZE = 30 * 1024 * 1024  # 10 mb
 
 
-from django_bolt.auth import JWTAuthentication, IsAuthenticated                      
+# from django_bolt.auth import JWTAuthentication, IsAuthenticated                      
                                                                                     
-BOLT_AUTHENTICATION_CLASSES = [                                                      
-    JWTAuthentication(),                                     
-]                                                                                    
+# BOLT_AUTHENTICATION_CLASSES = [                                                      
+#     JWTAuthentication(),                                     
+# ]                                                                                    
                                                                                     
-BOLT_DEFAULT_PERMISSION_CLASSES = [                                                  
-    IsAuthenticated(),                                                               
-]                                                                                    
+# BOLT_DEFAULT_PERMISSION_CLASSES = [                                                  
+#     IsAuthenticated(),                                                               
+# ]                                                                                    
                     

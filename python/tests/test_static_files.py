@@ -317,16 +317,16 @@ class TestCachingHeaders:
 
     @pytest.fixture(scope="class")
     def client(self, api):
-        """Create test client with HTTP layer."""
-        return TestClient(api, use_http_layer=True)
+        """Create test client with HTTP layer and explicit static files config."""
+        static_config = {
+            "url_prefix": "/static",
+            "directories": [TEST_STATIC_DIR],
+            "csp_header": None,
+        }
+        return TestClient(api, static_files_config=static_config)
 
     def test_etag_header_present(self, client, monkeypatch):
         """Test that ETag header is returned."""
-        from django.conf import settings
-
-        settings.STATIC_ROOT = TEST_STATIC_DIR
-        settings.STATIC_URL = "/static/"
-
         response = client.get("/static/css/style.css")
         assert response.status_code == 200
         # ETag may or may not be present depending on handler
@@ -334,11 +334,6 @@ class TestCachingHeaders:
 
     def test_content_type_correct(self, client, monkeypatch):
         """Test that Content-Type is correctly set."""
-        from django.conf import settings
-
-        settings.STATIC_ROOT = TEST_STATIC_DIR
-        settings.STATIC_URL = "/static/"
-
         response = client.get("/static/css/style.css")
         assert response.status_code == 200
         assert "text/css" in response.headers.get("content-type", "")
@@ -367,16 +362,13 @@ class TestDirectoryTraversalSecurity:
 
     @pytest.fixture(scope="class")
     def client(self, api_with_static):
-        """Create test client."""
-        return TestClient(api_with_static, use_http_layer=True)
-
-    @pytest.fixture(autouse=True)
-    def setup_static_dir(self):
-        """Setup static directory for tests."""
-        from django.conf import settings
-
-        settings.STATIC_ROOT = TEST_STATIC_DIR
-        settings.STATIC_URL = "/static/"
+        """Create test client with explicit static files config."""
+        static_config = {
+            "url_prefix": "/static",
+            "directories": [TEST_STATIC_DIR],
+            "csp_header": None,
+        }
+        return TestClient(api_with_static, static_files_config=static_config)
 
     def test_basic_traversal_blocked(self, client):
         """Test basic ../ traversal is blocked."""
@@ -831,19 +823,15 @@ class TestDebugModeFinders:
             import shutil
             shutil.rmtree(empty_static_root, ignore_errors=True)
 
-    def test_rust_handler_debug_flag_behavior(self):
-        """Test the debug flag behavior for Django finders fallback.
+    def test_rust_handler_debug_flag_integration(self):
+        """Test that the Rust handler respects debug flag for finders fallback.
 
-        The Rust handler in src/static_files.rs gates Django finders behind the debug flag:
-        - DEBUG=True (dev mode): Django finders are called as fallback
-        - DEBUG=False (production): Only configured directories are used
+        This is an integration test that verifies the full flow:
+        1. Request comes in for a file only available via Django finders
+        2. DEBUG=True: File is found (finders fallback enabled)
+        3. DEBUG=False: File is NOT found (finders fallback disabled)
 
-        This test verifies the expected behavior:
-        1. Admin files exist in Django but not in our configured STATIC_ROOT
-        2. In production, those files won't be served (handler doesn't call finders)
-
-        Note: The TestClient uses Python routes, not the Rust handler directly.
-        This test documents the expected production behavior.
+        Note: This test uses the TestClient which exercises the Rust static file handler.
         """
         from django.conf import settings
 
@@ -859,22 +847,36 @@ class TestDebugModeFinders:
             settings.STATICFILES_DIRS = []
             settings.STATIC_URL = "/static/"
 
-            # Verify admin files exist via Django finders
+            # Configure static files for testing
+            static_config = {
+                "url_prefix": "/static",
+                "directories": [empty_static_root],
+                "csp_header": None,
+            }
+
+            # Test with DEBUG=True (finders fallback should work)
             settings.DEBUG = True
-            admin_result = find_static_file("admin/css/base.css")
-            assert admin_result is not None, "Admin CSS should exist in Django"
 
-            # Verify admin files are NOT in our configured directories
-            import os
-            admin_in_configured_dir = os.path.exists(
-                os.path.join(empty_static_root, "admin/css/base.css")
-            )
-            assert not admin_in_configured_dir, \
-                "Admin files should not be in our empty STATIC_ROOT"
+            api_debug = BoltAPI()
+            client_debug = TestClient(api_debug, static_files_config=static_config)
 
-            # In production (DEBUG=False), the Rust handler won't call Django finders
-            # so admin files would return 404. This is the expected security behavior.
-            # The Rust code checks: if file_path.is_none() && app_state.debug { ... }
+            # Admin CSS is only available via Django finders, not in our empty STATIC_ROOT
+            response = client_debug.get("/static/admin/css/base.css")
+            assert response.status_code == 200, \
+                f"Admin CSS should be served in debug mode via Django finders (got {response.status_code})"
+
+            # Test with DEBUG=False (finders fallback should be disabled)
+            settings.DEBUG = False
+
+            api_prod = BoltAPI()
+            client_prod = TestClient(api_prod, static_files_config=static_config)
+
+            # Admin CSS should NOT be found because:
+            # 1. It's not in STATIC_ROOT or STATICFILES_DIRS
+            # 2. Django finders fallback is disabled in production
+            response = client_prod.get("/static/admin/css/base.css")
+            assert response.status_code == 404, \
+                f"Admin CSS should NOT be served in production mode (got {response.status_code})"
 
         finally:
             if original_debug is not None:

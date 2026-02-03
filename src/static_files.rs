@@ -15,6 +15,9 @@ use actix_files::NamedFile;
 use actix_web::{http::header, web, HttpRequest, HttpResponse};
 use pyo3::prelude::*;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::state::AppState;
 
 /// Find a static file in the configured directories (fast path)
 fn find_in_directories(relative_path: &str, directories: &[String]) -> Option<PathBuf> {
@@ -68,11 +71,17 @@ fn find_with_django_finders(relative_path: &str) -> Option<PathBuf> {
 /// - Range request support
 /// - Content-Type detection
 /// - CSP headers from Django settings (pre-built at server startup)
+///
+/// Security note:
+/// - Django finders fallback (for app static files like admin) is only enabled in debug mode
+/// - In production (DEBUG=False), only configured directories (STATIC_ROOT, STATICFILES_DIRS) are served
+/// - This prevents potential path exposure from Django app finders in production
 pub async fn handle_static_file(
     req: HttpRequest,
     path: web::Path<String>,
     directories: web::Data<Vec<String>>,
     csp_header: web::Data<Option<String>>,
+    app_state: web::Data<Arc<AppState>>,
 ) -> actix_web::Result<HttpResponse> {
     // Strip leading slash if present (route captures include it)
     let relative_path = path.into_inner();
@@ -83,9 +92,15 @@ pub async fn handle_static_file(
         return Err(actix_web::error::ErrorBadRequest("Invalid path"));
     }
 
-    // Try to find the file (fast path first, then Django finders)
-    let file_path = find_in_directories(&relative_path, directories.as_ref())
-        .or_else(|| find_with_django_finders(&relative_path));
+    // Try to find the file in configured directories (fast path)
+    let mut file_path = find_in_directories(&relative_path, directories.as_ref());
+
+    // Only fall back to Django finders in debug mode (development)
+    // In production, only serve files from explicitly configured directories
+    // This prevents potential path exposure from Django app finders
+    if file_path.is_none() && app_state.debug {
+        file_path = find_with_django_finders(&relative_path);
+    }
 
     let file_path = match file_path {
         Some(p) => p,

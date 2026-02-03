@@ -241,5 +241,4 @@ BOLT_MAX_UPLOAD_SIZE = 30 * 1024 * 1024  # 10 mb
 # BOLT_DEFAULT_PERMISSION_CLASSES = [                                                  
 #     IsAuthenticated(),                                                               
 # ]                                                                                    
-
                     

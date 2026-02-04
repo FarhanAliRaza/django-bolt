@@ -1,6 +1,8 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString};
 
+use std::sync::RwLock;
+
 #[pyclass]
 pub struct PyRequest {
     pub method: String,
@@ -22,6 +24,8 @@ pub struct PyRequest {
     pub form_map: Py<PyDict>,
     /// Files data - dict of {field_name: {filename, content, content_type, size, temp_path?}}
     pub files_map: Py<PyDict>,
+    /// Lazy cached META dict for Django template compatibility
+    pub meta_cache: RwLock<Option<Py<PyDict>>>,
 }
 
 #[pymethods]
@@ -147,6 +151,82 @@ impl PyRequest {
     #[inline]
     fn files<'py>(&self, py: Python<'py>) -> Py<PyDict> {
         self.files_map.clone_ref(py)
+    }
+
+    /// Get META dict for Django template compatibility.
+    ///
+    /// This provides a Django HttpRequest-compatible META dict containing:
+    /// - REQUEST_METHOD: HTTP method
+    /// - PATH_INFO: Request path
+    /// - QUERY_STRING: Query string
+    /// - HTTP_*: Headers converted to META format (e.g., host -> HTTP_HOST)
+    /// - CONTENT_TYPE: Content-Type header (without HTTP_ prefix)
+    /// - CONTENT_LENGTH: Content-Length header (without HTTP_ prefix)
+    ///
+    /// The dict is lazily built on first access and cached for subsequent accesses.
+    /// This ensures zero overhead for API handlers that don't use templates.
+    ///
+    /// Example:
+    ///     method = request.META.get("REQUEST_METHOD")  # "GET"
+    ///     host = request.META.get("HTTP_HOST")  # "example.com"
+    #[getter]
+    #[allow(non_snake_case)]
+    fn META<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
+        // Return cached if already built
+        {
+            let cache = self.meta_cache.read().unwrap();
+            if let Some(ref meta) = *cache {
+                return Ok(meta.clone_ref(py));
+            }
+        }
+
+        // Build META dict only on first access
+        let meta = PyDict::new(py);
+
+        // Standard META keys
+        meta.set_item("REQUEST_METHOD", &self.method)?;
+        meta.set_item("PATH_INFO", &self.path)?;
+
+        // Build QUERY_STRING from query_params
+        let query_dict = self.query_params.bind(py);
+        let query_string = if query_dict.is_empty() {
+            String::new()
+        } else {
+            query_dict
+                .iter()
+                .filter_map(|(k, v)| {
+                    let key = k.extract::<String>().ok()?;
+                    let val = v.str().ok()?.to_string();
+                    Some(format!("{}={}", key, val))
+                })
+                .collect::<Vec<_>>()
+                .join("&")
+        };
+        meta.set_item("QUERY_STRING", query_string)?;
+
+        // Convert headers to HTTP_* format
+        let headers_dict = self.headers.bind(py);
+        for (key, value) in headers_dict.iter() {
+            if let (Ok(k), Ok(v)) = (key.extract::<String>(), value.extract::<String>()) {
+                let lower_key = k.to_lowercase();
+                let meta_key = if lower_key == "content-type" {
+                    "CONTENT_TYPE".to_string()
+                } else if lower_key == "content-length" {
+                    "CONTENT_LENGTH".to_string()
+                } else {
+                    format!("HTTP_{}", k.to_uppercase().replace("-", "_"))
+                };
+                meta.set_item(meta_key, v)?;
+            }
+        }
+
+        // Cache and return
+        let meta_unbind = meta.unbind();
+        {
+            let mut cache = self.meta_cache.write().unwrap();
+            *cache = Some(meta_unbind.clone_ref(py));
+        }
+        Ok(meta_unbind)
     }
 
     /// Get the async user loader (Django-style).

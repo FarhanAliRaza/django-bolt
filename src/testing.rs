@@ -971,6 +971,7 @@ async fn handle_test_request_internal(
             state: PyDict::new(py).unbind(),
             form_map: form_map_dict,
             files_map: files_map_dict,
+            meta_cache: std::sync::RwLock::new(None), // Lazy cached META dict
         };
         let request_obj = Py::new(py, request)?;
 

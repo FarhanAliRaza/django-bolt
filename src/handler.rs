@@ -726,6 +726,7 @@ pub async fn handle_request(
             state: PyDict::new(py).unbind(), // Empty state dict for middleware and dynamic attributes
             form_map: form_map_dict,
             files_map: files_map_dict,
+            meta_cache: std::sync::RwLock::new(None), // Lazy cached META dict
         };
         let request_obj = Py::new(py, request)?;
 

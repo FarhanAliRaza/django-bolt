@@ -743,24 +743,34 @@ def _to_bolt_response(django_response: HttpResponse) -> MiddlewareResponse:
     """Convert Django HttpResponse to MiddlewareResponse for chain compatibility."""
     headers = dict(django_response.items())
 
-    # IMPORTANT: Extract cookies from django_response.cookies into dedicated list
+    # IMPORTANT: Extract cookies from django_response.cookies as raw tuples
     # Django's set_cookie() stores cookies in response.cookies (SimpleCookie),
-    # NOT in the regular headers. HTTP allows multiple Set-Cookie headers,
-    # but dict can't have duplicate keys - so we use a separate list.
+    # NOT in the regular headers. We extract raw data so Rust can serialize.
     # This is critical for CSRF cookie to be set by CsrfViewMiddleware.process_response
-    set_cookies = []
+    raw_cookies = None
     if hasattr(django_response, "cookies") and django_response.cookies:
-        for cookie in django_response.cookies.values():
-            # Each cookie's output() method returns the full Set-Cookie header value
-            # Format: "name=value; Path=/; ..."
-            cookie_header = cookie.output(header="").strip()
-            set_cookies.append(cookie_header)
+        raw_cookies = []
+        for morsel in django_response.cookies.values():
+            # Extract raw data from Morsel object for Rust serialization
+            # Cookie tuple: (name, value, path, max_age, expires, domain, secure, httponly, samesite)
+            max_age = morsel.get("max-age")
+            raw_cookies.append((
+                morsel.key,  # name
+                morsel.value,  # value
+                morsel.get("path") or "/",  # path
+                int(max_age) if max_age else None,  # max_age
+                morsel.get("expires") or None,  # expires
+                morsel.get("domain") or None,  # domain
+                bool(morsel.get("secure")),  # secure
+                bool(morsel.get("httponly")),  # httponly
+                morsel.get("samesite") or None,  # samesite
+            ))
 
     return MiddlewareResponse(
         status_code=django_response.status_code,
         headers=headers,
         body=django_response.content,
-        set_cookies=set_cookies,
+        raw_cookies=raw_cookies,
     )
 
 

@@ -24,6 +24,7 @@ use crate::middleware::auth::populate_auth_context;
 use crate::request::PyRequest;
 use crate::request_pipeline::validate_typed_params;
 use crate::response_builder;
+use crate::response_meta::ResponseMeta;
 use crate::responses;
 use crate::router::parse_query_string;
 use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
@@ -747,6 +748,53 @@ pub async fn handle_request(
 
     match fut.await {
         Ok(result_obj) => {
+            // Try new ResponseMeta format first: (status, meta_tuple, body)
+            // Performance: All header building happens in Rust using static strings
+            let parsed_meta =
+                Python::attach(|py| response_builder::try_extract_response_meta(py, &result_obj));
+
+            // Handle new ResponseMeta format
+            if let Some(parsed) = parsed_meta {
+                let status = StatusCode::from_u16(parsed.status_code).unwrap_or(StatusCode::OK);
+
+                // Check for file serving: x-bolt-file-path in custom headers
+                if let Some(fpath) = response_builder::extract_file_path_from_meta(&parsed.meta) {
+                    let headers = response_builder::meta_to_headers_without_file_path(&parsed.meta);
+                    return build_file_response(
+                        &fpath,
+                        status,
+                        headers,
+                        skip_compression,
+                        is_head_request,
+                    )
+                    .await;
+                }
+
+                let response_body = if is_head_request {
+                    Vec::new()
+                } else {
+                    parsed.body
+                };
+
+                let mut response = response_builder::build_response_from_meta(
+                    status,
+                    parsed.meta,
+                    response_body,
+                    skip_compression,
+                );
+
+                // Set skip-cors marker if @skip_middleware("cors") is used
+                if skip_cors {
+                    response
+                        .headers_mut()
+                        .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
+                }
+
+                // CORS headers will be added by CorsMiddleware
+                return response;
+            }
+
+            // Fallback to old format: (status, headers_list, body)
             // Fast-path: extract and copy body in single GIL acquisition (eliminates separate GIL for drop)
             let fast_tuple: Option<(u16, Vec<(String, String)>, Vec<u8>)> = Python::attach(|py| {
                 let obj = result_obj.bind(py);
@@ -865,7 +913,7 @@ pub async fn handle_request(
                     }
                 }
                 // Check for tuple with StreamingResponse body (middleware path)
-                // This handles the case where serialize_response returns (status, headers, StreamingResponse)
+                // This handles the case where serialize_response returns (status, headers/meta, StreamingResponse)
                 // allowing streaming responses to work with middleware (CORS, rate limiting, etc.)
                 let streaming_tuple = Python::attach(|py| {
                     let obj = result_obj.bind(py);
@@ -879,12 +927,19 @@ pub async fn handle_request(
                     if !body_obj.is_instance(streaming_cls.bind(py)).unwrap_or(false) {
                         return None;
                     }
-                    // It's a tuple with StreamingResponse body - extract tuple headers and streaming data
-                    let tuple_headers: Vec<(String, String)> = tuple
-                        .get_item(1)
-                        .ok()?
-                        .extract::<Vec<(String, String)>>()
-                        .ok()?;
+
+                    // Extract headers: try new ResponseMeta format first, then legacy format
+                    let meta_or_headers = tuple.get_item(1).ok()?;
+                    let tuple_headers: Vec<(String, String)> =
+                        if meta_or_headers.is_instance_of::<PyTuple>() {
+                            // New ResponseMeta format: build headers from meta
+                            let meta = ResponseMeta::from_python(&meta_or_headers).ok()?;
+                            response_builder::meta_to_headers(&meta)
+                        } else {
+                            // Legacy format: list of header tuples
+                            meta_or_headers.extract::<Vec<(String, String)>>().ok()?
+                        };
+
                     let media_type: String = body_obj
                         .getattr(pyo3::intern!(py, "media_type"))
                         .and_then(|v| v.extract())

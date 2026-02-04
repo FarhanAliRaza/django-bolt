@@ -68,6 +68,9 @@ from .auth import (
     get_current_user,
 )
 
+# Cookies module
+from .cookies import Cookie
+
 # Datastructures
 from .datastructures import UploadFile
 
@@ -171,6 +174,7 @@ __all__ = [
     "JSON",
     "StreamingResponse",
     "CompressionConfig",
+    "Cookie",
     "Depends",
     "UploadFile",
     # Enums

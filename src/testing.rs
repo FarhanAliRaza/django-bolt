@@ -38,6 +38,7 @@ use std::collections::HashMap;
 
 use crate::handler::{coerced_value_to_py, form_result_to_py};
 use crate::request_pipeline::validate_typed_params;
+use crate::response_meta::ResponseMeta;
 use crate::static_files::handle_static_file;
 use crate::type_coercion::{coerce_param, params_to_py_dict, TYPE_STRING};
 
@@ -142,6 +143,66 @@ fn get_streaming_response_class(py: Python<'_>) -> &Py<PyAny> {
             .unwrap()
             .unbind()
     })
+}
+
+/// Collect streaming content synchronously for test assertions.
+/// Handles both sync generators and async generators.
+fn collect_streaming_content(py: Python<'_>, content: &Bound<'_, PyAny>, is_async: bool) -> Vec<u8> {
+    let mut chunks: Vec<u8> = Vec::new();
+
+    if is_async {
+        // For async generators, use asyncio.run() to collect
+        let asyncio = match py.import("asyncio") {
+            Ok(m) => m,
+            Err(_) => return chunks,
+        };
+
+        let locals = PyDict::new(py);
+        let code = pyo3::ffi::c_str!(
+            r#"
+async def _collect_async_gen(gen):
+    result = []
+    async for item in gen:
+        if isinstance(item, bytes):
+            result.append(item)
+        elif isinstance(item, bytearray):
+            result.append(bytes(item))
+        elif isinstance(item, memoryview):
+            result.append(bytes(item))
+        elif isinstance(item, str):
+            result.append(item.encode('utf-8'))
+        else:
+            result.append(str(item).encode('utf-8'))
+    return b''.join(result)
+"#
+        );
+        if py.run(code, None, Some(&locals)).is_ok() {
+            if let Ok(Some(collect_fn)) = locals.get_item("_collect_async_gen") {
+                if let Ok(coro) = collect_fn.call1((content,)) {
+                    if let Ok(result) = asyncio.call_method1("run", (coro,)) {
+                        if let Ok(bytes) = result.extract::<Vec<u8>>() {
+                            chunks = bytes;
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Sync generator - iterate directly
+        if let Ok(iter) = content.try_iter() {
+            for item in iter {
+                if let Ok(item) = item {
+                    if let Ok(bytes) = item.extract::<Vec<u8>>() {
+                        chunks.extend(bytes);
+                    } else if let Ok(s) = item.extract::<String>() {
+                        chunks.extend(s.as_bytes());
+                    }
+                }
+            }
+        }
+    }
+
+    chunks
 }
 
 fn registry() -> &'static DashMap<u64, Arc<RwLock<TestAppState>>> {
@@ -927,6 +988,51 @@ async fn handle_test_request_internal(
     // Process the result
     match Ok::<_, PyErr>(result_obj) {
         Ok(result_obj) => {
+            // Try new ResponseMeta format first: (status, meta_tuple, body)
+            // Performance: All header building happens in Rust using static strings
+            let parsed_meta =
+                Python::attach(|py| response_builder::try_extract_response_meta(py, &result_obj));
+
+            // Handle new ResponseMeta format
+            if let Some(parsed) = parsed_meta {
+                let status = StatusCode::from_u16(parsed.status_code).unwrap_or(StatusCode::OK);
+
+                // Check for file serving: x-bolt-file-path in custom headers
+                if let Some(fpath) = response_builder::extract_file_path_from_meta(&parsed.meta) {
+                    let headers = response_builder::meta_to_headers_without_file_path(&parsed.meta);
+                    return crate::handler::build_file_response(
+                        &fpath,
+                        status,
+                        headers,
+                        skip_compression,
+                        is_head_request,
+                    )
+                    .await;
+                }
+
+                let response_body = if is_head_request {
+                    Vec::new()
+                } else {
+                    parsed.body
+                };
+
+                let mut response = response_builder::build_response_from_meta(
+                    status,
+                    parsed.meta,
+                    response_body,
+                    skip_compression,
+                );
+
+                if skip_cors {
+                    response
+                        .headers_mut()
+                        .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
+                }
+
+                return response;
+            }
+
+            // Fallback to old format: (status, headers_list, body)
             // Fast-path: tuple extraction
             let fast_tuple: Option<(u16, Vec<(String, String)>, Vec<u8>)> = Python::attach(|py| {
                 let obj = result_obj.bind(py);
@@ -1028,7 +1134,7 @@ async fn handle_test_request_internal(
             }
 
             // Check for tuple with StreamingResponse body (middleware path)
-            // This handles the case where serialize_response returns (status, headers, StreamingResponse)
+            // This handles the case where serialize_response returns (status, headers/meta, StreamingResponse)
             let streaming_tuple = Python::attach(|py| {
                 let obj = result_obj.bind(py);
                 let tuple = obj.cast::<PyTuple>().ok()?;
@@ -1041,13 +1147,20 @@ async fn handle_test_request_internal(
                 if !body_obj.is_instance(streaming_cls.bind(py)).unwrap_or(false) {
                     return None;
                 }
-                // Extract tuple headers (from middleware) and streaming data
+
+                // Extract headers: try new ResponseMeta format first, then legacy format
                 let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
-                let tuple_headers: Vec<(String, String)> = tuple
-                    .get_item(1)
-                    .ok()?
-                    .extract::<Vec<(String, String)>>()
-                    .ok()?;
+                let meta_or_headers = tuple.get_item(1).ok()?;
+                let tuple_headers: Vec<(String, String)> =
+                    if meta_or_headers.is_instance_of::<PyTuple>() {
+                        // New ResponseMeta format: build headers from meta
+                        let meta = ResponseMeta::from_python(&meta_or_headers).ok()?;
+                        response_builder::meta_to_headers(&meta)
+                    } else {
+                        // Legacy format: list of header tuples
+                        meta_or_headers.extract::<Vec<(String, String)>>().ok()?
+                    };
+
                 let media_type: String = body_obj
                     .getattr(pyo3::intern!(py, "media_type"))
                     .and_then(|v| v.extract())
@@ -1068,62 +1181,8 @@ async fn handle_test_request_internal(
                 let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
 
                 // For tests, collect streaming content synchronously
-                let collected_body = Python::attach(|py| -> Vec<u8> {
-                    let mut chunks: Vec<u8> = Vec::new();
-                    let content = content_obj.bind(py);
-
-                    if is_async_generator {
-                        // For async generators, use asyncio to collect
-                        let asyncio = match py.import("asyncio") {
-                            Ok(m) => m,
-                            Err(_) => return chunks,
-                        };
-
-                        let locals = PyDict::new(py);
-                        let code = pyo3::ffi::c_str!(
-                            r#"
-async def _collect_async_gen(gen):
-    result = []
-    async for item in gen:
-        if isinstance(item, bytes):
-            result.append(item)
-        elif isinstance(item, bytearray):
-            result.append(bytes(item))
-        elif isinstance(item, memoryview):
-            result.append(bytes(item))
-        elif isinstance(item, str):
-            result.append(item.encode('utf-8'))
-        else:
-            result.append(str(item).encode('utf-8'))
-    return b''.join(result)
-"#
-                        );
-                        if py.run(code, None, Some(&locals)).is_ok() {
-                            if let Ok(Some(collect_fn)) = locals.get_item("_collect_async_gen") {
-                                if let Ok(coro) = collect_fn.call1((content,)) {
-                                    if let Ok(result) = asyncio.call_method1("run", (coro,)) {
-                                        if let Ok(bytes) = result.extract::<Vec<u8>>() {
-                                            chunks = bytes;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // Sync generator - iterate directly
-                        if let Ok(iter) = content.try_iter() {
-                            for item in iter {
-                                if let Ok(item) = item {
-                                    if let Ok(bytes) = item.extract::<Vec<u8>>() {
-                                        chunks.extend(bytes);
-                                    } else if let Ok(s) = item.extract::<String>() {
-                                        chunks.extend(s.as_bytes());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    chunks
+                let collected_body = Python::attach(|py| {
+                    collect_streaming_content(py, content_obj.bind(py), is_async_generator)
                 });
 
                 let mut builder = HttpResponse::build(status);
@@ -1213,66 +1272,9 @@ async def _collect_async_gen(gen):
             {
                 let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
 
-                // For tests, collect streaming content synchronously instead of async streaming
-                // This avoids issues with event loop contexts
-                let collected_body = Python::attach(|py| -> Vec<u8> {
-                    let mut chunks: Vec<u8> = Vec::new();
-                    let content = content_obj.bind(py);
-
-                    if is_async_generator {
-                        // For async generators, use asyncio to collect
-                        let asyncio = match py.import("asyncio") {
-                            Ok(m) => m,
-                            Err(_) => return chunks,
-                        };
-
-                        // Create a coroutine that collects all items
-                        let locals = PyDict::new(py);
-                        let code = pyo3::ffi::c_str!(
-                            r#"
-async def _collect_async_gen(gen):
-    result = []
-    async for item in gen:
-        if isinstance(item, bytes):
-            result.append(item)
-        elif isinstance(item, bytearray):
-            result.append(bytes(item))
-        elif isinstance(item, memoryview):
-            result.append(bytes(item))
-        elif isinstance(item, str):
-            result.append(item.encode('utf-8'))
-        else:
-            result.append(str(item).encode('utf-8'))
-    return b''.join(result)
-"#
-                        );
-                        if py.run(code, None, Some(&locals)).is_ok() {
-                            if let Ok(Some(collect_fn)) = locals.get_item("_collect_async_gen") {
-                                if let Ok(coro) = collect_fn.call1((content,)) {
-                                    if let Ok(result) = asyncio.call_method1("run", (coro,)) {
-                                        if let Ok(bytes) = result.extract::<Vec<u8>>() {
-                                            chunks = bytes;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // Sync generator - iterate directly
-                        if let Ok(iter) = content.try_iter() {
-                            for item in iter {
-                                if let Ok(item) = item {
-                                    if let Ok(bytes) = item.extract::<Vec<u8>>() {
-                                        chunks.extend(bytes);
-                                    } else if let Ok(s) = item.extract::<String>() {
-                                        chunks.extend(s.as_bytes());
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    chunks
+                // For tests, collect streaming content synchronously
+                let collected_body = Python::attach(|py| {
+                    collect_streaming_content(py, content_obj.bind(py), is_async_generator)
                 });
 
                 if media_type == "text/event-stream" {

@@ -13,15 +13,71 @@ from django.http import HttpResponseRedirect as DjangoHttpResponseRedirect
 
 from . import _json
 from ._kwargs import coerce_to_response_type, coerce_to_response_type_async
+from .cookies import Cookie
 from .responses import HTML, JSON, File, FileResponse, PlainText, Redirect, StreamingResponse
 from .responses import Response as ResponseClass
 
 if TYPE_CHECKING:
     from .typing import HandlerMetadata
 
+
+# Type aliases for response formats
+# Raw cookie tuple: (name, value, path, max_age, expires, domain, secure, httponly, samesite)
+CookieTuple = tuple[str, str, str, int | None, str | None, str | None, bool, bool, str | None]
+
+# ResponseMeta tuple: (response_type, custom_content_type, custom_headers, cookies)
+# This is the new format for Rust-side header building
+ResponseMetaTuple = tuple[
+    str,  # response_type: "json", "html", "plaintext", etc.
+    str | None,  # custom_content_type: override content-type or None
+    list[tuple[str, str]] | None,  # custom_headers: [(key, value), ...] or None
+    list[CookieTuple] | None,  # cookies: list of raw cookie tuples or None
+]
+
 # ResponseTuple body can be bytes (normal) or StreamingResponse (for streaming)
 # Rust handler.rs checks if body is StreamingResponse and handles it specially
-ResponseTuple = tuple[int, list[tuple[str, str]], bytes | StreamingResponse]
+# The second element can be either:
+# - list[tuple[str, str]]: legacy format with pre-built headers
+# - ResponseMetaTuple: new format for Rust-side header building
+ResponseTuple = tuple[int, list[tuple[str, str]] | ResponseMetaTuple, bytes | StreamingResponse]
+
+def _build_response_meta(
+    response_type: str,
+    custom_headers: dict[str, str] | None,
+    cookies: list[Cookie] | None,
+) -> ResponseMetaTuple:
+    """Build metadata tuple for Rust header construction.
+
+    Args:
+        response_type: Type of response ("json", "html", "plaintext", etc.)
+        custom_headers: Custom headers dict or None
+        cookies: List of Cookie objects or None
+
+    Returns:
+        Tuple of (response_type, custom_content_type, custom_headers, cookies)
+        suitable for Rust-side header building
+    """
+    custom_ct: str | None = None
+    headers_list: list[tuple[str, str]] | None = None
+
+    if custom_headers:
+        # Extract custom content-type if provided
+        headers_list = []
+        for k, v in custom_headers.items():
+            if k.lower() == "content-type":
+                custom_ct = v
+            else:
+                # Don't lowercase here - Rust will do it
+                headers_list.append((k, v))
+        if not headers_list:
+            headers_list = None
+
+    # Convert cookies to raw tuples
+    cookies_data: list[CookieTuple] | None = None
+    if cookies:
+        cookies_data = [c.to_raw_tuple() for c in cookies]
+
+    return (response_type, custom_ct, headers_list, cookies_data)
 
 
 def _convert_serializers(result: Any) -> Any:
@@ -96,19 +152,24 @@ async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTupl
     # This allows middleware to process the response (CORS headers, etc.)
     # Rust handler.rs detects StreamingResponse in the body and handles streaming
     if isinstance(result, StreamingResponse):
-        headers = [("content-type", result.media_type)]
+        # Build custom headers with content-type
+        custom_headers: dict[str, str] = {"content-type": result.media_type}
         if result.headers:
-            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-        return (result.status_code, headers, result)
+            custom_headers.update(result.headers)
+        cookies = getattr(result, "_cookies", None)
+        resp_meta = _build_response_meta("streaming", custom_headers, cookies)
+        return (result.status_code, resp_meta, result)
     # Less common: Other response types
     if isinstance(result, PlainText):
         return serialize_plaintext_response(result)
     if isinstance(result, HTML):
         return serialize_html_response(result)
     if isinstance(result, (bytes, bytearray)):
-        return int(status_code), [("content-type", "application/octet-stream")], bytes(result)
+        resp_meta = _build_response_meta("octetstream", None, None)
+        return int(status_code), resp_meta, bytes(result)
     if isinstance(result, str):
-        return int(status_code), [("content-type", "text/plain; charset=utf-8")], result.encode()
+        resp_meta = _build_response_meta("plaintext", None, None)
+        return int(status_code), resp_meta, result.encode()
     if isinstance(result, Redirect):
         return serialize_redirect_response(result)
     if isinstance(result, File):
@@ -173,15 +234,7 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
     # Handle different response types (ordered by frequency for performance)
     # Common: JSON wrapper
     if isinstance(result, JSON):
-        # Sync version of serialize_json_response
-        has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
-        if has_custom_content_type:
-            headers = [(k.lower(), v) for k, v in result.headers.items()]
-        else:
-            headers = [("content-type", "application/json")]
-            if result.headers:
-                headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-
+        # Sync version of serialize_json_response using ResponseMeta format
         if response_tp is not None:
             try:
                 validated = coerce_to_response_type(result.data, response_tp, meta=meta)
@@ -191,16 +244,20 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
                 return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
         else:
             data_bytes = result.to_bytes()
-        return int(result.status_code), headers, data_bytes
+        cookies = getattr(result, "_cookies", None)
+        resp_meta = _build_response_meta("json", result.headers, cookies)
+        return int(result.status_code), resp_meta, data_bytes
     # Less common: Other response types
     elif isinstance(result, PlainText):
         return serialize_plaintext_response(result)
     elif isinstance(result, HTML):
         return serialize_html_response(result)
     elif isinstance(result, (bytes, bytearray)):
-        return int(status_code), [("content-type", "application/octet-stream")], bytes(result)
+        resp_meta = _build_response_meta("octetstream", None, None)
+        return int(status_code), resp_meta, bytes(result)
     elif isinstance(result, str):
-        return int(status_code), [("content-type", "text/plain; charset=utf-8")], result.encode()
+        resp_meta = _build_response_meta("plaintext", None, None)
+        return int(status_code), resp_meta, result.encode()
     elif isinstance(result, Redirect):
         return serialize_redirect_response(result)
     elif isinstance(result, File):
@@ -208,15 +265,7 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
     elif isinstance(result, FileResponse):
         return serialize_file_streaming_response(result)
     elif isinstance(result, ResponseClass):
-        # Sync version of serialize_generic_response
-        has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
-        if has_custom_content_type:
-            headers = [(k.lower(), v) for k, v in result.headers.items()]
-        else:
-            headers = [("content-type", result.media_type)]
-            if result.headers:
-                headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-
+        # Sync version of serialize_generic_response using ResponseMeta format
         if response_tp is not None:
             try:
                 validated = coerce_to_response_type(result.content, response_tp, meta=meta)
@@ -226,7 +275,19 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
                 return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
         else:
             data_bytes = result.to_bytes()
-        return int(result.status_code), headers, data_bytes
+
+        # Determine response type based on media_type
+        response_type = "json" if result.media_type == "application/json" else "octetstream"
+
+        # Build headers dict with media_type as content-type if not already provided
+        headers = result.headers.copy() if result.headers else {}
+        has_custom_content_type = any(k.lower() == "content-type" for k in headers)
+        if not has_custom_content_type:
+            headers["content-type"] = result.media_type
+
+        cookies = getattr(result, "_cookies", None)
+        resp_meta = _build_response_meta(response_type, headers, cookies)
+        return int(result.status_code), resp_meta, data_bytes
     elif isinstance(result, msgspec.Struct):
         # Handle msgspec.Struct instances (e.g., PaginatedResponse)
         return serialize_json_data_sync(result, response_tp, meta)
@@ -247,19 +308,10 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
 async def serialize_generic_response(
     result: ResponseClass, response_tp: Any | None, meta: HandlerMetadata | None = None
 ) -> ResponseTuple:
-    """Serialize generic Response object with custom headers."""
-    # Check if content-type is already provided in custom headers
-    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
+    """Serialize generic Response object with custom headers.
 
-    if has_custom_content_type:
-        # Use only custom headers (including custom content-type)
-        headers = [(k.lower(), v) for k, v in result.headers.items()]
-    else:
-        # Use media_type as content-type and extend with custom headers
-        headers = [("content-type", result.media_type)]
-        if result.headers:
-            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-
+    Uses the new ResponseMeta tuple format for Rust-side header building.
+    """
     if response_tp is not None:
         try:
             validated = await coerce_to_response_type_async(result.content, response_tp, meta=meta)
@@ -270,25 +322,27 @@ async def serialize_generic_response(
     else:
         data_bytes = result.to_bytes()
 
-    return int(result.status_code), headers, data_bytes
+    # Determine response type based on media_type
+    response_type = "json" if result.media_type == "application/json" else "octetstream"
+
+    # Build headers dict with media_type as content-type if not already provided
+    headers = result.headers.copy() if result.headers else {}
+    has_custom_content_type = any(k.lower() == "content-type" for k in headers)
+    if not has_custom_content_type:
+        headers["content-type"] = result.media_type
+
+    cookies = getattr(result, "_cookies", None)
+    resp_meta = _build_response_meta(response_type, headers, cookies)
+    return int(result.status_code), resp_meta, data_bytes
 
 
 async def serialize_json_response(
     result: JSON, response_tp: Any | None, meta: HandlerMetadata | None = None
 ) -> ResponseTuple:
-    """Serialize JSON response object."""
-    # Check if content-type is already provided in custom headers
-    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
+    """Serialize JSON response object.
 
-    if has_custom_content_type:
-        # Use only custom headers (including custom content-type)
-        headers = [(k.lower(), v) for k, v in result.headers.items()]
-    else:
-        # Use default content-type and extend with custom headers
-        headers = [("content-type", "application/json")]
-        if result.headers:
-            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-
+    Uses the new ResponseMeta tuple format for Rust-side header building.
+    """
     if response_tp is not None:
         try:
             validated = await coerce_to_response_type_async(result.data, response_tp, meta=meta)
@@ -299,49 +353,44 @@ async def serialize_json_response(
     else:
         data_bytes = result.to_bytes()
 
-    return int(result.status_code), headers, data_bytes
+    cookies = getattr(result, "_cookies", None)
+    resp_meta = _build_response_meta("json", result.headers, cookies)
+    return int(result.status_code), resp_meta, data_bytes
 
 
 def serialize_plaintext_response(result: PlainText) -> ResponseTuple:
-    """Serialize plain text response."""
-    # Check if content-type is already provided in custom headers
-    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
+    """Serialize plain text response.
 
-    if has_custom_content_type:
-        # Use only custom headers (including custom content-type)
-        headers = [(k.lower(), v) for k, v in result.headers.items()]
-    else:
-        # Use default content-type and extend with custom headers
-        headers = [("content-type", "text/plain; charset=utf-8")]
-        if result.headers:
-            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-
-    return int(result.status_code), headers, result.to_bytes()
+    Uses the new ResponseMeta tuple format for Rust-side header building.
+    """
+    cookies = getattr(result, "_cookies", None)
+    resp_meta = _build_response_meta("plaintext", result.headers, cookies)
+    return int(result.status_code), resp_meta, result.to_bytes()
 
 
 def serialize_html_response(result: HTML) -> ResponseTuple:
-    """Serialize HTML response."""
-    # Check if content-type is already provided in custom headers
-    has_custom_content_type = result.headers and any(k.lower() == "content-type" for k in result.headers)
+    """Serialize HTML response.
 
-    if has_custom_content_type:
-        # Use only custom headers (including custom content-type)
-        headers = [(k.lower(), v) for k, v in result.headers.items()]
-    else:
-        # Use default content-type and extend with custom headers
-        headers = [("content-type", "text/html; charset=utf-8")]
-        if result.headers:
-            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-
-    return int(result.status_code), headers, result.to_bytes()
+    Uses the new ResponseMeta tuple format for Rust-side header building.
+    """
+    cookies = getattr(result, "_cookies", None)
+    resp_meta = _build_response_meta("html", result.headers, cookies)
+    return int(result.status_code), resp_meta, result.to_bytes()
 
 
 def serialize_redirect_response(result: Redirect) -> ResponseTuple:
-    """Serialize redirect response."""
-    headers = [("location", result.url)]
+    """Serialize redirect response.
+
+    Uses the new ResponseMeta tuple format for Rust-side header building.
+    """
+    # Build custom headers with location
+    custom_headers: dict[str, str] = {"location": result.url}
     if result.headers:
-        headers.extend([(k.lower(), v) for k, v in result.headers.items()])
-    return int(result.status_code), headers, b""
+        custom_headers.update(result.headers)
+
+    cookies = getattr(result, "_cookies", None)
+    resp_meta = _build_response_meta("redirect", custom_headers, cookies)
+    return int(result.status_code), resp_meta, b""
 
 
 def serialize_django_response(result: DjangoHttpResponse) -> ResponseTuple:
@@ -365,59 +414,86 @@ def serialize_django_response(result: DjangoHttpResponse) -> ResponseTuple:
 
 
 def serialize_file_response(result: File) -> ResponseTuple:
-    """Serialize file response."""
+    """Serialize file response.
+
+    Uses the new ResponseMeta tuple format for Rust-side header building.
+    """
     data = result.read_bytes()
     ctype = result.media_type or mimetypes.guess_type(result.path)[0] or "application/octet-stream"
-    headers = [("content-type", ctype)]
 
+    # Build custom headers
+    custom_headers: dict[str, str] = {"content-type": ctype}
     if result.filename:
-        headers.append(("content-disposition", f'attachment; filename="{result.filename}"'))
+        custom_headers["content-disposition"] = f'attachment; filename="{result.filename}"'
     if result.headers:
-        headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+        custom_headers.update(result.headers)
 
-    return int(result.status_code), headers, data
+    cookies = getattr(result, "_cookies", None)
+    resp_meta = _build_response_meta("file", custom_headers, cookies)
+    return int(result.status_code), resp_meta, data
 
 
 def serialize_file_streaming_response(result: FileResponse) -> ResponseTuple:
-    """Serialize file streaming response."""
+    """Serialize file streaming response.
+
+    Uses the new ResponseMeta tuple format for Rust-side header building.
+    """
     ctype = result.media_type or mimetypes.guess_type(result.path)[0] or "application/octet-stream"
-    headers = [("x-bolt-file-path", result.path), ("content-type", ctype)]
 
+    # Build custom headers
+    custom_headers: dict[str, str] = {
+        "x-bolt-file-path": result.path,
+        "content-type": ctype,
+    }
     if result.filename:
-        headers.append(("content-disposition", f'attachment; filename="{result.filename}"'))
+        custom_headers["content-disposition"] = f'attachment; filename="{result.filename}"'
     if result.headers:
-        headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+        custom_headers.update(result.headers)
 
-    return int(result.status_code), headers, b""
+    cookies = getattr(result, "_cookies", None)
+    resp_meta = _build_response_meta("file", custom_headers, cookies)
+    return int(result.status_code), resp_meta, b""
 
 
 async def serialize_json_data(result: Any, response_tp: Any | None, meta: HandlerMetadata) -> ResponseTuple:
-    """Serialize dict/list/other data as JSON."""
+    """Serialize dict/list/other data as JSON.
+
+    Uses the new ResponseMeta tuple format for Rust-side header building.
+    """
     if response_tp is not None:
         try:
             validated = await coerce_to_response_type_async(result, response_tp, meta=meta)
             data = _json.encode(validated)
         except Exception as e:
             err = f"Response validation error: {e}"
+            # Error responses use legacy format (simple case)
             return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
     else:
         data = _json.encode(result)
 
     status = int(meta.get("default_status_code", 200))
-    return status, [("content-type", "application/json")], data
+    # Use new ResponseMeta tuple format - Rust builds headers
+    resp_meta = _build_response_meta("json", None, None)
+    return status, resp_meta, data
 
 
 def serialize_json_data_sync(result: Any, response_tp: Any | None, meta: HandlerMetadata) -> ResponseTuple:
-    """Serialize dict/list/other data as JSON (sync version for sync handlers)."""
+    """Serialize dict/list/other data as JSON (sync version for sync handlers).
+
+    Uses the new ResponseMeta tuple format for Rust-side header building.
+    """
     if response_tp is not None:
         try:
             validated = coerce_to_response_type(result, response_tp, meta=meta)
             data = _json.encode(validated)
         except Exception as e:
             err = f"Response validation error: {e}"
+            # Error responses use legacy format (simple case)
             return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
     else:
         data = _json.encode(result)
 
     status = int(meta.get("default_status_code", 200))
-    return status, [("content-type", "application/json")], data
+    # Use new ResponseMeta tuple format - Rust builds headers
+    resp_meta = _build_response_meta("json", None, None)
+    return status, resp_meta, data

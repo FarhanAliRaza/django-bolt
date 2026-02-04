@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import inspect
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 # Django import - may fail if Django not configured, kept at top for consistency
 try:
@@ -9,6 +12,76 @@ except ImportError:
     django_settings = None
 
 from . import _json
+from .cookies import Cookie, make_delete_cookie
+
+if TYPE_CHECKING:
+    from .cookies import SameSitePolicy
+
+T = TypeVar("T", bound="CookieMixin")
+
+
+class CookieMixin:
+    """Mixin providing set_cookie() and delete_cookie() methods for response classes."""
+
+    _cookies: list[Cookie]
+
+    def set_cookie(
+        self: T,
+        name: str,
+        value: str = "",
+        max_age: int | None = None,
+        expires: datetime | str | None = None,
+        path: str = "/",
+        domain: str | None = None,
+        secure: bool = False,
+        httponly: bool = False,
+        samesite: SameSitePolicy = "Lax",
+    ) -> T:
+        """Set a cookie on the response.
+
+        Matches Django's HttpResponse.set_cookie() API for familiarity.
+
+        Args:
+            name: Cookie name
+            value: Cookie value (default: "")
+            max_age: Maximum age in seconds (default: None, session cookie)
+            expires: Expiration datetime or string (default: None)
+            path: Cookie path (default: "/")
+            domain: Cookie domain (default: None, current domain)
+            secure: Require HTTPS (default: False)
+            httponly: Prevent JavaScript access (default: False)
+            samesite: SameSite policy - "Strict", "Lax", "None", or False (default: "Lax")
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            return Response({"ok": True}).set_cookie("session", "abc123", httponly=True)
+        """
+        if not hasattr(self, "_cookies"):
+            self._cookies = []
+        self._cookies.append(Cookie(name, value, max_age, expires, path, domain, secure, httponly, samesite))
+        return self
+
+    def delete_cookie(self: T, name: str, path: str = "/", domain: str | None = None) -> T:
+        """Delete a cookie by setting it to expire immediately.
+
+        Args:
+            name: Cookie name to delete
+            path: Cookie path (default: "/")
+            domain: Cookie domain (default: None)
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            return Response({"ok": True}).delete_cookie("old_session")
+        """
+        if not hasattr(self, "_cookies"):
+            self._cookies = []
+        self._cookies.append(make_delete_cookie(name, path, domain))
+        return self
+
 
 # Cache for BOLT_ALLOWED_FILE_PATHS - loaded once at server startup
 _ALLOWED_FILE_PATHS_CACHE: list[Path] | None = None
@@ -39,7 +112,7 @@ def initialize_file_response_settings():
     _ALLOWED_FILE_PATHS_INITIALIZED = True
 
 
-class Response:
+class Response(CookieMixin):
     """
     Generic HTTP response with custom headers.
 
@@ -59,6 +132,11 @@ class Response:
                 status_code=200,
                 headers={"X-Custom-Header": "value"}
             )
+
+        # Response with cookies
+        @api.post("/login")
+        async def login():
+            return Response({"ok": True}).set_cookie("session", "abc123", httponly=True)
     """
 
     def __init__(
@@ -84,7 +162,7 @@ class Response:
             return str(self.content).encode()
 
 
-class JSON:
+class JSON(CookieMixin):
     def __init__(self, data: Any, status_code: int = 200, headers: dict[str, str] | None = None):
         self.data = data
         self.status_code = status_code
@@ -94,7 +172,7 @@ class JSON:
         return _json.encode(self.data)
 
 
-class PlainText:
+class PlainText(CookieMixin):
     def __init__(self, text: str, status_code: int = 200, headers: dict[str, str] | None = None):
         self.text = text
         self.status_code = status_code
@@ -104,7 +182,7 @@ class PlainText:
         return self.text.encode()
 
 
-class HTML:
+class HTML(CookieMixin):
     def __init__(self, html: str, status_code: int = 200, headers: dict[str, str] | None = None):
         self.html = html
         self.status_code = status_code
@@ -114,14 +192,14 @@ class HTML:
         return self.html.encode()
 
 
-class Redirect:
+class Redirect(CookieMixin):
     def __init__(self, url: str, status_code: int = 307, headers: dict[str, str] | None = None):
         self.url = url
         self.status_code = status_code
         self.headers = headers or {}
 
 
-class File:
+class File(CookieMixin):
     def __init__(
         self,
         path: str,
@@ -154,7 +232,7 @@ class UploadFile:
             return f.read()
 
 
-class FileResponse:
+class FileResponse(CookieMixin):
     def __init__(
         self,
         path: str,
@@ -206,7 +284,7 @@ class FileResponse:
         self.headers = headers or {}
 
 
-class StreamingResponse:
+class StreamingResponse(CookieMixin):
     def __init__(
         self,
         content: Any,

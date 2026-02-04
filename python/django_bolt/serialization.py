@@ -76,25 +76,30 @@ def response_meta_to_headers(meta: ResponseMetaTuple) -> list[tuple[str, str]]:
         for k, v in custom_headers:
             headers.append((k.lower(), v))
 
-    # Add cookies as Set-Cookie headers
+    # Add cookies as Set-Cookie headers using SimpleCookie for proper escaping
     if cookies:
+        from http.cookies import SimpleCookie
+
         for cookie_tuple in cookies:
             name, value, path, max_age, expires, domain, secure, httponly, samesite = cookie_tuple
-            # Build Set-Cookie header value
-            parts = [f"{name}={value}", f"Path={path}"]
+            # Use SimpleCookie for RFC 6265 compliant escaping
+            morsel = SimpleCookie()
+            morsel[name] = value
+            cookie = morsel[name]
+            cookie["path"] = path
             if max_age is not None:
-                parts.append(f"Max-Age={max_age}")
+                cookie["max-age"] = str(max_age)
             if expires:
-                parts.append(f"Expires={expires}")
+                cookie["expires"] = expires
             if domain:
-                parts.append(f"Domain={domain}")
+                cookie["domain"] = domain
             if secure:
-                parts.append("Secure")
+                cookie["secure"] = True
             if httponly:
-                parts.append("HttpOnly")
+                cookie["httponly"] = True
             if samesite:
-                parts.append(f"SameSite={samesite}")
-            headers.append(("set-cookie", "; ".join(parts)))
+                cookie["samesite"] = samesite
+            headers.append(("set-cookie", cookie.output(header="").strip()))
 
     return headers
 

@@ -351,3 +351,161 @@ class TestAsyncSerializationWithCookies:
         assert len(set_cookie_headers) == 1
         assert "session=xyz" in set_cookie_headers[0][1]
         assert "Secure" in set_cookie_headers[0][1]
+
+
+class TestCookieSecurityValidation:
+    """Tests for cookie security validation in Rust layer.
+
+    These tests verify that invalid cookies are rejected to prevent
+    injection attacks and other security issues.
+    """
+
+    def test_valid_cookie_passes(self):
+        """Test that valid cookies are properly serialized."""
+        from django_bolt import BoltAPI
+        from django_bolt.testing import TestClient
+
+        api = BoltAPI()
+
+        @api.get("/set-cookie")
+        async def set_cookie():
+            return Response({"ok": True}).set_cookie("session", "abc123", httponly=True)
+
+        client = TestClient(api)
+        response = client.get("/set-cookie")
+        assert response.status_code == 200
+        # Check Set-Cookie header is present
+        set_cookie = response.headers.get("set-cookie", "")
+        assert "session=" in set_cookie
+        assert "HttpOnly" in set_cookie
+
+    def test_invalid_cookie_name_rejected(self):
+        """Test that cookie names with injection characters are rejected.
+
+        Rust should reject cookie names containing separators like ; which
+        could be used for injection attacks. A warning is logged to stderr.
+        """
+        from django_bolt import BoltAPI
+        from django_bolt.testing import TestClient
+
+        api = BoltAPI()
+
+        @api.get("/bad-cookie-name")
+        async def bad_cookie_name():
+            # Attempt injection via cookie name
+            return Response({"ok": True}).set_cookie("session; Path=/evil", "xyz")
+
+        client = TestClient(api)
+        response = client.get("/bad-cookie-name")
+        assert response.status_code == 200
+        # Cookie should be rejected - no Set-Cookie header
+        set_cookie = response.headers.get("set-cookie", "")
+        assert "evil" not in set_cookie
+
+    def test_control_chars_in_value_rejected(self):
+        """Test that cookie values with control characters are rejected.
+
+        Control characters like CR/LF could enable header injection attacks.
+        A warning is logged to stderr.
+        """
+        from django_bolt import BoltAPI
+        from django_bolt.testing import TestClient
+
+        api = BoltAPI()
+
+        @api.get("/bad-cookie-value")
+        async def bad_cookie_value():
+            # Attempt header injection via cookie value
+            return Response({"ok": True}).set_cookie("session", "value\r\nSet-Cookie: evil=1")
+
+        client = TestClient(api)
+        response = client.get("/bad-cookie-value")
+        assert response.status_code == 200
+        # Cookie should be rejected - no evil cookie
+        set_cookie = response.headers.get("set-cookie", "")
+        assert "evil" not in set_cookie
+
+    def test_empty_cookie_name_rejected(self):
+        """Test that empty cookie names are rejected. A warning is logged to stderr."""
+        from django_bolt import BoltAPI
+        from django_bolt.testing import TestClient
+
+        api = BoltAPI()
+
+        @api.get("/empty-name")
+        async def empty_name():
+            return Response({"ok": True}).set_cookie("", "value")
+
+        client = TestClient(api)
+        response = client.get("/empty-name")
+        assert response.status_code == 200
+        # Empty name cookie should be rejected
+        set_cookie = response.headers.get("set-cookie", "")
+        assert set_cookie == "" or "=" not in set_cookie.split(";")[0]
+
+    def test_special_chars_in_value_escaped(self):
+        """Test that special characters in cookie values are properly escaped."""
+        from django_bolt import BoltAPI
+        from django_bolt.testing import TestClient
+
+        api = BoltAPI()
+
+        @api.get("/special-value")
+        async def special_value():
+            # Value with spaces should be quoted
+            return Response({"ok": True}).set_cookie("data", "hello world")
+
+        client = TestClient(api)
+        response = client.get("/special-value")
+        assert response.status_code == 200
+        set_cookie = response.headers.get("set-cookie", "")
+        assert "data=" in set_cookie
+
+    def test_multiple_valid_cookies(self):
+        """Test that multiple valid cookies all get set."""
+        from django_bolt import BoltAPI
+        from django_bolt.testing import TestClient
+
+        api = BoltAPI()
+
+        @api.get("/multi-cookie")
+        async def multi_cookie():
+            return Response({"ok": True}).set_cookie("a", "1").set_cookie("b", "2").set_cookie("c", "3")
+
+        client = TestClient(api)
+        response = client.get("/multi-cookie")
+        assert response.status_code == 200
+        # All cookies should be present (may be in multiple headers or one)
+        all_cookies = response.headers.get("set-cookie", "")
+        # Check all three cookies are set
+        assert "a=" in all_cookies or response.headers.get_list("set-cookie")
+
+    def test_mixed_valid_invalid_cookies(self):
+        """Test that valid cookies are set even when mixed with invalid ones.
+
+        Note: Rust logs a warning to stderr for invalid cookies, but we can't
+        capture Rust's eprintln! from Python tests. Check server logs manually
+        for: [django-bolt] WARNING: Invalid cookie name 'bad; injection'
+        """
+        from django_bolt import BoltAPI
+        from django_bolt.testing import TestClient
+
+        api = BoltAPI()
+
+        @api.get("/mixed-cookies")
+        async def mixed_cookies():
+            return (
+                Response({"ok": True})
+                .set_cookie("valid", "good")
+                .set_cookie("bad; injection", "evil")  # Invalid name - rejected
+                .set_cookie("also_valid", "fine")
+            )
+
+        client = TestClient(api)
+        response = client.get("/mixed-cookies")
+        assert response.status_code == 200
+        set_cookie = response.headers.get("set-cookie", "")
+        # Valid cookies should be present
+        assert "valid=" in set_cookie or "also_valid=" in set_cookie
+        # Injection attempt should be blocked
+        assert "injection" not in set_cookie

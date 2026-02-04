@@ -25,6 +25,9 @@ class Cookie:
         httponly: Prevent JavaScript access (default: False)
         samesite: SameSite policy - "Strict", "Lax", "None", or False to omit (default: "Lax")
 
+    Note:
+        Invalid cookie names/values are validated and rejected by Rust at serialization time.
+
     Example:
         >>> cookie = Cookie("session", "abc123", httponly=True, secure=True)
         >>> cookie.to_header_value()

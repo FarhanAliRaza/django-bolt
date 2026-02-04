@@ -113,11 +113,13 @@ pub fn meta_to_headers(meta: &ResponseMeta) -> Vec<(String, String)> {
         }
     }
 
-    // 3. Cookies: serialize in Rust
+    // 3. Cookies: serialize in Rust (skip invalid cookies with warning)
     if let Some(ref cookies) = meta.cookies {
         for cookie in cookies {
-            let header_value = format_cookie(cookie);
-            headers.push(("set-cookie".to_string(), header_value));
+            if let Some(header_value) = format_cookie(cookie) {
+                headers.push(("set-cookie".to_string(), header_value));
+            }
+            // Invalid cookies are logged and skipped by format_cookie
         }
     }
 
@@ -142,7 +144,7 @@ pub struct ParsedResponseMeta {
 #[inline]
 pub fn try_extract_response_meta(py: Python<'_>, result: &Py<PyAny>) -> Option<ParsedResponseMeta> {
     let obj = result.bind(py);
-    let tuple = obj.downcast::<PyTuple>().ok()?;
+    let tuple = obj.cast::<PyTuple>().ok()?;
 
     if tuple.len() != 3 {
         return None;
@@ -162,7 +164,7 @@ pub fn try_extract_response_meta(py: Python<'_>, result: &Py<PyAny>) -> Option<P
 
     // Element 2: body (bytes)
     let body_obj = tuple.get_item(2).ok()?;
-    let pybytes = body_obj.downcast::<PyBytes>().ok()?;
+    let pybytes = body_obj.cast::<PyBytes>().ok()?;
     let body = pybytes.as_bytes().to_vec();
 
     Some(ParsedResponseMeta {
@@ -231,11 +233,13 @@ pub fn build_response_from_meta(
         }
     }
 
-    // 3. Cookies: serialize in Rust (replaces SimpleCookie)
+    // 3. Cookies: serialize in Rust (skip invalid cookies with warning)
     if let Some(cookies) = meta.cookies {
         for cookie in cookies {
-            let header_value = format_cookie(&cookie);
-            builder.append_header(("set-cookie", header_value));
+            if let Some(header_value) = format_cookie(&cookie) {
+                builder.append_header(("set-cookie", header_value));
+            }
+            // Invalid cookies are logged and skipped by format_cookie
         }
     }
 

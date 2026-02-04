@@ -78,7 +78,7 @@ pub struct ResponseMeta {
 impl ResponseMeta {
     /// Extract from Python tuple: (response_type, custom_ct, headers, cookies)
     pub fn from_python(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let tuple = obj.downcast::<PyTuple>()?;
+        let tuple = obj.cast::<PyTuple>()?;
 
         // Element 0: response_type string
         let type_str: String = tuple.get_item(0)?.extract()?;

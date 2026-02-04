@@ -1036,7 +1036,7 @@ async fn handle_test_request_internal(
             // Fast-path: tuple extraction
             let fast_tuple: Option<(u16, Vec<(String, String)>, Vec<u8>)> = Python::attach(|py| {
                 let obj = result_obj.bind(py);
-                let tuple = obj.downcast::<PyTuple>().ok()?;
+                let tuple = obj.cast::<PyTuple>().ok()?;
                 if tuple.len() != 3 {
                     return None;
                 }
@@ -1048,7 +1048,7 @@ async fn handle_test_request_internal(
                     .extract::<Vec<(String, String)>>()
                     .ok()?;
                 let body_obj = tuple.get_item(2).ok()?;
-                let pybytes = body_obj.downcast::<PyBytes>().ok()?;
+                let pybytes = body_obj.cast::<PyBytes>().ok()?;
                 let body_vec = pybytes.as_bytes().to_vec();
                 Some((status_code, resp_headers, body_vec))
             });

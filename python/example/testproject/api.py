@@ -526,6 +526,198 @@ async def get_cookie(val: Annotated[str, Cookie(alias="session")]):
     return PlainText(val)
 
 
+# ==== Cookie Setting Demo Endpoints ====
+# These demonstrate the cookie API and Rust-side validation
+
+
+@api.get("/cookies/valid")
+async def cookies_valid():
+    """
+    Set a valid cookie with all standard attributes.
+
+    Test with:
+        curl -v http://localhost:8000/cookies/valid
+
+    Response headers should include:
+        Set-Cookie: session=abc123; Path=/; Max-Age=3600; Secure; HttpOnly; SameSite=Lax
+    """
+    from django_bolt.responses import JSON
+
+    response = JSON({"message": "Cookie set successfully", "cookie_name": "session"})
+    response.set_cookie(
+        "session",
+        "abc123",
+        max_age=3600,
+        path="/",
+        secure=False,
+        httponly=True,
+        samesite="Lax",
+    )
+    return response
+
+
+@api.get("/cookies/multiple")
+async def cookies_multiple():
+    """
+    Set multiple cookies in one response.
+
+    Test with:
+        curl -v http://localhost:8000/cookies/multiple
+
+    Response headers should include multiple Set-Cookie headers.
+    """
+    from django_bolt.responses import JSON
+
+    response = JSON({"message": "Multiple cookies set", "cookies": ["user_id", "theme", "lang"]})
+    response.set_cookie("user_id", "12345", httponly=True)
+    response.set_cookie("theme", "dark", max_age=86400 * 365)  # 1 year
+    response.set_cookie("lang", "en-US")
+    return response
+
+
+@api.get("/cookies/delete")
+async def cookies_delete():
+    """
+    Delete a cookie by setting it to expire immediately.
+
+    Test with:
+        curl -v http://localhost:8000/cookies/delete
+
+    Response headers should include:
+        Set-Cookie: session=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT
+    """
+    from django_bolt.responses import JSON
+
+    response = JSON({"message": "Cookie deleted", "cookie_name": "session"})
+    response.delete_cookie("session")
+    return response
+
+
+@api.get("/cookies/invalid-name")
+async def cookies_invalid_name():
+    """
+    Attempt to set a cookie with an invalid name (contains injection characters).
+
+    The Rust layer will reject this cookie and log a warning.
+    The response will succeed but the invalid cookie won't be set.
+
+    Test with:
+        curl -v http://localhost:8000/cookies/invalid-name
+
+    Check server logs for:
+        [django-bolt] WARNING: Invalid cookie name 'session; Path=/evil' - contains invalid characters
+
+    The Set-Cookie header will NOT appear in the response.
+    """
+    from django_bolt.responses import JSON
+
+    response = JSON(
+        {
+            "message": "Attempted to set cookie with invalid name",
+            "cookie_name": "session; Path=/evil",
+            "note": "This cookie will be rejected by Rust validation - check server logs",
+        }
+    )
+    # This name contains '; Path=/evil' which is a header injection attempt
+    # Rust will reject it based on RFC 6265 cookie name validation
+    response.set_cookie("session; Path=/evil", "malicious", httponly=True)
+    return response
+
+
+@api.get("/cookies/invalid-value")
+async def cookies_invalid_value():
+    """
+    Attempt to set a cookie with control characters in the value.
+
+    The Rust layer will reject this cookie and log a warning.
+    The response will succeed but the invalid cookie won't be set.
+
+    Test with:
+        curl -v http://localhost:8000/cookies/invalid-value
+
+    Check server logs for:
+        [django-bolt] WARNING: Cookie 'injection' value contains control characters - rejected for security
+
+    The Set-Cookie header will NOT appear in the response.
+    """
+    from django_bolt.responses import JSON
+
+    response = JSON(
+        {
+            "message": "Attempted to set cookie with control characters in value",
+            "cookie_name": "injection",
+            "note": "This cookie will be rejected by Rust validation - check server logs",
+        }
+    )
+    # This value contains CRLF which could enable header injection
+    # Rust will reject it for security
+    response.set_cookie("injection", "value\r\nSet-Cookie: evil=1", httponly=True)
+    return response
+
+
+@api.get("/cookies/mixed")
+async def cookies_mixed():
+    """
+    Set multiple cookies - some valid, some invalid.
+
+    Demonstrates that invalid cookies are rejected individually,
+    while valid cookies in the same response are still set.
+
+    Test with:
+        curl -v http://localhost:8000/cookies/mixed
+
+    Only valid cookies will appear in Set-Cookie headers.
+    Invalid ones will be logged and skipped.
+    """
+    from django_bolt.responses import JSON
+
+    response = JSON(
+        {
+            "message": "Mixed valid/invalid cookies",
+            "valid_cookies": ["good_session", "user_prefs"],
+            "invalid_cookies": ["bad; name", "has_control_chars"],
+        }
+    )
+
+    # Valid cookies - these will be set
+    response.set_cookie("good_session", "valid123", httponly=True, secure=True)
+    response.set_cookie("user_prefs", "theme=dark", max_age=86400)
+
+    # Invalid cookie name - will be rejected
+    response.set_cookie("bad; name", "value")
+
+    # Invalid cookie value (control characters) - will be rejected
+    response.set_cookie("has_control_chars", "line1\nline2")
+
+    return response
+
+
+@api.get("/cookies/special-chars")
+async def cookies_special_chars():
+    """
+    Set a cookie with special characters in the value that need escaping.
+
+    The cookie crate handles proper quoting/escaping for RFC 6265 compliance.
+
+    Test with:
+        curl -v http://localhost:8000/cookies/special-chars
+
+    The value with spaces will be properly quoted in the Set-Cookie header.
+    """
+    from django_bolt.responses import JSON
+
+    response = JSON(
+        {
+            "message": "Cookie with special characters",
+            "cookie_name": "data",
+            "cookie_value": "hello world with spaces",
+        }
+    )
+    # Spaces require quoting per RFC 6265 - the cookie crate handles this
+    response.set_cookie("data", "hello world with spaces")
+    return response
+
+
 @api.get("/exc")
 async def raise_exc():
     raise HTTPException(status_code=404, detail="Not found")

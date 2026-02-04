@@ -391,39 +391,136 @@ async def options_items():
 
 ## Setting cookies
 
-Set a cookie using the `Set-Cookie` header:
+Use the `.set_cookie()` method on any response type:
 
 ```python
-from django_bolt import JSON
+from django_bolt import Response, JSON
 
 @api.post("/login")
 async def login():
-    return JSON(
-        {"message": "Logged in"},
-        headers={"Set-Cookie": "session=abc123; Path=/; HttpOnly; SameSite=Lax"}
+    return Response({"logged_in": True}).set_cookie("session", "abc123")
+```
+
+### Cookie options
+
+Pass additional options to control cookie behavior:
+
+```python
+@api.post("/login")
+async def login():
+    return JSON({"message": "Logged in"}).set_cookie(
+        name="session",
+        value="abc123",
+        max_age=3600,           # Expires in 3600 seconds
+        path="/",               # Cookie path (default: "/")
+        domain=".example.com",  # Cookie domain
+        secure=True,            # Only send over HTTPS
+        httponly=True,          # Not accessible via JavaScript
+        samesite="Lax",         # CSRF protection: "Strict", "Lax", or "None"
     )
 ```
 
-Common cookie attributes:
+Cookie attributes:
 
-| Attribute | Description |
-|-----------|-------------|
-| `Path=/` | Cookie is sent for all paths |
-| `HttpOnly` | Not accessible via JavaScript |
-| `Secure` | Only sent over HTTPS |
-| `SameSite=Lax` | CSRF protection (Lax, Strict, or None) |
-| `Max-Age=3600` | Expires in 3600 seconds |
-| `Expires=<date>` | Specific expiration date |
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | `str` | required | Cookie name |
+| `value` | `str` | `""` | Cookie value |
+| `max_age` | `int` | `None` | Seconds until expiration |
+| `expires` | `datetime \| str` | `None` | Expiration date |
+| `path` | `str` | `"/"` | Cookie path |
+| `domain` | `str` | `None` | Cookie domain |
+| `secure` | `bool` | `False` | HTTPS only |
+| `httponly` | `bool` | `False` | No JavaScript access |
+| `samesite` | `str \| False` | `"Lax"` | `"Strict"`, `"Lax"`, `"None"`, or `False` to omit |
 
-To delete a cookie, set it with `Max-Age=0`:
+### Multiple cookies
+
+Chain multiple `.set_cookie()` calls:
+
+```python
+@api.post("/login")
+async def login():
+    return Response({"logged_in": True}) \
+        .set_cookie("session", "abc123", httponly=True) \
+        .set_cookie("preferences", "dark-mode", max_age=86400 * 365)
+```
+
+### Deleting cookies
+
+Use `.delete_cookie()` to remove a cookie:
 
 ```python
 @api.post("/logout")
 async def logout():
-    return JSON(
-        {"message": "Logged out"},
-        headers={"Set-Cookie": "session=; Path=/; Max-Age=0"}
+    return Response({"logged_out": True}).delete_cookie("session")
+```
+
+With path and domain (must match the original cookie):
+
+```python
+@api.post("/logout")
+async def logout():
+    return Response({"logged_out": True}).delete_cookie(
+        "session",
+        path="/app",
+        domain=".example.com"
     )
+```
+
+### Set and delete in one response
+
+```python
+@api.post("/refresh")
+async def refresh():
+    return Response({"refreshed": True}) \
+        .delete_cookie("old_session") \
+        .set_cookie("new_session", "xyz789", httponly=True)
+```
+
+### Cookies on all response types
+
+The `.set_cookie()` and `.delete_cookie()` methods work on all response types:
+
+```python
+from django_bolt import Response, JSON, StreamingResponse
+from django_bolt.responses import HTML, PlainText, Redirect
+
+# JSON
+JSON({"ok": True}).set_cookie("api_token", "secret")
+
+# HTML
+HTML("<h1>Welcome</h1>").set_cookie("visited", "true")
+
+# PlainText
+PlainText("OK").set_cookie("status", "checked")
+
+# Redirect with cookie (e.g., after login)
+Redirect("/dashboard").set_cookie("just_logged_in", "1", max_age=5)
+
+# Streaming response
+StreamingResponse(generate()).set_cookie("stream_id", "12345")
+```
+
+### Using the Cookie class directly
+
+For advanced use cases, create `Cookie` objects directly:
+
+```python
+from django_bolt import Cookie
+
+cookie = Cookie(
+    name="session",
+    value="abc123",
+    max_age=3600,
+    secure=True,
+    httponly=True,
+    samesite="Strict",
+)
+
+# Get the Set-Cookie header value
+header_value = cookie.to_header_value()
+# "session=abc123; Max-Age=3600; Path=/; Secure; HttpOnly; SameSite=Strict"
 ```
 
 ## Response validation

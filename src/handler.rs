@@ -798,7 +798,7 @@ pub async fn handle_request(
             // Fast-path: extract and copy body in single GIL acquisition (eliminates separate GIL for drop)
             let fast_tuple: Option<(u16, Vec<(String, String)>, Vec<u8>)> = Python::attach(|py| {
                 let obj = result_obj.bind(py);
-                let tuple = obj.downcast::<PyTuple>().ok()?;
+                let tuple = obj.cast::<PyTuple>().ok()?;
                 if tuple.len() != 3 {
                     return None;
                 }
@@ -815,7 +815,7 @@ pub async fn handle_request(
 
                 // 2: body (bytes) - copy within GIL, drop Python object before releasing GIL
                 let body_obj = tuple.get_item(2).ok()?;
-                let pybytes = body_obj.downcast::<PyBytes>().ok()?;
+                let pybytes = body_obj.cast::<PyBytes>().ok()?;
                 let body_vec = pybytes.as_bytes().to_vec();
                 // Python object drops automatically when this scope ends (still holding GIL)
                 Some((status_code, resp_headers, body_vec))

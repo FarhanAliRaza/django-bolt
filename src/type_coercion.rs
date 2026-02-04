@@ -316,7 +316,8 @@ pub fn coerce_to_py(
                 Ok(CoercedValue::DateTime(dt)) => {
                     // Use fromisoformat for RFC3339 strings
                     let iso_str = dt.to_rfc3339().replace('Z', "+00:00");
-                    let py_dt = get_datetime_class(py).call_method1(py, "fromisoformat", (iso_str,))?;
+                    let py_dt =
+                        get_datetime_class(py).call_method1(py, "fromisoformat", (iso_str,))?;
                     Ok(py_dt)
                 }
                 Ok(CoercedValue::NaiveDateTime(ndt)) => {
@@ -359,8 +360,11 @@ pub fn coerce_to_py(
             // OPTIMIZATION: Use cached date class (avoids py.import per call)
             match NaiveDate::parse_from_str(value, "%Y-%m-%d") {
                 Ok(date) => {
-                    let py_date =
-                        get_date_class(py).call_method1(py, "fromisoformat", (date.to_string(),))?;
+                    let py_date = get_date_class(py).call_method1(
+                        py,
+                        "fromisoformat",
+                        (date.to_string(),),
+                    )?;
                     Ok(py_date)
                 }
                 Err(e) => Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -374,8 +378,11 @@ pub fn coerce_to_py(
             // OPTIMIZATION: Use cached time class (avoids py.import per call)
             match parse_time(value) {
                 Ok(CoercedValue::Time(time)) => {
-                    let py_time =
-                        get_time_class(py).call_method1(py, "fromisoformat", (time.to_string(),))?;
+                    let py_time = get_time_class(py).call_method1(
+                        py,
+                        "fromisoformat",
+                        (time.to_string(),),
+                    )?;
                     Ok(py_time)
                 }
                 Ok(_) => {

@@ -195,7 +195,7 @@ class TestCustomMiddlewareHTTPCycle:
         """Test custom middleware that adds response header."""
         api = BoltAPI()
         # Add custom middleware via DjangoMiddlewareStack
-        api.middleware = [DjangoMiddlewareStack([HeaderAddingMiddleware])]
+        api._middleware = [DjangoMiddlewareStack([HeaderAddingMiddleware])]
 
         @api.get("/test")
         async def test_route():
@@ -209,7 +209,7 @@ class TestCustomMiddlewareHTTPCycle:
     def test_middleware_short_circuit(self):
         """Test middleware can return early without calling handler."""
         api = BoltAPI()
-        api.middleware = [DjangoMiddlewareStack([ShortCircuitMiddleware])]
+        api._middleware = [DjangoMiddlewareStack([ShortCircuitMiddleware])]
 
         handler_called = {"called": False}
 
@@ -271,7 +271,7 @@ class TestMiddlewareChainingHTTPCycle:
     def test_multiple_middlewares_all_run(self):
         """Test that multiple middlewares in chain all execute."""
         api = BoltAPI()
-        api.middleware = [DjangoMiddlewareStack([Order1Middleware, Order2Middleware])]
+        api._middleware = [DjangoMiddlewareStack([Order1Middleware, Order2Middleware])]
 
         @api.get("/test")
         async def test_route():
@@ -310,7 +310,7 @@ class TestErrorHandlingHTTPCycle:
     def test_middleware_catches_exception(self):
         """Test that middleware can catch and handle exceptions."""
         api = BoltAPI()
-        api.middleware = [DjangoMiddlewareStack([ExceptionCatchingMiddleware])]
+        api._middleware = [DjangoMiddlewareStack([ExceptionCatchingMiddleware])]
 
         @api.get("/error")
         async def error_route():
@@ -531,7 +531,7 @@ class TestMiddlewareCategorization:
 
         # Test through HTTP cycle
         api = BoltAPI()
-        api.middleware = [DjangoMiddlewareStack([HookBasedThirdPartyMiddleware])]
+        api._middleware = [DjangoMiddlewareStack([HookBasedThirdPartyMiddleware])]
 
         @api.get("/test")
         async def test_route():
@@ -550,7 +550,7 @@ class TestMiddlewareCategorization:
         Middleware without hooks must be chained and run via sync_to_async.
         """
         api = BoltAPI()
-        api.middleware = [DjangoMiddlewareStack([CallOnlyMiddleware])]
+        api._middleware = [DjangoMiddlewareStack([CallOnlyMiddleware])]
 
         @api.get("/test")
         async def test_route():
@@ -568,7 +568,7 @@ class TestMiddlewareCategorization:
         All three types should work together correctly.
         """
         api = BoltAPI()
-        api.middleware = [
+        api._middleware = [
             DjangoMiddlewareStack(
                 [
                     SessionMiddleware,  # Django built-in (fast path)
@@ -601,7 +601,7 @@ class TestMiddlewareCategorization:
         still be able to return early responses.
         """
         api = BoltAPI()
-        api.middleware = [DjangoMiddlewareStack([HookShortCircuitMiddleware])]
+        api._middleware = [DjangoMiddlewareStack([HookShortCircuitMiddleware])]
 
         handler_called = {"called": False}
 
@@ -1106,7 +1106,7 @@ class TestMultipleCookieHeaders:
         because dict can't have duplicate keys.
         """
         api = BoltAPI()
-        api.middleware = [DjangoMiddlewareStack([MultipleCookieMiddleware])]
+        api._middleware = [DjangoMiddlewareStack([MultipleCookieMiddleware])]
 
         @api.get("/test")
         async def test_route():
@@ -1153,7 +1153,7 @@ class TestMultipleCookieHeaders:
         attributes are correctly passed through.
         """
         api = BoltAPI()
-        api.middleware = [DjangoMiddlewareStack([MultipleCookieMiddleware])]
+        api._middleware = [DjangoMiddlewareStack([MultipleCookieMiddleware])]
 
         @api.get("/test")
         async def test_route():
@@ -1195,7 +1195,7 @@ class TestMultipleCookieHeaders:
         handler sets additional cookies, and ALL of them appear in response.
         """
         api = BoltAPI()
-        api.middleware = [DjangoMiddlewareStack([MultipleCookieMiddleware])]
+        api._middleware = [DjangoMiddlewareStack([MultipleCookieMiddleware])]
 
         @api.get("/test")
         async def test_route():
@@ -1220,7 +1220,7 @@ class TestMultipleCookieHeaders:
         """
         api = BoltAPI()
         # No middleware that sets cookies
-        api.middleware = [DjangoMiddlewareStack([HeaderAddingMiddleware])]
+        api._middleware = [DjangoMiddlewareStack([HeaderAddingMiddleware])]
 
         @api.get("/test")
         async def test_route():

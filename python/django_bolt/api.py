@@ -137,23 +137,23 @@ class BoltAPI:
         self.trailing_slash = trailing_slash  # Mode: "strip", "append", or "keep"
 
         # Build middleware list: Django middleware first, then custom middleware
-        self.middleware = []
+        self._middleware = []
 
         # Load Django middleware if configured
         # Store flag for optimization bypass (Django middleware needs cookies/headers)
         self._has_django_middleware = bool(django_middleware)
         if django_middleware:
-            self.middleware.extend(load_django_middleware(django_middleware))
+            self._middleware.extend(load_django_middleware(django_middleware))
 
         # Add custom middleware
         if middleware:
-            self.middleware.extend(middleware)
+            self._middleware.extend(middleware)
 
         # Logging configuration (opt-in, setup happens at server startup)
-        self.enable_logging = enable_logging
+        self._enable_logging = enable_logging
         self._logging_middleware = None
 
-        if self.enable_logging:
+        if self._enable_logging:
             # Create logging middleware (actual logging setup happens at server startup)
             if logging_config is not None:
                 self._logging_middleware = LoggingMiddleware(logging_config)
@@ -165,13 +165,13 @@ class BoltAPI:
         # compression=None means disabled, not providing compression arg means default enabled
         if compression is False:
             # Explicitly disabled
-            self.compression = None
+            self._compression = None
         elif compression is None:
             # Not provided, use default
-            self.compression = CompressionConfig()
+            self._compression = CompressionConfig()
         else:
             # Custom config provided
-            self.compression = compression
+            self._compression = compression
 
         # OpenAPI configuration - enabled by default with sensible defaults
         if openapi_config is None:
@@ -188,7 +188,7 @@ class BoltAPI:
             except Exception:
                 title = "API"
 
-            self.openapi_config = OpenAPIConfig(
+            self._openapi_config = OpenAPIConfig(
                 title=title,
                 version="1.0.0",
                 path="/docs",
@@ -201,7 +201,7 @@ class BoltAPI:
                 ],
             )
         else:
-            self.openapi_config = openapi_config
+            self._openapi_config = openapi_config
 
         self._openapi_schema: dict[str, Any] | None = None
         self._openapi_routes_registered = False
@@ -490,13 +490,13 @@ class BoltAPI:
             # Compile middleware metadata for WebSocket handler
             # Always call compile_middleware_meta to pick up:
             # 1. Handler-level decorators (@rate_limit, @cors, etc.)
-            # 2. Global middleware from self.middleware
+            # 2. Global middleware from self._middleware
             # 3. Guards and auth backends
             middleware_meta = compile_middleware_meta(
                 handler=fn,
                 method="WEBSOCKET",
                 path=full_path,
-                global_middleware=self.middleware,
+                global_middleware=self._middleware,
                 guards=guards,
                 auth=auth,
             )
@@ -956,7 +956,7 @@ class BoltAPI:
             self._handler_meta[handler_id] = meta
 
             # Compile middleware metadata for this handler (including guards and auth)
-            middleware_meta = compile_middleware_meta(fn, method, full_path, self.middleware, guards=guards, auth=auth)
+            middleware_meta = compile_middleware_meta(fn, method, full_path, self._middleware, guards=guards, auth=auth)
 
             # Add optimization flags to middleware metadata
             # These are parsed by Rust's RouteMetadata::from_python() to skip unused parsing
@@ -965,7 +965,7 @@ class BoltAPI:
             # Python middleware requires cookies and headers regardless of handler params
             # Django middleware needs cookies/headers (CSRF, session, auth, etc.)
             # Custom middleware may also inspect headers for routing, auth, etc.
-            if self._has_django_middleware or self.middleware:
+            if self._has_django_middleware or self._middleware:
                 middleware_meta["needs_cookies"] = True
                 middleware_meta["needs_headers"] = True
 
@@ -1033,13 +1033,13 @@ class BoltAPI:
         Returns:
             The outermost middleware callable, or None if no middleware
         """
-        if not api.middleware:
+        if not api._middleware:
             return None
 
         # The innermost "get_response" is a placeholder - it will be replaced per-request
         # by the actual handler execution. We use a sentinel callable here.
         # The real handler dispatch happens in _dispatch_with_middleware.
-        return api.middleware  # Return middleware classes for per-request chain building
+        return api._middleware  # Return middleware classes for per-request chain building
 
     async def _dispatch_with_middleware(
         self,
@@ -1115,7 +1115,7 @@ class BoltAPI:
             # Build the middleware chain (innermost to outermost)
             # Each middleware class receives get_response in __init__
             chain = inner_handler
-            for middleware_cls in reversed(api.middleware):
+            for middleware_cls in reversed(api._middleware):
                 # Check if this is a DjangoMiddleware instance (pre-configured wrapper)
                 if hasattr(middleware_cls, "_create_middleware_instance"):
                     # DjangoMiddleware: call _create_middleware_instance with get_response
@@ -1218,9 +1218,9 @@ class BoltAPI:
             # Middleware runs for:
             # - Mounted sub-apps (original_api has middleware)
             # - Main API (self has middleware)
-            if original_api and original_api.middleware:
+            if original_api and original_api._middleware:
                 api_with_middleware = original_api
-            elif self.middleware:
+            elif self._middleware:
                 api_with_middleware = self
             else:
                 api_with_middleware = None
@@ -1309,7 +1309,7 @@ class BoltAPI:
             OpenAPI schema as dictionary.
         """
         if self._openapi_schema is None:
-            generator = SchemaGenerator(self, self.openapi_config)
+            generator = SchemaGenerator(self, self._openapi_config)
             openapi = generator.generate()
             self._openapi_schema = openapi.to_schema()
 

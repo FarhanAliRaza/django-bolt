@@ -169,15 +169,15 @@ class Command(BaseCommand):
         # Find first API with OpenAPI config (project-level API takes priority)
         # Respect enabled=False from the first API - don't let other APIs override it
         for _api_path, api in apis:
-            if api.openapi_config:
-                openapi_config = api.openapi_config
-                openapi_enabled = api.openapi_config.enabled
+            if api._openapi_config:
+                openapi_config = api._openapi_config
+                openapi_enabled = api._openapi_config.enabled
                 break
 
         # Register OpenAPI routes on merged API if any API had OpenAPI enabled
         if openapi_enabled and openapi_config:
             # Transfer OpenAPI config to merged API
-            merged_api.openapi_config = openapi_config
+            merged_api._openapi_config = openapi_config
             merged_api._register_openapi_routes()
 
             if process_id is not None:
@@ -293,8 +293,8 @@ class Command(BaseCommand):
         else:
             # Check if any API has compression configured
             for _api_path, api in apis:
-                if hasattr(api, "compression") and api.compression is not None:
-                    compression_config = api.compression.to_rust_config()
+                if api._compression is not None:
+                    compression_config = api._compression.to_rust_config()
                     break
 
         # Register authentication backends for user resolution (request.user loading)

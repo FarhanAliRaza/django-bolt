@@ -153,8 +153,8 @@ class TestGlobalMiddleware:
 
         api = BoltAPI(middleware=[custom_mw])
 
-        assert len(api.middleware) == 1
-        assert api.middleware[0] == custom_mw
+        assert len(api._middleware) == 1
+        assert api._middleware[0] == custom_mw
 
 
 class TestMiddlewareMetadata:

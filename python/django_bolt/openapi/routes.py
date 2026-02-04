@@ -37,7 +37,7 @@ class OpenAPIRouteRegistrar:
         Returns:
             The decorator function, or None if not configured.
         """
-        django_auth = self.api.openapi_config.django_auth
+        django_auth = self.api._openapi_config.django_auth
         if django_auth is None:
             return None
         if django_auth is True:
@@ -66,7 +66,7 @@ class OpenAPIRouteRegistrar:
         django_middleware=True and mounts it at the docs path.
         Otherwise, returns the main API for direct registration.
         """
-        if self.api.openapi_config.django_auth:
+        if self.api._openapi_config.django_auth:
             if self._docs_api is None:
                 from django_bolt.api import BoltAPI  # noqa: PLC0415
 
@@ -91,25 +91,25 @@ class OpenAPIRouteRegistrar:
         When django_auth is configured, routes are registered on a separate
         BoltAPI with django_middleware=True and mounted at the docs path.
         """
-        if not self.api.openapi_config or self.api._openapi_routes_registered:
+        if not self.api._openapi_config or self.api._openapi_routes_registered:
             return
 
         # Check if docs are enabled
-        if not self.api.openapi_config.enabled:
+        if not self.api._openapi_config.enabled:
             return
 
         # Get the API to register routes on (separate API if using django_auth)
         docs_api = self._get_docs_api()
-        use_django_auth = self.api.openapi_config.django_auth is not None
+        use_django_auth = self.api._openapi_config.django_auth is not None
 
         # Get guards and auth from config for protecting doc routes
-        guards = self.api.openapi_config.guards
-        auth = self.api.openapi_config.auth
+        guards = self.api._openapi_config.guards
+        auth = self.api._openapi_config.auth
 
         # Determine the base path for routes
         # If using mounted docs API, routes are relative (no prefix)
         # If using main API, routes include the full path
-        route_prefix = "" if use_django_auth else self.api.openapi_config.path
+        route_prefix = "" if use_django_auth else self.api._openapi_config.path
 
         # When registering on main API (not using django_auth), skip the API prefix
         # so docs are at absolute paths (e.g., /docs/*) regardless of API prefix
@@ -165,7 +165,7 @@ class OpenAPIRouteRegistrar:
 
         # If using separate docs API, mount it at the docs path
         if use_django_auth and self._docs_api is not None:
-            self.api.mount(self.api.openapi_config.path, self._docs_api)
+            self.api.mount(self.api._openapi_config.path, self._docs_api)
 
         self.api._openapi_routes_registered = True
 
@@ -176,7 +176,7 @@ class OpenAPIRouteRegistrar:
             OpenAPI schema as dictionary
         """
         if self.api._openapi_schema is None:
-            generator = SchemaGenerator(self.api, self.api.openapi_config)
+            generator = SchemaGenerator(self.api, self.api._openapi_config)
             openapi = generator.generate()
             self.api._openapi_schema = openapi.to_schema()
 
@@ -185,11 +185,11 @@ class OpenAPIRouteRegistrar:
     def _register_ui_plugins(self, docs_api, route_prefix: str, skip_prefix: bool) -> None:
         """Register UI plugin routes (Swagger UI, ReDoc, etc.)."""
         # Schema URL is always the full path (for the UI to fetch)
-        schema_url = f"{self.api.openapi_config.path}/openapi.json"
-        guards = self.api.openapi_config.guards
-        auth = self.api.openapi_config.auth
+        schema_url = f"{self.api._openapi_config.path}/openapi.json"
+        guards = self.api._openapi_config.guards
+        auth = self.api._openapi_config.auth
 
-        for plugin in self.api.openapi_config.render_plugins:
+        for plugin in self.api._openapi_config.render_plugins:
             for plugin_path in plugin.paths:
                 full_path = f"{route_prefix}{plugin_path}"
 
@@ -220,17 +220,17 @@ class OpenAPIRouteRegistrar:
         This avoids redirect loops caused by NormalizePath::trim() middleware
         which strips trailing slashes (e.g., /docs/ -> /docs).
         """
-        if self.api.openapi_config.default_plugin:
+        if self.api._openapi_config.default_plugin:
             # Schema URL is always the full path (for the UI to fetch)
-            schema_url = f"{self.api.openapi_config.path}/openapi.json"
-            plugin = self.api.openapi_config.default_plugin
-            guards = self.api.openapi_config.guards
-            auth = self.api.openapi_config.auth
+            schema_url = f"{self.api._openapi_config.path}/openapi.json"
+            plugin = self.api._openapi_config.default_plugin
+            guards = self.api._openapi_config.guards
+            auth = self.api._openapi_config.auth
 
             # For mounted API, register at empty string so mount adds just the prefix
             # e.g., "" mounted at "/docs" becomes "/docs" (not "/docs/")
             # For main API, use the full path
-            use_django_auth = self.api.openapi_config.django_auth is not None
+            use_django_auth = self.api._openapi_config.django_auth is not None
             root_path = "" if use_django_auth else route_prefix
 
             # Capture plugin in closure

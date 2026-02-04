@@ -45,6 +45,7 @@ api = BoltAPI(
         enabled=True,
     ),
 )
+
 #
 # 2. Custom compression with specific settings:
 # api = BoltAPI(

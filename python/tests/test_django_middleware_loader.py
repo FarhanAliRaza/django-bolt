@@ -142,12 +142,12 @@ class TestBoltAPIIntegration:
     def test_boltapi_no_django_middleware(self):
         """Test BoltAPI without django_middleware."""
         api = BoltAPI()
-        assert api.middleware == []
+        assert api._middleware == []
 
     def test_boltapi_django_middleware_false(self):
         """Test BoltAPI with django_middleware=False."""
         api = BoltAPI(django_middleware=False)
-        assert api.middleware == []
+        assert api._middleware == []
 
     def test_boltapi_django_middleware_list_creates_stack(self):
         """Test BoltAPI with middleware list creates DjangoMiddlewareStack."""
@@ -157,8 +157,8 @@ class TestBoltAPIIntegration:
             ]
         )
 
-        assert len(api.middleware) == 1
-        assert isinstance(api.middleware[0], DjangoMiddlewareStack)
+        assert len(api._middleware) == 1
+        assert isinstance(api._middleware[0], DjangoMiddlewareStack)
 
     def test_boltapi_combines_django_and_custom_middleware(self):
         """Test BoltAPI stores both Django and custom middleware."""
@@ -168,11 +168,11 @@ class TestBoltAPIIntegration:
         )
 
         # Should have 2 middleware entries
-        assert len(api.middleware) == 2
+        assert len(api._middleware) == 2
         # First should be DjangoMiddlewareStack
-        assert isinstance(api.middleware[0], DjangoMiddlewareStack)
+        assert isinstance(api._middleware[0], DjangoMiddlewareStack)
         # Second should be the custom middleware class
-        assert api.middleware[1] is TimingMiddleware
+        assert api._middleware[1] is TimingMiddleware
 
 
 # =============================================================================
@@ -258,7 +258,7 @@ class TestMiddlewareHTTPCycle:
     def test_custom_middleware_adds_header(self):
         """Test custom middleware runs and adds response header."""
         api = BoltAPI()
-        api.middleware = [DjangoMiddlewareStack([CustomHeaderMiddleware])]
+        api._middleware = [DjangoMiddlewareStack([CustomHeaderMiddleware])]
 
         @api.get("/test")
         async def test_route():
@@ -274,7 +274,7 @@ class TestMiddlewareHTTPCycle:
         """Test middleware executes in correct order (both request and response phases)."""
         # This test verifies middleware runs by checking headers added during response phase
         api = BoltAPI()
-        api.middleware = [DjangoMiddlewareStack([CustomHeaderMiddleware])]
+        api._middleware = [DjangoMiddlewareStack([CustomHeaderMiddleware])]
 
         @api.get("/test")
         async def test_route():
@@ -340,7 +340,7 @@ class TestMiddlewareHTTPCycle:
         """Test that excluded middleware doesn't run."""
         # Create middleware stack with one middleware excluded
         api = BoltAPI()
-        api.middleware = [DjangoMiddlewareStack([CustomHeaderMiddleware])]
+        api._middleware = [DjangoMiddlewareStack([CustomHeaderMiddleware])]
 
         @api.get("/test")
         async def test_route():

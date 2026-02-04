@@ -21,7 +21,8 @@ from ..typing import FieldDefinition, HandlerMetadata, is_msgspec_struct
 from .extractors import get_msgspec_decoder
 
 # Pre-compiled regex pattern for extracting path parameters
-PATH_PARAM_REGEX = re.compile(r"\{(\w+)\}")
+# Matches both {param} and {param:type} formats (e.g., {path:path} for catch-all)
+PATH_PARAM_REGEX = re.compile(r"\{(\w+)(?::\w+)?\}")
 
 
 def extract_path_params(path: str) -> set[str]:
@@ -31,6 +32,7 @@ def extract_path_params(path: str) -> set[str]:
     Examples:
         "/users/{user_id}" -> {"user_id"}
         "/posts/{post_id}/comments/{comment_id}" -> {"post_id", "comment_id"}
+        "/files/{path:path}" -> {"path"}  # catch-all path parameter
     """
     return set(PATH_PARAM_REGEX.findall(path))
 

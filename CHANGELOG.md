@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0]
+
+### Added
+
+- **Session authentication** - Full session-based authentication support with Django session backend integration. (#112)
+- **Static file serving** - Serve static files directly from the Bolt server with configurable paths. (#123)
+- **Global authentication and permission classes** - New `BOLT_AUTHENTICATION_CLASSES` and `BOLT_PERMISSION_CLASSES` settings for project-wide defaults. (#121)
+- **camelCase/snake_case field mapping** - Serializers now support automatic field name transformation between camelCase (JSON) and snake_case (Python) via `rename="camel"` config option. (#115)
+- **`request.META` compatibility** - Added `request.META` dictionary for compatibility with Django request objects, enabling easier migration from Django views. (#128)
+
+### Changed
+
+- **Cookie and header parsing moved to Rust** - Cookie parsing and header extraction now happen in Rust before reaching Python, improving performance. Cookie setting shortcut added. (#127)
+- **Removed legacy middleware configuration** - Cleaned up deprecated middleware configuration patterns. (#120)
+
+### Fixed
+
+- **Pagination respects serializer fields** - Pagination now correctly uses serializer field definitions instead of raw model fields. (#100)
+- **`from_model()` respects `field(source=...)` parameter** - The serializer's `from_model()` method now correctly handles fields with custom source mappings. (#107)
+- **Streaming response handling in middleware** - Fixed middleware incorrectly buffering streaming responses. (#126)
+- **Middleware safety checks** - Enhanced validation of middleware configuration to catch common errors early. (#93)
+
+### Documentation
+
+- Clarified global vs per-view file upload size limits. (#102)
+
+### New Contributors
+
+- @NourEldin-Osama
+- @Rey092
+- @athul-binu
+
 ## [0.5.1]
 
 ### Changed

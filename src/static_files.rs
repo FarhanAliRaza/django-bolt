@@ -127,9 +127,8 @@ pub async fn handle_static_file(
     if let Some(ref csp) = csp_header.as_ref() {
         response.headers_mut().insert(
             header::CONTENT_SECURITY_POLICY,
-            header::HeaderValue::from_str(csp).unwrap_or_else(|_| {
-                header::HeaderValue::from_static("default-src 'self'")
-            }),
+            header::HeaderValue::from_str(csp)
+                .unwrap_or_else(|_| header::HeaderValue::from_static("default-src 'self'")),
         );
     }
 

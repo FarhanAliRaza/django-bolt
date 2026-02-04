@@ -136,9 +136,8 @@ class DjangoMiddleware:
 
         # Check if this is chain building call (get_response is a callable)
         # vs initial configuration (middleware_class is a type or string)
-        is_get_response_callable = (
-            callable(middleware_class_or_get_response)
-            and not isinstance(middleware_class_or_get_response, (type, str))
+        is_get_response_callable = callable(middleware_class_or_get_response) and not isinstance(
+            middleware_class_or_get_response, (type, str)
         )
         if is_get_response_callable:
             raise TypeError(
@@ -754,17 +753,19 @@ def _to_bolt_response(django_response: HttpResponse) -> MiddlewareResponse:
             # Extract raw data from Morsel object for Rust serialization
             # Cookie tuple: (name, value, path, max_age, expires, domain, secure, httponly, samesite)
             max_age = morsel.get("max-age")
-            raw_cookies.append((
-                morsel.key,  # name
-                morsel.value,  # value
-                morsel.get("path") or "/",  # path
-                int(max_age) if max_age else None,  # max_age
-                morsel.get("expires") or None,  # expires
-                morsel.get("domain") or None,  # domain
-                bool(morsel.get("secure")),  # secure
-                bool(morsel.get("httponly")),  # httponly
-                morsel.get("samesite") or None,  # samesite
-            ))
+            raw_cookies.append(
+                (
+                    morsel.key,  # name
+                    morsel.value,  # value
+                    morsel.get("path") or "/",  # path
+                    int(max_age) if max_age else None,  # max_age
+                    morsel.get("expires") or None,  # expires
+                    morsel.get("domain") or None,  # domain
+                    bool(morsel.get("secure")),  # secure
+                    bool(morsel.get("httponly")),  # httponly
+                    morsel.get("samesite") or None,  # samesite
+                )
+            )
 
     return MiddlewareResponse(
         status_code=django_response.status_code,

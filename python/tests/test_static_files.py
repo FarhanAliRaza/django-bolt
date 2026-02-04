@@ -44,17 +44,78 @@ IMG_DIR = os.path.join(TEST_STATIC_DIR, "img")
 os.makedirs(IMG_DIR, exist_ok=True)
 IMG_FILE = os.path.join(IMG_DIR, "logo.png")
 # Minimal valid 1x1 transparent PNG
-PNG_BYTES = bytes([
-    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,  # PNG signature
-    0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,  # IHDR chunk
-    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,  # 1x1 dimensions
-    0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,  # RGBA, 8-bit
-    0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41,  # IDAT chunk
-    0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,  # Compressed data
-    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,  # Adler32 checksum
-    0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,  # IEND chunk
-    0xAE, 0x42, 0x60, 0x82                           # CRC
-])
+PNG_BYTES = bytes(
+    [
+        0x89,
+        0x50,
+        0x4E,
+        0x47,
+        0x0D,
+        0x0A,
+        0x1A,
+        0x0A,  # PNG signature
+        0x00,
+        0x00,
+        0x00,
+        0x0D,
+        0x49,
+        0x48,
+        0x44,
+        0x52,  # IHDR chunk
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x01,  # 1x1 dimensions
+        0x08,
+        0x06,
+        0x00,
+        0x00,
+        0x00,
+        0x1F,
+        0x15,
+        0xC4,  # RGBA, 8-bit
+        0x89,
+        0x00,
+        0x00,
+        0x00,
+        0x0A,
+        0x49,
+        0x44,
+        0x41,  # IDAT chunk
+        0x54,
+        0x78,
+        0x9C,
+        0x63,
+        0x00,
+        0x01,
+        0x00,
+        0x00,  # Compressed data
+        0x05,
+        0x00,
+        0x01,
+        0x0D,
+        0x0A,
+        0x2D,
+        0xB4,
+        0x00,  # Adler32 checksum
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x49,
+        0x45,
+        0x4E,
+        0x44,  # IEND chunk
+        0xAE,
+        0x42,
+        0x60,
+        0x82,  # CRC
+    ]
+)
 with open(IMG_FILE, "wb") as f:
     f.write(PNG_BYTES)
 
@@ -507,8 +568,7 @@ class TestSymlinkSecurity:
 
             # The symlink points to a file outside the directory
             # so canonical should NOT start with dir_canonical
-            assert not is_within_directory, \
-                "Symlink canonical path should not be within static directory"
+            assert not is_within_directory, "Symlink canonical path should not be within static directory"
 
     def test_safe_file_still_accessible(self, setup_symlink_test):
         """Test that regular files within the directory are still accessible."""
@@ -646,6 +706,7 @@ class TestEdgeCases:
     def test_file_with_spaces_in_name(self):
         """Test finding files with spaces in the name."""
         from django.conf import settings
+
         settings.STATIC_ROOT = TEST_STATIC_DIR
 
         # Create a file with spaces
@@ -665,6 +726,7 @@ class TestEdgeCases:
     def test_file_with_unicode_name(self):
         """Test finding files with unicode characters in the name."""
         from django.conf import settings
+
         settings.STATIC_ROOT = TEST_STATIC_DIR
 
         # Create a file with unicode characters
@@ -711,6 +773,7 @@ class TestEdgeCases:
     def test_deeply_nested_path(self, client):
         """Test serving files from deeply nested directories."""
         import shutil
+
         deep_dir = os.path.join(TEST_STATIC_DIR, "a", "b", "c", "d", "e")
         os.makedirs(deep_dir, exist_ok=True)
         deep_file = os.path.join(deep_dir, "deep.txt")
@@ -806,11 +869,9 @@ class TestDebugModeFinders:
 
             # Verify empty static root doesn't have admin files
             import os
-            admin_in_configured_dir = os.path.exists(
-                os.path.join(empty_static_root, "admin/css/base.css")
-            )
-            assert not admin_in_configured_dir, \
-                "Admin files should not be in our empty STATIC_ROOT"
+
+            admin_in_configured_dir = os.path.exists(os.path.join(empty_static_root, "admin/css/base.css"))
+            assert not admin_in_configured_dir, "Admin files should not be in our empty STATIC_ROOT"
 
         finally:
             if original_debug is not None:
@@ -821,6 +882,7 @@ class TestDebugModeFinders:
                 settings.STATICFILES_DIRS = original_dirs
             # Cleanup
             import shutil
+
             shutil.rmtree(empty_static_root, ignore_errors=True)
 
     def test_rust_handler_debug_flag_integration(self):
@@ -862,8 +924,9 @@ class TestDebugModeFinders:
 
             # Admin CSS is only available via Django finders, not in our empty STATIC_ROOT
             response = client_debug.get("/static/admin/css/base.css")
-            assert response.status_code == 200, \
+            assert response.status_code == 200, (
                 f"Admin CSS should be served in debug mode via Django finders (got {response.status_code})"
+            )
 
             # Test with DEBUG=False (finders fallback should be disabled)
             settings.DEBUG = False
@@ -875,8 +938,9 @@ class TestDebugModeFinders:
             # 1. It's not in STATIC_ROOT or STATICFILES_DIRS
             # 2. Django finders fallback is disabled in production
             response = client_prod.get("/static/admin/css/base.css")
-            assert response.status_code == 404, \
+            assert response.status_code == 404, (
                 f"Admin CSS should NOT be served in production mode (got {response.status_code})"
+            )
 
         finally:
             if original_debug is not None:
@@ -887,4 +951,5 @@ class TestDebugModeFinders:
                 settings.STATICFILES_DIRS = original_dirs
             # Cleanup
             import shutil
+
             shutil.rmtree(empty_static_root, ignore_errors=True)

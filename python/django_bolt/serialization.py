@@ -41,6 +41,7 @@ ResponseMetaTuple = tuple[
 # - ResponseMetaTuple: new format for Rust-side header building
 ResponseTuple = tuple[int, list[tuple[str, str]] | ResponseMetaTuple, bytes | StreamingResponse]
 
+
 def _build_response_meta(
     response_type: str,
     custom_headers: dict[str, str] | None,

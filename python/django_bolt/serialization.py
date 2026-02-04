@@ -19,7 +19,9 @@ from .responses import Response as ResponseClass
 if TYPE_CHECKING:
     from .typing import HandlerMetadata
 
-ResponseTuple = tuple[int, list[tuple[str, str]], bytes]
+# ResponseTuple body can be bytes (normal) or StreamingResponse (for streaming)
+# Rust handler.rs checks if body is StreamingResponse and handles it specially
+ResponseTuple = tuple[int, list[tuple[str, str]], bytes | StreamingResponse]
 
 
 def _convert_serializers(result: Any) -> Any:
@@ -90,9 +92,14 @@ async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTupl
     # Common: JSON wrapper
     if isinstance(result, JSON):
         return await serialize_json_response(result, response_tp, meta)
-    # Common: Streaming responses
+    # Common: Streaming responses - return as tuple with StreamingResponse as body
+    # This allows middleware to process the response (CORS headers, etc.)
+    # Rust handler.rs detects StreamingResponse in the body and handles streaming
     if isinstance(result, StreamingResponse):
-        return result
+        headers = [("content-type", result.media_type)]
+        if result.headers:
+            headers.extend([(k.lower(), v) for k, v in result.headers.items()])
+        return (result.status_code, headers, result)
     # Less common: Other response types
     if isinstance(result, PlainText):
         return serialize_plaintext_response(result)

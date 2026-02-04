@@ -9,7 +9,14 @@ This is in a separate module to avoid circular imports:
 
 from __future__ import annotations
 
-Response = tuple[int, list[tuple[str, str]], bytes]
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .responses import StreamingResponse
+
+# Response tuple body can be bytes (normal) or StreamingResponse (for streaming)
+# Rust handler.rs detects StreamingResponse in the body and handles streaming
+Response = tuple[int, list[tuple[str, str]], "bytes | StreamingResponse"]
 
 
 class MiddlewareResponse:
@@ -30,7 +37,7 @@ class MiddlewareResponse:
         self,
         status_code: int,
         headers: dict[str, str],
-        body: bytes,
+        body: bytes | StreamingResponse,
         set_cookies: list[str] | None = None,
     ):
         self.status_code = status_code

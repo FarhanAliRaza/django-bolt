@@ -37,6 +37,17 @@ static DECIMAL_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static DATETIME_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static DATE_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static TIME_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static STREAMING_RESPONSE_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+
+fn get_streaming_response_class(py: Python<'_>) -> &Py<PyAny> {
+    STREAMING_RESPONSE_CLASS.get_or_init(py, || {
+        py.import("django_bolt.responses")
+            .unwrap()
+            .getattr("StreamingResponse")
+            .unwrap()
+            .unbind()
+    })
+}
 
 fn get_uuid_class(py: Python<'_>) -> &Py<PyAny> {
     UUID_CLASS.get_or_init(py, || {
@@ -853,15 +864,111 @@ pub async fn handle_request(
                         return builder.body(response_body);
                     }
                 }
+                // Check for tuple with StreamingResponse body (middleware path)
+                // This handles the case where serialize_response returns (status, headers, StreamingResponse)
+                // allowing streaming responses to work with middleware (CORS, rate limiting, etc.)
+                let streaming_tuple = Python::attach(|py| {
+                    let obj = result_obj.bind(py);
+                    let tuple = obj.cast::<PyTuple>().ok()?;
+                    if tuple.len() != 3 {
+                        return None;
+                    }
+                    // Extract body (element 2) and check if it's a StreamingResponse
+                    let body_obj = tuple.get_item(2).ok()?;
+                    let streaming_cls = get_streaming_response_class(py);
+                    if !body_obj.is_instance(streaming_cls.bind(py)).unwrap_or(false) {
+                        return None;
+                    }
+                    // It's a tuple with StreamingResponse body - extract tuple headers and streaming data
+                    let tuple_headers: Vec<(String, String)> = tuple
+                        .get_item(1)
+                        .ok()?
+                        .extract::<Vec<(String, String)>>()
+                        .ok()?;
+                    let media_type: String = body_obj
+                        .getattr(pyo3::intern!(py, "media_type"))
+                        .and_then(|v| v.extract())
+                        .unwrap_or_else(|_| "application/octet-stream".to_string());
+                    let content_obj: Py<PyAny> = body_obj
+                        .getattr(pyo3::intern!(py, "content"))
+                        .ok()?
+                        .unbind();
+                    let is_async_generator: bool = body_obj
+                        .getattr(pyo3::intern!(py, "is_async_generator"))
+                        .and_then(|v| v.extract())
+                        .unwrap_or(false);
+                    // Use headers from the tuple (processed by middleware) rather than StreamingResponse.headers
+                    Some((tuple_headers, media_type, content_obj, is_async_generator))
+                });
+                if let Some((headers, media_type, content_obj, is_async_generator)) = streaming_tuple
+                {
+                    // Extract status from tuple element 0
+                    // Headers already include content-type from serialize_response
+                    let status = Python::attach(|py| {
+                        let obj = result_obj.bind(py);
+                        if let Ok(tuple) = obj.cast::<PyTuple>() {
+                            tuple
+                                .get_item(0)
+                                .ok()
+                                .and_then(|v| v.extract::<u16>().ok())
+                                .map(|s| StatusCode::from_u16(s).unwrap_or(StatusCode::OK))
+                                .unwrap_or(StatusCode::OK)
+                        } else {
+                            StatusCode::OK
+                        }
+                    });
+
+                    if media_type == "text/event-stream" {
+                        if is_head_request {
+                            let mut builder =
+                                response_builder::build_sse_response(status, headers, skip_compression);
+                            let mut response = builder.body(Vec::<u8>::new());
+                            if skip_cors {
+                                response
+                                    .headers_mut()
+                                    .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
+                            }
+                            return response;
+                        }
+                        let stream = create_sse_stream(content_obj, is_async_generator);
+                        let mut response = response_builder::build_sse_response(status, headers, skip_compression)
+                            .streaming(stream);
+                        if skip_cors {
+                            response
+                                .headers_mut()
+                                .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
+                        }
+                        return response;
+                    } else {
+                        // Non-SSE streaming responses
+                        let mut builder = HttpResponse::build(status);
+                        for (k, v) in headers {
+                            builder.append_header((k, v));
+                        }
+                        if is_head_request {
+                            if skip_compression {
+                                builder.append_header(("Content-Encoding", "identity"));
+                            }
+                            if skip_cors {
+                                builder.append_header(("x-bolt-skip-cors", "true"));
+                            }
+                            return builder.body(Vec::<u8>::new());
+                        }
+                        if skip_compression {
+                            builder.append_header(("Content-Encoding", "identity"));
+                        }
+                        if skip_cors {
+                            builder.append_header(("x-bolt-skip-cors", "true"));
+                        }
+                        let stream = create_python_stream(content_obj, is_async_generator);
+                        return builder.streaming(stream);
+                    }
+                }
                 let streaming = Python::attach(|py| {
                     let obj = result_obj.bind(py);
-                    let is_streaming = (|| -> PyResult<bool> {
-                        let m = py.import("django_bolt.responses")?;
-                        // OPTIMIZATION: pyo3::intern!() caches Python string objects
-                        let cls = m.getattr(pyo3::intern!(py, "StreamingResponse"))?;
-                        obj.is_instance(&cls)
-                    })()
-                    .unwrap_or(false);
+                    // Use cached StreamingResponse class to avoid repeated imports
+                    let streaming_cls = get_streaming_response_class(py);
+                    let is_streaming = obj.is_instance(streaming_cls.bind(py)).unwrap_or(false);
                     // OPTIMIZATION: Use interned strings for attribute checks
                     if !is_streaming && !obj.hasattr(pyo3::intern!(py, "content")).unwrap_or(false)
                     {

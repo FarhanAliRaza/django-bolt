@@ -232,8 +232,8 @@ async def main() -> None:
     parser.add_argument(
         "url",
         nargs="?",
-        default="http://127.0.0.1:8000/sse",
-        help="URL of SSE endpoint (default: http://127.0.0.1:8000/sse)",
+        default="http://127.0.0.1:8001/sse",
+        help="URL of SSE endpoint (default: http://127.0.0.1:8001/sse)",
     )
     parser.add_argument("-c", "--clients", type=int, default=50, help="Number of concurrent clients (default: 50)")
     parser.add_argument("-d", "--duration", type=int, default=30, help="Duration per client in seconds (default: 30)")

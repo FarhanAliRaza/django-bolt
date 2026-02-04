@@ -769,6 +769,15 @@ async fn handle_test_request_internal(
 
     let peer_addr = req.peer_addr().map(|addr| addr.ip().to_string());
 
+    // Get connection info from Actix - handles proxies, IPv6, etc. correctly
+    let conn_info = req.connection_info();
+    let conn_host = conn_info.host().to_owned();
+    let conn_scheme = conn_info.scheme().to_owned();
+    let conn_remote_addr = conn_info
+        .realip_remote_addr()
+        .unwrap_or("127.0.0.1")
+        .to_owned();
+
     // Rate limiting
     if let Some(ref meta) = route_meta {
         if let Some(ref rate_config) = meta.rate_limit_config {
@@ -971,6 +980,10 @@ async fn handle_test_request_internal(
             state: PyDict::new(py).unbind(),
             form_map: form_map_dict,
             files_map: files_map_dict,
+            meta_cache: std::sync::OnceLock::new(),
+            conn_host: conn_host.clone(),
+            conn_scheme: conn_scheme.clone(),
+            conn_remote_addr: conn_remote_addr.clone(),
         };
         let request_obj = Py::new(py, request)?;
 

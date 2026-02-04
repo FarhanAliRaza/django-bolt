@@ -1,6 +1,27 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString};
 
+use std::sync::OnceLock;
+
+/// Parse host:port from Actix's connection_info().host()
+/// Returns (hostname, port_string) - port defaults to "80"
+#[inline]
+fn parse_host_port(host: &str) -> (&str, &str) {
+    // IPv6 with brackets: [::1]:8080 or [::1]
+    if let Some(bracket_end) = host.find(']') {
+        // Check for port after closing bracket
+        if host.len() > bracket_end + 2 && host.as_bytes()[bracket_end + 1] == b':' {
+            return (&host[..bracket_end + 1], &host[bracket_end + 2..]);
+        }
+        return (&host[..bracket_end + 1], "80");
+    }
+    // IPv4/hostname: split on last colon
+    match host.rsplit_once(':') {
+        Some((name, port)) if port.parse::<u16>().is_ok() => (name, port),
+        _ => (host, "80"),
+    }
+}
+
 #[pyclass]
 pub struct PyRequest {
     pub method: String,
@@ -22,6 +43,16 @@ pub struct PyRequest {
     pub form_map: Py<PyDict>,
     /// Files data - dict of {field_name: {filename, content, content_type, size, temp_path?}}
     pub files_map: Py<PyDict>,
+    /// Lazy cached META dict for Django template compatibility
+    /// Uses OnceLock for thread-safe lazy initialization (required by PyO3's pyclass)
+    pub meta_cache: OnceLock<Py<PyDict>>,
+    /// Connection info from Actix's connection_info() - handles proxies correctly
+    /// Host (may include port): "example.com:8080" or "[::1]:8080"
+    pub conn_host: String,
+    /// Scheme: "http" or "https" (from X-Forwarded-Proto or request)
+    pub conn_scheme: String,
+    /// Remote address: client IP (from X-Forwarded-For, X-Real-IP, or peer)
+    pub conn_remote_addr: String,
 }
 
 #[pymethods]
@@ -149,6 +180,92 @@ impl PyRequest {
         self.files_map.clone_ref(py)
     }
 
+    /// Get META dict for Django template compatibility.
+    ///
+    /// This provides a Django HttpRequest-compatible META dict containing:
+    /// - REQUEST_METHOD: HTTP method
+    /// - PATH_INFO: Request path
+    /// - QUERY_STRING: Query string
+    /// - HTTP_*: Headers converted to META format (e.g., host -> HTTP_HOST)
+    /// - CONTENT_TYPE: Content-Type header (without HTTP_ prefix)
+    /// - CONTENT_LENGTH: Content-Length header (without HTTP_ prefix)
+    ///
+    /// The dict is lazily built on first access and cached for subsequent accesses.
+    /// This ensures zero overhead for API handlers that don't use templates.
+    ///
+    /// Example:
+    ///     method = request.META.get("REQUEST_METHOD")  # "GET"
+    ///     host = request.META.get("HTTP_HOST")  # "example.com"
+    #[getter]
+    #[allow(non_snake_case)]
+    fn META<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
+        // Return cached if already built (zero-overhead check)
+        if let Some(meta) = self.meta_cache.get() {
+            return Ok(meta.clone_ref(py));
+        }
+
+        // Build META dict only on first access
+        let meta = PyDict::new(py);
+        let headers_dict = self.headers.bind(py);
+
+        // Standard META keys (Django HttpRequest compatible)
+        meta.set_item("REQUEST_METHOD", &self.method)?;
+        meta.set_item("PATH_INFO", &self.path)?;
+
+        // QUERY_STRING - reconstruct from query_params (empty if none)
+        // Note: Original encoding/ordering not preserved, but sufficient for template rendering
+        let query_dict = self.query_params.bind(py);
+        let query_string = if query_dict.is_empty() {
+            String::new()
+        } else {
+            query_dict
+                .iter()
+                .filter_map(|(k, v)| {
+                    let key = k.extract::<String>().ok()?;
+                    let val = v.str().ok()?.to_string();
+                    Some(format!("{}={}", key, val))
+                })
+                .collect::<Vec<_>>()
+                .join("&")
+        };
+        meta.set_item("QUERY_STRING", query_string)?;
+
+        // Server info from Actix's connection_info() - handles IPv6 and proxies correctly
+        // conn_host may include port: "example.com:8080" or "[::1]:8080"
+        let (server_name, server_port) = parse_host_port(&self.conn_host);
+        meta.set_item("SERVER_NAME", server_name)?;
+        meta.set_item("SERVER_PORT", server_port)?;
+        meta.set_item("SERVER_PROTOCOL", "HTTP/1.1")?;
+
+        // REMOTE_ADDR from Actix's connection_info().realip_remote_addr()
+        // Actix handles X-Forwarded-For, Forwarded header, and peer_addr fallback
+        meta.set_item("REMOTE_ADDR", &self.conn_remote_addr)?;
+        meta.set_item("REMOTE_HOST", &self.conn_remote_addr)?;
+
+        // SCRIPT_NAME is usually empty for Django apps
+        meta.set_item("SCRIPT_NAME", "")?;
+
+        // Convert headers to HTTP_* format
+        // Header keys are already lowercase (normalized by http crate)
+        for (key, value) in headers_dict.iter() {
+            if let (Ok(k), Ok(v)) = (key.extract::<String>(), value.extract::<String>()) {
+                let meta_key = if k == "content-type" {
+                    "CONTENT_TYPE".to_string()
+                } else if k == "content-length" {
+                    "CONTENT_LENGTH".to_string()
+                } else {
+                    format!("HTTP_{}", k.to_uppercase().replace('-', "_"))
+                };
+                meta.set_item(meta_key, v)?;
+            }
+        }
+
+        // Cache and return
+        let meta_unbind = meta.unbind();
+        let _ = self.meta_cache.set(meta_unbind.clone_ref(py));
+        Ok(meta_unbind)
+    }
+
     /// Get the async user loader (Django-style).
     ///
     /// Returns the async user callable set by Django's AuthenticationMiddleware.
@@ -225,26 +342,21 @@ impl PyRequest {
     fn build_absolute_uri(&self, py: Python<'_>, location: Option<&str>) -> String {
         let headers_dict = self.headers.bind(py);
 
-        // Get host from headers (or use default)
-        let host = headers_dict
-            .get_item("host")
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<String>().ok())
-            .unwrap_or_else(|| "localhost".to_string());
+        // Helper to extract header value with default
+        let get_header = |key: &str, default: &str| -> String {
+            headers_dict
+                .get_item(key)
+                .ok()
+                .flatten()
+                .and_then(|v| v.extract::<String>().ok())
+                .unwrap_or_else(|| default.to_string())
+        };
 
-        // Determine scheme (check for X-Forwarded-Proto or default to http)
-        let scheme = headers_dict
-            .get_item("x-forwarded-proto")
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<String>().ok())
-            .unwrap_or_else(|| "http".to_string());
+        let host = get_header("host", "localhost");
+        let scheme = get_header("x-forwarded-proto", "http");
+        let path = location.unwrap_or(&self.path);
 
-        // If location is provided, use it; otherwise use current path
-        let path = location.unwrap_or_else(|| &self.path);
-
-        // Build full URL
+        // Build query string from query_params if using current path
         let query_dict = self.query_params.bind(py);
         if query_dict.is_empty() || location.is_some() {
             format!("{}://{}{}", scheme, host, path)

@@ -3,6 +3,25 @@ use pyo3::types::{PyBytes, PyDict, PyString};
 
 use std::sync::OnceLock;
 
+/// Parse host:port from Actix's connection_info().host()
+/// Returns (hostname, port_string) - port defaults to "80"
+#[inline]
+fn parse_host_port(host: &str) -> (&str, &str) {
+    // IPv6 with brackets: [::1]:8080 or [::1]
+    if let Some(bracket_end) = host.find(']') {
+        // Check for port after closing bracket
+        if host.len() > bracket_end + 2 && host.as_bytes()[bracket_end + 1] == b':' {
+            return (&host[..bracket_end + 1], &host[bracket_end + 2..]);
+        }
+        return (&host[..bracket_end + 1], "80");
+    }
+    // IPv4/hostname: split on last colon
+    match host.rsplit_once(':') {
+        Some((name, port)) if port.parse::<u16>().is_ok() => (name, port),
+        _ => (host, "80"),
+    }
+}
+
 #[pyclass]
 pub struct PyRequest {
     pub method: String,
@@ -26,8 +45,14 @@ pub struct PyRequest {
     pub files_map: Py<PyDict>,
     /// Lazy cached META dict for Django template compatibility
     /// Uses OnceLock for thread-safe lazy initialization (required by PyO3's pyclass)
-    /// Zero hot-path cost: all META values are derived from existing fields when accessed
     pub meta_cache: OnceLock<Py<PyDict>>,
+    /// Connection info from Actix's connection_info() - handles proxies correctly
+    /// Host (may include port): "example.com:8080" or "[::1]:8080"
+    pub conn_host: String,
+    /// Scheme: "http" or "https" (from X-Forwarded-Proto or request)
+    pub conn_scheme: String,
+    /// Remote address: client IP (from X-Forwarded-For, X-Real-IP, or peer)
+    pub conn_remote_addr: String,
 }
 
 #[pymethods]
@@ -179,19 +204,9 @@ impl PyRequest {
             return Ok(meta.clone_ref(py));
         }
 
-        // Build META dict only on first access (ZERO hot-path cost)
-        // All values are derived from existing PyRequest fields
+        // Build META dict only on first access
         let meta = PyDict::new(py);
         let headers_dict = self.headers.bind(py);
-
-        // Helper to get header value
-        let get_header = |key: &str| -> Option<String> {
-            headers_dict
-                .get_item(key)
-                .ok()
-                .flatten()
-                .and_then(|v| v.extract::<String>().ok())
-        };
 
         // Standard META keys (Django HttpRequest compatible)
         meta.set_item("REQUEST_METHOD", &self.method)?;
@@ -215,31 +230,17 @@ impl PyRequest {
         };
         meta.set_item("QUERY_STRING", query_string)?;
 
-        // Server info - derived from Host header
-        let (server_name, server_port) = get_header("host")
-            .map(|host| {
-                if let Some((name, port_str)) = host.rsplit_once(':') {
-                    let port = port_str.parse::<u16>().unwrap_or(80);
-                    (name.to_owned(), port)
-                } else {
-                    (host, 80u16)
-                }
-            })
-            .unwrap_or_else(|| ("localhost".to_owned(), 8000));
-
+        // Server info from Actix's connection_info() - handles IPv6 and proxies correctly
+        // conn_host may include port: "example.com:8080" or "[::1]:8080"
+        let (server_name, server_port) = parse_host_port(&self.conn_host);
         meta.set_item("SERVER_NAME", server_name)?;
-        meta.set_item("SERVER_PORT", server_port.to_string())?;
+        meta.set_item("SERVER_PORT", server_port)?;
         meta.set_item("SERVER_PROTOCOL", "HTTP/1.1")?;
 
-        // REMOTE_ADDR - derived from X-Forwarded-For or X-Real-IP header
-        // This is the standard approach for apps behind reverse proxies
-        let remote_addr = get_header("x-forwarded-for")
-            .and_then(|v| v.split(',').next().map(|s| s.trim().to_owned()))
-            .or_else(|| get_header("x-real-ip"))
-            .unwrap_or_else(|| "127.0.0.1".to_owned());
-
-        meta.set_item("REMOTE_ADDR", &remote_addr)?;
-        meta.set_item("REMOTE_HOST", &remote_addr)?;
+        // REMOTE_ADDR from Actix's connection_info().realip_remote_addr()
+        // Actix handles X-Forwarded-For, Forwarded header, and peer_addr fallback
+        meta.set_item("REMOTE_ADDR", &self.conn_remote_addr)?;
+        meta.set_item("REMOTE_HOST", &self.conn_remote_addr)?;
 
         // SCRIPT_NAME is usually empty for Django apps
         meta.set_item("SCRIPT_NAME", "")?;

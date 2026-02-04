@@ -269,3 +269,104 @@ Cleaning up test users...
 ## Django Middleware Performance
 ### Django Middleware + Messages Framework (/middleware/demo)
 Tests: SessionMiddleware, AuthenticationMiddleware, MessageMiddleware, custom middleware, template rendering
+ 0 / 10000 [---------------------------------------------------------------------------------------------------------------------------------------------]   0.00% 1907 / 10000 [========================>----------------------------------------------------------------------------------------------------------]  19.07% 9505/s 3883 / 10000 [==================================================>--------------------------------------------------------------------------------]  38.83% 9684/s 5790 / 10000 [===========================================================================>-------------------------------------------------------]  57.90% 9625/s 7514 / 10000 [==================================================================================================>--------------------------------]  75.14% 9370/s 9378 / 10000 [==========================================================================================================================>--------]  93.78% 9356/s 10000 / 10000 [==================================================================================================================================] 100.00% 8311/s 10000 / 10000 [===============================================================================================================================] 100.00% 8310/s 1s
+  Reqs/sec      9928.43    4013.00   37444.66
+  Latency       10.58ms     2.97ms    31.24ms
+  Latency Distribution
+     50%    10.33ms
+     75%    12.66ms
+     90%    14.81ms
+     99%    19.71ms
+
+## Django Ninja-style Benchmarks
+### JSON Parse/Validate (POST /bench/parse)
+  Reqs/sec     99883.07    8162.21  107800.78
+  Latency        0.98ms   383.19us     5.65ms
+  Latency Distribution
+     50%     0.89ms
+     75%     1.19ms
+     90%     1.53ms
+     99%     2.59ms
+
+## Serializer Performance Benchmarks
+### Raw msgspec Serializer (POST /bench/serializer-raw)
+  Reqs/sec     98182.25    7235.75  104806.28
+  Latency        1.01ms   315.32us     5.20ms
+  Latency Distribution
+     50%     0.93ms
+     75%     1.25ms
+     90%     1.60ms
+     99%     2.33ms
+### Django-Bolt Serializer with Validators (POST /bench/serializer-validated)
+  Reqs/sec     89554.49    8405.24   98388.29
+  Latency        1.11ms   381.61us     5.50ms
+  Latency Distribution
+     50%     1.04ms
+     75%     1.32ms
+     90%     1.67ms
+     99%     2.76ms
+### Users msgspec Serializer (POST /users/bench/msgspec)
+  Reqs/sec     99892.95   11415.77  120277.07
+  Latency        1.03ms   366.79us     4.41ms
+  Latency Distribution
+     50%     0.94ms
+     75%     1.27ms
+     90%     1.63ms
+     99%     2.72ms
+
+## Latency Percentile Benchmarks
+Measures p50/p75/p90/p99 latency for type coercion overhead analysis
+
+### Baseline - No Parameters (/)
+  Reqs/sec     91922.95    3746.68   95420.58
+  Latency        1.08ms   369.29us     4.79ms
+  Latency Distribution
+     50%     1.00ms
+     75%     1.34ms
+     90%     1.70ms
+     99%     2.71ms
+
+### Path Parameter - int (/items/12345)
+  Reqs/sec     90859.27    5379.87   96082.29
+  Latency        1.08ms   358.54us     4.42ms
+  Latency Distribution
+     50%     0.99ms
+     75%     1.36ms
+     90%     1.77ms
+     99%     2.67ms
+
+### Path + Query Parameters (/items/12345?q=hello)
+  Reqs/sec     85080.20    3472.48   91279.99
+  Latency        1.15ms   428.19us     6.17ms
+  Latency Distribution
+     50%     1.05ms
+     75%     1.44ms
+     90%     1.86ms
+     99%     2.96ms
+
+### Header Parameter (/header)
+  Reqs/sec     71078.72    4860.03   76218.60
+  Latency        1.37ms   617.26us     7.96ms
+  Latency Distribution
+     50%     1.24ms
+     75%     1.69ms
+     90%     2.23ms
+     99%     4.15ms
+
+### Cookie Parameter (/cookie)
+  Reqs/sec     55001.75    9301.38   62276.51
+  Latency        1.77ms     0.99ms    12.72ms
+  Latency Distribution
+     50%     1.51ms
+     75%     2.18ms
+     90%     3.04ms
+     99%     6.43ms
+
+### Auth Context - JWT validated, no DB (/auth/context)
+  Reqs/sec     41911.25    6629.24   51135.13
+  Latency        2.32ms     1.35ms    18.21ms
+  Latency Distribution
+     50%     2.01ms
+     75%     2.88ms
+     90%     4.05ms
+     99%     8.06ms

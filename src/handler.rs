@@ -505,6 +505,15 @@ pub async fn handle_request(
     // Get peer address for rate limiting fallback
     let peer_addr = req.peer_addr().map(|addr| addr.ip().to_string());
 
+    // Get connection info from Actix - handles proxies, IPv6, etc. correctly
+    let conn_info = req.connection_info();
+    let conn_host = conn_info.host().to_owned();
+    let conn_scheme = conn_info.scheme().to_owned();
+    let conn_remote_addr = conn_info
+        .realip_remote_addr()
+        .unwrap_or("127.0.0.1")
+        .to_owned();
+
     // Compute skip flags (e.g., skip compression)
     let skip_compression = route_metadata
         .as_ref()
@@ -726,7 +735,10 @@ pub async fn handle_request(
             state: PyDict::new(py).unbind(), // Empty state dict for middleware and dynamic attributes
             form_map: form_map_dict,
             files_map: files_map_dict,
-            meta_cache: std::sync::OnceLock::new(), // Lazy META - zero hot-path cost
+            meta_cache: std::sync::OnceLock::new(),
+            conn_host: conn_host.clone(),
+            conn_scheme: conn_scheme.clone(),
+            conn_remote_addr: conn_remote_addr.clone(),
         };
         let request_obj = Py::new(py, request)?;
 

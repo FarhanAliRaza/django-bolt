@@ -17,7 +17,7 @@ Your first question might be: why? Well, consider this: **Faster than _FastAPI_,
 pip install django-bolt
 ```
 
-**📖 Full Documentation:** [bolt.farhana.li](https://bolt.farhana.li/)
+**📖 Full Documentation:** [bolt.farhana.li](https://bolt.farhana.li/) or if your prefer [youtube video by BugBytes](https://www.youtube.com/watch?v=Pukr-fT4MFY)
 
 > ⚠️ **Note:** Django-Bolt is under active development. Some features are not yet finalized.
 
@@ -76,8 +76,7 @@ python manage.py runbolt --dev
 
 ## 📊 Performance Benchmarks
 
-> **⚠️ Disclaimer:** Django-Bolt is a **feature-incomplete framework** currently in development. Benchmarks were run on a Ryzen 5600G with 16GB RAM (8 processes × 1 worker, C=100 N=10,000) on localhost. Performance will vary significantly based on hardware, OS, configuration, and workload.
->
+
 > **📁 Resources:** Example project available at [python/example/](python/example/). Run benchmarks with `just save-bench` or see [scripts/benchmark.sh](scripts/benchmark.sh).
 
 ### Standard Endpoints
@@ -167,7 +166,7 @@ Contributions welcome! Here's how:
 - Cleaning up code.
 - More examples, tutorials, and docs.
 
----
+
 
 ## 🙏 Acknowledgments & Inspiration
 

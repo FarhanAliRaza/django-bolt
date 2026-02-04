@@ -6,27 +6,30 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **Session authentication** - Full session-based authentication support with Django session backend integration. (#112)
-- **Static file serving** - Serve static files directly from the Bolt server with configurable paths. (#123)
-- **Global authentication and permission classes** - New `BOLT_AUTHENTICATION_CLASSES` and `BOLT_PERMISSION_CLASSES` settings for project-wide defaults. (#121)
-- **camelCase/snake_case field mapping** - Serializers now support automatic field name transformation between camelCase (JSON) and snake_case (Python) via `rename="camel"` config option. (#115)
-- **`request.META` compatibility** - Added `request.META` dictionary for compatibility with Django request objects, enabling easier migration from Django views. (#128)
+- **Actix-native static file serving** - Serve static files directly from Actix without Python handler overhead. Reads Django settings (`STATIC_URL`, `STATIC_ROOT`, `STATICFILES_DIRS`) at startup and uses actix-files with proper ETag, Last-Modified, and MIME type handling. Includes Content Security Policy header support, directory traversal prevention, symlink security, and falls back to Django staticfiles finders in debug mode only. (#123)
+- **Session authentication** - Django session framework integration with async session methods (`request.session.aget()`, `aset()`, `apop()`, `aflush()`, etc.) for non-blocking session access. Includes login/logout endpoint examples and browser-based session demo. Removed the deprecated `SessionAuthentication` class in favor of using Django's built-in session middleware directly. (#112)
+- **Global authentication and permission classes** - New `BOLT_AUTHENTICATION_CLASSES` and `BOLT_PERMISSION_CLASSES` Django settings to configure project-wide defaults instead of specifying them on every endpoint. (#121)
+- **camelCase/snake_case field mapping in serializers** - Serializers now support automatic field name transformation via `rename="camel"` in the Config class, allowing snake_case Python attributes to serialize as camelCase JSON and vice versa. (#115)
+- **`request.META` compatibility** - Added `request.META` dictionary populated in Rust with HTTP headers (as `HTTP_*` keys), server info (`SERVER_NAME`, `SERVER_PORT`), and request metadata (`REQUEST_METHOD`, `PATH_INFO`, `QUERY_STRING`, `CONTENT_TYPE`, `CONTENT_LENGTH`). Enables easier migration from Django views and compatibility with libraries expecting Django request objects. (#128)
 
 ### Changed
 
-- **Cookie and header parsing moved to Rust** - Cookie parsing and header extraction now happen in Rust before reaching Python, improving performance. Cookie setting shortcut added. (#127)
-- **Removed legacy middleware configuration** - Cleaned up deprecated middleware configuration patterns. (#120)
+- **Cookie and header parsing moved to Rust** - Cookie parsing now uses the actix-cookie crate in Rust instead of Python-side parsing. Added `response.set_cookie()` shortcut method with support for all cookie attributes (max_age, expires, path, domain, secure, httponly, samesite). Removed Python-side cookie serialization for better performance. (#127)
+- **Removed legacy middleware configuration** - Removed deprecated `middleware` parameter format from `BoltAPI` constructor that accepted raw middleware config dicts. Middleware should now be passed as classes or the `@cors`/`@rate_limit` decorators. (#120)
+- **Middleware safety classification** - `DjangoMiddlewareStack` now automatically classifies Django middleware as safe (async-compatible) or unsafe (blocking I/O) based on known patterns. Added `auser` property setter on Request for compatibility with Django's `alogin()` and `alogout()` functions. (#93)
 
 ### Fixed
 
-- **Pagination respects serializer fields** - Pagination now correctly uses serializer field definitions instead of raw model fields. (#100)
-- **`from_model()` respects `field(source=...)` parameter** - The serializer's `from_model()` method now correctly handles fields with custom source mappings. (#107)
-- **Streaming response handling in middleware** - Fixed middleware incorrectly buffering streaming responses. (#126)
-- **Middleware safety checks** - Enhanced validation of middleware configuration to catch common errors early. (#93)
+- **Streaming response handling in middleware** - Fixed `TypeError: cannot unpack non-iterable StreamingResponse object` when using `StreamingResponse` with middleware. The serialization layer now correctly returns streaming responses as tuples, and both `handler.rs` and `testing.rs` detect and process `StreamingResponse` bodies appropriately while preserving SSE-specific headers. Added `PyOnceLock`-based caching to avoid repeated imports on the streaming path. (#126)
+- **Pagination respects serializer fields** - Pagination now correctly uses serializer field definitions for item serialization instead of raw model fields. Added `extract_pagination_item_type()` helper and enhanced `PaginatedResponse` with `omit_defaults=True` for cleaner output. (#100)
+- **`from_model()` respects `field(source=...)` parameter** - Fixed serializer's `from_model()` ignoring fields defined with `source="..."`. Now checks `__source_mapping__` and correctly retrieves values using the source path, including dot-notation nested access (e.g., `source="author.name"`). Also improved Python 3.14 compatibility using `inspect.get_annotations()` for PEP 649 deferred annotation evaluation. (#107)
 
 ### Documentation
 
-- Clarified global vs per-view file upload size limits. (#102)
+- Clarified global vs per-view file upload size limits with examples. (#102)
+- Added comprehensive static files documentation with CSP configuration.
+- Added session authentication setup guide with login/logout examples.
+- Enhanced pagination documentation with serializer integration patterns.
 
 ### New Contributors
 

@@ -41,69 +41,6 @@ ResponseMetaTuple = tuple[
 # - ResponseMetaTuple: new format for Rust-side header building
 ResponseTuple = tuple[int, list[tuple[str, str]] | ResponseMetaTuple, bytes | StreamingResponse]
 
-# Content-type mapping for response types
-_CONTENT_TYPE_MAP = {
-    "json": "application/json",
-    "html": "text/html; charset=utf-8",
-    "plaintext": "text/plain; charset=utf-8",
-    "octetstream": "application/octet-stream",
-}
-
-
-def response_meta_to_headers(meta: ResponseMetaTuple) -> list[tuple[str, str]]:
-    """Convert ResponseMetaTuple to legacy headers list format.
-
-    This is primarily for testing - allows tests that call serialization
-    functions directly to get headers in the expected format.
-
-    Args:
-        meta: ResponseMeta tuple (response_type, custom_ct, custom_headers, cookies)
-
-    Returns:
-        List of (header_name, header_value) tuples
-    """
-    response_type, custom_ct, custom_headers, cookies = meta
-    headers: list[tuple[str, str]] = []
-
-    # Add content-type
-    if custom_ct:
-        headers.append(("content-type", custom_ct))
-    elif response_type in _CONTENT_TYPE_MAP:
-        headers.append(("content-type", _CONTENT_TYPE_MAP[response_type]))
-
-    # Add custom headers (lowercase keys)
-    if custom_headers:
-        for k, v in custom_headers:
-            headers.append((k.lower(), v))
-
-    # Add cookies as Set-Cookie headers using SimpleCookie for proper escaping
-    if cookies:
-        from http.cookies import SimpleCookie
-
-        for cookie_tuple in cookies:
-            name, value, path, max_age, expires, domain, secure, httponly, samesite = cookie_tuple
-            # Use SimpleCookie for RFC 6265 compliant escaping
-            morsel = SimpleCookie()
-            morsel[name] = value
-            cookie = morsel[name]
-            cookie["path"] = path
-            if max_age is not None:
-                cookie["max-age"] = str(max_age)
-            if expires:
-                cookie["expires"] = expires
-            if domain:
-                cookie["domain"] = domain
-            if secure:
-                cookie["secure"] = True
-            if httponly:
-                cookie["httponly"] = True
-            if samesite:
-                cookie["samesite"] = samesite
-            headers.append(("set-cookie", cookie.output(header="").strip()))
-
-    return headers
-
-
 def _build_response_meta(
     response_type: str,
     custom_headers: dict[str, str] | None,

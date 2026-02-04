@@ -10,7 +10,6 @@ from django_bolt import JSON, Cookie, Response, StreamingResponse
 from django_bolt.cookies import make_delete_cookie
 from django_bolt.responses import HTML, PlainText, Redirect
 from django_bolt.serialization import (
-    response_meta_to_headers,
     serialize_html_response,
     serialize_plaintext_response,
     serialize_redirect_response,
@@ -272,44 +271,58 @@ class TestResponseDeleteCookie:
 
 
 class TestSerializationWithCookies:
-    """Tests for cookie header inclusion in serialized responses."""
+    """Tests for raw cookie tuples in ResponseMeta (Rust handles serialization)."""
 
     def test_plaintext_serialization_includes_cookies(self):
-        """Test that PlainText serialization includes Set-Cookie headers."""
+        """Test that PlainText serialization includes raw cookie tuples for Rust."""
         response = PlainText("Hello").set_cookie("greeting", "sent")
-        status, meta_or_headers, body = serialize_plaintext_response(response)
-        # Convert ResponseMeta tuple to headers list if needed
-        headers = response_meta_to_headers(meta_or_headers) if isinstance(meta_or_headers, tuple) else meta_or_headers
-        # Check that set-cookie is in headers
-        set_cookie_headers = [h for h in headers if h[0] == "set-cookie"]
-        assert len(set_cookie_headers) == 1
-        assert "greeting=sent" in set_cookie_headers[0][1]
+        status, meta, body = serialize_plaintext_response(response)
+        # Verify ResponseMeta format: (response_type, custom_ct, custom_headers, cookies)
+        assert isinstance(meta, tuple)
+        assert len(meta) == 4
+        response_type, custom_ct, custom_headers, cookies = meta
+        assert response_type == "plaintext"
+        assert cookies is not None
+        assert len(cookies) == 1
+        # Cookie tuple: (name, value, path, max_age, expires, domain, secure, httponly, samesite)
+        assert cookies[0][0] == "greeting"
+        assert cookies[0][1] == "sent"
 
     def test_html_serialization_includes_cookies(self):
-        """Test that HTML serialization includes Set-Cookie headers."""
+        """Test that HTML serialization includes raw cookie tuples for Rust."""
         response = HTML("<h1>Hi</h1>").set_cookie("page", "home")
-        status, meta_or_headers, body = serialize_html_response(response)
-        headers = response_meta_to_headers(meta_or_headers) if isinstance(meta_or_headers, tuple) else meta_or_headers
-        set_cookie_headers = [h for h in headers if h[0] == "set-cookie"]
-        assert len(set_cookie_headers) == 1
-        assert "page=home" in set_cookie_headers[0][1]
+        status, meta, body = serialize_html_response(response)
+        assert isinstance(meta, tuple)
+        response_type, custom_ct, custom_headers, cookies = meta
+        assert response_type == "html"
+        assert cookies is not None
+        assert len(cookies) == 1
+        assert cookies[0][0] == "page"
+        assert cookies[0][1] == "home"
 
     def test_redirect_serialization_includes_cookies(self):
-        """Test that Redirect serialization includes Set-Cookie headers."""
+        """Test that Redirect serialization includes raw cookie tuples for Rust."""
         response = Redirect("/dashboard").set_cookie("redirected", "true")
-        status, meta_or_headers, body = serialize_redirect_response(response)
-        headers = response_meta_to_headers(meta_or_headers) if isinstance(meta_or_headers, tuple) else meta_or_headers
-        set_cookie_headers = [h for h in headers if h[0] == "set-cookie"]
-        assert len(set_cookie_headers) == 1
-        assert "redirected=true" in set_cookie_headers[0][1]
+        status, meta, body = serialize_redirect_response(response)
+        assert isinstance(meta, tuple)
+        response_type, custom_ct, custom_headers, cookies = meta
+        assert response_type == "redirect"
+        assert cookies is not None
+        assert len(cookies) == 1
+        assert cookies[0][0] == "redirected"
+        assert cookies[0][1] == "true"
 
     def test_multiple_cookies_in_serialization(self):
-        """Test that multiple cookies create multiple Set-Cookie headers."""
+        """Test that multiple cookies produce multiple raw tuples for Rust."""
         response = PlainText("OK").set_cookie("a", "1").set_cookie("b", "2").set_cookie("c", "3")
-        status, meta_or_headers, body = serialize_plaintext_response(response)
-        headers = response_meta_to_headers(meta_or_headers) if isinstance(meta_or_headers, tuple) else meta_or_headers
-        set_cookie_headers = [h for h in headers if h[0] == "set-cookie"]
-        assert len(set_cookie_headers) == 3
+        status, meta, body = serialize_plaintext_response(response)
+        assert isinstance(meta, tuple)
+        response_type, custom_ct, custom_headers, cookies = meta
+        assert cookies is not None
+        assert len(cookies) == 3
+        assert cookies[0][0] == "a"
+        assert cookies[1][0] == "b"
+        assert cookies[2][0] == "c"
 
 
 class TestCookieImport:
@@ -326,31 +339,37 @@ class TestCookieImport:
 
 @pytest.mark.asyncio
 class TestAsyncSerializationWithCookies:
-    """Tests for cookie header inclusion in async serialized responses."""
+    """Tests for raw cookie tuples in async serialized responses (Rust handles serialization)."""
 
     async def test_json_async_serialization_includes_cookies(self):
-        """Test that JSON async serialization includes Set-Cookie headers."""
+        """Test that JSON async serialization includes raw cookie tuples for Rust."""
         from django_bolt.serialization import serialize_json_response
 
         response = JSON({"ok": True}).set_cookie("api_token", "secret123", httponly=True)
-        status, meta_or_headers, body = await serialize_json_response(response, None, None)
-        headers = response_meta_to_headers(meta_or_headers) if isinstance(meta_or_headers, tuple) else meta_or_headers
-        set_cookie_headers = [h for h in headers if h[0] == "set-cookie"]
-        assert len(set_cookie_headers) == 1
-        assert "api_token=secret123" in set_cookie_headers[0][1]
-        assert "HttpOnly" in set_cookie_headers[0][1]
+        status, meta, body = await serialize_json_response(response, None, None)
+        assert isinstance(meta, tuple)
+        response_type, custom_ct, custom_headers, cookies = meta
+        assert response_type == "json"
+        assert cookies is not None
+        assert len(cookies) == 1
+        # Cookie tuple: (name, value, path, max_age, expires, domain, secure, httponly, samesite)
+        assert cookies[0][0] == "api_token"
+        assert cookies[0][1] == "secret123"
+        assert cookies[0][7] is True  # httponly
 
     async def test_response_async_serialization_includes_cookies(self):
-        """Test that Response async serialization includes Set-Cookie headers."""
+        """Test that Response async serialization includes raw cookie tuples for Rust."""
         from django_bolt.serialization import serialize_generic_response
 
         response = Response({"status": "logged_in"}).set_cookie("session", "xyz", secure=True)
-        status, meta_or_headers, body = await serialize_generic_response(response, None, None)
-        headers = response_meta_to_headers(meta_or_headers) if isinstance(meta_or_headers, tuple) else meta_or_headers
-        set_cookie_headers = [h for h in headers if h[0] == "set-cookie"]
-        assert len(set_cookie_headers) == 1
-        assert "session=xyz" in set_cookie_headers[0][1]
-        assert "Secure" in set_cookie_headers[0][1]
+        status, meta, body = await serialize_generic_response(response, None, None)
+        assert isinstance(meta, tuple)
+        response_type, custom_ct, custom_headers, cookies = meta
+        assert cookies is not None
+        assert len(cookies) == 1
+        assert cookies[0][0] == "session"
+        assert cookies[0][1] == "xyz"
+        assert cookies[0][6] is True  # secure
 
 
 class TestCookieSecurityValidation:

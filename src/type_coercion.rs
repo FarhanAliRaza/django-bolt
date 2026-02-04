@@ -5,11 +5,71 @@
 //! Performance improvement: ~100-500µs per parameter.
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyAnyMethods, PyDictMethods};
-use pyo3::IntoPyObject;
+use pyo3::{IntoPyObject, Py, PyAny, Python};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use uuid::Uuid;
+
+// OPTIMIZATION: Cache Python classes for type construction (avoids repeated imports)
+// Each import costs ~50-100ns, caching eliminates this overhead for repeated coercions
+static UUID_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static DECIMAL_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static DATETIME_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static DATE_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static TIME_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+
+#[inline]
+fn get_uuid_class(py: Python<'_>) -> &Py<PyAny> {
+    UUID_CLASS.get_or_init(py, || {
+        py.import("uuid").unwrap().getattr("UUID").unwrap().unbind()
+    })
+}
+
+#[inline]
+fn get_decimal_class(py: Python<'_>) -> &Py<PyAny> {
+    DECIMAL_CLASS.get_or_init(py, || {
+        py.import("decimal")
+            .unwrap()
+            .getattr("Decimal")
+            .unwrap()
+            .unbind()
+    })
+}
+
+#[inline]
+fn get_datetime_class(py: Python<'_>) -> &Py<PyAny> {
+    DATETIME_CLASS.get_or_init(py, || {
+        py.import("datetime")
+            .unwrap()
+            .getattr("datetime")
+            .unwrap()
+            .unbind()
+    })
+}
+
+#[inline]
+fn get_date_class(py: Python<'_>) -> &Py<PyAny> {
+    DATE_CLASS.get_or_init(py, || {
+        py.import("datetime")
+            .unwrap()
+            .getattr("date")
+            .unwrap()
+            .unbind()
+    })
+}
+
+#[inline]
+fn get_time_class(py: Python<'_>) -> &Py<PyAny> {
+    TIME_CLASS.get_or_init(py, || {
+        py.import("datetime")
+            .unwrap()
+            .getattr("time")
+            .unwrap()
+            .unbind()
+    })
+}
 
 /// Maximum allowed length for parameter values (8KB default)
 /// Prevents memory exhaustion attacks from extremely long parameters
@@ -237,12 +297,11 @@ pub fn coerce_to_py(
         }
         TYPE_UUID => {
             // Parse UUID in Rust, convert to Python uuid.UUID
+            // OPTIMIZATION: Use cached UUID class (avoids py.import per call)
             match Uuid::parse_str(value) {
                 Ok(uuid) => {
-                    let uuid_module = py.import("uuid")?;
-                    let uuid_class = uuid_module.getattr("UUID")?;
-                    let py_uuid = uuid_class.call1((uuid.to_string(),))?;
-                    Ok(py_uuid.unbind())
+                    let py_uuid = get_uuid_class(py).call1(py, (uuid.to_string(),))?;
+                    Ok(py_uuid)
                 }
                 Err(e) => Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "Invalid UUID '{}': {}",
@@ -252,23 +311,22 @@ pub fn coerce_to_py(
         }
         TYPE_DATETIME => {
             // Parse datetime in Rust, convert to Python datetime
+            // OPTIMIZATION: Use cached datetime class (avoids py.import per call)
             match parse_datetime(value) {
                 Ok(CoercedValue::DateTime(dt)) => {
-                    let datetime_module = py.import("datetime")?;
-                    let datetime_class = datetime_module.getattr("datetime")?;
                     // Use fromisoformat for RFC3339 strings
-                    let py_dt = datetime_class.call_method1("fromisoformat", (dt.to_rfc3339(),))?;
-                    Ok(py_dt.unbind())
+                    let iso_str = dt.to_rfc3339().replace('Z', "+00:00");
+                    let py_dt = get_datetime_class(py).call_method1(py, "fromisoformat", (iso_str,))?;
+                    Ok(py_dt)
                 }
                 Ok(CoercedValue::NaiveDateTime(ndt)) => {
-                    let datetime_module = py.import("datetime")?;
-                    let datetime_class = datetime_module.getattr("datetime")?;
                     // Format as ISO string for fromisoformat
-                    let py_dt = datetime_class.call_method1(
+                    let py_dt = get_datetime_class(py).call_method1(
+                        py,
                         "fromisoformat",
                         (ndt.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),),
                     )?;
-                    Ok(py_dt.unbind())
+                    Ok(py_dt)
                 }
                 Ok(_) => {
                     // Shouldn't happen, but fallback to string
@@ -284,12 +342,11 @@ pub fn coerce_to_py(
         }
         TYPE_DECIMAL => {
             // Validate decimal in Rust, convert to Python Decimal
+            // OPTIMIZATION: Use cached Decimal class (avoids py.import per call)
             match Decimal::from_str(value) {
                 Ok(d) => {
-                    let decimal_module = py.import("decimal")?;
-                    let decimal_class = decimal_module.getattr("Decimal")?;
-                    let py_decimal = decimal_class.call1((d.to_string(),))?;
-                    Ok(py_decimal.unbind())
+                    let py_decimal = get_decimal_class(py).call1(py, (d.to_string(),))?;
+                    Ok(py_decimal)
                 }
                 Err(e) => Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "Invalid decimal '{}': {}",
@@ -299,12 +356,12 @@ pub fn coerce_to_py(
         }
         TYPE_DATE => {
             // Parse date in Rust, convert to Python date
+            // OPTIMIZATION: Use cached date class (avoids py.import per call)
             match NaiveDate::parse_from_str(value, "%Y-%m-%d") {
                 Ok(date) => {
-                    let datetime_module = py.import("datetime")?;
-                    let date_class = datetime_module.getattr("date")?;
-                    let py_date = date_class.call_method1("fromisoformat", (date.to_string(),))?;
-                    Ok(py_date.unbind())
+                    let py_date =
+                        get_date_class(py).call_method1(py, "fromisoformat", (date.to_string(),))?;
+                    Ok(py_date)
                 }
                 Err(e) => Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "Invalid date '{}': {}",
@@ -314,12 +371,12 @@ pub fn coerce_to_py(
         }
         TYPE_TIME => {
             // Parse time in Rust, convert to Python time
+            // OPTIMIZATION: Use cached time class (avoids py.import per call)
             match parse_time(value) {
                 Ok(CoercedValue::Time(time)) => {
-                    let datetime_module = py.import("datetime")?;
-                    let time_class = datetime_module.getattr("time")?;
-                    let py_time = time_class.call_method1("fromisoformat", (time.to_string(),))?;
-                    Ok(py_time.unbind())
+                    let py_time =
+                        get_time_class(py).call_method1(py, "fromisoformat", (time.to_string(),))?;
+                    Ok(py_time)
                 }
                 Ok(_) => {
                     // Shouldn't happen, but fallback to string

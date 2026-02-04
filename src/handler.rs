@@ -454,9 +454,6 @@ pub async fn handle_request(
         .get()
         .and_then(|meta_map| meta_map.get(&handler_id).cloned());
 
-    // Capture raw query string for META dict (preserves original encoding and ordering)
-    let raw_query_string = req.uri().query().unwrap_or("").to_owned();
-
     // Optimization: Only parse query string if handler needs it
     // This saves ~0.5-1ms per request for handlers that don't use query params
     let needs_query = route_metadata
@@ -465,8 +462,8 @@ pub async fn handle_request(
         .unwrap_or(true);
 
     let query_params = if needs_query {
-        if !raw_query_string.is_empty() {
-            parse_query_string(&raw_query_string)
+        if let Some(q) = req.uri().query() {
+            parse_query_string(q)
         } else {
             AHashMap::new()
         }
@@ -716,9 +713,6 @@ pub async fn handle_request(
             (PyDict::new(py).unbind(), PyDict::new(py).unbind())
         };
 
-        // Get remote address (client IP) - stored for META lazy evaluation
-        let remote_addr = peer_addr.clone().unwrap_or_else(|| "127.0.0.1".to_owned());
-
         let request = PyRequest {
             method: method_owned.clone(),
             path: path_owned.clone(),
@@ -732,9 +726,7 @@ pub async fn handle_request(
             state: PyDict::new(py).unbind(), // Empty state dict for middleware and dynamic attributes
             form_map: form_map_dict,
             files_map: files_map_dict,
-            meta_cache: std::sync::RwLock::new(None), // Lazy cached META dict
-            raw_query_string: raw_query_string.clone(),
-            remote_addr,
+            meta_cache: std::sync::OnceLock::new(), // Lazy META - zero hot-path cost
         };
         let request_obj = Py::new(py, request)?;
 

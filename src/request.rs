@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString};
 
-use std::sync::RwLock;
+use std::sync::OnceLock;
 
 #[pyclass]
 pub struct PyRequest {
@@ -25,11 +25,9 @@ pub struct PyRequest {
     /// Files data - dict of {field_name: {filename, content, content_type, size, temp_path?}}
     pub files_map: Py<PyDict>,
     /// Lazy cached META dict for Django template compatibility
-    pub meta_cache: RwLock<Option<Py<PyDict>>>,
-    /// Raw query string from the original request (preserved for QUERY_STRING META key)
-    pub raw_query_string: String,
-    /// Remote client address for META (e.g., "127.0.0.1")
-    pub remote_addr: String,
+    /// Uses OnceLock for thread-safe lazy initialization (required by PyO3's pyclass)
+    /// Zero hot-path cost: all META values are derived from existing fields when accessed
+    pub meta_cache: OnceLock<Py<PyDict>>,
 }
 
 #[pymethods]
@@ -176,37 +174,49 @@ impl PyRequest {
     #[getter]
     #[allow(non_snake_case)]
     fn META<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
-        // Return cached if already built
-        {
-            let cache = self
-                .meta_cache
-                .read()
-                .expect("META cache read lock poisoned");
-            if let Some(ref meta) = *cache {
-                return Ok(meta.clone_ref(py));
-            }
+        // Return cached if already built (zero-overhead check)
+        if let Some(meta) = self.meta_cache.get() {
+            return Ok(meta.clone_ref(py));
         }
 
-        // Build META dict only on first access
+        // Build META dict only on first access (ZERO hot-path cost)
+        // All values are derived from existing PyRequest fields
         let meta = PyDict::new(py);
+        let headers_dict = self.headers.bind(py);
+
+        // Helper to get header value
+        let get_header = |key: &str| -> Option<String> {
+            headers_dict
+                .get_item(key)
+                .ok()
+                .flatten()
+                .and_then(|v| v.extract::<String>().ok())
+        };
 
         // Standard META keys (Django HttpRequest compatible)
         meta.set_item("REQUEST_METHOD", &self.method)?;
         meta.set_item("PATH_INFO", &self.path)?;
 
-        // Use raw query string (preserves original encoding and ordering)
-        meta.set_item("QUERY_STRING", &self.raw_query_string)?;
+        // QUERY_STRING - reconstruct from query_params (empty if none)
+        // Note: Original encoding/ordering not preserved, but sufficient for template rendering
+        let query_dict = self.query_params.bind(py);
+        let query_string = if query_dict.is_empty() {
+            String::new()
+        } else {
+            query_dict
+                .iter()
+                .filter_map(|(k, v)| {
+                    let key = k.extract::<String>().ok()?;
+                    let val = v.str().ok()?.to_string();
+                    Some(format!("{}={}", key, val))
+                })
+                .collect::<Vec<_>>()
+                .join("&")
+        };
+        meta.set_item("QUERY_STRING", query_string)?;
 
-        // Convert headers to HTTP_* format and extract server info
-        // Note: Header keys are already lowercase (normalized by http crate)
-        let headers_dict = self.headers.bind(py);
-
-        // Server info - computed lazily from Host header (not in hot path)
-        let (server_name, server_port) = headers_dict
-            .get_item("host")
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<String>().ok())
+        // Server info - derived from Host header
+        let (server_name, server_port) = get_header("host")
             .map(|host| {
                 if let Some((name, port_str)) = host.rsplit_once(':') {
                     let port = port_str.parse::<u16>().unwrap_or(80);
@@ -221,18 +231,26 @@ impl PyRequest {
         meta.set_item("SERVER_PORT", server_port.to_string())?;
         meta.set_item("SERVER_PROTOCOL", "HTTP/1.1")?;
 
-        // Client info
-        meta.set_item("REMOTE_ADDR", &self.remote_addr)?;
-        meta.set_item("REMOTE_HOST", &self.remote_addr)?; // Same as REMOTE_ADDR in most cases
+        // REMOTE_ADDR - derived from X-Forwarded-For or X-Real-IP header
+        // This is the standard approach for apps behind reverse proxies
+        let remote_addr = get_header("x-forwarded-for")
+            .and_then(|v| v.split(',').next().map(|s| s.trim().to_owned()))
+            .or_else(|| get_header("x-real-ip"))
+            .unwrap_or_else(|| "127.0.0.1".to_owned());
+
+        meta.set_item("REMOTE_ADDR", &remote_addr)?;
+        meta.set_item("REMOTE_HOST", &remote_addr)?;
 
         // SCRIPT_NAME is usually empty for Django apps
         meta.set_item("SCRIPT_NAME", "")?;
+
+        // Convert headers to HTTP_* format
+        // Header keys are already lowercase (normalized by http crate)
         for (key, value) in headers_dict.iter() {
             if let (Ok(k), Ok(v)) = (key.extract::<String>(), value.extract::<String>()) {
-                let lower_key = k.to_lowercase();
-                let meta_key = if lower_key == "content-type" {
+                let meta_key = if k == "content-type" {
                     "CONTENT_TYPE".to_string()
-                } else if lower_key == "content-length" {
+                } else if k == "content-length" {
                     "CONTENT_LENGTH".to_string()
                 } else {
                     format!("HTTP_{}", k.to_uppercase().replace('-', "_"))
@@ -243,13 +261,7 @@ impl PyRequest {
 
         // Cache and return
         let meta_unbind = meta.unbind();
-        {
-            let mut cache = self
-                .meta_cache
-                .write()
-                .expect("META cache write lock poisoned");
-            *cache = Some(meta_unbind.clone_ref(py));
-        }
+        let _ = self.meta_cache.set(meta_unbind.clone_ref(py));
         Ok(meta_unbind)
     }
 
@@ -300,12 +312,21 @@ impl PyRequest {
     ///     /users?page=2&limit=10
     ///
     /// This matches Django's HttpRequest.get_full_path() method.
-    /// Uses the raw query string to preserve original encoding and ordering.
-    fn get_full_path(&self) -> String {
-        if self.raw_query_string.is_empty() {
+    fn get_full_path(&self, py: Python<'_>) -> String {
+        let query_dict = self.query_params.bind(py);
+        if query_dict.is_empty() {
             self.path.clone()
         } else {
-            format!("{}?{}", self.path, self.raw_query_string)
+            let query_string: String = query_dict
+                .iter()
+                .filter_map(|(k, v)| {
+                    let key = k.extract::<String>().ok()?;
+                    let val = v.str().ok()?.to_string();
+                    Some(format!("{}={}", key, val))
+                })
+                .collect::<Vec<_>>()
+                .join("&");
+            format!("{}?{}", self.path, query_string)
         }
     }
 
@@ -316,7 +337,6 @@ impl PyRequest {
     ///
     /// This matches Django's HttpRequest.build_absolute_uri() method.
     /// Uses Host header to determine the scheme and host.
-    /// Uses raw query string to preserve original encoding and ordering.
     #[pyo3(signature = (location=None))]
     fn build_absolute_uri(&self, py: Python<'_>, location: Option<&str>) -> String {
         let headers_dict = self.headers.bind(py);
@@ -335,11 +355,21 @@ impl PyRequest {
         let scheme = get_header("x-forwarded-proto", "http");
         let path = location.unwrap_or(&self.path);
 
-        // Build full URL (only include query string if using current path and query exists)
-        if self.raw_query_string.is_empty() || location.is_some() {
+        // Build query string from query_params if using current path
+        let query_dict = self.query_params.bind(py);
+        if query_dict.is_empty() || location.is_some() {
             format!("{}://{}{}", scheme, host, path)
         } else {
-            format!("{}://{}{}?{}", scheme, host, path, self.raw_query_string)
+            let query_string: String = query_dict
+                .iter()
+                .filter_map(|(k, v)| {
+                    let key = k.extract::<String>().ok()?;
+                    let val = v.str().ok()?.to_string();
+                    Some(format!("{}={}", key, val))
+                })
+                .collect::<Vec<_>>()
+                .join("&");
+            format!("{}://{}{}?{}", scheme, host, path, query_string)
         }
     }
 

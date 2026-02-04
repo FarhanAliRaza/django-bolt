@@ -230,7 +230,9 @@ class SmallPagePagination(PageNumberPagination):
 # ----------------------------------------------------------------------------
 
 
-@api.get("/paginated", )
+@api.get(
+    "/paginated",
+)
 @paginate(SmallPagePagination)
 async def list_users_paginated(request):
     """

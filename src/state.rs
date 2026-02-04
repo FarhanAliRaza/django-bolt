@@ -13,9 +13,9 @@ use crate::websocket::WebSocketRouter;
 /// Configuration for serving static files via Actix
 #[derive(Clone, Debug)]
 pub struct StaticFilesConfig {
-    pub url_prefix: String,          // URL prefix (e.g., "/static")
-    pub directories: Vec<String>,    // List of directories to serve from
-    pub csp_header: Option<String>,  // Pre-built Content-Security-Policy header from Django settings
+    pub url_prefix: String,         // URL prefix (e.g., "/static")
+    pub directories: Vec<String>,   // List of directories to serve from
+    pub csp_header: Option<String>, // Pre-built Content-Security-Policy header from Django settings
 }
 
 pub struct AppState {

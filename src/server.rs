@@ -141,30 +141,31 @@ pub fn start_server_async(
     });
 
     // Get configuration from Django settings ONCE at startup (not per-request)
-    let (debug, max_header_size, max_payload_size, cors_config_data, static_files_data, csp_header) = Python::attach(|py| {
-        let debug = (|| -> PyResult<bool> {
-            let django_conf = py.import("django.conf")?;
-            let settings = django_conf.getattr("settings")?;
-            settings.getattr("DEBUG")?.extract::<bool>()
-        })()
-        .unwrap_or(false);
+    let (debug, max_header_size, max_payload_size, cors_config_data, static_files_data, csp_header) =
+        Python::attach(|py| {
+            let debug = (|| -> PyResult<bool> {
+                let django_conf = py.import("django.conf")?;
+                let settings = django_conf.getattr("settings")?;
+                settings.getattr("DEBUG")?.extract::<bool>()
+            })()
+            .unwrap_or(false);
 
-        let max_header_size = (|| -> PyResult<usize> {
-            let django_conf = py.import("django.conf")?;
-            let settings = django_conf.getattr("settings")?;
-            settings.getattr("BOLT_MAX_HEADER_SIZE")?.extract::<usize>()
-        })()
-        .unwrap_or(8192); // Default 8KB
+            let max_header_size = (|| -> PyResult<usize> {
+                let django_conf = py.import("django.conf")?;
+                let settings = django_conf.getattr("settings")?;
+                settings.getattr("BOLT_MAX_HEADER_SIZE")?.extract::<usize>()
+            })()
+            .unwrap_or(8192); // Default 8KB
 
-        let max_payload_size = (|| -> PyResult<usize> {
-            let django_conf = py.import("django.conf")?;
-            let settings = django_conf.getattr("settings")?;
-            settings.getattr("BOLT_MAX_UPLOAD_SIZE")?.extract::<usize>()
-        })()
-        .unwrap_or(1 * 1024 * 1024); // Default 1MB
+            let max_payload_size = (|| -> PyResult<usize> {
+                let django_conf = py.import("django.conf")?;
+                let settings = django_conf.getattr("settings")?;
+                settings.getattr("BOLT_MAX_UPLOAD_SIZE")?.extract::<usize>()
+            })()
+            .unwrap_or(1 * 1024 * 1024); // Default 1MB
 
-        // Read django-cors-headers compatible CORS settings
-        let cors_data = (|| -> PyResult<(Vec<String>, Vec<String>, bool, bool, Option<Vec<String>>, Option<Vec<String>>, Option<Vec<String>>, Option<u32>)> {
+            // Read django-cors-headers compatible CORS settings
+            let cors_data = (|| -> PyResult<(Vec<String>, Vec<String>, bool, bool, Option<Vec<String>>, Option<Vec<String>>, Option<Vec<String>>, Option<u32>)> {
             let django_conf = py.import("django.conf")?;
             let settings = django_conf.getattr("settings")?;
 
@@ -203,105 +204,118 @@ pub fn start_server_async(
             Ok((origins, origin_regexes, allow_all, credentials, methods, headers, expose_headers, max_age))
         })().unwrap_or_else(|_| (vec![], vec![], false, false, None, None, None, None));
 
-        // Read static files configuration from Django settings
-        // STATIC_URL: URL prefix for static files (e.g., "/static/")
-        // STATIC_ROOT: Directory where collectstatic gathers files
-        // STATICFILES_DIRS: Additional directories to search for static files
-        let static_data = (|| -> PyResult<Option<(String, Vec<String>)>> {
-            let django_conf = py.import("django.conf")?;
-            let settings = django_conf.getattr("settings")?;
+            // Read static files configuration from Django settings
+            // STATIC_URL: URL prefix for static files (e.g., "/static/")
+            // STATIC_ROOT: Directory where collectstatic gathers files
+            // STATICFILES_DIRS: Additional directories to search for static files
+            let static_data = (|| -> PyResult<Option<(String, Vec<String>)>> {
+                let django_conf = py.import("django.conf")?;
+                let settings = django_conf.getattr("settings")?;
 
-            // Get STATIC_URL (required for static serving)
-            let static_url = match settings.getattr("STATIC_URL") {
-                Ok(url) => url.extract::<String>().ok(),
-                Err(_) => None,
-            };
+                // Get STATIC_URL (required for static serving)
+                let static_url = match settings.getattr("STATIC_URL") {
+                    Ok(url) => url.extract::<String>().ok(),
+                    Err(_) => None,
+                };
 
-            let static_url = match static_url {
-                Some(url) => url,
-                None => return Ok(None), // No static URL configured
-            };
+                let static_url = match static_url {
+                    Some(url) => url,
+                    None => return Ok(None), // No static URL configured
+                };
 
-            // Normalize URL prefix (remove trailing slash for actix-files)
-            let url_prefix = static_url.trim_end_matches('/').to_string();
-            if url_prefix.is_empty() {
-                return Ok(None); // Invalid static URL
-            }
-
-            let mut directories: Vec<String> = Vec::new();
-
-            // Get STATIC_ROOT (primary location for collected static files)
-            // STATIC_ROOT can be a Path object, so convert via str()
-            if let Ok(static_root) = settings.getattr("STATIC_ROOT") {
-                let root_str = static_root.extract::<String>()
-                    .or_else(|_| static_root.call_method0("__str__").and_then(|s| s.extract::<String>()));
-                if let Ok(root_str) = root_str {
-                    if !root_str.is_empty() {
-                        directories.push(root_str);
-                    }
+                // Normalize URL prefix (remove trailing slash for actix-files)
+                let url_prefix = static_url.trim_end_matches('/').to_string();
+                if url_prefix.is_empty() {
+                    return Ok(None); // Invalid static URL
                 }
-            }
 
-            // Get STATICFILES_DIRS (additional directories)
-            if let Ok(static_dirs) = settings.getattr("STATICFILES_DIRS") {
-                if let Ok(dirs) = static_dirs.extract::<Vec<String>>() {
-                    for dir in dirs {
-                        if !dir.is_empty() && !directories.contains(&dir) {
-                            directories.push(dir);
+                let mut directories: Vec<String> = Vec::new();
+
+                // Get STATIC_ROOT (primary location for collected static files)
+                // STATIC_ROOT can be a Path object, so convert via str()
+                if let Ok(static_root) = settings.getattr("STATIC_ROOT") {
+                    let root_str = static_root.extract::<String>().or_else(|_| {
+                        static_root
+                            .call_method0("__str__")
+                            .and_then(|s| s.extract::<String>())
+                    });
+                    if let Ok(root_str) = root_str {
+                        if !root_str.is_empty() {
+                            directories.push(root_str);
                         }
                     }
                 }
-            }
 
-            if directories.is_empty() {
-                return Ok(None); // No static directories configured
-            }
-
-            Ok(Some((url_prefix, directories)))
-        })().unwrap_or(None);
-
-        // Read CSP configuration from Django settings (Django 6.0+ SECURE_CSP)
-        // CSP header is built once at startup for static files (no nonce support for static files)
-        // See: https://docs.djangoproject.com/en/6.0/ref/csp/
-        let csp_header: Option<String> = (|| -> Option<String> {
-            use std::collections::HashMap;
-
-            let django_conf = py.import("django.conf").ok()?;
-            let settings = django_conf.getattr("settings").ok()?;
-
-            let csp = settings.getattr("SECURE_CSP").ok()?;
-            if csp.is_none() {
-                return None;
-            }
-            let csp_directives: HashMap<String, Vec<String>> = csp.extract().ok()?;
-
-            // Build CSP header string from directives
-            let mut csp_parts: Vec<String> = Vec::new();
-
-            for (directive, sources) in csp_directives {
-                // Filter out CSP.NONCE sentinel values (can't inject nonces for static files)
-                let filtered_sources: Vec<String> = sources
-                    .into_iter()
-                    .filter(|s| !s.contains("CSP_NONCE_SENTINEL"))
-                    .collect();
-
-                if !filtered_sources.is_empty() {
-                    csp_parts.push(format!("{} {}", directive, filtered_sources.join(" ")));
-                } else if directive == "upgrade-insecure-requests" || directive == "block-all-mixed-content" {
-                    // Boolean directives (no sources needed)
-                    csp_parts.push(directive);
+                // Get STATICFILES_DIRS (additional directories)
+                if let Ok(static_dirs) = settings.getattr("STATICFILES_DIRS") {
+                    if let Ok(dirs) = static_dirs.extract::<Vec<String>>() {
+                        for dir in dirs {
+                            if !dir.is_empty() && !directories.contains(&dir) {
+                                directories.push(dir);
+                            }
+                        }
+                    }
                 }
-            }
 
-            if csp_parts.is_empty() {
-                None
-            } else {
-                Some(csp_parts.join("; "))
-            }
-        })();
+                if directories.is_empty() {
+                    return Ok(None); // No static directories configured
+                }
 
-        (debug, max_header_size, max_payload_size, cors_data, static_data, csp_header)
-    });
+                Ok(Some((url_prefix, directories)))
+            })()
+            .unwrap_or(None);
+
+            // Read CSP configuration from Django settings (Django 6.0+ SECURE_CSP)
+            // CSP header is built once at startup for static files (no nonce support for static files)
+            // See: https://docs.djangoproject.com/en/6.0/ref/csp/
+            let csp_header: Option<String> = (|| -> Option<String> {
+                use std::collections::HashMap;
+
+                let django_conf = py.import("django.conf").ok()?;
+                let settings = django_conf.getattr("settings").ok()?;
+
+                let csp = settings.getattr("SECURE_CSP").ok()?;
+                if csp.is_none() {
+                    return None;
+                }
+                let csp_directives: HashMap<String, Vec<String>> = csp.extract().ok()?;
+
+                // Build CSP header string from directives
+                let mut csp_parts: Vec<String> = Vec::new();
+
+                for (directive, sources) in csp_directives {
+                    // Filter out CSP.NONCE sentinel values (can't inject nonces for static files)
+                    let filtered_sources: Vec<String> = sources
+                        .into_iter()
+                        .filter(|s| !s.contains("CSP_NONCE_SENTINEL"))
+                        .collect();
+
+                    if !filtered_sources.is_empty() {
+                        csp_parts.push(format!("{} {}", directive, filtered_sources.join(" ")));
+                    } else if directive == "upgrade-insecure-requests"
+                        || directive == "block-all-mixed-content"
+                    {
+                        // Boolean directives (no sources needed)
+                        csp_parts.push(directive);
+                    }
+                }
+
+                if csp_parts.is_empty() {
+                    None
+                } else {
+                    Some(csp_parts.join("; "))
+                }
+            })();
+
+            (
+                debug,
+                max_header_size,
+                max_payload_size,
+                cors_data,
+                static_data,
+                csp_header,
+            )
+        });
 
     // Unpack CORS configuration data
     let (

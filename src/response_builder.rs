@@ -283,8 +283,7 @@ mod tests {
             custom_headers: None,
             cookies: None,
         };
-        let response =
-            build_response_from_meta(StatusCode::OK, meta, b"{}".to_vec(), false);
+        let response = build_response_from_meta(StatusCode::OK, meta, b"{}".to_vec(), false);
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -296,8 +295,7 @@ mod tests {
             custom_headers: None,
             cookies: None,
         };
-        let response =
-            build_response_from_meta(StatusCode::OK, meta, b"{}".to_vec(), false);
+        let response = build_response_from_meta(StatusCode::OK, meta, b"{}".to_vec(), false);
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -312,8 +310,7 @@ mod tests {
             ]),
             cookies: None,
         };
-        let response =
-            build_response_from_meta(StatusCode::OK, meta, b"{}".to_vec(), false);
+        let response = build_response_from_meta(StatusCode::OK, meta, b"{}".to_vec(), false);
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -323,22 +320,19 @@ mod tests {
             response_type: ResponseType::Json,
             custom_content_type: None,
             custom_headers: None,
-            cookies: Some(vec![
-                CookieData {
-                    name: "session".to_string(),
-                    value: "abc123".to_string(),
-                    path: "/".to_string(),
-                    max_age: Some(3600),
-                    expires: None,
-                    domain: None,
-                    secure: true,
-                    httponly: true,
-                    samesite: Some("Lax".to_string()),
-                },
-            ]),
+            cookies: Some(vec![CookieData {
+                name: "session".to_string(),
+                value: "abc123".to_string(),
+                path: "/".to_string(),
+                max_age: Some(3600),
+                expires: None,
+                domain: None,
+                secure: true,
+                httponly: true,
+                samesite: Some("Lax".to_string()),
+            }]),
         };
-        let response =
-            build_response_from_meta(StatusCode::OK, meta, b"{}".to_vec(), false);
+        let response = build_response_from_meta(StatusCode::OK, meta, b"{}".to_vec(), false);
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -350,12 +344,8 @@ mod tests {
             custom_headers: None,
             cookies: None,
         };
-        let response = build_response_from_meta(
-            StatusCode::OK,
-            meta,
-            b"<html></html>".to_vec(),
-            false,
-        );
+        let response =
+            build_response_from_meta(StatusCode::OK, meta, b"<html></html>".to_vec(), false);
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -367,12 +357,8 @@ mod tests {
             custom_headers: None,
             cookies: None,
         };
-        let response = build_response_from_meta(
-            StatusCode::OK,
-            meta,
-            b"Hello, World!".to_vec(),
-            false,
-        );
+        let response =
+            build_response_from_meta(StatusCode::OK, meta, b"Hello, World!".to_vec(), false);
         assert_eq!(response.status(), StatusCode::OK);
     }
 }

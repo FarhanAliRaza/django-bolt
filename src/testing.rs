@@ -147,7 +147,11 @@ fn get_streaming_response_class(py: Python<'_>) -> &Py<PyAny> {
 
 /// Collect streaming content synchronously for test assertions.
 /// Handles both sync generators and async generators.
-fn collect_streaming_content(py: Python<'_>, content: &Bound<'_, PyAny>, is_async: bool) -> Vec<u8> {
+fn collect_streaming_content(
+    py: Python<'_>,
+    content: &Bound<'_, PyAny>,
+    is_async: bool,
+) -> Vec<u8> {
     let mut chunks: Vec<u8> = Vec::new();
 
     if is_async {
@@ -501,7 +505,16 @@ pub fn test_request(
 
     runtime_handle.block_on(async {
         // Read test app state
-        let (router, route_metadata, dispatch, global_cors_config, debug, max_payload_size, _trailing_slash, static_files_config) = {
+        let (
+            router,
+            route_metadata,
+            dispatch,
+            global_cors_config,
+            debug,
+            max_payload_size,
+            _trailing_slash,
+            static_files_config,
+        ) = {
             let state = app_state.read();
             (
                 state.router.clone(),
@@ -1144,7 +1157,10 @@ async fn handle_test_request_internal(
                 // Extract body (element 2) and check if it's a StreamingResponse
                 let body_obj = tuple.get_item(2).ok()?;
                 let streaming_cls = get_streaming_response_class(py);
-                if !body_obj.is_instance(streaming_cls.bind(py)).unwrap_or(false) {
+                if !body_obj
+                    .is_instance(streaming_cls.bind(py))
+                    .unwrap_or(false)
+                {
                     return None;
                 }
 
@@ -1173,7 +1189,13 @@ async fn handle_test_request_internal(
                     .getattr(pyo3::intern!(py, "is_async_generator"))
                     .and_then(|v| v.extract())
                     .unwrap_or(false);
-                Some((status_code, tuple_headers, media_type, content_obj, is_async_generator))
+                Some((
+                    status_code,
+                    tuple_headers,
+                    media_type,
+                    content_obj,
+                    is_async_generator,
+                ))
             });
             if let Some((status_code, headers, media_type, content_obj, is_async_generator)) =
                 streaming_tuple

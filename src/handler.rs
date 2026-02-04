@@ -924,7 +924,10 @@ pub async fn handle_request(
                     // Extract body (element 2) and check if it's a StreamingResponse
                     let body_obj = tuple.get_item(2).ok()?;
                     let streaming_cls = get_streaming_response_class(py);
-                    if !body_obj.is_instance(streaming_cls.bind(py)).unwrap_or(false) {
+                    if !body_obj
+                        .is_instance(streaming_cls.bind(py))
+                        .unwrap_or(false)
+                    {
                         return None;
                     }
 
@@ -955,7 +958,8 @@ pub async fn handle_request(
                     // Use headers from the tuple (processed by middleware) rather than StreamingResponse.headers
                     Some((tuple_headers, media_type, content_obj, is_async_generator))
                 });
-                if let Some((headers, media_type, content_obj, is_async_generator)) = streaming_tuple
+                if let Some((headers, media_type, content_obj, is_async_generator)) =
+                    streaming_tuple
                 {
                     // Extract status from tuple element 0
                     // Headers already include content-type from serialize_response
@@ -975,23 +979,29 @@ pub async fn handle_request(
 
                     if media_type == "text/event-stream" {
                         if is_head_request {
-                            let mut builder =
-                                response_builder::build_sse_response(status, headers, skip_compression);
+                            let mut builder = response_builder::build_sse_response(
+                                status,
+                                headers,
+                                skip_compression,
+                            );
                             let mut response = builder.body(Vec::<u8>::new());
                             if skip_cors {
-                                response
-                                    .headers_mut()
-                                    .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
+                                response.headers_mut().insert(
+                                    "x-bolt-skip-cors".parse().unwrap(),
+                                    "true".parse().unwrap(),
+                                );
                             }
                             return response;
                         }
                         let stream = create_sse_stream(content_obj, is_async_generator);
-                        let mut response = response_builder::build_sse_response(status, headers, skip_compression)
-                            .streaming(stream);
+                        let mut response =
+                            response_builder::build_sse_response(status, headers, skip_compression)
+                                .streaming(stream);
                         if skip_cors {
-                            response
-                                .headers_mut()
-                                .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
+                            response.headers_mut().insert(
+                                "x-bolt-skip-cors".parse().unwrap(),
+                                "true".parse().unwrap(),
+                            );
                         }
                         return response;
                     } else {

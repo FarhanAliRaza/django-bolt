@@ -165,3 +165,69 @@ class TestRequestMETA:
         assert meta["REQUEST_METHOD"] == "GET"
         assert meta["PATH_INFO"] == "/meta"
         assert "test=1" in meta["QUERY_STRING"]
+
+    def test_meta_server_info(self, client):
+        """META contains SERVER_NAME, SERVER_PORT, and SERVER_PROTOCOL."""
+        response = client.get(
+            "/meta",
+            headers={"Host": "example.com:8080"},
+        )
+        assert response.status_code == 200
+        meta = response.json()
+
+        # Server info keys
+        assert "SERVER_NAME" in meta
+        assert "SERVER_PORT" in meta
+        assert "SERVER_PROTOCOL" in meta
+
+        # Verify values (parsed from Host header)
+        assert meta["SERVER_NAME"] == "example.com"
+        assert meta["SERVER_PORT"] == "8080"
+        assert meta["SERVER_PROTOCOL"] == "HTTP/1.1"
+
+    def test_meta_server_info_default_port(self, client):
+        """META parses Host header without port correctly."""
+        response = client.get(
+            "/meta",
+            headers={"Host": "example.com"},
+        )
+        assert response.status_code == 200
+        meta = response.json()
+
+        assert meta["SERVER_NAME"] == "example.com"
+        assert meta["SERVER_PORT"] == "80"  # Default port when not specified
+
+    def test_meta_remote_addr(self, client):
+        """META contains REMOTE_ADDR and REMOTE_HOST."""
+        response = client.get("/meta")
+        assert response.status_code == 200
+        meta = response.json()
+
+        # Client info keys
+        assert "REMOTE_ADDR" in meta
+        assert "REMOTE_HOST" in meta
+
+        # Both should have a valid IP address (or "127.0.0.1" for localhost)
+        assert meta["REMOTE_ADDR"]  # Non-empty
+        assert meta["REMOTE_HOST"]  # Non-empty
+
+    def test_meta_script_name(self, client):
+        """META contains SCRIPT_NAME (usually empty for Django apps)."""
+        response = client.get("/meta")
+        assert response.status_code == 200
+        meta = response.json()
+
+        assert "SCRIPT_NAME" in meta
+        assert meta["SCRIPT_NAME"] == ""
+
+    def test_meta_query_string_preserves_encoding(self, client):
+        """META QUERY_STRING preserves URL encoding from original request."""
+        # URL-encoded query string: foo=hello%20world -> foo=hello world when decoded
+        # But QUERY_STRING should preserve the original encoding
+        response = client.get("/meta/query?foo=hello%20world&bar=a%2Bb")
+        assert response.status_code == 200
+        query = response.json()["query"]
+
+        # The raw query string should be preserved
+        assert "foo=hello%20world" in query or "foo=hello world" in query
+        assert "bar=a%2Bb" in query or "bar=a+b" in query

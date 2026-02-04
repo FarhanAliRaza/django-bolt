@@ -18,6 +18,14 @@ if TYPE_CHECKING:
 # Rust handler.rs detects StreamingResponse in the body and handles streaming
 Response = tuple[int, list[tuple[str, str]], "bytes | StreamingResponse"]
 
+# Content-type mapping for response types (used when converting ResponseMeta)
+_CONTENT_TYPE_MAP = {
+    "json": "application/json",
+    "html": "text/html; charset=utf-8",
+    "plaintext": "text/plain; charset=utf-8",
+    "octetstream": "application/octet-stream",
+}
+
 
 class MiddlewareResponse:
     """
@@ -47,11 +55,55 @@ class MiddlewareResponse:
 
     @classmethod
     def from_tuple(cls, response: Response) -> MiddlewareResponse:
-        """Create from internal tuple format."""
-        status_code, headers_list, body = response
-        # Convert list of tuples to dict for middleware
-        headers = dict(headers_list)
-        return cls(status_code, headers, body)
+        """Create from internal tuple format.
+
+        Handles both legacy format (status, headers_list, body) and new
+        ResponseMeta format (status, meta_tuple, body).
+        """
+        status_code, headers_or_meta, body = response
+
+        # Check if this is the new ResponseMeta format (tuple) vs legacy format (list)
+        if isinstance(headers_or_meta, tuple) and len(headers_or_meta) == 4:
+            # New ResponseMeta format: (response_type, custom_ct, custom_headers, cookies)
+            response_type, custom_ct, custom_headers, cookies = headers_or_meta
+            headers: dict[str, str] = {}
+            set_cookies: list[str] = []
+
+            # Add content-type
+            if custom_ct:
+                headers["content-type"] = custom_ct
+            elif response_type in _CONTENT_TYPE_MAP:
+                headers["content-type"] = _CONTENT_TYPE_MAP[response_type]
+
+            # Add custom headers
+            if custom_headers:
+                for k, v in custom_headers:
+                    headers[k.lower()] = v
+
+            # Convert cookie tuples to Set-Cookie header values
+            if cookies:
+                for cookie_tuple in cookies:
+                    name, value, path, max_age, expires, domain, secure, httponly, samesite = cookie_tuple
+                    parts = [f"{name}={value}", f"Path={path}"]
+                    if max_age is not None:
+                        parts.append(f"Max-Age={max_age}")
+                    if expires:
+                        parts.append(f"Expires={expires}")
+                    if domain:
+                        parts.append(f"Domain={domain}")
+                    if secure:
+                        parts.append("Secure")
+                    if httponly:
+                        parts.append("HttpOnly")
+                    if samesite:
+                        parts.append(f"SameSite={samesite}")
+                    set_cookies.append("; ".join(parts))
+
+            return cls(status_code, headers, body, set_cookies)
+        else:
+            # Legacy format: list of (header_name, header_value) tuples
+            headers = dict(headers_or_meta)
+            return cls(status_code, headers, body)
 
     def to_tuple(self) -> Response:
         """Convert back to internal tuple format."""

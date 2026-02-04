@@ -79,6 +79,14 @@ ruff-fix:
 format:
     uv run ruff format .
 
+# Find unused code (functions, classes, variables) with vulture
+dead-code:
+    uv run vulture python/django_bolt --min-confidence 80
+
+# Find unused code including tests (more false positives)
+dead-code-all:
+    uv run vulture python/ --min-confidence 60
+
 # Seed database with test data
 seed-data host=host port=port:
     #!/usr/bin/env bash

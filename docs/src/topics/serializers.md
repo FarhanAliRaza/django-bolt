@@ -815,3 +815,7 @@ Custom validators (`@field_validator`, `@model_validator`) always run, regardles
 4. **Use write_only for sensitive data**: Password fields should never appear in output.
 
 5. **Use Meta constraints for simple validation**: They're validated by msgspec's C code - much faster than Python validators.
+
+## Design: custom fields
+
+For design considerations on reusable custom field types (e.g. `Annotated[T, Validator(...)]`), see [Serializers: custom fields design](serializers-custom-fields-design.md).

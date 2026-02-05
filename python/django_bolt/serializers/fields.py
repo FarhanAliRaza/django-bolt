@@ -14,7 +14,25 @@ from msgspec import Meta
 T = TypeVar("T")
 
 # Sentinel for unset default values
+# Sentinel for unset default values
 _UNSET = object()
+
+
+@dataclass(frozen=True, slots=True)
+class Validator:
+    """
+    Validation logic for a reusable custom field.
+
+    Usage:
+        def validate_even(val: int) -> int:
+            if val % 2 != 0: raise ValueError("Must be even")
+            return val
+
+        EvenInt = Annotated[int, Validator(validate_even)]
+    """
+
+    func: Callable[[Any], Any]
+    sub_error: bool = False  # If True, wrap error in validation error structure
 
 
 @dataclass(frozen=True, slots=True)

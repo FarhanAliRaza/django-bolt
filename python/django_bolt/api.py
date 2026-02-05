@@ -138,6 +138,9 @@ class BoltAPI:
         self.prefix = prefix.rstrip("/")  # Remove trailing slash from prefix
         self.trailing_slash = trailing_slash  # Mode: "strip", "append", or "keep"
 
+        # Named routes registry: name -> full_path
+        self._named_routes: dict[str, str] = {}
+
         # Build middleware list: Django middleware first, then custom middleware
         self.middleware = []
 
@@ -268,6 +271,7 @@ class BoltAPI:
         tags: list[str] | None = None,
         summary: str | None = None,
         description: str | None = None,
+        name: str | None = None,
     ):
         return self._route_decorator(
             "GET",
@@ -279,6 +283,7 @@ class BoltAPI:
             tags=tags,
             summary=summary,
             description=description,
+            name=name,
         )
 
     def post(
@@ -292,6 +297,7 @@ class BoltAPI:
         tags: list[str] | None = None,
         summary: str | None = None,
         description: str | None = None,
+        name: str | None = None,
     ):
         return self._route_decorator(
             "POST",
@@ -303,6 +309,7 @@ class BoltAPI:
             tags=tags,
             summary=summary,
             description=description,
+            name=name,
         )
 
     def put(
@@ -316,6 +323,7 @@ class BoltAPI:
         tags: list[str] | None = None,
         summary: str | None = None,
         description: str | None = None,
+        name: str | None = None,
     ):
         return self._route_decorator(
             "PUT",
@@ -327,6 +335,7 @@ class BoltAPI:
             tags=tags,
             summary=summary,
             description=description,
+            name=name,
         )
 
     def patch(
@@ -340,6 +349,7 @@ class BoltAPI:
         tags: list[str] | None = None,
         summary: str | None = None,
         description: str | None = None,
+        name: str | None = None,
     ):
         return self._route_decorator(
             "PATCH",
@@ -351,6 +361,7 @@ class BoltAPI:
             tags=tags,
             summary=summary,
             description=description,
+            name=name,
         )
 
     def delete(
@@ -364,6 +375,7 @@ class BoltAPI:
         tags: list[str] | None = None,
         summary: str | None = None,
         description: str | None = None,
+        name: str | None = None,
     ):
         return self._route_decorator(
             "DELETE",
@@ -375,6 +387,7 @@ class BoltAPI:
             tags=tags,
             summary=summary,
             description=description,
+            name=name,
         )
 
     def head(
@@ -388,6 +401,7 @@ class BoltAPI:
         tags: list[str] | None = None,
         summary: str | None = None,
         description: str | None = None,
+        name: str | None = None,
     ):
         return self._route_decorator(
             "HEAD",
@@ -399,6 +413,7 @@ class BoltAPI:
             tags=tags,
             summary=summary,
             description=description,
+            name=name,
         )
 
     def options(
@@ -412,6 +427,7 @@ class BoltAPI:
         tags: list[str] | None = None,
         summary: str | None = None,
         description: str | None = None,
+        name: str | None = None,
     ):
         return self._route_decorator(
             "OPTIONS",
@@ -423,6 +439,7 @@ class BoltAPI:
             tags=tags,
             summary=summary,
             description=description,
+            name=name,
         )
 
     def websocket(
@@ -533,6 +550,7 @@ class BoltAPI:
         auth: list[Any] | None = None,
         status_code: int | None = None,
         tags: list[str] | None = None,
+        name: str | None = None,
     ):
         """
         Register a class-based view as a decorator.
@@ -613,6 +631,7 @@ class BoltAPI:
                     guards=merged_guards,
                     auth=merged_auth,
                     tags=tags,
+                    name=name,
                 )
 
                 # Apply decorator to register the handler
@@ -634,8 +653,9 @@ class BoltAPI:
         guards: list[Any] | None = None,
         auth: list[Any] | None = None,
         status_code: int | None = None,
-        lookup_field: str = "pk",
+        lookup_field: str | None = "pk",
         tags: list[str] | None = None,
+        name: str | None = None,
     ):
         """
         Register a ViewSet with automatic CRUD route generation as a decorator.
@@ -736,6 +756,7 @@ class BoltAPI:
                         method_response_model = getattr(original, "response_model", None)
 
                 # Register the route
+                route_name = f"{name}-{action_name}" if name else None
                 route_decorator = self._route_decorator(
                     http_method,
                     route_path,
@@ -744,6 +765,7 @@ class BoltAPI:
                     guards=merged_guards,
                     auth=merged_auth,
                     tags=tags,
+                    name=route_name,
                 )
                 route_decorator(handler)
 
@@ -867,6 +889,7 @@ class BoltAPI:
         tags: list[str] | None = None,
         summary: str | None = None,
         description: str | None = None,
+        name: str | None = None,
         _skip_prefix: bool = False,
     ):
         def decorator(fn: Callable):
@@ -892,6 +915,10 @@ class BoltAPI:
 
             # Normalize trailing slash based on setting
             full_path = _normalize_path(full_path, self.trailing_slash)
+
+            # Register named route if name provided
+            if name:
+                self._named_routes[name] = full_path
 
             self._routes.append((method, full_path, handler_id, fn))
             self._handlers[handler_id] = fn

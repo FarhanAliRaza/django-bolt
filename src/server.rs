@@ -12,7 +12,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::handler::handle_request;
+use crate::handler::{handle_request, prewarm_type_classes};
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
 use crate::middleware::compression::CompressionMiddleware;
 use crate::middleware::cors::CorsMiddleware;
@@ -307,6 +307,10 @@ pub fn start_server_async(
                 }
             })();
 
+            // OPTIMIZATION: Pre-initialize type classes at startup to avoid first-request latency spike
+            // This imports uuid, decimal, datetime modules (~1-2ms each) before any requests arrive
+            prewarm_type_classes(py);
+
             (
                 debug,
                 max_header_size,
@@ -377,6 +381,8 @@ pub fn start_server_async(
         .collect();
 
     // Inject global CORS config into routes that don't have explicit config
+    // OPTIMIZATION: Store Arc<RouteMetadata> to avoid cloning entire struct on each request
+    // Arc clone is ~10ns vs ~100-500ns for full struct clone with HashMaps
     if let (Some(ref global_config), Some(metadata_temp)) =
         (&global_cors_config, ROUTE_METADATA_TEMP.get())
     {
@@ -395,11 +401,19 @@ pub fn start_server_async(
             }
         }
 
-        // Set the final ROUTE_METADATA with updated version (only set once)
-        let _ = ROUTE_METADATA.set(Arc::new(updated_metadata));
+        // Set the final ROUTE_METADATA with updated version (wrapped in Arc for cheap cloning)
+        let dash_map = dashmap::DashMap::new();
+        for (handler_id, route_meta) in updated_metadata {
+            dash_map.insert(handler_id, Arc::new(route_meta));
+        }
+        let _ = ROUTE_METADATA.set(Arc::new(dash_map));
     } else if let Some(metadata_temp) = ROUTE_METADATA_TEMP.get() {
-        // No global CORS config, just use the metadata as-is
-        let _ = ROUTE_METADATA.set(Arc::new(metadata_temp.clone()));
+        // No global CORS config, wrap each RouteMetadata in Arc
+        let dash_map = dashmap::DashMap::new();
+        for (handler_id, route_meta) in metadata_temp.clone() {
+            dash_map.insert(handler_id, Arc::new(route_meta));
+        }
+        let _ = ROUTE_METADATA.set(Arc::new(dash_map));
     }
 
     // Parse compression configuration from Python

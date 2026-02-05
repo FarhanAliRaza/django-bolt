@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
 use crate::router::Router;
 use crate::websocket::WebSocketRouter;
+use dashmap::DashMap;
 
 /// Configuration for serving static files via Actix
 #[derive(Clone, Debug)]
@@ -33,7 +34,9 @@ pub struct AppState {
 pub static GLOBAL_ROUTER: OnceCell<Arc<Router>> = OnceCell::new();
 pub static GLOBAL_WEBSOCKET_ROUTER: OnceCell<Arc<WebSocketRouter>> = OnceCell::new();
 pub static TASK_LOCALS: OnceCell<TaskLocals> = OnceCell::new(); // reuse global python event loop
-pub static ROUTE_METADATA: OnceCell<Arc<AHashMap<usize, RouteMetadata>>> = OnceCell::new();
+// OPTIMIZATION: Store Arc<RouteMetadata> instead of RouteMetadata to avoid cloning the entire
+// struct on every request. Arc clone is ~10ns vs ~100-500ns for full struct clone with HashMaps.
+pub static ROUTE_METADATA: OnceCell<Arc<DashMap<usize, Arc<RouteMetadata>>>> = OnceCell::new();
 pub static ROUTE_METADATA_TEMP: OnceCell<AHashMap<usize, RouteMetadata>> = OnceCell::new(); // Temporary storage before CORS injection
 
 // Sync streaming thread limiting to prevent thread exhaustion DoS

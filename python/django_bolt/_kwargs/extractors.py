@@ -233,6 +233,11 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
     for field in msgspec.structs.fields(struct_type):
         field_type = field.type
         is_upload = is_upload_file_type(field_type)
+        encoded_name = getattr(field, "encode_name", field.name)
+        if encoded_name != field.name:
+            param_names = (encoded_name, field.name)
+        else:
+            param_names = (field.name,)
 
         if is_upload:
             has_upload_file_fields = True
@@ -245,6 +250,8 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
         fields_info.append(
             {
                 "name": field.name,
+                "encoded_name": encoded_name,
+                "param_names": param_names,
                 "type": field_type,
                 "required": field.required,
                 "default": field.default,
@@ -261,21 +268,24 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
 
             for field_info in fields_info:
                 field_name = field_info["name"]
+                encoded_name = field_info["encoded_name"]
+                param_names = field_info["param_names"]
 
                 if field_info["is_upload_file"]:
                     # Handle UploadFile field from files_map
-                    if field_name in files_map:
-                        file_info = files_map[field_name]
+                    file_key = next((key for key in param_names if key in files_map), None)
+                    if file_key is not None:
+                        file_info = files_map[file_key]
                         if isinstance(file_info, list):
                             uploads = [UploadFile.from_file_info(f) for f in file_info]
-                            converted[field_name] = uploads if field_info["expects_list"] else uploads[0]
+                            converted[encoded_name] = uploads if field_info["expects_list"] else uploads[0]
                             # Track for auto-cleanup
                             if "_upload_files" not in files_map:
                                 files_map["_upload_files"] = []
                             files_map["_upload_files"].extend(uploads)
                         else:
                             upload = UploadFile.from_file_info(file_info)
-                            converted[field_name] = [upload] if field_info["expects_list"] else upload
+                            converted[encoded_name] = [upload] if field_info["expects_list"] else upload
                             # Track for auto-cleanup
                             if "_upload_files" not in files_map:
                                 files_map["_upload_files"] = []
@@ -292,11 +302,13 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
                             ]
                         )
                     # If not required and not present, let msgspec use the default
-                elif field_name in param_map:
-                    # Regular form field - Rust pre-converts to typed values
-                    converted[field_name] = param_map[field_name]
-                elif field_info["required"]:
-                    raise HTTPException(status_code=422, detail=f"Missing required {param_type}: {field_name}")
+                else:
+                    param_key = next((key for key in param_names if key in param_map), None)
+                    if param_key is not None:
+                        # Regular form field - Rust pre-converts to typed values
+                        converted[encoded_name] = param_map[param_key]
+                    elif field_info["required"]:
+                        raise HTTPException(status_code=422, detail=f"Missing required {param_type}: {field_name}")
 
             # Use msgspec.convert to create and validate the struct
             try:
@@ -312,10 +324,12 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
             converted = {}
             for field_info in fields_info:
                 field_name = field_info["name"]
-
-                if field_name in param_map:
+                encoded_name = field_info["encoded_name"]
+                param_names = field_info["param_names"]
+                param_key = next((key for key in param_names if key in param_map), None)
+                if param_key is not None:
                     # Rust pre-converts to typed values
-                    converted[field_name] = param_map[field_name]
+                    converted[encoded_name] = param_map[param_key]
                 elif field_info["required"]:
                     raise HTTPException(status_code=422, detail=f"Missing required {param_type}: {field_name}")
 

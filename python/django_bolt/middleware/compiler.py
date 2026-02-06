@@ -245,6 +245,9 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
                     struct_type_hint = get_type_hint_id(struct_field.type)
                     if struct_type_hint != TYPE_STRING:
                         param_types[struct_field.name] = struct_type_hint
+                        encoded_name = getattr(struct_field, "encode_name", struct_field.name)
+                        if encoded_name != struct_field.name:
+                            param_types[encoded_name] = struct_type_hint
             else:
                 # Individual field
                 type_hint = get_type_hint_id(field.annotation)
@@ -261,6 +264,9 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
                 for struct_field in msgspec.structs.fields(unwrapped):
                     struct_type_hint = get_type_hint_id(struct_field.type)
                     form_type_hints[struct_field.name] = struct_type_hint
+                    encoded_name = getattr(struct_field, "encode_name", struct_field.name)
+                    if encoded_name != struct_field.name:
+                        form_type_hints[encoded_name] = struct_type_hint
             else:
                 # Individual form field
                 type_hint = get_type_hint_id(field.annotation)

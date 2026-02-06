@@ -279,6 +279,25 @@ def api():
     async def query_struct(params: Annotated[QueryParams, Query()]):
         return {"limit": params.limit, "offset": params.offset, "search": params.search}
 
+    # Query parameters with Struct + explicit field names
+    class ReportFilters(msgspec.Struct):
+        category_id: int | None = msgspec.field(default=None, name="categoryID")
+        min_price: float | None = msgspec.field(default=None, name="minPrice")
+        query: str | None = None
+
+    @api.get("/query-struct-rename")
+    async def query_struct_rename(filters: Annotated[ReportFilters, Query()]):
+        return {"category_id": filters.category_id, "min_price": filters.min_price, "query": filters.query}
+
+    # Query parameters with Struct + class-level rename
+    class Example(msgspec.Struct, rename="camel"):
+        field_one: int
+        field_two: str
+
+    @api.get("/query-struct-rename-camel")
+    async def query_struct_rename_camel(example: Annotated[Example, Query()]):
+        return {"field_one": example.field_one, "field_two": example.field_two}
+
     # Header parameters with Struct
     class HeaderParams(msgspec.Struct):
         x_api_key: str
@@ -878,6 +897,44 @@ def test_query_struct_with_defaults(client):
     assert data["limit"] == 10
     assert data["offset"] == 0
     assert data["search"] is None
+
+
+def test_query_struct_rename_accepts_field_name(client):
+    """Test Query() struct accepts msgspec field name (alias)."""
+    response = client.get("/query-struct-rename?categoryID=7&minPrice=3.5&query=bolt")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["category_id"] == 7
+    assert data["min_price"] == 3.5
+    assert data["query"] == "bolt"
+
+
+def test_query_struct_rename_accepts_variable_name(client):
+    """Test Query() struct accepts Python variable name."""
+    response = client.get("/query-struct-rename?category_id=9&min_price=1.25")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["category_id"] == 9
+    assert data["min_price"] == 1.25
+    assert data["query"] is None
+
+
+def test_query_struct_rename_camel_accepts_alias(client):
+    """Test Query() struct accepts camelCase alias from rename='camel'."""
+    response = client.get("/query-struct-rename-camel?fieldOne=1&fieldTwo=hello")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["field_one"] == 1
+    assert data["field_two"] == "hello"
+
+
+def test_query_struct_rename_camel_accepts_variable_name(client):
+    """Test Query() struct accepts snake_case variable name with rename='camel'."""
+    response = client.get("/query-struct-rename-camel?field_one=2&field_two=world")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["field_one"] == 2
+    assert data["field_two"] == "world"
 
 
 def test_header_struct(client):

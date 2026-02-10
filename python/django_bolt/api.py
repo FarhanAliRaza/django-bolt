@@ -29,6 +29,7 @@ from ._kwargs import (
     compile_websocket_binder,
     extract_response_metadata,
 )
+from ._jit import compile_jit_dispatcher, JIT_DISPATCHERS
 from .admin.routes import AdminRouteRegistrar
 from .admin.static_routes import StaticRouteRegistrar
 from .analysis import analyze_handler, warn_blocking_handler
@@ -953,6 +954,16 @@ class BoltAPI:
             # Store whether injector is async (avoids runtime check with inspect.iscoroutinefunction)
             meta["injector_is_async"] = inspect.iscoroutinefunction(injector)
 
+            # JIT compile specialized dispatch function (Elysia-style optimization)
+            # Generates inline code for parameter extraction + handler call + serialization
+            # Eliminates runtime branching for common handler patterns
+            jit_dispatcher = compile_jit_dispatcher(handler_id, fn, meta)
+            if jit_dispatcher is not None:
+                meta["jit_dispatcher"] = jit_dispatcher
+                meta["has_jit"] = True
+            else:
+                meta["has_jit"] = False
+
             self._handler_meta[handler_id] = meta
 
             # Compile middleware metadata for this handler (including guards and auth)
@@ -1150,6 +1161,7 @@ class BoltAPI:
         Optimized async dispatch that calls the handler and returns response tuple.
 
         Performance optimizations:
+        - JIT-compiled dispatch for simple handlers (Elysia-style)
         - Unchecked metadata access (guaranteed to exist)
         - Inline user loading (eliminates function call overhead)
         - Pre-compiled argument injector (zero parameter binding overhead)
@@ -1162,6 +1174,28 @@ class BoltAPI:
             request: The request dictionary
             handler_id: Handler ID to lookup original API (for merged APIs)
         """
+        # JIT FAST PATH: Use pre-compiled dispatcher when available
+        # This eliminates all runtime branching for simple handlers
+        # Conditions: no logging, no middleware, no auth context needed, JIT available
+        meta = self._handler_meta[handler_id]
+        if meta.get("has_jit", False):
+            # Check if we can use the ultra-fast JIT path
+            # Skip JIT if: logging enabled, middleware present, or auth context needed
+            original_api = self._handler_api_map.get(handler_id) if handler_id is not None else None
+            has_logging = bool(original_api._logging_middleware if original_api else self._logging_middleware)
+            has_middleware = bool((original_api and original_api._middleware) or self._middleware)
+            needs_auth = bool(request.get("auth"))
+
+            if not has_logging and not has_middleware and not needs_auth:
+                # Ultra-fast JIT dispatch - no overhead
+                try:
+                    jit_dispatcher = meta["jit_dispatcher"]
+                    return await jit_dispatcher(handler, request, meta)
+                except HTTPException as he:
+                    return self._handle_http_exception(he)
+                except Exception as e:
+                    return self._handle_generic_exception(e, request=request)
+
         # For merged APIs, use the original API's logging middleware and middleware chain
         # This preserves per-API logging, auth, and middleware config (Litestar-style)
         # Note: _handler_api_map is always initialized in __init__ (no hasattr needed)

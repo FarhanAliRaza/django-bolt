@@ -122,7 +122,8 @@ where
 
             // Apply CORS headers
             match cors_config {
-                Some(CorsConfigRef::Route(cors_cfg)) => {
+                Some(CorsConfigRef::Route(cors_cfg))
+                | Some(CorsConfigRef::Global(cors_cfg)) => {
                     let origin_allowed = add_cors_headers_with_config(
                         res.headers_mut(),
                         origin.as_deref(),
@@ -133,7 +134,8 @@ where
                         add_preflight_headers_with_config(res.headers_mut(), cors_cfg);
                     }
                 }
-                Some(CorsConfigRef::Global(cors_cfg)) => {
+                Some(CorsConfigRef::RouteOwned(ref cors_cfg)) => {
+                    // Production path with owned config
                     let origin_allowed = add_cors_headers_with_config(
                         res.headers_mut(),
                         origin.as_deref(),
@@ -154,9 +156,11 @@ where
     }
 }
 
-/// Reference to CORS config - avoids cloning
+/// Reference to CORS config - avoids cloning in most cases
+/// Uses Owned variant for production path where DashMap guard can't outlive function
 enum CorsConfigRef<'a> {
     Route(&'a CorsConfig),
+    RouteOwned(CorsConfig),  // Owned variant for production path (DashMap)
     Global(&'a CorsConfig),
     Skipped,
 }
@@ -215,23 +219,31 @@ fn find_cors_for_method<'a>(
         let handler_id = route_match.handler_id();
 
         // Try AppState metadata first (tests), then global metadata (production)
-        let meta = if let Some(ref meta_map) = state.route_metadata {
-            meta_map.get(&handler_id)
-        } else {
-            ROUTE_METADATA
-                .get()
-                .and_then(|meta_map| meta_map.get(&handler_id))
-        };
-
-        if let Some(meta) = meta {
-            // Check if CORS is skipped
-            if meta.skip.contains("cors") {
-                return Some(CorsConfigRef::Skipped);
+        // Note: Production uses Arc<RouteMetadata> for cheap cloning, tests use RouteMetadata directly
+        if let Some(ref meta_map) = state.route_metadata {
+            if let Some(meta) = meta_map.get(&handler_id) {
+                // Check if CORS is skipped
+                if meta.skip.contains("cors") {
+                    return Some(CorsConfigRef::Skipped);
+                }
+                // Return route-level CORS if present
+                if let Some(ref cors_cfg) = meta.cors_config {
+                    return Some(CorsConfigRef::Route(cors_cfg));
+                }
             }
-
-            // Return route-level CORS if present
-            if let Some(ref cors_cfg) = meta.cors_config {
-                return Some(CorsConfigRef::Route(cors_cfg));
+        } else if let Some(meta_map) = ROUTE_METADATA.get() {
+            // Production path: DashMap<usize, Arc<RouteMetadata>>
+            // Clone CORS config since DashMap guard can't outlive this function
+            if let Some(meta_ref) = meta_map.get(&handler_id) {
+                let meta = meta_ref.value();
+                // Check if CORS is skipped
+                if meta.skip.contains("cors") {
+                    return Some(CorsConfigRef::Skipped);
+                }
+                // Return route-level CORS if present (clone for owned variant)
+                if let Some(ref cors_cfg) = meta.cors_config {
+                    return Some(CorsConfigRef::RouteOwned(cors_cfg.clone()));
+                }
             }
         }
     }

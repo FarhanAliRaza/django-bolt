@@ -33,7 +33,7 @@ class Command(BaseCommand):
     help = "Run Django-Bolt server with autodiscovered APIs"
 
     def add_arguments(self, parser):
-        parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0)")
+        parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
         parser.add_argument("--port", type=int, default=8000, help="Port to bind to (default: 8000)")
         parser.add_argument("--processes", type=int, default=1, help="Number of processes (default: 1)")
         parser.add_argument(

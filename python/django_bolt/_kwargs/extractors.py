@@ -363,10 +363,11 @@ def _create_header_struct_extractor(struct_type: type, default: Any) -> Callable
     # Include the kebab-case header name for lookup
     fields_info = []
     for field in msgspec.structs.fields(struct_type):
+        encoded_name = getattr(field, "encode_name", field.name)
         fields_info.append(
             {
                 "name": field.name,
-                "header_name": field.name.lower().replace("_", "-"),
+                "header_name": encoded_name.lower().replace("_", "-"),
                 "required": field.required,
             }
         )

@@ -7,6 +7,7 @@ Moving this out reduces api.py size without impacting runtime performance.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import sys
 from collections.abc import Callable
@@ -585,11 +586,9 @@ def compile_argument_injector(
 
     # Fast path 6: Simple pattern (path + query, no body/headers/cookies)
     if pattern is HandlerPattern.SIMPLE:
-        # Pre-categorize fields by source for direct access
-        path_fields = [(f.extractor, f.kind, f.name) for f in fields if f.source == "path"]
-        query_fields = [(f.extractor, f.kind, f.name) for f in fields if f.source == "query"]
-        # Maintain original field order for args
-        field_order = [(f.source, i) for i, f in enumerate(fields)]
+        # Pre-build a single flat list with source tag resolved at registration time.
+        # Each entry is (source, extractor, kind, name) -- no re-filtering at request time.
+        _simple_fields = [(f.source, f.extractor, f.kind, f.name) for f in fields]
 
         def injector_simple(request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
             params_map = request["params"]
@@ -597,19 +596,8 @@ def compile_argument_injector(
             args: list[Any] = []
             kwargs: dict[str, Any] = {}
 
-            # Extract in original field order
-            path_idx = 0
-            query_idx = 0
-            for source, _ in field_order:
-                if source == "path":
-                    extractor, kind, name = path_fields[path_idx]
-                    value = extractor(params_map)
-                    path_idx += 1
-                else:  # query
-                    extractor, kind, name = query_fields[query_idx]
-                    value = extractor(query_map)
-                    query_idx += 1
-
+            for source, extractor, kind, name in _simple_fields:
+                value = extractor(params_map) if source == "path" else extractor(query_map)
                 if kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
                     args.append(value)
                 else:
@@ -627,11 +615,58 @@ def compile_argument_injector(
         needs_path_params = meta.get("needs_path_params", True)
         has_file_uploads = meta.get("has_file_uploads", False)
 
+        # Pre-build extraction plan at registration time (same approach as full injector).
+        _SRC_DEP = -1
+        _SRC_REQUEST_D = 0
+        _SRC_PATH_D = 1
+        _SRC_QUERY_D = 2
+        _SRC_HEADER_D = 3
+        _SRC_COOKIE_D = 4
+        _SRC_FORM_D = 5
+        _SRC_FILE_D = 6
+        _SRC_BODY_D = 7
+        _SRC_FALLBACK_D = 8
+
+        _dep_source_map = {
+            "request": _SRC_REQUEST_D, "path": _SRC_PATH_D, "query": _SRC_QUERY_D,
+            "header": _SRC_HEADER_D, "cookie": _SRC_COOKIE_D, "form": _SRC_FORM_D,
+            "file": _SRC_FILE_D, "body": _SRC_BODY_D, "dependency": _SRC_DEP,
+        }
+
+        _dep_plan: list[tuple[int, Any, Any, str, bool, Any]] = []
+        _dep_fallback_fields: list[FieldDefinition] = []
+        http_method = meta.get("http_method", "")
+        path = meta.get("path", "")
+
+        for f in fields:
+            src_id = _dep_source_map.get(f.source, _SRC_FALLBACK_D)
+            if src_id == _SRC_DEP:
+                _dep_plan.append((src_id, None, f.kind, f.name, False, f.dependency))
+            elif src_id == _SRC_REQUEST_D:
+                _dep_plan.append((src_id, None, f.kind, f.name, False, None))
+            elif src_id == _SRC_FALLBACK_D or f.extractor is None:
+                _dep_plan.append((_SRC_FALLBACK_D, None, f.kind, f.name, False, None))
+                _dep_fallback_fields.append(f)
+            elif src_id == _SRC_FORM_D:
+                needs_files = getattr(f.extractor, "needs_files_map", False)
+                _dep_plan.append((src_id, f.extractor, f.kind, f.name, needs_files, None))
+            else:
+                _dep_plan.append((src_id, f.extractor, f.kind, f.name, False, None))
+
+        _dep_fallback_by_name = {f.name: f for f in _dep_fallback_fields}
+
+        # Pre-compute which dep indices can be parallelized.
+        # Only parallelize if there are 2+ async deps (otherwise gather overhead isn't worth it).
+        _dep_indices = [i for i, (src_id, *_) in enumerate(_dep_plan) if src_id == _SRC_DEP]
+        _async_dep_fns = []
+        for idx in _dep_indices:
+            dep = _dep_plan[idx][5]  # dependency marker
+            if dep is not None and inspect.iscoroutinefunction(dep.dependency):
+                _async_dep_fns.append(idx)
+        _can_parallel = len(_async_dep_fns) >= 2
+
         async def injector_with_deps(request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
             """Optimized argument injector with dependency support."""
-            args: list[Any] = []
-            kwargs: dict[str, Any] = {}
-
             params_map = request["params"] if needs_path_params else {}
             query_map = request["query"] if needs_query else {}
             headers_map = request.get("headers", {}) if needs_headers else {}
@@ -647,83 +682,72 @@ def compile_argument_injector(
             body_loaded: bool = False
             dep_cache: dict[Any, Any] = {}
 
-            for field in fields:
-                if field.source == "request":
-                    value = request
-                elif field.source == "dependency":
-                    if field.dependency is None:
-                        raise ValueError(f"Depends for parameter {field.name} requires a callable")
-                    value = await resolve_dependency(
-                        field.dependency.dependency,
-                        field.dependency,
-                        request,
-                        dep_cache,
-                        params_map,
-                        query_map,
-                        headers_map,
-                        cookies_map,
-                        handler_meta_dict,
-                        compile_binder_fn,
-                        meta.get("http_method", ""),
-                        meta.get("path", ""),
-                    )
-                elif field.extractor is not None:
-                    # Use pre-compiled extractor
-                    source = field.source
-                    if source == "path":
-                        value = field.extractor(params_map)
-                    elif source == "query":
-                        value = field.extractor(query_map)
-                    elif source == "header":
-                        value = field.extractor(headers_map)
-                    elif source == "cookie":
-                        value = field.extractor(cookies_map)
-                    elif source == "form":
-                        # Check if extractor needs files_map (for structs with UploadFile fields)
-                        if getattr(field.extractor, "needs_files_map", False):
-                            value = field.extractor(form_map, files_map)
-                        else:
-                            value = field.extractor(form_map)
-                    elif source == "file":
-                        value = field.extractor(files_map)
-                    elif source == "body":
-                        if not body_loaded:
-                            body_obj = field.extractor(request["body"])
-                            body_loaded = True
-                        value = body_obj
-                    else:
-                        value, body_obj, body_loaded = extract_parameter_value(
-                            field,
-                            request,
-                            params_map,
-                            query_map,
-                            headers_map,
-                            cookies_map,
-                            form_map,
-                            files_map,
-                            meta,
-                            body_obj,
-                            body_loaded,
-                        )
-                else:
-                    value, body_obj, body_loaded = extract_parameter_value(
-                        field,
-                        request,
-                        params_map,
-                        query_map,
-                        headers_map,
-                        cookies_map,
-                        form_map,
-                        files_map,
-                        meta,
-                        body_obj,
-                        body_loaded,
+            # For 2+ async deps, resolve them in parallel via asyncio.gather
+            if _can_parallel:
+                # Pre-resolve all async deps in parallel
+                async def _resolve_one(dependency):
+                    return await resolve_dependency(
+                        dependency.dependency, dependency, request, dep_cache,
+                        params_map, query_map, headers_map, cookies_map,
+                        handler_meta_dict, compile_binder_fn, http_method, path,
                     )
 
-                if field.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                dep_coros = []
+                for idx in _async_dep_fns:
+                    dep = _dep_plan[idx][5]
+                    dep_coros.append(_resolve_one(dep))
+
+                dep_results = await asyncio.gather(*dep_coros)
+                # Map results back to plan indices
+                _parallel_results = dict(zip(_async_dep_fns, dep_results, strict=True))
+            else:
+                _parallel_results = None
+
+            args: list[Any] = []
+            kwargs: dict[str, Any] = {}
+
+            for plan_idx, (src_id, extractor, kind, name, needs_files, dependency) in enumerate(_dep_plan):
+                if src_id == _SRC_DEP:
+                    if _parallel_results is not None and plan_idx in _parallel_results:
+                        value = _parallel_results[plan_idx]
+                    else:
+                        if dependency is None:
+                            raise ValueError(f"Depends for parameter {name} requires a callable")
+                        value = await resolve_dependency(
+                            dependency.dependency, dependency, request, dep_cache,
+                            params_map, query_map, headers_map, cookies_map,
+                            handler_meta_dict, compile_binder_fn, http_method, path,
+                        )
+                elif src_id == _SRC_REQUEST_D:
+                    value = request
+                elif src_id == _SRC_PATH_D:
+                    value = extractor(params_map)
+                elif src_id == _SRC_QUERY_D:
+                    value = extractor(query_map)
+                elif src_id == _SRC_HEADER_D:
+                    value = extractor(headers_map)
+                elif src_id == _SRC_COOKIE_D:
+                    value = extractor(cookies_map)
+                elif src_id == _SRC_FORM_D:
+                    value = extractor(form_map, files_map) if needs_files else extractor(form_map)
+                elif src_id == _SRC_FILE_D:
+                    value = extractor(files_map)
+                elif src_id == _SRC_BODY_D:
+                    if not body_loaded:
+                        body_obj = extractor(request["body"])
+                        body_loaded = True
+                    value = body_obj
+                else:
+                    field = _dep_fallback_by_name[name]
+                    value, body_obj, body_loaded = extract_parameter_value(
+                        field, request, params_map, query_map, headers_map, cookies_map,
+                        form_map, files_map, meta, body_obj, body_loaded,
+                    )
+
+                if kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
                     args.append(value)
                 else:
-                    kwargs[field.name] = value
+                    kwargs[name] = value
 
             # Track UploadFiles for auto-cleanup (only when handler has file params)
             if has_file_uploads and "_upload_files" in files_map:
@@ -734,7 +758,9 @@ def compile_argument_injector(
         return injector_with_deps
 
     # Full pattern (form, headers, cookies, or complex combinations)
-    # Uses pre-compiled extractors with source-based dispatch
+    # Pre-build field extraction entries at registration time.
+    # Each entry captures (source_id, extractor, kind, name, needs_files_map) to avoid
+    # per-request string comparisons on field.source.
     needs_form = meta.get("needs_form_parsing", False)
     needs_query = meta.get("needs_query", True)
     needs_headers = meta.get("needs_headers", True)
@@ -742,8 +768,50 @@ def compile_argument_injector(
     needs_path_params = meta.get("needs_path_params", True)
     has_file_uploads = meta.get("has_file_uploads", False)
 
+    # Pre-compute source IDs: convert string source to int for faster dispatch
+    _SRC_REQUEST = 0
+    _SRC_PATH = 1
+    _SRC_QUERY = 2
+    _SRC_HEADER = 3
+    _SRC_COOKIE = 4
+    _SRC_FORM = 5
+    _SRC_FILE = 6
+    _SRC_BODY = 7
+    _SRC_FALLBACK = 8
+
+    _SOURCE_MAP = {
+        "request": _SRC_REQUEST,
+        "path": _SRC_PATH,
+        "query": _SRC_QUERY,
+        "header": _SRC_HEADER,
+        "cookie": _SRC_COOKIE,
+        "form": _SRC_FORM,
+        "file": _SRC_FILE,
+        "body": _SRC_BODY,
+    }
+
+    # Pre-build extraction plan: (source_id, extractor, kind, name, needs_files)
+    _extraction_plan: list[tuple[int, Any, Any, str, bool]] = []
+    _fallback_fields: list[FieldDefinition] = []  # Fields needing generic extraction
+
+    for f in fields:
+        src_id = _SOURCE_MAP.get(f.source, _SRC_FALLBACK)
+        if src_id == _SRC_REQUEST:
+            _extraction_plan.append((src_id, None, f.kind, f.name, False))
+        elif src_id == _SRC_FALLBACK or f.extractor is None:
+            _extraction_plan.append((_SRC_FALLBACK, None, f.kind, f.name, False))
+            _fallback_fields.append(f)
+        elif src_id == _SRC_FORM:
+            needs_files = getattr(f.extractor, "needs_files_map", False)
+            _extraction_plan.append((src_id, f.extractor, f.kind, f.name, needs_files))
+        else:
+            _extraction_plan.append((src_id, f.extractor, f.kind, f.name, False))
+
+    # Pre-index fallback fields by name for O(1) lookup
+    _fallback_by_name = {f.name: f for f in _fallback_fields}
+
     def injector_full(request: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
-        """Full injector with pre-compiled extractors."""
+        """Full injector with pre-compiled extraction plan."""
         args: list[Any] = []
         kwargs: dict[str, Any] = {}
 
@@ -761,68 +829,38 @@ def compile_argument_injector(
         body_obj: Any = None
         body_loaded: bool = False
 
-        for field in fields:
-            if field.source == "request":
+        for src_id, extractor, kind, name, needs_files in _extraction_plan:
+            if src_id == _SRC_REQUEST:
                 value = request
-            elif field.extractor is not None:
-                # Use pre-compiled extractor based on source
-                source = field.source
-                if source == "path":
-                    value = field.extractor(params_map)
-                elif source == "query":
-                    value = field.extractor(query_map)
-                elif source == "header":
-                    value = field.extractor(headers_map)
-                elif source == "cookie":
-                    value = field.extractor(cookies_map)
-                elif source == "form":
-                    # Check if extractor needs files_map (for structs with UploadFile fields)
-                    if getattr(field.extractor, "needs_files_map", False):
-                        value = field.extractor(form_map, files_map)
-                    else:
-                        value = field.extractor(form_map)
-                elif source == "file":
-                    value = field.extractor(files_map)
-                elif source == "body":
-                    if not body_loaded:
-                        body_obj = field.extractor(request["body"])
-                        body_loaded = True
-                    value = body_obj
-                else:
-                    # Fallback for unknown sources
-                    value, body_obj, body_loaded = extract_parameter_value(
-                        field,
-                        request,
-                        params_map,
-                        query_map,
-                        headers_map,
-                        cookies_map,
-                        form_map,
-                        files_map,
-                        meta,
-                        body_obj,
-                        body_loaded,
-                    )
+            elif src_id == _SRC_PATH:
+                value = extractor(params_map)
+            elif src_id == _SRC_QUERY:
+                value = extractor(query_map)
+            elif src_id == _SRC_HEADER:
+                value = extractor(headers_map)
+            elif src_id == _SRC_COOKIE:
+                value = extractor(cookies_map)
+            elif src_id == _SRC_FORM:
+                value = extractor(form_map, files_map) if needs_files else extractor(form_map)
+            elif src_id == _SRC_FILE:
+                value = extractor(files_map)
+            elif src_id == _SRC_BODY:
+                if not body_loaded:
+                    body_obj = extractor(request["body"])
+                    body_loaded = True
+                value = body_obj
             else:
-                # No pre-compiled extractor, use generic extraction
+                # Fallback for unknown/no-extractor sources
+                field = _fallback_by_name[name]
                 value, body_obj, body_loaded = extract_parameter_value(
-                    field,
-                    request,
-                    params_map,
-                    query_map,
-                    headers_map,
-                    cookies_map,
-                    form_map,
-                    files_map,
-                    meta,
-                    body_obj,
-                    body_loaded,
+                    field, request, params_map, query_map, headers_map, cookies_map,
+                    form_map, files_map, meta, body_obj, body_loaded,
                 )
 
-            if field.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            if kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
                 args.append(value)
             else:
-                kwargs[field.name] = value
+                kwargs[name] = value
 
         # Track UploadFiles for auto-cleanup (only when handler has file params)
         if has_file_uploads and "_upload_files" in files_map:

@@ -305,7 +305,7 @@ def infer_param_source(name: str, annotation: Any, path_params: set[str], http_m
     return "query"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FieldDefinition:
     """
     Represents a parsed function parameter with type metadata.

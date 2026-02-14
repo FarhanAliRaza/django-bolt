@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from enum import Enum
+from enum import IntEnum, StrEnum
 
 __all__ = ("MediaType", "FileSize")
 
 
-class MediaType(str, Enum):
+class MediaType(StrEnum):
     """Content-Type header values."""
 
     JSON = "application/json"
@@ -16,7 +16,7 @@ class MediaType(str, Enum):
     MESSAGEPACK = "application/vnd.msgpack"
 
 
-class FileSize(int, Enum):
+class FileSize(IntEnum):
     """Common file size limits in bytes for upload validation (binary units)."""
 
     MB_1 = 1 * 1024 * 1024  # 1 MiB = 1,048,576 bytes

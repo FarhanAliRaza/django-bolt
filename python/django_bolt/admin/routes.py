@@ -86,9 +86,13 @@ class AdminRouteRegistrar:
         self.api._handlers[handler_id] = admin_handler
 
         # Create minimal metadata for admin handlers
+        # Keys must match what _dispatch and serialize_response access directly
         meta = {
             "mode": "request_only",
+            "is_async": True,
             "sig": None,
             "fields": [],
+            "default_status_code": 200,
+            "response_type": None,
         }
         self.api._handler_meta[handler_id] = meta

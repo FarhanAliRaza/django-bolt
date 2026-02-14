@@ -234,19 +234,20 @@ def _collect_struct_errors(
     we iterate fields one-by-one to collect ALL errors with proper types
     (e.g. "file_missing" vs "missing_field"). Based on the Litestar approach.
     """
+    dec_hook = _upload_file_dec_hook if has_files else None
+    loc_prefix = "body" if param_type == "form field" else param_type
     errors: list[dict[str, Any]] = []
     for field in msgspec.structs.fields(struct_type):
         encoded_name = getattr(field, "encode_name", field.name)
         if encoded_name in data:
             try:
-                dec_hook = _upload_file_dec_hook if has_files else None
                 msgspec.convert(data[encoded_name], type=field.type, strict=False, dec_hook=dec_hook)
             except (msgspec.ValidationError, NotImplementedError) as e:
                 errors.append({
                     "type": "validation_error",
-                    "loc": ("body" if param_type == "form field" else param_type, encoded_name),
+                    "loc": (loc_prefix, encoded_name),
                     "msg": str(e),
-                    "input": data.get(encoded_name),
+                    "input": data[encoded_name],
                 })
         elif field.required:
             is_file = is_upload_file_type(field.type)
@@ -263,52 +264,40 @@ def _create_param_struct_extractor(struct_type: type, default: Any, param_type: 
     """Create an extractor that builds a Struct/Serializer from parameter data.
 
     Generic helper used by Form(), Query(), and Cookie() extractors.
-    Supports UploadFile fields in structs when used with Form().
-    Supports msgspec field aliases (field(name=...)) and rename strategies.
-
-    Uses msgspec.convert() which natively handles field aliases, rename strategies,
-    defaults, and type validation. A dec_hook is used to support UploadFile fields.
-
-    On validation failure, falls back to field-by-field validation to collect ALL
-    errors with proper error types (Litestar approach).
-
-    Args:
-        struct_type: The msgspec.Struct or Serializer class
-        default: Default value if the entire struct is optional
-        param_type: Type name for error messages (e.g., "form field", "query parameter")
-
-    Returns:
-        Extractor function that takes param_map (and optionally files_map) and returns struct instance
+    Uses msgspec.convert() which handles field aliases, rename strategies,
+    defaults, and type validation. Falls back to field-by-field validation
+    to collect all errors on failure.
     """
     # Check at registration time if any fields need file handling
     has_upload_file_fields = any(is_upload_file_type(f.type) for f in msgspec.structs.fields(struct_type))
 
     if has_upload_file_fields:
-        # Extractor that merges form_map and files_map, then uses msgspec.convert with dec_hook
+        _upload_field_names = [f.name for f in msgspec.structs.fields(struct_type) if is_upload_file_type(f.type)]
+
         def extract_with_files(param_map: dict[str, Any], files_map: dict[str, Any] | None = None) -> Any:
             files_map = files_map or {}
-            merged = {**param_map, **{k: v for k, v in files_map.items() if k != "_upload_files"}}
+            merged = {**param_map}
+            for k, v in files_map.items():
+                if k != "_upload_files":
+                    merged[k] = v
 
             try:
                 result = msgspec.convert(merged, struct_type, strict=False, dec_hook=_upload_file_dec_hook)
             except msgspec.ValidationError as e:
-                # Fallback: collect all errors with proper types (file_missing, etc.)
                 errors = _collect_struct_errors(struct_type, merged, param_type, has_files=True)
                 if errors:
                     raise RequestValidationError(errors=errors) from e
                 raise
 
             # Track UploadFile instances for auto-cleanup
-            for field in msgspec.structs.fields(struct_type):
-                if is_upload_file_type(field.type):
-                    value = getattr(result, field.name, None)
-                    if value is not None:
-                        if "_upload_files" not in files_map:
-                            files_map["_upload_files"] = []
-                        if isinstance(value, list):
-                            files_map["_upload_files"].extend(value)
-                        else:
-                            files_map["_upload_files"].append(value)
+            upload_files = files_map.setdefault("_upload_files", [])
+            for name in _upload_field_names:
+                value = getattr(result, name, None)
+                if value is not None:
+                    if isinstance(value, list):
+                        upload_files.extend(value)
+                    else:
+                        upload_files.append(value)
 
             return result
 
@@ -366,10 +355,7 @@ def _create_header_struct_extractor(struct_type: type, default: Any) -> Callable
             elif header_name in required_headers:
                 raise HTTPException(status_code=422, detail=f"Missing required header: {header_name}")
 
-        try:
-            return msgspec.convert(converted, struct_type)
-        except msgspec.ValidationError:
-            raise
+        return msgspec.convert(converted, struct_type)
 
     return extract
 

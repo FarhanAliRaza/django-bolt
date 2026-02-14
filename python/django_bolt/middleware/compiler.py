@@ -197,6 +197,31 @@ def compile_middleware_meta(
     return result
 
 
+def _extract_type_hints_from_field(
+    field: Any, target: dict[str, int], skip_string: bool = False
+) -> None:
+    """Extract type hints from a field (struct or individual) into target dict.
+
+    For struct fields, registers both the attribute name and the encoded name
+    (for msgspec field aliases and rename strategies).
+    """
+    unwrapped = unwrap_optional(field.annotation)
+    if is_msgspec_struct(unwrapped):
+        for struct_field in msgspec.structs.fields(unwrapped):
+            struct_type_hint = get_type_hint_id(struct_field.type)
+            if skip_string and struct_type_hint == TYPE_STRING:
+                continue
+            target[struct_field.name] = struct_type_hint
+            encoded_name = getattr(struct_field, "encode_name", struct_field.name)
+            if encoded_name != struct_field.name:
+                target[encoded_name] = struct_type_hint
+    else:
+        type_hint = get_type_hint_id(field.annotation)
+        if skip_string and type_hint == TYPE_STRING:
+            return
+        target[field.name] = type_hint
+
+
 def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_meta: dict[str, Any]) -> dict[str, Any]:
     """
     Add optimization flags to middleware metadata.
@@ -237,42 +262,11 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
     for field in fields:
         # Include type hints for path, query, header, cookie
         if field.source in ("path", "query", "header", "cookie"):
-            unwrapped = unwrap_optional(field.annotation)
-            # Check if this is a struct type (Query/Header/Cookie with struct parameter)
-            if is_msgspec_struct(unwrapped):
-                # Extract type hints for each struct field (both attribute and encoded names)
-                for struct_field in msgspec.structs.fields(unwrapped):
-                    struct_type_hint = get_type_hint_id(struct_field.type)
-                    if struct_type_hint != TYPE_STRING:
-                        param_types[struct_field.name] = struct_type_hint
-                        # Also register encoded name for aliased fields (field(name=...) or rename=)
-                        encoded_name = getattr(struct_field, "encode_name", struct_field.name)
-                        if encoded_name != struct_field.name:
-                            param_types[encoded_name] = struct_type_hint
-            else:
-                # Individual field
-                type_hint = get_type_hint_id(field.annotation)
-                # Only include non-string types (string is the default, no coercion needed)
-                if type_hint != TYPE_STRING:
-                    param_types[field.name] = type_hint
+            _extract_type_hints_from_field(field, param_types, skip_string=True)
 
         # Form fields - extract type hints for Rust-side form parsing
         elif field.source == "form":
-            unwrapped = unwrap_optional(field.annotation)
-            # Check if this is a struct type (Form with struct parameter)
-            if is_msgspec_struct(unwrapped):
-                # Extract type hints for each struct field (both attribute and encoded names)
-                for struct_field in msgspec.structs.fields(unwrapped):
-                    struct_type_hint = get_type_hint_id(struct_field.type)
-                    form_type_hints[struct_field.name] = struct_type_hint
-                    # Also register encoded name for aliased fields
-                    encoded_name = getattr(struct_field, "encode_name", struct_field.name)
-                    if encoded_name != struct_field.name:
-                        form_type_hints[encoded_name] = struct_type_hint
-            else:
-                # Individual form field
-                type_hint = get_type_hint_id(field.annotation)
-                form_type_hints[field.name] = type_hint
+            _extract_type_hints_from_field(field, form_type_hints, skip_string=False)
 
         # File fields - extract constraints for Rust-side validation
         elif field.source == "file":

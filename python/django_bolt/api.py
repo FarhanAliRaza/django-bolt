@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextvars
 import inspect
-import logging
 import sys
 import time
 import types
@@ -924,6 +923,8 @@ class BoltAPI:
                 # Pre-compute field names for QuerySet optimization (registration time only)
                 response_meta = extract_response_metadata(final_response_type)
                 meta.update(response_meta)
+            else:
+                meta["response_type"] = None
 
             # If handler is paginated, extract and store the item serializer
             # This enables @paginate to use Serializer.dump_many() for efficient serialization
@@ -936,8 +937,8 @@ class BoltAPI:
                     if original is not None:
                         original.__serializer_class__ = item_type
 
-            if status_code is not None:
-                meta["default_status_code"] = int(status_code)
+            # Guarantee all keys exist at registration time for direct access
+            meta["default_status_code"] = int(status_code) if status_code is not None else 200
             # Store OpenAPI metadata
             if tags is not None:
                 meta["openapi_tags"] = tags
@@ -1172,21 +1173,7 @@ class BoltAPI:
         # Use cached should_time flag (computed once per logging middleware instance)
         start_time = None
         if logging_middleware:
-            # Check cached timing decision (computed once at first request)
-            if not hasattr(logging_middleware, "_should_time_cached"):
-                # First request: compute and cache the timing decision
-                should_time = False
-                try:
-                    if logging_middleware.logger.isEnabledFor(logging.INFO):
-                        should_time = True
-                except Exception:
-                    # Logger might not be fully configured; default to no timing
-                    # This is expected during testing or when logger is unavailable
-                    should_time = False
-                if not should_time:
-                    should_time = bool(getattr(logging_middleware.config, "min_duration_ms", None))
-                logging_middleware._should_time_cached = should_time
-
+            # _should_time_cached initialized in LoggingMiddleware.__init__()
             if logging_middleware._should_time_cached:
                 start_time = time.time()
 
@@ -1201,8 +1188,8 @@ class BoltAPI:
             # 2. Lazy user loading using SimpleLazyObject (Django pattern)
             # User is only loaded from DB when request.user is actually accessed
             auth_context = request.get("auth")
-            if auth_context and auth_context.get("user_id"):
-                user_id = auth_context["user_id"]  # Direct access - key exists
+            user_id = auth_context.get("user_id") if auth_context else None
+            if user_id:
                 backend_name = auth_context.get("auth_backend")
                 # Use pre-computed is_async from handler metadata (avoids runtime loop check)
                 # Default True for ASGI bridge handlers that don't set is_async
@@ -1230,9 +1217,9 @@ class BoltAPI:
                 response = await self._dispatch_with_middleware(handler, request, handler_id, api_with_middleware, meta)
             else:
                 # Fast path: no middleware, execute handler directly
-                # Pre-extract commonly used metadata to avoid repeated dict lookups
-                mode = meta.get("mode")
-                is_async = meta.get("is_async", True)  # Default True for ASGI bridge handlers
+                # Direct access -- keys guaranteed by compile_binder + _route_decorator
+                mode = meta["mode"]
+                is_async = meta["is_async"]
                 is_blocking = meta.get("is_blocking", False)
 
                 # 3. Fast path for request-only handlers (no parameter extraction)
@@ -1247,8 +1234,8 @@ class BoltAPI:
                             result = handler(request)
                 else:
                     # 4. Use pre-compiled injector (sync or async based on needs)
-                    # Note: injector_is_async defaults to False for most handlers
-                    if meta.get("injector_is_async", False):
+                    # Direct access -- injector_is_async set in _route_decorator
+                    if meta["injector_is_async"]:
                         args, kwargs = await meta["injector"](request)
                     else:
                         args, kwargs = meta["injector"](request)

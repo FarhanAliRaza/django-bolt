@@ -250,8 +250,8 @@ def test_no_response_type_specified():
     _method, _path, handler_id, _handler = api._routes[0]
     meta = api._handler_meta[handler_id]
 
-    # Should not have response_type or field names
-    assert "response_type" not in meta
+    # response_type should be None (always present for direct access optimization)
+    assert meta["response_type"] is None
     assert "response_field_names" not in meta
 
 

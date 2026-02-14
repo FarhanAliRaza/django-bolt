@@ -22,6 +22,7 @@ mod streaming;
 mod testing;
 mod type_coercion;
 mod validation;
+mod fast_dispatch;
 mod websocket;
 
 // Global allocator selection (mutually exclusive features)
@@ -64,6 +65,15 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(register_test_middleware_metadata, m)?)?;
     m.add_function(wrap_pyfunction!(test_request, m)?)?;
     m.add_function(wrap_pyfunction!(handle_test_websocket, m)?)?;
+
+    // Fast dispatch functions (Rust-accelerated Python dispatch)
+    m.add_class::<fast_dispatch::DispatchInfo>()?;
+    m.add_function(wrap_pyfunction!(fast_dispatch::fast_serialize_json, m)?)?;
+    m.add_function(wrap_pyfunction!(fast_dispatch::fast_dispatch_sync, m)?)?;
+    m.add_function(wrap_pyfunction!(fast_dispatch::fast_dispatch_full, m)?)?;
+    m.add_function(wrap_pyfunction!(fast_dispatch::fast_inject_path_only, m)?)?;
+    m.add_function(wrap_pyfunction!(fast_dispatch::fast_inject_query_only, m)?)?;
+    m.add_function(wrap_pyfunction!(fast_dispatch::fast_inject_simple, m)?)?;
 
     Ok(())
 }

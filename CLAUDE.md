@@ -483,6 +483,38 @@ uv run --with pytest pytest python/tests -s -vv
 - **GIL contention**: Reduce Python work in hot paths, consider moving logic to Rust in `src/handler.rs`
 - **Compression**: `python/django_bolt/middleware/compression.py` and `src/middleware/compression.rs`
 
+## Performance Principles (Hot Path)
+
+The core performance principle is **do it once at registration, reuse forever at runtime**. Every per-request operation must justify its existence.
+
+### Registration-Time Pre-computation (MUST DO)
+
+All route metadata keys must be guaranteed at registration time so the dispatch path uses direct `meta["key"]` access, never `meta.get("key", default)`. This applies to `_route_decorator()`, `compile_binder()`, and any code that registers routes outside the normal decorator path (admin routes, static routes, mounted apps). Required keys: `mode`, `is_async`, `default_status_code`, `response_type`.
+
+### Hot Path Rules
+
+When modifying code in the per-request dispatch path (`api.py:_dispatch`, `serialization.py:serialize_response`, `_kwargs/model.py` injectors, `dependencies.py`):
+
+1. **No string dispatch in loops** -- Pre-sort fields into source buckets (path, query, header, cookie, form) at registration time. Iterate pre-built lists at request time instead of `if source == "path"` chains.
+2. **Pre-compute singleton tuples/headers** -- Response metadata tuples (`_RESPONSE_META_JSON`, error headers) should be module-level constants, not rebuilt per response.
+3. **Avoid per-request allocations** -- Don't create temporary dicts/lists that can be eliminated. Example: pagination should use PyRequest directly instead of copying into a new dict.
+4. **Single `msgspec.convert()` for validation** -- Prefer one C-accelerated `msgspec.convert()` call over field-by-field Python validation when possible (Litestar pattern: `msgspec.defstruct()` at registration, single convert at runtime).
+5. **Pre-compute file field names** -- Don't iterate all struct fields at request time to find UploadFile fields. Store file field names at registration time.
+6. **Use `__slots__`** -- On request wrapper, state, and connection objects to avoid per-instance `__dict__` allocation.
+7. **Cache parsed data** -- Use `@cached_property` on middleware config objects. Consider scope-level caching so middleware and handler share parsed query params/cookies.
+8. **Singleton encoders** -- Use module-level `msgspec.json.Encoder(enc_hook=...)` instances, don't recreate per response.
+9. **Parallel dependency resolution** -- Pre-compute dependency graph at registration. Execute independent deps concurrently with `asyncio.gather()`.
+10. **Pre-bind serializers** -- Use `functools.partial` to bind handler-specific serializer config at registration, avoiding per-call config lookups.
+
+### What NOT to Do on the Hot Path
+
+- `hasattr()` checks (use `__init__` to set attributes)
+- `meta.get()` with defaults (guarantee keys at registration)
+- `isinstance()` after a conversion that guarantees the type
+- Double dict lookups (`if d.get(k): v = d[k]` -- use walrus or single `.get()`)
+- String parsing in error formatting when structured data is available
+- Duplicate async/sync code paths -- extract shared logic into helpers
+
 ### Testing
 
 - **Add unit tests**: Create file in `python/tests/test_*.py` following existing patterns

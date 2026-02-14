@@ -21,6 +21,8 @@ class BasePermission(ABC):
     is called, enabling early 403 responses without GIL overhead.
     """
 
+    __slots__ = ()
+
     @property
     @abstractmethod
     def guard_name(self) -> str:
@@ -54,6 +56,8 @@ class AllowAny(BasePermission):
     Using this explicitly bypasses any global default permissions.
     """
 
+    __slots__ = ()
+
     @property
     def guard_name(self) -> str:
         return "allow_any"
@@ -71,6 +75,8 @@ class IsAuthenticated(BasePermission):
 
     Returns 401 if no authentication was successful.
     """
+
+    __slots__ = ()
 
     @property
     def guard_name(self) -> str:
@@ -91,6 +97,8 @@ class IsAdminUser(BasePermission):
     Requires JWT token to include 'is_superuser' claim.
     """
 
+    __slots__ = ()
+
     @property
     def guard_name(self) -> str:
         return "is_superuser"
@@ -109,6 +117,8 @@ class IsStaff(BasePermission):
     Returns 403 if user is not staff.
     Requires JWT token to include 'is_staff' claim.
     """
+
+    __slots__ = ()
 
     @property
     def guard_name(self) -> str:
@@ -131,6 +141,8 @@ class HasPermission(BasePermission):
     For JWT: token should include "permissions" claim as list of strings
     For API keys: configured via key_permissions mapping in APIKeyAuthentication
     """
+
+    __slots__ = ("permission",)
 
     def __init__(self, permission: str):
         self.permission = permission
@@ -159,6 +171,8 @@ class HasAnyPermission(BasePermission):
         permissions: List of permission strings
     """
 
+    __slots__ = ("permissions",)
+
     def __init__(self, *permissions: str):
         self.permissions = list(permissions)
 
@@ -185,6 +199,8 @@ class HasAllPermissions(BasePermission):
     Args:
         permissions: List of permission strings
     """
+
+    __slots__ = ("permissions",)
 
     def __init__(self, *permissions: str):
         self.permissions = list(permissions)

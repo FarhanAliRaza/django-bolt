@@ -75,20 +75,18 @@ async def resolve_dependency(
     return value
 
 
-async def call_dependency(
-    dep_fn: Callable,
+def _extract_dependency_args(
     dep_meta: dict[str, Any],
     request: dict[str, Any],
     params_map: dict[str, Any],
     query_map: dict[str, Any],
     headers_map: dict[str, str],
     cookies_map: dict[str, str],
-) -> Any:
-    """Call an async dependency function with resolved parameters."""
+) -> tuple[list[Any], dict[str, Any]]:
+    """Shared parameter extraction for async and sync dependency calls."""
     dep_args: list[Any] = []
     dep_kwargs: dict[str, Any] = {}
 
-    # Use FieldDefinition objects directly
     for field in dep_meta["fields"]:
         if field.source == "request":
             dval = request
@@ -100,7 +98,21 @@ async def call_dependency(
         else:
             dep_kwargs[field.name] = dval
 
-    return await dep_fn(*dep_args, **dep_kwargs)
+    return dep_args, dep_kwargs
+
+
+async def call_dependency(
+    dep_fn: Callable,
+    dep_meta: dict[str, Any],
+    request: dict[str, Any],
+    params_map: dict[str, Any],
+    query_map: dict[str, Any],
+    headers_map: dict[str, str],
+    cookies_map: dict[str, str],
+) -> Any:
+    """Call an async dependency function with resolved parameters."""
+    args, kwargs = _extract_dependency_args(dep_meta, request, params_map, query_map, headers_map, cookies_map)
+    return await dep_fn(*args, **kwargs)
 
 
 def call_dependency_sync(
@@ -113,22 +125,8 @@ def call_dependency_sync(
     cookies_map: dict[str, str],
 ) -> Any:
     """Call a sync dependency function with resolved parameters."""
-    dep_args: list[Any] = []
-    dep_kwargs: dict[str, Any] = {}
-
-    # Use FieldDefinition objects directly
-    for field in dep_meta["fields"]:
-        if field.source == "request":
-            dval = request
-        else:
-            dval = extract_dependency_value(field, params_map, query_map, headers_map, cookies_map)
-
-        if field.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
-            dep_args.append(dval)
-        else:
-            dep_kwargs[field.name] = dval
-
-    return dep_fn(*dep_args, **dep_kwargs)
+    args, kwargs = _extract_dependency_args(dep_meta, request, params_map, query_map, headers_map, cookies_map)
+    return dep_fn(*args, **kwargs)
 
 
 def extract_dependency_value(

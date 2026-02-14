@@ -21,6 +21,9 @@ from .exceptions import (
 
 logger = logging.getLogger(__name__)
 
+# Pre-computed constant headers (avoid per-error allocation)
+_DEFAULT_JSON_HEADERS: list[tuple[str, str]] = [("content-type", "application/json")]
+
 # Django import - may fail if Django not configured
 try:
     from django.conf import settings as django_settings
@@ -58,9 +61,11 @@ def format_error_response(
 
     body_bytes = _json.encode(error_body)
 
-    response_headers = [("content-type", "application/json")]
     if headers:
+        response_headers = list(_DEFAULT_JSON_HEADERS)
         response_headers.extend(headers.items())
+    else:
+        response_headers = _DEFAULT_JSON_HEADERS
 
     return status_code, response_headers, body_bytes
 
@@ -129,6 +134,12 @@ def http_exception_handler(exc: HTTPException) -> tuple[int, list[tuple[str, str
     )
 
 
+# Pre-compiled regex patterns for validation error parsing
+_RE_AT_LOCATION = re.compile(r" - at `(.+?)`$")
+_RE_FIELD_NAME = re.compile(r"`(\w+)`")
+_RE_LOC_CLEAN = re.compile(r"[\$\[\]]")
+
+
 def msgspec_validation_error_to_dict(error: msgspec.ValidationError) -> list[dict[str, Any]]:
     """Convert msgspec ValidationError to structured error list.
 
@@ -138,56 +149,24 @@ def msgspec_validation_error_to_dict(error: msgspec.ValidationError) -> list[dic
     Returns:
         List of error dictionaries with 'loc', 'msg', 'type' fields
     """
-    # msgspec.ValidationError doesn't provide structured error info like pydantic
-    # We'll do our best to parse the error message
     error_msg = str(error)
 
-    # Try to extract field path from error message
-    # Example: "Expected `int`, got `str` - at `$[0].age`"
-    # Example: "Object missing required field `name`"
+    # Try to extract field location with pre-compiled regex
+    loc_match = _RE_AT_LOCATION.search(error_msg)
+    if loc_match:
+        loc_path = loc_match.group(1)
+        msg_part = error_msg[: loc_match.start()]
+        # Parse location like $[0].age into ["body", "0.age"]
+        cleaned = _RE_LOC_CLEAN.sub("", loc_path).strip(".")
+        loc_parts = ["body", cleaned] if cleaned else ["body"]
+        return [{"loc": loc_parts, "msg": msg_part, "type": "validation_error"}]
 
-    errors = []
-
-    # Check if error message contains field location
-    if " - at `" in error_msg:
-        msg_part, loc_part = error_msg.split(" - at `", 1)
-        loc_path = loc_part.rstrip("`")
-        # Parse location like $[0].age into ["body", 0, "age"]
-        loc_parts = ["body"]
-        # Simple parsing - can be improved
-        loc_parts.append(loc_path.replace("$", "").replace("[", ".").replace("]", "").strip("."))
-    elif "missing required field" in error_msg.lower():
-        # Extract field name from message
-        match = re.search(r"`(\w+)`", error_msg)
+    if "missing required field" in error_msg.lower():
+        match = _RE_FIELD_NAME.search(error_msg)
         field = match.group(1) if match else "unknown"
-        errors.append(
-            {
-                "loc": ["body", field],
-                "msg": error_msg,
-                "type": "missing_field",
-            }
-        )
-        return errors
-    else:
-        # Generic error without location
-        errors.append(
-            {
-                "loc": ["body"],
-                "msg": error_msg,
-                "type": "validation_error",
-            }
-        )
-        return errors
+        return [{"loc": ["body", field], "msg": error_msg, "type": "missing_field"}]
 
-    errors.append(
-        {
-            "loc": loc_parts if isinstance(loc_parts, list) else ["body"],
-            "msg": error_msg.split(" - at `")[0] if " - at `" in error_msg else error_msg,
-            "type": "validation_error",
-        }
-    )
-
-    return errors
+    return [{"loc": ["body"], "msg": error_msg, "type": "validation_error"}]
 
 
 def request_validation_error_handler(

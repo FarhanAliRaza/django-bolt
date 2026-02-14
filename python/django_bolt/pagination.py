@@ -721,18 +721,8 @@ def paginate(pagination_class: type[PaginationBase] = PageNumberPagination):
                     f"Args: {[type(a).__name__ for a in args]}, kwargs: {list(kwargs.keys())}"
                 )
 
-            # Convert PyRequest to dict if needed for pagination
-            # PyRequest objects from Rust layer behave like dicts
-            if not isinstance(request, dict) and hasattr(request, "__getitem__"):
-                # It's a PyRequest object - convert to dict for pagination methods
-                request_dict = {
-                    "method": request.get("method", "GET"),
-                    "query": request.get("query", {}),
-                    "params": request.get("params", {}),
-                    "headers": request.get("headers", {}),
-                    "cookies": request.get("cookies", {}),
-                }
-            elif isinstance(request, dict):
+            # PyRequest already supports .get() and __getitem__, no need to copy
+            if isinstance(request, dict) or hasattr(request, "__getitem__"):
                 request_dict = request
             else:
                 raise ValueError(

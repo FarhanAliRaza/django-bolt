@@ -16,6 +16,8 @@ class LoggingMiddleware:
     Integrates with Django's logging system and provides structured logging.
     """
 
+    __slots__ = ("config", "logger", "_should_time_cached")
+
     def __init__(self, config: LoggingConfig | None = None):
         """Initialize logging middleware.
 
@@ -27,6 +29,17 @@ class LoggingMiddleware:
 
         self.config = config
         self.logger = config.get_logger()
+
+        # Pre-compute timing decision at init (not per-request)
+        should_time = False
+        try:
+            if self.logger.isEnabledFor(logging.INFO):
+                should_time = True
+        except Exception:
+            should_time = False
+        if not should_time:
+            should_time = bool(getattr(config, "min_duration_ms", None))
+        self._should_time_cached = should_time
 
     def obfuscate_headers(self, headers: dict[str, str]) -> dict[str, str]:
         """Obfuscate sensitive headers.

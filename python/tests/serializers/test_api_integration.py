@@ -674,8 +674,8 @@ class TestAPI4MixedValidation:
         }
         response = client_api_4.post("/posts/strict", json=payload)
 
-        # Verify request fails
-        assert response.status_code == 400 or response.status_code == 422
+        # Verify request fails with 400 (Litestar-style validation error)
+        assert response.status_code == 400
 
     @pytest.mark.django_db(transaction=True)
     def test_create_post_strict_title_validation(self, client_api_4):
@@ -692,8 +692,8 @@ class TestAPI4MixedValidation:
         }
         response = client_api_4.post("/posts/strict", json=payload)
 
-        # Verify request fails
-        assert response.status_code == 400 or response.status_code == 422
+        # Verify request fails with 400 (Litestar-style validation error)
+        assert response.status_code == 400
 
     @pytest.mark.django_db(transaction=True)
     def test_create_post_strict_content_validation(self, client_api_4):
@@ -710,8 +710,8 @@ class TestAPI4MixedValidation:
         }
         response = client_api_4.post("/posts/strict", json=payload)
 
-        # Verify request fails
-        assert response.status_code == 400 or response.status_code == 422
+        # Verify request fails with 400 (Litestar-style validation error)
+        assert response.status_code == 400
 
     @pytest.mark.django_db(transaction=True)
     def test_create_post_strict_author_email_validation(self, client_api_4):
@@ -726,8 +726,8 @@ class TestAPI4MixedValidation:
         }
         response = client_api_4.post("/posts/strict", json=payload)
 
-        # Verify request fails
-        assert response.status_code == 400 or response.status_code == 422
+        # Verify request fails with 400 (Litestar-style validation error)
+        assert response.status_code == 400
 
     @pytest.mark.django_db(transaction=True)
     def test_get_post_and_validate_roundtrip(self, client_api_4):
@@ -880,12 +880,14 @@ class TestAPI5UserRegistration:
         }
         response = client_api_5.post("/auth/signup", json=payload)
 
-        # Should fail validation
-        assert response.status_code in [400, 422]
+        # Should fail validation with 400 (Litestar-style envelope)
+        assert response.status_code == 400
         data = response.json()
-        # detail can be a string or list of validation errors
-        detail_str = str(data["detail"]).lower()
-        assert "password" in detail_str or "match" in detail_str
+        assert data["detail"] == "Validation failed"
+        assert isinstance(data["extra"], list)
+        # Check that extra contains error about password mismatch
+        extra_str = str(data["extra"]).lower()
+        assert "password" in extra_str or "match" in extra_str
         assert not User.objects.filter(username="janedoe").exists()
 
     @pytest.mark.django_db(transaction=True)
@@ -943,12 +945,14 @@ class TestAPI5UserRegistration:
         }
         response = client_api_5.post("/auth/signup", json=payload)
 
-        # Should fail validation with email-related error
-        assert response.status_code in [400, 422]
+        # Should fail validation with 400 (Litestar-style envelope)
+        assert response.status_code == 400
         data = response.json()
-        # Check if detail mentions email or regex pattern
-        detail_str = str(data["detail"]).lower()
-        assert "email" in detail_str or "regex" in detail_str or "pattern" in detail_str
+        assert data["detail"] == "Validation failed"
+        assert isinstance(data["extra"], list)
+        # Check if extra mentions email or regex pattern
+        extra_str = str(data["extra"]).lower()
+        assert "email" in extra_str or "regex" in extra_str or "pattern" in extra_str
         assert not User.objects.filter(username="testuser").exists()
 
     @pytest.mark.django_db(transaction=True)
@@ -962,11 +966,13 @@ class TestAPI5UserRegistration:
         }
         response = client_api_5.post("/auth/signup", json=payload)
 
-        # Should fail validation with username length error
-        assert response.status_code in [400, 422]
+        # Should fail validation with 400 (Litestar-style envelope)
+        assert response.status_code == 400
         data = response.json()
-        detail_str = str(data["detail"]).lower()
-        assert "username" in detail_str or "length" in detail_str or ">= 3" in detail_str
+        assert data["detail"] == "Validation failed"
+        assert isinstance(data["extra"], list)
+        extra_str = str(data["extra"]).lower()
+        assert "username" in extra_str or "length" in extra_str or ">= 3" in extra_str
         assert not User.objects.filter(username="ab").exists()
 
     @pytest.mark.django_db(transaction=True)
@@ -980,11 +986,13 @@ class TestAPI5UserRegistration:
         }
         response = client_api_5.post("/auth/signup", json=payload)
 
-        # Should fail validation with password length error
-        assert response.status_code in [400, 422]
+        # Should fail validation with 400 (Litestar-style envelope)
+        assert response.status_code == 400
         data = response.json()
-        detail_str = str(data["detail"]).lower()
-        assert "password" in detail_str or "length" in detail_str or ">= 8" in detail_str
+        assert data["detail"] == "Validation failed"
+        assert isinstance(data["extra"], list)
+        extra_str = str(data["extra"]).lower()
+        assert "password" in extra_str or "length" in extra_str or ">= 8" in extra_str
         assert not User.objects.filter(username="testuser").exists()
 
     @pytest.mark.django_db(transaction=True)
@@ -1522,7 +1530,7 @@ class TestAPI6AdvancedSerializerFeatures:
 
         response = client_api_6.post("/posts", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
         assert not BlogPost.objects.filter(title="AB").exists()
 
     @pytest.mark.django_db(transaction=True)
@@ -1540,7 +1548,7 @@ class TestAPI6AdvancedSerializerFeatures:
 
         response = client_api_6.post("/posts", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
         assert not BlogPost.objects.filter(title="Valid Title").exists()
 
     @pytest.mark.django_db(transaction=True)

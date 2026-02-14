@@ -63,7 +63,7 @@ def create_path_extractor(name: str, annotation: Any, alias: str | None = None) 
 
     def extract(params_map: dict[str, Any]) -> Any:
         if key not in params_map:
-            raise HTTPException(status_code=422, detail=f"Missing required path parameter: {key}")
+            raise HTTPException(status_code=400, detail=f"Missing required path parameter: {key}")
         return params_map[key]
 
     return extract
@@ -99,7 +99,7 @@ def create_query_extractor(name: str, annotation: Any, default: Any, alias: str 
 
         def extract(query_map: dict[str, Any]) -> Any:
             if key not in query_map:
-                raise HTTPException(status_code=422, detail=f"Missing required query parameter: {key}")
+                raise HTTPException(status_code=400, detail=f"Missing required query parameter: {key}")
             return query_map[key]
 
     return extract
@@ -137,7 +137,7 @@ def create_header_extractor(name: str, annotation: Any, default: Any, alias: str
 
         def extract(headers_map: dict[str, str]) -> Any:
             if key not in headers_map:
-                raise HTTPException(status_code=422, detail=f"Missing required header: {key}")
+                raise HTTPException(status_code=400, detail=f"Missing required header: {key}")
             return headers_map[key]
 
     return extract
@@ -173,7 +173,7 @@ def create_cookie_extractor(name: str, annotation: Any, default: Any, alias: str
 
         def extract(cookies_map: dict[str, str]) -> Any:
             if key not in cookies_map:
-                raise HTTPException(status_code=422, detail=f"Missing required cookie: {key}")
+                raise HTTPException(status_code=400, detail=f"Missing required cookie: {key}")
             return cookies_map[key]
 
     return extract
@@ -206,7 +206,7 @@ def create_form_extractor(name: str, annotation: Any, default: Any, alias: str |
 
         def extract(form_map: dict[str, Any]) -> Any:
             if key not in form_map:
-                raise HTTPException(status_code=422, detail=f"Missing required form field: {key}")
+                raise HTTPException(status_code=400, detail=f"Missing required form field: {key}")
             return form_map[key]
 
     return extract
@@ -353,7 +353,7 @@ def _create_header_struct_extractor(struct_type: type, default: Any) -> Callable
             if header_name in headers_map:
                 converted[encoded_name] = headers_map[header_name]
             elif header_name in required_headers:
-                raise HTTPException(status_code=422, detail=f"Missing required header: {header_name}")
+                raise HTTPException(status_code=400, detail=f"Missing required header: {header_name}")
 
         return msgspec.convert(converted, struct_type)
 
@@ -498,7 +498,7 @@ def create_body_extractor(name: str, annotation: Any) -> Callable:
                 # IMPORTANT: Must catch ValidationError BEFORE DecodeError since ValidationError subclasses DecodeError
                 raise
             except msgspec.DecodeError as e:
-                # JSON parsing error (malformed JSON) - return 422 with error details including line/column
+                # JSON parsing error (malformed JSON) - return 400 with error details including line/column
                 error_detail = parse_msgspec_decode_error(e, body_bytes)
                 raise RequestValidationError(
                     errors=[error_detail],
@@ -514,7 +514,7 @@ def create_body_extractor(name: str, annotation: Any) -> Callable:
                 # IMPORTANT: Must catch ValidationError BEFORE DecodeError since ValidationError subclasses DecodeError
                 raise
             except msgspec.DecodeError as e:
-                # JSON parsing error (malformed JSON) - return 422 with error details including line/column
+                # JSON parsing error (malformed JSON) - return 400 with error details including line/column
                 error_detail = parse_msgspec_decode_error(e, body_bytes)
                 raise RequestValidationError(
                     errors=[error_detail],

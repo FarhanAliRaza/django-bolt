@@ -159,7 +159,7 @@ class TestParameterLengthLimits:
 
     def test_typed_path_param_exceeds_limit_rejected(self, client):
         """
-        Test that typed path parameter exceeding 8KB limit returns 422.
+        Test that typed path parameter exceeding 8KB limit returns 400.
 
         Security: Prevents memory exhaustion from oversized parameters.
         Validated by: src/type_coercion.rs MAX_PARAM_LENGTH check in coerce_param()
@@ -167,27 +167,27 @@ class TestParameterLengthLimits:
         # Create 8193 byte string for an int field (will fail coercion AND length)
         value = "1" * 8193
         response = client.get(f"/int/{value}")
-        assert response.status_code == 422, f"Expected 422 for >8KB typed param, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for >8KB typed param, got {response.status_code}"
 
     def test_typed_query_param_exceeds_limit_rejected(self, client):
         """
-        Test that typed query parameter exceeding 8KB limit returns 422.
+        Test that typed query parameter exceeding 8KB limit returns 400.
 
         Security: Query parameters are also subject to the length limit.
         """
         value = "1" * 8193
         response = client.get(f"/query/int?value={value}")
-        assert response.status_code == 422, f"Expected 422 for >8KB typed query param, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for >8KB typed query param, got {response.status_code}"
 
     def test_typed_form_field_exceeds_limit_rejected(self, client):
         """
-        Test that typed form field exceeding 8KB limit returns 422.
+        Test that typed form field exceeding 8KB limit returns 400.
 
         Security: Form fields are also subject to the length limit.
         """
         value = "1" * 8193
         response = client.post("/form/int", data={"value": value})
-        assert response.status_code == 422, f"Expected 422 for >8KB typed form field, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for >8KB typed form field, got {response.status_code}"
 
     def test_string_path_param_exceeds_limit_rejected(self, client):
         """
@@ -199,7 +199,7 @@ class TestParameterLengthLimits:
         # String params over 8KB are rejected
         value = "a" * 10000
         response = client.get(f"/str/{value}")
-        assert response.status_code == 422, f"Expected 422 for large string param, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for large string param, got {response.status_code}"
 
 
 # =============================================================================
@@ -233,45 +233,45 @@ class TestIntegerBoundaries:
 
     def test_int_overflow_rejected(self, client):
         """
-        Test value exceeding i64 range returns 422.
+        Test value exceeding i64 range returns 400.
 
         Security: Prevents integer overflow attacks that could bypass validation.
         """
         overflow = 9223372036854775808  # i64::MAX + 1
         response = client.get(f"/int/{overflow}")
-        assert response.status_code == 422, f"Expected 422 for i64 overflow, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for i64 overflow, got {response.status_code}"
 
     def test_int_underflow_rejected(self, client):
         """
-        Test value below i64 range returns 422.
+        Test value below i64 range returns 400.
 
         Security: Prevents integer underflow attacks.
         """
         underflow = -9223372036854775809  # i64::MIN - 1
         response = client.get(f"/int/{underflow}")
-        assert response.status_code == 422, f"Expected 422 for i64 underflow, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for i64 underflow, got {response.status_code}"
 
     def test_int_with_float_value_rejected(self, client):
         """
-        Test float value for int parameter returns 422.
+        Test float value for int parameter returns 400.
 
         Security: No implicit truncation - must be exact integer.
         """
         response = client.get("/int/3.14")
-        assert response.status_code == 422, f"Expected 422 for float in int field, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for float in int field, got {response.status_code}"
 
     def test_int_scientific_notation_rejected(self, client):
         """
-        Test scientific notation for int parameter returns 422.
+        Test scientific notation for int parameter returns 400.
 
         Security: Scientific notation could be used to bypass range checks.
         """
         response = client.get("/int/1e10")
-        assert response.status_code == 422, f"Expected 422 for scientific notation, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for scientific notation, got {response.status_code}"
 
     def test_int_with_plus_sign_rejected(self, client):
         """
-        Test integer with explicit plus sign returns 422.
+        Test integer with explicit plus sign returns 400.
 
         Security: Only plain integers accepted, no prefix modifiers.
         """
@@ -283,12 +283,12 @@ class TestIntegerBoundaries:
             data = response.json()
             assert data["value"] == 123
         else:
-            assert response.status_code == 422
+            assert response.status_code == 400
 
     def test_int_empty_string_rejected(self, client):
-        """Test empty string for int parameter returns 422."""
+        """Test empty string for int parameter returns 400."""
         response = client.get("/query/int?value=")
-        assert response.status_code == 422, f"Expected 422 for empty int, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for empty int, got {response.status_code}"
 
 
 # =============================================================================
@@ -353,15 +353,15 @@ class TestFloatEdgeCases:
         assert response.status_code == 200, f"Expected 200 for small float, got {response.status_code}"
 
     def test_float_invalid_string_rejected(self, client):
-        """Test invalid string for float returns 422."""
+        """Test invalid string for float returns 400."""
         response = client.get("/float/notafloat")
-        assert response.status_code == 422, f"Expected 422 for invalid float, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for invalid float, got {response.status_code}"
 
     def test_float_empty_string_rejected(self, client):
-        """Test empty string for float parameter returns 422."""
+        """Test empty string for float parameter returns 400."""
         response = client.get("/float/")
-        # Empty path segment may result in 404 (not found) or 422
-        assert response.status_code in (404, 422), f"Expected 404/422 for empty float, got {response.status_code}"
+        # Empty path segment may result in 404 (not found) or 400
+        assert response.status_code in (400, 404), f"Expected 400/404 for empty float, got {response.status_code}"
 
 
 # =============================================================================
@@ -407,7 +407,7 @@ class TestBooleanEdgeCases:
         invalid_values = ["2", "-1", "maybe", "yep", "nope", "enabled", "disabled", "t", "f"]
         for val in invalid_values:
             response = client.get(f"/bool/{val}")
-            assert response.status_code == 422, f"Expected 422 for invalid bool='{val}', got {response.status_code}"
+            assert response.status_code == 400, f"Expected 400 for invalid bool='{val}', got {response.status_code}"
 
     def test_bool_numeric_two_rejected(self, client):
         """
@@ -416,7 +416,7 @@ class TestBooleanEdgeCases:
         Security: Only 0 and 1 are valid numeric booleans.
         """
         response = client.get("/bool/2")
-        assert response.status_code == 422, f"Expected 422 for bool=2, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for bool=2, got {response.status_code}"
 
     def test_bool_negative_one_rejected(self, client):
         """
@@ -425,7 +425,7 @@ class TestBooleanEdgeCases:
         Security: Negative numbers are not valid boolean representations.
         """
         response = client.get("/bool/-1")
-        assert response.status_code == 422, f"Expected 422 for bool=-1, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for bool=-1, got {response.status_code}"
 
 
 # =============================================================================
@@ -455,35 +455,35 @@ class TestUUIDValidation:
         assert response.status_code == 200, f"Expected 200 for uppercase UUID, got {response.status_code}"
 
     def test_uuid_invalid_format_rejected(self, client):
-        """Test malformed UUID returns 422."""
+        """Test malformed UUID returns 400."""
         invalid_uuid = "not-a-uuid"
         response = client.get(f"/uuid/{invalid_uuid}")
-        assert response.status_code == 422, f"Expected 422 for invalid UUID, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for invalid UUID, got {response.status_code}"
 
     def test_uuid_wrong_length_rejected(self, client):
-        """Test UUID with wrong length returns 422."""
+        """Test UUID with wrong length returns 400."""
         # Missing one character
         short_uuid = "550e8400-e29b-41d4-a716-44665544000"
         response = client.get(f"/uuid/{short_uuid}")
-        assert response.status_code == 422, f"Expected 422 for short UUID, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for short UUID, got {response.status_code}"
 
     def test_uuid_invalid_chars_rejected(self, client):
-        """Test UUID with invalid characters returns 422."""
+        """Test UUID with invalid characters returns 400."""
         # 'g' is not valid hex
         invalid_uuid = "550e8400-e29b-41d4-a716-44665544000g"
         response = client.get(f"/uuid/{invalid_uuid}")
-        assert response.status_code == 422, f"Expected 422 for UUID with invalid char, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for UUID with invalid char, got {response.status_code}"
 
     def test_uuid_sql_injection_rejected(self, client):
         """
-        Test SQL injection attempt in UUID field returns 422.
+        Test SQL injection attempt in UUID field returns 400.
 
         Security: Type validation rejects non-UUID strings before they reach handlers.
         """
         # SQL injection pattern without quotes (which cause URI issues)
         sql_injection = "550e8400-e29b-41d4-a716-DROP-TABLE"
         response = client.get(f"/uuid/{sql_injection}")
-        assert response.status_code == 422, f"Expected 422 for SQL injection in UUID, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for SQL injection in UUID, got {response.status_code}"
 
 
 # =============================================================================
@@ -644,44 +644,44 @@ class TestTypeConfusion:
     """
 
     def test_string_for_int_rejected(self, client):
-        """Test string value for int parameter returns 422."""
+        """Test string value for int parameter returns 400."""
         response = client.get("/int/abc")
-        assert response.status_code == 422, f"Expected 422 for string in int field, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for string in int field, got {response.status_code}"
 
     def test_float_for_int_rejected(self, client):
         """
-        Test float value for int parameter returns 422.
+        Test float value for int parameter returns 400.
 
         Security: No implicit truncation (3.14 does not become 3).
         """
         response = client.get("/int/3.14")
-        assert response.status_code == 422, f"Expected 422 for float in int field, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for float in int field, got {response.status_code}"
 
     def test_special_string_for_int_rejected(self, client):
         """Test special strings don't coerce to int."""
         special_values = ["null", "None", "undefined", "NaN"]
         for val in special_values:
             response = client.get(f"/int/{val}")
-            assert response.status_code == 422, f"Expected 422 for '{val}' in int field, got {response.status_code}"
+            assert response.status_code == 400, f"Expected 400 for '{val}' in int field, got {response.status_code}"
 
     def test_hex_string_for_int_rejected(self, client):
         """
-        Test hex string (0x10) for int parameter returns 422.
+        Test hex string (0x10) for int parameter returns 400.
 
         Security: Only decimal integers accepted, no base conversion.
         """
         response = client.get("/int/0x10")
-        assert response.status_code == 422, f"Expected 422 for hex in int field, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for hex in int field, got {response.status_code}"
 
     def test_octal_string_for_int_rejected(self, client):
-        """Test octal string (0o10) for int parameter returns 422."""
+        """Test octal string (0o10) for int parameter returns 400."""
         response = client.get("/int/0o10")
-        assert response.status_code == 422, f"Expected 422 for octal in int field, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for octal in int field, got {response.status_code}"
 
     def test_binary_string_for_int_rejected(self, client):
-        """Test binary string (0b10) for int parameter returns 422."""
+        """Test binary string (0b10) for int parameter returns 400."""
         response = client.get("/int/0b10")
-        assert response.status_code == 422, f"Expected 422 for binary in int field, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for binary in int field, got {response.status_code}"
 
 
 # =============================================================================
@@ -718,14 +718,14 @@ class TestDecimalEdgeCases:
         assert data["value"] == "-123.45"
 
     def test_decimal_invalid_format_rejected(self, client):
-        """Test invalid decimal format returns 422."""
+        """Test invalid decimal format returns 400."""
         response = client.get("/decimal/not_a_decimal")
-        assert response.status_code == 422, f"Expected 422 for invalid decimal, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for invalid decimal, got {response.status_code}"
 
     def test_decimal_double_dot_rejected(self, client):
-        """Test decimal with two dots returns 422."""
+        """Test decimal with two dots returns 400."""
         response = client.get("/decimal/12.34.56")
-        assert response.status_code == 422, f"Expected 422 for double-dot decimal, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for double-dot decimal, got {response.status_code}"
 
     def test_decimal_scientific_notation(self, client):
         """Test decimal with scientific notation."""
@@ -738,7 +738,7 @@ class TestDecimalEdgeCases:
             # Verify it parsed to expected value
             assert float(data["value"]) == 1.5e10 or "e" in data["value"].lower()
         else:
-            assert response.status_code == 422
+            assert response.status_code == 400
 
     def test_decimal_zero_precision(self, client):
         """Test decimal integer (no fractional part)."""
@@ -777,11 +777,11 @@ class TestDecimalEdgeCases:
         value = "79228162514264337593543950335"
         response = client.get(f"/decimal/{value}")
         # May succeed or fail depending on exact limits
-        assert response.status_code in (200, 422)
+        assert response.status_code in (200, 400)
 
     def test_decimal_overflow_rejected(self, client):
         """
-        Test decimal overflow returns 422.
+        Test decimal overflow returns 400.
 
         Security: Prevents overflow attacks on decimal type.
         """
@@ -789,7 +789,7 @@ class TestDecimalEdgeCases:
         value = "999999999999999999999999999999999999999999"
         response = client.get(f"/decimal/{value}")
         # Should fail due to overflow
-        assert response.status_code == 422, f"Expected 422 for decimal overflow, got {response.status_code}"
+        assert response.status_code == 400, f"Expected 400 for decimal overflow, got {response.status_code}"
 
     def test_decimal_currency_precision(self, client):
         """Test typical currency precision (2 decimal places)."""
@@ -861,7 +861,7 @@ class TestKnownSecurityGaps:
         # Create a 10KB string (just over 8KB limit) - now correctly rejected
         huge_value = "a" * 10000
         response = client.get(f"/str/{huge_value}")
-        assert response.status_code == 422, f"String param should be rejected at 10KB, got {response.status_code}"
+        assert response.status_code == 400, f"String param should be rejected at 10KB, got {response.status_code}"
 
     def test_datetime_query_param_is_coerced(self, client_datetime):
         """
@@ -879,13 +879,13 @@ class TestKnownSecurityGaps:
         data = response.json()
         assert data["type"] == "datetime", f"Expected datetime, got {data['type']}"
 
-    def test_invalid_datetime_returns_422_but_for_wrong_reason(self, client_datetime):
+    def test_invalid_datetime_returns_400(self, client_datetime):
         """
-        DOCUMENTATION: Invalid datetime returns 422, but due to handler crash not validation.
+        DOCUMENTATION: Invalid datetime returns 400, but due to handler crash not validation.
 
         When invalid datetime is sent, the handler receives a string and crashes
         when trying to call .isoformat() on it. The framework catches this and
-        returns 422 - which is the right status code but for the wrong reason.
+        returns 400 - which is the right status code but for the wrong reason.
 
         The issue is that validation should happen BEFORE the handler runs,
         not as a side effect of the handler crashing.
@@ -893,10 +893,10 @@ class TestKnownSecurityGaps:
         NOTE: This test passes, but the underlying issue remains - datetime
         params are passed as strings, not datetime objects.
         """
-        # Send invalid datetime - returns 422 due to handler crash
+        # Send invalid datetime - returns 400 due to handler crash
         response = client_datetime.get("/typed-datetime?dt=not-a-datetime")
-        # Returns 422 (handler crashes and framework converts to 422)
-        assert response.status_code == 422
+        # Returns 400 (handler crashes and framework converts to 400)
+        assert response.status_code == 400
 
     def test_empty_string_bool_requires_explicit_value(self, client_datetime):
         """
@@ -905,12 +905,12 @@ class TestKnownSecurityGaps:
         Previously, empty string "" was in the false_values list, meaning
         `?flag=` (empty value) silently became False instead of an error.
 
-        FIX APPLIED: Empty string is now rejected with 422, requiring an
+        FIX APPLIED: Empty string is now rejected with 400, requiring an
         explicit boolean value (true/false/1/0/yes/no/on/off).
         """
         # Empty query param - now correctly rejected
         response = client_datetime.get("/query/bool?value=")
-        assert response.status_code == 422, f"Empty bool param should be rejected, got {response.status_code}"
+        assert response.status_code == 400, f"Empty bool param should be rejected, got {response.status_code}"
 
 
 class TestSecurityGapsDocumentation:
@@ -930,7 +930,7 @@ class TestSecurityGapsDocumentation:
         # 50KB string - now rejected by length validation
         large_value = "a" * 50000
         response = client.get(f"/str/{large_value}")
-        assert response.status_code == 422
+        assert response.status_code == 400
 
     def test_document_explicit_false_string_works(self, client):
         """
@@ -955,12 +955,12 @@ class TestSecurityGapsDocumentation:
         # Typed param over 8KB - rejected
         huge_int_str = "1" * 8193
         response = client.get(f"/int/{huge_int_str}")
-        assert response.status_code == 422  # Rejected
+        assert response.status_code == 400  # Rejected
 
         # String param over 8KB - also rejected (security fix applied)
         huge_str = "a" * 8193
         response = client.get(f"/str/{huge_str}")
-        assert response.status_code == 422  # Now rejected (was accepted before fix)
+        assert response.status_code == 400  # Now rejected (was accepted before fix)
 
 
 # =============================================================================

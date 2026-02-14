@@ -218,25 +218,25 @@ class TestProductionVsDebugMode:
     """Test error responses in production vs debug mode."""
 
     def test_validation_error_in_production_mode(self):
-        """Test that validation errors return 422 in production without stack traces."""
+        """Test that validation errors return 400 in production without stack traces."""
         # Simulate validation error
         exc = msgspec.ValidationError("Expected int, got str")
 
         # Handle in production mode (debug=False)
         status, headers, body = handle_exception(exc, debug=False)
 
-        assert status == 422, "Validation error must return 422"
+        assert status == 400, "Validation error must return 400"
 
         # Parse response
         data = json.loads(body)
 
-        # Should have validation errors
-        assert "detail" in data
-        assert isinstance(data["detail"], list), "Validation errors should be a list"
+        # Litestar-style envelope: detail is a string, extra is a list
+        assert data["detail"] == "Validation failed"
+        assert isinstance(data["extra"], list), "Validation errors should be in extra as a list"
 
         # Should NOT have stack traces in production
-        if "extra" in data:
-            assert "traceback" not in data["extra"], "Production mode should not expose traceback"
+        for err in data["extra"]:
+            assert "traceback" not in err, "Production mode should not expose traceback"
 
     def test_validation_error_in_debug_mode(self):
         """Test that validation errors in debug mode may include more details."""
@@ -246,7 +246,7 @@ class TestProductionVsDebugMode:
         # Handle in debug mode (debug=True)
         status, headers, body = handle_exception(exc, debug=True)
 
-        assert status == 422, "Validation error must return 422 even in debug"
+        assert status == 400, "Validation error must return 400 even in debug"
 
         # Response should still be JSON (not HTML for validation errors)
         headers_dict = dict(headers)
@@ -262,7 +262,8 @@ class TestProductionVsDebugMode:
 
         prod_data = json.loads(prod_body)
         assert prod_data["detail"] == "Internal Server Error", "Production should hide error details"
-        assert "extra" not in prod_data, "Production should not expose exception details"
+        # extra is always present in Litestar-style envelope (null when no data)
+        assert prod_data["extra"] is None, "Production should not expose exception details"
 
         # Debug mode - should show details (HTML or JSON with traceback)
         debug_status, debug_headers, debug_body = handle_exception(exc, debug=True)
@@ -277,7 +278,7 @@ class TestProductionVsDebugMode:
         else:
             # JSON with traceback
             debug_data = json.loads(debug_body)
-            assert "extra" in debug_data
+            assert debug_data["extra"] is not None
             assert "traceback" in debug_data["extra"]
 
 
@@ -294,20 +295,20 @@ class TestRequestValidationErrorHandling:
         exc = RequestValidationError(errors)
         status, headers, body = handle_exception(exc, debug=False)
 
-        assert status == 422
+        assert status == 400
 
         data = json.loads(body)
 
-        # Should return errors in detail field
-        assert "detail" in data
-        assert isinstance(data["detail"], list)
-        assert len(data["detail"]) == 2
+        # Litestar-style envelope: detail is a string, errors are in extra
+        assert data["detail"] == "Validation failed"
+        assert isinstance(data["extra"], list)
+        assert len(data["extra"]) == 2
 
-        # Each error should have loc, msg, type
-        for error in data["detail"]:
-            assert "loc" in error
-            assert "msg" in error
-            assert "type" in error
+        # Each error should have message, key, source (Litestar-style)
+        for error in data["extra"]:
+            assert "message" in error
+            assert "key" in error
+            assert "source" in error
 
     def test_request_validation_error_with_body(self):
         """Test RequestValidationError preserves request body for debugging."""
@@ -456,11 +457,13 @@ class TestIntegrationWithBoltAPI:
         exc = RequestValidationError(errors)
 
         status, headers, body = handle_exception(exc, debug=False)
-        assert status == 422
+        assert status == 400
 
         data = json.loads(body)
-        assert len(data["detail"]) == 1
-        assert data["detail"][0]["loc"] == ["body", "age"]
+        assert data["detail"] == "Validation failed"
+        assert len(data["extra"]) == 1
+        assert data["extra"][0]["key"] == "age"
+        assert data["extra"][0]["source"] == "body"
 
 
 if __name__ == "__main__":

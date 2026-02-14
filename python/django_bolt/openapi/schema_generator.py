@@ -674,6 +674,17 @@ class SchemaGenerator:
             if type_name in msgspec_type_map:
                 return msgspec_type_map[type_name]
             # For list/array types from msgspec
+            if type_name == "StructType":
+                # Nested struct - extract the actual class and register as component
+                struct_cls = type_annotation.cls
+                return self._struct_to_component_schema(struct_cls)
+            if type_name == "UnionType" and hasattr(type_annotation, "types"):
+                # Handle Optional[T] (Union[T, None]) from msgspec inspect
+                # Note: check for .types attr to distinguish from Python's types.UnionType
+                non_none_types = [t for t in type_annotation.types if type(t).__name__ != "NoneType"]
+                if non_none_types:
+                    return self._type_to_schema(non_none_types[0], register_component=register_component)
+                return Schema(type="object")
             if type_name == "ListType":
                 item_type = getattr(type_annotation, "item_type", None)
                 if item_type:

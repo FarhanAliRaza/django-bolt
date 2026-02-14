@@ -240,11 +240,15 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
             unwrapped = unwrap_optional(field.annotation)
             # Check if this is a struct type (Query/Header/Cookie with struct parameter)
             if is_msgspec_struct(unwrapped):
-                # Extract type hints for each struct field
+                # Extract type hints for each struct field (both attribute and encoded names)
                 for struct_field in msgspec.structs.fields(unwrapped):
                     struct_type_hint = get_type_hint_id(struct_field.type)
                     if struct_type_hint != TYPE_STRING:
                         param_types[struct_field.name] = struct_type_hint
+                        # Also register encoded name for aliased fields (field(name=...) or rename=)
+                        encoded_name = getattr(struct_field, "encode_name", struct_field.name)
+                        if encoded_name != struct_field.name:
+                            param_types[encoded_name] = struct_type_hint
             else:
                 # Individual field
                 type_hint = get_type_hint_id(field.annotation)
@@ -257,10 +261,14 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
             unwrapped = unwrap_optional(field.annotation)
             # Check if this is a struct type (Form with struct parameter)
             if is_msgspec_struct(unwrapped):
-                # Extract type hints for each struct field
+                # Extract type hints for each struct field (both attribute and encoded names)
                 for struct_field in msgspec.structs.fields(unwrapped):
                     struct_type_hint = get_type_hint_id(struct_field.type)
                     form_type_hints[struct_field.name] = struct_type_hint
+                    # Also register encoded name for aliased fields
+                    encoded_name = getattr(struct_field, "encode_name", struct_field.name)
+                    if encoded_name != struct_field.name:
+                        form_type_hints[encoded_name] = struct_type_hint
             else:
                 # Individual form field
                 type_hint = get_type_hint_id(field.annotation)

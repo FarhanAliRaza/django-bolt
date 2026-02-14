@@ -232,12 +232,26 @@ SECURE_CSP = {
 BOLT_MAX_UPLOAD_SIZE = 30 * 1024 * 1024  # 10 mb
 
 
-# from django_bolt.auth import JWTAuthentication, IsAuthenticated
 
-# BOLT_AUTHENTICATION_CLASSES = [
-#     JWTAuthentication(),
-# ]
 
-# BOLT_DEFAULT_PERMISSION_CLASSES = [
-#     IsAuthenticated(),
-# ]
+INSTALLED_APPS = [
+    "django_bolt",
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+  
+]
+
+
+from django_bolt.auth import JWTAuthentication, IsAuthenticated
+
+BOLT_AUTHENTICATION_CLASSES = [
+    JWTAuthentication(),
+]
+
+BOLT_DEFAULT_PERMISSION_CLASSES = [
+    IsAuthenticated(),
+]

@@ -50,6 +50,30 @@ class ParentDeepNested(msgspec.Struct):
     child: ChildWithAddress
 
 
+class TreeNode(msgspec.Struct):
+    value: str
+    parent: TreeNode | None = None
+
+
+class Cat(msgspec.Struct, tag="cat"):
+    meow: str
+
+
+class Dog(msgspec.Struct, tag="dog"):
+    bark: str
+
+
+class PetOwner(msgspec.Struct):
+    name: str
+    pet: Cat | Dog
+
+
+class SharedParent(msgspec.Struct):
+    first: Child
+    second: Child
+    others: list[Child]
+
+
 def _get_schema(api: BoltAPI) -> dict:
     """Helper to get OpenAPI schema dict from an API instance."""
     api._register_openapi_routes()
@@ -168,3 +192,69 @@ def test_nested_struct_as_request_body():
     assert "Child" in schemas
     assert "id" in schemas["Child"]["properties"]
     assert "name" in schemas["Child"]["properties"]
+
+
+def test_self_referential_struct_does_not_recurse():
+    """Self-referential structs must not cause infinite recursion."""
+    api = BoltAPI(openapi_config=OpenAPIConfig(title="Test", version="1.0.0"))
+
+    @api.get("/tree")
+    async def get_tree() -> TreeNode:
+        pass
+
+    schema = _get_schema(api)
+    schemas = schema["components"]["schemas"]
+
+    assert "TreeNode" in schemas
+    tree_schema = schemas["TreeNode"]
+    assert "value" in tree_schema["properties"]
+    # parent should be a $ref back to itself
+    assert tree_schema["properties"]["parent"]["$ref"] == "#/components/schemas/TreeNode"
+
+
+def test_multi_type_union_produces_any_of():
+    """Union[A, B] (tagged) should produce anyOf with refs to both schemas."""
+    api = BoltAPI(openapi_config=OpenAPIConfig(title="Test", version="1.0.0"))
+
+    @api.get("/owner")
+    async def get_owner() -> PetOwner:
+        pass
+
+    schema = _get_schema(api)
+    schemas = schema["components"]["schemas"]
+
+    # Both Cat and Dog schemas must be registered with their fields
+    assert "Cat" in schemas
+    assert "meow" in schemas["Cat"]["properties"]
+    assert "Dog" in schemas
+    assert "bark" in schemas["Dog"]["properties"]
+
+    # pet field should use anyOf
+    pet_field = schemas["PetOwner"]["properties"]["pet"]
+    assert "anyOf" in pet_field, f"Expected anyOf for union field, got: {pet_field}"
+    refs = {item["$ref"] for item in pet_field["anyOf"]}
+    assert refs == {"#/components/schemas/Cat", "#/components/schemas/Dog"}
+
+
+def test_shared_nested_struct_registered_once():
+    """A struct used in multiple fields should be registered as a single component."""
+    api = BoltAPI(openapi_config=OpenAPIConfig(title="Test", version="1.0.0"))
+
+    @api.get("/shared")
+    async def get_shared() -> SharedParent:
+        pass
+
+    schema = _get_schema(api)
+    schemas = schema["components"]["schemas"]
+
+    # Child must appear exactly once as a component
+    assert "Child" in schemas
+    child_schema = schemas["Child"]
+    assert "id" in child_schema["properties"]
+    assert "name" in child_schema["properties"]
+
+    # All three fields should reference the same component
+    shared = schemas["SharedParent"]["properties"]
+    assert shared["first"]["$ref"] == "#/components/schemas/Child"
+    assert shared["second"]["$ref"] == "#/components/schemas/Child"
+    assert shared["others"]["items"]["$ref"] == "#/components/schemas/Child"

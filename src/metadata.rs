@@ -9,9 +9,35 @@ use pyo3::types::PyDict;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
+use std::sync::Arc;
+
+use crate::fast_dispatch::{DispatchMode, ParamPlan};
 use crate::form_parsing::FileFieldConstraints;
 use crate::middleware::auth::AuthBackend;
 use crate::permissions::Guard;
+
+/// Fast dispatch info — pre-compiled at registration time for Rust-side dispatch.
+/// When eligible, handler.rs bypasses Python's _dispatch() entirely.
+#[derive(Debug)]
+pub struct FastDispatchInfo {
+    pub mode: DispatchMode,
+    pub is_async: bool,
+    pub is_blocking: bool,
+    pub default_status_code: u16,
+    pub has_middleware: bool,
+    pub has_response_type: bool,
+    pub has_file_uploads: bool,
+    /// Pre-compiled injection plan (for path/query-only handlers)
+    pub param_plan: Vec<ParamPlan>,
+    /// True if param_plan can be used (no body, header, cookie, deps)
+    pub use_fast_inject: bool,
+    /// Python injector callable (fallback for complex params)
+    pub injector: Option<Py<PyAny>>,
+    pub injector_is_async: bool,
+    /// Whether this route is eligible for fast dispatch
+    /// (sync, non-blocking, no middleware, no response_type, no logging)
+    pub eligible: bool,
+}
 
 /// CORS configuration parsed at startup
 #[derive(Debug, Clone)]
@@ -223,6 +249,9 @@ pub struct RouteMetadata {
     pub file_constraints: HashMap<String, FileFieldConstraints>,
     pub max_upload_size: usize,
     pub memory_spool_threshold: usize,
+    /// Fast dispatch info for Rust-side handler execution
+    /// Wrapped in Arc since FastDispatchInfo contains Py<PyAny> (not Clone)
+    pub fast_dispatch: Option<Arc<FastDispatchInfo>>,
 }
 
 impl RouteMetadata {
@@ -369,6 +398,10 @@ impl RouteMetadata {
             .and_then(|v| v.extract::<usize>().ok())
             .unwrap_or(1024 * 1024);
 
+        // Parse fast dispatch info from Python handler metadata
+        let fast_dispatch =
+            parse_fast_dispatch_info(py_meta, py, &auth_backends, &guards).map(Arc::new);
+
         Ok(RouteMetadata {
             auth_backends,
             guards,
@@ -386,6 +419,7 @@ impl RouteMetadata {
             file_constraints,
             max_upload_size,
             memory_spool_threshold,
+            fast_dispatch,
         })
     }
 }
@@ -583,6 +617,146 @@ fn parse_guard(dict: &HashMap<String, Py<PyAny>>, py: Python) -> Option<Guard> {
         }
         _ => None,
     }
+}
+
+/// Parse fast dispatch info from Python handler metadata.
+///
+/// Determines if a route is eligible for Rust-side fast dispatch:
+/// - Must be sync (async requires Python event loop)
+/// - Must not be blocking (blocking needs thread pool via Python)
+/// - Must not have Python middleware (needs _dispatch_with_middleware)
+/// - Must not have response_type validation (needs Python serialize_response)
+/// - Must not have logging middleware (needs Python logging)
+///
+/// When eligible, handler.rs can call the handler directly from Rust,
+/// bypassing Python's _dispatch() entirely.
+fn parse_fast_dispatch_info(
+    py_meta: &Bound<'_, PyDict>,
+    py: Python,
+    auth_backends: &[AuthBackend],
+    guards: &[Guard],
+) -> Option<FastDispatchInfo> {
+    // Read handler dispatch fields
+    let mode_str: String = py_meta
+        .get_item("mode")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract().ok())
+        .unwrap_or_else(|| "mixed".to_string());
+
+    let is_async: bool = py_meta
+        .get_item("is_async")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract().ok())
+        .unwrap_or(true);
+
+    let is_blocking: bool = py_meta
+        .get_item("is_blocking")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract().ok())
+        .unwrap_or(false);
+
+    let default_status_code: u16 = py_meta
+        .get_item("default_status_code")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract().ok())
+        .unwrap_or(200);
+
+    let has_response_type: bool = py_meta
+        .get_item("response_type")
+        .ok()
+        .flatten()
+        .map(|v| !v.is_none())
+        .unwrap_or(false);
+
+    let has_file_uploads: bool = py_meta
+        .get_item("has_file_uploads")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract().ok())
+        .unwrap_or(false);
+
+    let has_middleware: bool = py_meta
+        .get_item("has_middleware")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract().ok())
+        .unwrap_or(false);
+
+    let has_logging: bool = py_meta
+        .get_item("has_logging")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract().ok())
+        .unwrap_or(false);
+
+    let injector_is_async: bool = py_meta
+        .get_item("injector_is_async")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract().ok())
+        .unwrap_or(false);
+
+    // Get injector callable
+    let injector: Option<Py<PyAny>> = py_meta
+        .get_item("injector")
+        .ok()
+        .flatten()
+        .and_then(|v| if v.is_none() { None } else { Some(v.unbind()) });
+
+    // Parse param_plan if present
+    let param_plan: Vec<ParamPlan> = py_meta
+        .get_item("param_plan")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract::<Vec<(String, u8, Option<Py<PyAny>>)>>().ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, source, default)| ParamPlan {
+            name,
+            source,
+            default,
+        })
+        .collect();
+
+    let use_fast_inject = !param_plan.is_empty();
+
+    let mode = if mode_str == "request_only" {
+        DispatchMode::RequestOnly
+    } else {
+        DispatchMode::Mixed
+    };
+
+    // Determine eligibility for fast dispatch
+    // Sync + non-blocking + no middleware + no response_type + no logging + no file uploads
+    // Auth/guards are already handled in Rust before we get here
+    let eligible = !is_async
+        && !is_blocking
+        && !has_middleware
+        && !has_response_type
+        && !has_logging
+        && !has_file_uploads
+        && !injector_is_async;
+
+    let _ = (auth_backends, guards); // Used in eligibility check if needed in the future
+
+    Some(FastDispatchInfo {
+        mode,
+        is_async,
+        is_blocking,
+        default_status_code,
+        has_middleware,
+        has_response_type,
+        has_file_uploads,
+        param_plan,
+        use_fast_inject,
+        injector,
+        injector_is_async,
+        eligible,
+    })
 }
 
 /// Parse file field constraints from Python metadata

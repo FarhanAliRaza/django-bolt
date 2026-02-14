@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import decimal
+import inspect
 import logging
 import uuid
 from collections.abc import Callable
@@ -311,6 +312,42 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
 
     # Memory spool threshold - when to spool files to disk (default 1MB)
     metadata["memory_spool_threshold"] = getattr(settings, "BOLT_MEMORY_SPOOL_THRESHOLD", 1024 * 1024)
+
+    # ── Fast dispatch fields for Rust-side handler execution ──────────
+    # These enable handler.rs to bypass Python's _dispatch() entirely
+    # for eligible sync handlers (no middleware, no response_type, etc.)
+
+    # Copy handler dispatch fields needed by Rust's FastDispatchInfo
+    metadata["mode"] = handler_meta.get("mode", "mixed")
+    metadata["is_async"] = handler_meta.get("is_async", True)
+    metadata["is_blocking"] = handler_meta.get("is_blocking", False)
+    metadata["default_status_code"] = handler_meta.get("default_status_code", 200)
+    metadata["response_type"] = handler_meta.get("response_type")
+    metadata["has_file_uploads"] = handler_meta.get("has_file_uploads", False)
+    metadata["injector"] = handler_meta.get("injector")
+    metadata["injector_is_async"] = handler_meta.get("injector_is_async", False)
+
+    # has_middleware: True if this route has Python middleware to execute
+    metadata["has_middleware"] = bool(metadata.get("middleware"))
+
+    # Build param_plan for Rust inline injection
+    # Only for simple path/query handlers (no body, header, cookie, deps, form, file)
+    param_plan = []
+    can_fast_inject = True
+    for field in fields:
+        if field.source == "path":
+            param_plan.append((field.name, 0, None))  # source=0 for path
+        elif field.source == "query":
+            default = field.default if field.default is not inspect.Parameter.empty else None
+            param_plan.append((field.name, 1, default))
+        else:
+            # Has body, header, cookie, form, file, or deps — can't use fast inject
+            can_fast_inject = False
+            break
+
+    if can_fast_inject and param_plan:
+        metadata["param_plan"] = param_plan
+    # else: no param_plan → Rust falls back to Python injector
 
     return metadata
 

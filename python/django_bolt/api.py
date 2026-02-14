@@ -970,6 +970,9 @@ class BoltAPI:
                 middleware_meta["needs_cookies"] = True
                 middleware_meta["needs_headers"] = True
 
+            # Flag for Rust fast dispatch: whether logging is enabled for this handler
+            middleware_meta["has_logging"] = self._logging_middleware is not None
+
             if middleware_meta:
                 self._handler_middleware[handler_id] = middleware_meta
                 # Also store actual auth backend instances for user resolution

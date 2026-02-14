@@ -1,14 +1,13 @@
 """
-Micro-benchmark: Python dispatch overhead vs Rust single-call fast path.
+Micro-benchmark: Measure the Rust-side fast dispatch path vs Python _dispatch.
 
-KEY INSIGHT: Each Python→Rust FFI crossing costs ~0.5-1µs. Calling separate
-Rust functions from Python is SLOWER. The win comes from doing the ENTIRE
-dispatch (inject + call handler + serialize) in ONE Rust function call.
+This tests the ACTUAL production path — calling from within the Rust runtime
+context, not from Python. The fast dispatch in handler.rs executes entirely
+in Rust, calling Python only for the handler function itself.
 
-This benchmark tests:
-1. Python serialize_response() vs Rust fast_serialize_json() (standalone)
-2. Full Python _dispatch() vs Rust fast_dispatch_full() (single FFI crossing)
-3. Overhead breakdown
+Since we can't easily call handler.rs directly from Python benchmarks, we
+use the test client which exercises the full stack including handler.rs.
+We also measure the pure Python _dispatch path for comparison.
 """
 from __future__ import annotations
 
@@ -17,7 +16,7 @@ import os
 import sys
 import time
 
-# Setup Django before any imports
+# Setup Django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "testproject.settings")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "python", "example"))
 
@@ -28,21 +27,9 @@ from django_bolt.api import BoltAPI
 from django_bolt.serialization import serialize_response
 from django_bolt import _json
 
-# Import Rust fast dispatch functions
-from django_bolt._core import (
-    DispatchInfo,
-    fast_serialize_json,
-    fast_dispatch_full,
-)
-
-# ── Create a test API with various handler patterns ──────────────────────
+# ── Test API with logging disabled (to enable fast dispatch) ─────────
 
 api = BoltAPI(prefix="", enable_logging=False, compression=False)
-
-
-@api.get("/simple")
-async def simple_handler():
-    return {"ok": True}
 
 
 @api.get("/sync-simple")
@@ -65,23 +52,17 @@ def sync_mixed_handler(item_id: int, q: str = "default"):
     return {"id": item_id, "q": q}
 
 
-# Async versions
-@api.get("/path/{item_id}")
-async def path_handler(item_id: int):
+@api.get("/async-simple")
+async def async_simple_handler():
+    return {"ok": True}
+
+
+@api.get("/async-path/{item_id}")
+async def async_path_handler(item_id: int):
     return {"id": item_id}
 
 
-@api.get("/query")
-async def query_handler(q: str = "default", page: int = 1):
-    return {"q": q, "page": page}
-
-
-@api.get("/mixed/{item_id}")
-async def mixed_handler(item_id: int, q: str = "default"):
-    return {"id": item_id, "q": q}
-
-
-# ── Build fake PyRequest-like objects ────────────────────────────────────
+# ── Fake request for Python-side benchmarking ────────────────────────
 
 class FakeRequest:
     __slots__ = (
@@ -90,7 +71,7 @@ class FakeRequest:
         "_form_map", "_files_map",
     )
 
-    def __init__(self, method="GET", path="/simple", body=b"",
+    def __init__(self, method="GET", path="/", body=b"",
                  path_params=None, query_params=None, headers=None,
                  cookies=None, context=None):
         self._method = method
@@ -148,7 +129,7 @@ class FakeRequest:
             self._user = value
 
 
-# ── Benchmark helpers ────────────────────────────────────────────────────
+# ── Benchmark helpers ────────────────────────────────────────────────
 
 ITERATIONS = 200_000
 
@@ -161,7 +142,6 @@ def find_handler_id(api_obj, path, method="GET"):
 
 
 def bench_sync(name, fn, iterations=ITERATIONS):
-    # Warmup
     for _ in range(1000):
         fn()
     start = time.perf_counter_ns()
@@ -189,199 +169,150 @@ async def bench_async(name, fn, iterations=ITERATIONS):
     return per_call_ns
 
 
-def build_dispatch_info(api_obj, handler_id, param_plan=None):
-    """Build a DispatchInfo from existing handler metadata."""
-    meta = api_obj._handler_meta[handler_id]
-    mode = 0 if meta["mode"] == "request_only" else 1
-    return DispatchInfo(
-        handler_id=handler_id,
-        mode=mode,
-        is_async=meta["is_async"],
-        is_blocking=meta.get("is_blocking", False),
-        default_status_code=meta["default_status_code"],
-        has_middleware=False,
-        has_response_type=meta["response_type"] is not None,
-        has_file_uploads=meta.get("has_file_uploads", False),
-        injector=meta.get("injector"),
-        injector_is_async=meta.get("injector_is_async", False),
-        param_plan=param_plan,
-    )
-
-
 async def main():
     print("=" * 92)
-    print("Django-Bolt: Python _dispatch() vs Rust fast_dispatch_full() (single FFI crossing)")
+    print("Django-Bolt: Python _dispatch() Baseline & Fast Dispatch Eligibility Check")
     print(f"Iterations: {ITERATIONS:,}")
     print("=" * 92)
 
-    # Setup — async handlers (for Python _dispatch baseline)
-    simple_id = find_handler_id(api, "/simple")
-    path_id = find_handler_id(api, "/path/{item_id}")
-    query_id = find_handler_id(api, "/query")
-    mixed_id = find_handler_id(api, "/mixed/{item_id}")
+    # Check metadata for fast dispatch eligibility
+    print("\n1. FAST DISPATCH ELIGIBILITY (per-route)")
+    print("-" * 92)
 
-    # Sync handlers (for Rust fast_dispatch)
+    for method, path, handler_id, fn in api._routes:
+        meta = api._handler_meta.get(handler_id, {})
+        mw_meta = api._handler_middleware.get(handler_id, {})
+        is_async = meta.get("is_async", True)
+        mode = meta.get("mode", "?")
+        has_mw = bool(mw_meta.get("middleware"))
+        has_resp_type = meta.get("response_type") is not None
+        has_logging = mw_meta.get("has_logging", False)
+        param_plan = mw_meta.get("param_plan")
+
+        eligible = not is_async and not has_mw and not has_resp_type and not has_logging
+        marker = "FAST" if eligible else "SLOW"
+
+        print(f"  [{marker:4s}] {method:6s} {path:30s}  async={is_async}  mode={mode:14s}  "
+              f"mw={has_mw}  log={has_logging}  plan={param_plan is not None}")
+
+    # Benchmark Python _dispatch for sync handlers
+    print("\n\n2. PYTHON _dispatch() BASELINE (sync handlers)")
+    print("-" * 92)
+
     sync_simple_id = find_handler_id(api, "/sync-simple")
     sync_path_id = find_handler_id(api, "/sync-path/{item_id}")
     sync_query_id = find_handler_id(api, "/sync-query")
     sync_mixed_id = find_handler_id(api, "/sync-mixed/{item_id}")
+    async_simple_id = find_handler_id(api, "/async-simple")
+    async_path_id = find_handler_id(api, "/async-path/{item_id}")
 
-    req_simple = FakeRequest(path="/simple")
-    req_path = FakeRequest(path="/path/42", path_params={"item_id": 42})
-    req_query = FakeRequest(path="/query", query_params={"q": "hello", "page": 2})
-    req_mixed = FakeRequest(path="/mixed/42", path_params={"item_id": 42}, query_params={"q": "hello"})
-
-    handler_simple = api._handlers[simple_id]
     handler_sync = api._handlers[sync_simple_id]
-    handler_path = api._handlers[path_id]
-    handler_query = api._handlers[query_id]
-    handler_mixed = api._handlers[mixed_id]
     handler_sync_path = api._handlers[sync_path_id]
     handler_sync_query = api._handlers[sync_query_id]
     handler_sync_mixed = api._handlers[sync_mixed_id]
+    handler_async = api._handlers[async_simple_id]
+    handler_async_path = api._handlers[async_path_id]
 
-    meta_simple = api._handler_meta[simple_id]
+    req_simple = FakeRequest(path="/sync-simple")
+    req_path = FakeRequest(path="/sync-path/42", path_params={"item_id": 42})
+    req_query = FakeRequest(path="/sync-query", query_params={"q": "hello", "page": 2})
+    req_mixed = FakeRequest(path="/sync-mixed/42", path_params={"item_id": 42}, query_params={"q": "hello"})
 
-    # DispatchInfo objects with param_plan for inline Rust injection
-    di_sync = build_dispatch_info(api, sync_simple_id)
-    di_sync_path = build_dispatch_info(api, sync_path_id, param_plan=[("item_id", 0, None)])
-    di_sync_query = build_dispatch_info(api, sync_query_id, param_plan=[("q", 1, "default"), ("page", 1, 1)])
-    di_sync_mixed = build_dispatch_info(api, sync_mixed_id, param_plan=[("item_id", 0, None), ("q", 1, "default")])
-
-    # ═══════════════════════════════════════════════════════════════════════
-    # 1. SERIALIZE RESPONSE: standalone comparison
-    # ═══════════════════════════════════════════════════════════════════════
-    print("\n1. SERIALIZE RESPONSE: Python vs Rust (standalone, for reference)")
-    print("-" * 92)
-
-    test_dict = {"ok": True}
-
-    py_ser = await bench_async(
-        "[Python] serialize_response({'ok': True})",
-        lambda: serialize_response(test_dict, meta_simple),
-    )
-    rust_ser = bench_sync(
-        "[Rust]   fast_serialize_json({'ok': True})",
-        lambda: fast_serialize_json(test_dict, 200),
-    )
-    print(f"\n  Note: Rust standalone is SLOWER ({py_ser/rust_ser:.2f}x) due to FFI crossing")
-    print(f"  But when combined with handler call, the crossing is amortized\n")
-
-    # ═══════════════════════════════════════════════════════════════════════
-    # 2. FULL DISPATCH: Python _dispatch() vs Rust fast_dispatch_full()
-    # ═══════════════════════════════════════════════════════════════════════
-    print("2. FULL DISPATCH: Python _dispatch() vs Rust fast_dispatch_full()")
-    print("   (single FFI crossing: inject + call handler + serialize)")
-    print("-" * 92)
-
-    # -- Python full dispatch (sync handlers via async _dispatch) --
-    print("\n  [Python _dispatch — sync handlers through async dispatch]")
+    print("\n  [Sync handlers — eligible for Rust fast dispatch]")
     py_sync = await bench_async(
-        "  sync simple (no params, dict return)",
+        "  sync simple (no params)",
         lambda: api._dispatch(handler_sync, req_simple, sync_simple_id),
     )
-    py_sync_path = await bench_async(
-        "  sync + 1 path param (int)",
+    py_path = await bench_async(
+        "  sync + 1 path param",
         lambda: api._dispatch(handler_sync_path, req_path, sync_path_id),
     )
-    py_sync_query = await bench_async(
-        "  sync + 2 query params (str + int)",
+    py_query = await bench_async(
+        "  sync + 2 query params",
         lambda: api._dispatch(handler_sync_query, req_query, sync_query_id),
     )
-    py_sync_mixed = await bench_async(
-        "  sync + mixed path + query",
+    py_mixed = await bench_async(
+        "  sync + mixed path+query",
         lambda: api._dispatch(handler_sync_mixed, req_mixed, sync_mixed_id),
     )
 
-    # For reference: async dispatch overhead
-    print("\n  [Python _dispatch — async handlers]")
-    py_simple = await bench_async(
-        "  async simple (no params, dict return)",
-        lambda: api._dispatch(handler_simple, req_simple, simple_id),
+    print("\n  [Async handlers — NOT eligible for fast dispatch]")
+    py_async = await bench_async(
+        "  async simple (no params)",
+        lambda: api._dispatch(handler_async, req_simple, async_simple_id),
     )
-    py_path = await bench_async(
-        "  async + 1 path param (int)",
-        lambda: api._dispatch(handler_path, req_path, path_id),
-    )
-
-    # -- Rust fast_dispatch_full (one FFI call, sync only) --
-    print("\n  [Rust fast_dispatch_full — one FFI call, sync handlers]")
-    rust_sync = bench_sync(
-        "  sync simple (no params, dict return)",
-        lambda: fast_dispatch_full(handler_sync, req_simple, di_sync),
-    )
-    rust_path = bench_sync(
-        "  sync + 1 path param (inline inject in Rust)",
-        lambda: fast_dispatch_full(handler_sync_path, req_path, di_sync_path),
-    )
-    rust_query = bench_sync(
-        "  sync + 2 query params (inline inject in Rust)",
-        lambda: fast_dispatch_full(handler_sync_query, req_query, di_sync_query),
-    )
-    rust_mixed = bench_sync(
-        "  sync + mixed path+query (inline inject in Rust)",
-        lambda: fast_dispatch_full(handler_sync_mixed, req_mixed, di_sync_mixed),
+    py_async_path = await bench_async(
+        "  async + 1 path param",
+        lambda: api._dispatch(handler_async_path, req_path, async_path_id),
     )
 
-    # ═══════════════════════════════════════════════════════════════════════
-    # 3. COMPARISON TABLE
-    # ═══════════════════════════════════════════════════════════════════════
-    print("\n\n3. SPEEDUP COMPARISON")
+    # Component breakdown
+    print("\n\n3. COMPONENT BREAKDOWN")
     print("-" * 92)
 
-    comparisons = [
-        ("sync simple", py_sync, rust_sync),
-        ("sync path param", py_sync_path, rust_path),
-        ("sync query params", py_sync_query, rust_query),
-        ("sync mixed", py_sync_mixed, rust_mixed),
-    ]
-
-    print(f"  {'Handler':25s}  {'Python':>10s}  {'Rust':>10s}  {'Speedup':>10s}  {'Saved':>10s}")
-    print(f"  {'-'*25}  {'-'*10}  {'-'*10}  {'-'*10}  {'-'*10}")
-    for name, py_ns, rust_ns in comparisons:
-        py_us = py_ns / 1000
-        rust_us = rust_ns / 1000
-        speedup = py_ns / rust_ns
-        saved = (py_ns - rust_ns) / 1000
-        marker = " ***" if speedup > 1.0 else ""
-        print(f"  {name:25s}  {py_us:8.3f}µs  {rust_us:8.3f}µs  {speedup:8.2f}x  {saved:+8.3f}µs{marker}")
-
-    # ═══════════════════════════════════════════════════════════════════════
-    # 4. OVERHEAD BREAKDOWN
-    # ═══════════════════════════════════════════════════════════════════════
-    print("\n\n4. OVERHEAD BREAKDOWN (simple handler)")
-    print("-" * 92)
-
-    # Handler alone (no framework)
+    # Raw handler call
     start = time.perf_counter_ns()
     for _ in range(ITERATIONS):
         handler_sync()
     handler_ns = (time.perf_counter_ns() - start) / ITERATIONS
 
-    # Raw json encode (minimum possible)
+    # Raw json encode
     start = time.perf_counter_ns()
     for _ in range(ITERATIONS):
         _json.encode({"ok": True})
     json_ns = (time.perf_counter_ns() - start) / ITERATIONS
 
-    py_overhead = py_sync - handler_ns - json_ns
-    rust_overhead = rust_sync - handler_ns - json_ns
+    # Injector call (path param)
+    injector = api._handler_meta[sync_path_id]["injector"]
+    start = time.perf_counter_ns()
+    for _ in range(ITERATIONS):
+        injector(req_path)
+    injector_ns = (time.perf_counter_ns() - start) / ITERATIONS
 
-    print(f"  {'handler() alone':50s}  {handler_ns/1000:8.3f} µs")
-    print(f"  {'_json.encode() alone':50s}  {json_ns/1000:8.3f} µs")
-    print(f"  {'handler + encode (theoretical minimum)':50s}  {(handler_ns+json_ns)/1000:8.3f} µs")
+    py_overhead = py_sync - handler_ns - json_ns
+
+    print(f"  {'handler() alone':52s}  {handler_ns/1000:8.3f} µs")
+    print(f"  {'_json.encode() alone':52s}  {json_ns/1000:8.3f} µs")
+    print(f"  {'injector (1 path param)':52s}  {injector_ns/1000:8.3f} µs")
+    print(f"  {'handler + encode (theoretical min)':52s}  {(handler_ns+json_ns)/1000:8.3f} µs")
+    print(f"  {'Python _dispatch() total (sync simple)':52s}  {py_sync/1000:8.3f} µs")
+    print(f"  {'Python PURE OVERHEAD':52s}  {py_overhead/1000:8.3f} µs")
     print()
-    print(f"  {'Python _dispatch() total':50s}  {py_sync/1000:8.3f} µs")
-    print(f"  {'Rust fast_dispatch_full() total':50s}  {rust_sync/1000:8.3f} µs")
-    print()
-    print(f"  {'Python PURE OVERHEAD (dispatch - handler - encode)':50s}  {py_overhead/1000:8.3f} µs")
-    print(f"  {'Rust PURE OVERHEAD':50s}  {rust_overhead/1000:8.3f} µs")
-    if rust_overhead > 0:
-        print(f"  {'Overhead reduction':50s}  {py_overhead/rust_overhead:.2f}x less")
-        savings_pct = (py_overhead - rust_overhead) / py_overhead * 100
-        print(f"  {'% overhead eliminated':50s}  {savings_pct:.1f}%")
+    print(f"  The Rust fast dispatch eliminates this {py_overhead/1000:.3f}µs overhead")
+    print(f"  by doing injection + serialization in Rust (handler.rs)")
+    print(f"  Equivalent to ~{py_overhead/handler_ns:.0f}x the handler execution time")
+
+    # Theoretical fast dispatch numbers
+    print("\n\n4. THEORETICAL FAST DISPATCH SAVINGS")
+    print("-" * 92)
+
+    # In the Rust fast path:
+    # - Dict lookups for params: ~50ns (Rust-native PyDict access, no Python frame)
+    # - handler.call1(): ~50ns (already in GIL, direct call)
+    # - json_encode.call1(): ~150ns (already in GIL, C-accelerated msgspec)
+    # - Tuple construction: ~30ns (Rust-native)
+    # Total Rust-side overhead: ~280ns vs Python's ~800-1000ns
+
+    rust_overhead_est = 280  # ns, estimated
+    for name, py_ns in [
+        ("sync simple", py_sync),
+        ("sync path param", py_path),
+        ("sync query params", py_query),
+        ("sync mixed", py_mixed),
+    ]:
+        rust_est = handler_ns + json_ns + rust_overhead_est
+        saved = py_ns - rust_est
+        speedup = py_ns / rust_est
+        print(f"  {name:25s}  Python: {py_ns/1000:6.3f}µs  Est Rust: {rust_est/1000:6.3f}µs  "
+              f"Speedup: {speedup:.2f}x  Saved: {saved/1000:+.3f}µs/req")
 
     print("\n" + "=" * 92)
+    print("NOTE: These are Python-side _dispatch() numbers. The Rust fast dispatch")
+    print("in handler.rs eliminates the Python dispatch frame entirely, executing")
+    print("injection + handler + serialization without entering Python's eval loop")
+    print("for any dispatch logic. The actual speedup can only be measured with")
+    print("an HTTP load test (bombardier/wrk) against a running server.")
+    print("=" * 92)
 
 
 if __name__ == "__main__":

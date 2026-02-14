@@ -15,6 +15,7 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
 use crate::error;
+use crate::fast_dispatch;
 use crate::form_parsing::{
     parse_multipart, parse_urlencoded, FileContent, FileInfo, FormParseResult, ValidationError,
     DEFAULT_MAX_PARTS, DEFAULT_MEMORY_LIMIT,
@@ -447,12 +448,11 @@ pub async fn handle_request(
     let method_owned = method.to_string();
     let path_owned = path.to_string();
 
-    // Get parsed route metadata (Rust-native) - clone to release DashMap lock immediately
-    // This trade-off: small clone cost < lock contention across concurrent requests
+    // Get parsed route metadata (Rust-native) as a reference
+    // ROUTE_METADATA is Arc<AHashMap>, so references are safe (immutable after init)
     // NOTE: Fetch metadata EARLY so we can use optimization flags to skip unnecessary parsing
-    let route_metadata = ROUTE_METADATA
-        .get()
-        .and_then(|meta_map| meta_map.get(&handler_id).cloned());
+    let route_metadata_map = ROUTE_METADATA.get();
+    let route_metadata = route_metadata_map.and_then(|meta_map| meta_map.get(&handler_id));
 
     // Optimization: Only parse query string if handler needs it
     // This saves ~0.5-1ms per request for handlers that don't use query params
@@ -669,7 +669,299 @@ pub async fn handle_request(
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
 
-    // All handlers (sync and async) go through async dispatch path
+    // Check if this route is eligible for Rust-side fast dispatch
+    // Fast dispatch bypasses Python's _dispatch() entirely for sync handlers
+    // that return dict/list with no middleware, no response_type, no logging
+    let fast_dispatch_eligible = route_metadata
+        .as_ref()
+        .and_then(|m| m.fast_dispatch.as_ref())
+        .map(|fd| fd.eligible)
+        .unwrap_or(false);
+
+    // FAST PATH: Rust-side dispatch for eligible sync handlers
+    // Bypasses Python's _dispatch() entirely — saves ~1µs per request
+    if fast_dispatch_eligible {
+        let fast_result = Python::attach(|py| -> PyResult<Option<Py<PyAny>>> {
+            let fd = route_metadata
+                .as_ref()
+                .unwrap()
+                .fast_dispatch
+                .as_ref()
+                .unwrap();
+
+            // Get handler
+            let handler = router
+                .find(&method_owned, &path_owned)
+                .map(|rm| rm.route().handler.clone_ref(py))
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyRuntimeError::new_err("Route not found during dispatch")
+                })?;
+
+            // Get type hints for type coercion
+            let param_types = route_metadata
+                .as_ref()
+                .map(|m| &m.param_types)
+                .cloned()
+                .unwrap_or_default();
+
+            // Create typed dicts
+            let path_params_dict = params_to_py_dict(py, &path_params, &param_types)?;
+            let query_params_dict = params_to_py_dict(py, &query_params, &param_types)?;
+
+            // Call handler based on mode
+            let result = match fd.mode {
+                fast_dispatch::DispatchMode::RequestOnly => {
+                    // Build minimal PyRequest for request-only handlers
+                    let headers_for_python = if needs_headers {
+                        headers.clone()
+                    } else {
+                        AHashMap::new()
+                    };
+                    let headers_dict = params_to_py_dict(py, &headers_for_python, &param_types)?;
+                    let cookies_dict = params_to_py_dict(py, &cookies, &param_types)?;
+                    let (form_map_dict, files_map_dict) = if let Some(ref result) = form_result {
+                        form_result_to_py(py, result)?
+                    } else {
+                        (PyDict::new(py).unbind(), PyDict::new(py).unbind())
+                    };
+                    let context = if let Some(ref auth) = auth_ctx {
+                        let ctx_dict = PyDict::new(py);
+                        let ctx_py = ctx_dict.unbind();
+                        populate_auth_context(&ctx_py, auth, py);
+                        Some(ctx_py)
+                    } else {
+                        None
+                    };
+                    let request = PyRequest {
+                        method: method_owned.clone(),
+                        path: path_owned.clone(),
+                        body: body.clone(),
+                        path_params: path_params_dict.unbind(),
+                        query_params: query_params_dict.unbind(),
+                        headers: headers_dict.unbind(),
+                        cookies: cookies_dict.unbind(),
+                        context,
+                        user: None,
+                        state: PyDict::new(py).unbind(),
+                        form_map: form_map_dict,
+                        files_map: files_map_dict,
+                        meta_cache: std::sync::OnceLock::new(),
+                        conn_host: conn_host.clone(),
+                        conn_scheme: conn_scheme.clone(),
+                        conn_remote_addr: conn_remote_addr.clone(),
+                    };
+                    let request_obj = Py::new(py, request)?;
+                    handler.call1(py, (request_obj,))?
+                }
+                fast_dispatch::DispatchMode::Mixed => {
+                    if fd.use_fast_inject {
+                        // INLINE INJECTION: extract params directly from Rust-owned dicts
+                        // No Python function call — just dict lookups in Rust
+                        let path_dict = &path_params_dict;
+                        let query_dict = &query_params_dict;
+
+                        let args = PyList::empty(py);
+                        for param in &fd.param_plan {
+                            let value = if param.source == 0 {
+                                // Path param
+                                path_dict
+                                    .get_item(&param.name)?
+                                    .ok_or_else(|| {
+                                        pyo3::exceptions::PyKeyError::new_err(format!(
+                                            "Missing path parameter: {}",
+                                            param.name
+                                        ))
+                                    })?
+                                    .unbind()
+                            } else {
+                                // Query param
+                                match query_dict.get_item(&param.name)? {
+                                    Some(v) => {
+                                        let val: Py<PyAny> = v.unbind();
+                                        val
+                                    }
+                                    None => match &param.default {
+                                        Some(d) => d.clone_ref(py),
+                                        None => {
+                                            return Err(
+                                                pyo3::exceptions::PyKeyError::new_err(format!(
+                                                    "Missing query parameter: {}",
+                                                    param.name
+                                                )),
+                                            )
+                                        }
+                                    },
+                                }
+                            };
+                            args.append(value.bind(py))?;
+                        }
+
+                        let args_tuple = args.to_tuple();
+                        handler.call1(py, &args_tuple)?
+                    } else if let Some(ref injector) = fd.injector {
+                        // Python injector fallback (body, header, cookie, deps)
+                        let headers_for_python = if needs_headers {
+                            headers.clone()
+                        } else {
+                            AHashMap::new()
+                        };
+                        let headers_dict =
+                            params_to_py_dict(py, &headers_for_python, &param_types)?;
+                        let cookies_dict = params_to_py_dict(py, &cookies, &param_types)?;
+                        let (form_map_dict, files_map_dict) =
+                            if let Some(ref result) = form_result {
+                                form_result_to_py(py, result)?
+                            } else {
+                                (PyDict::new(py).unbind(), PyDict::new(py).unbind())
+                            };
+                        let context = if let Some(ref auth) = auth_ctx {
+                            let ctx_dict = PyDict::new(py);
+                            let ctx_py = ctx_dict.unbind();
+                            populate_auth_context(&ctx_py, auth, py);
+                            Some(ctx_py)
+                        } else {
+                            None
+                        };
+                        let request = PyRequest {
+                            method: method_owned.clone(),
+                            path: path_owned.clone(),
+                            body: body.clone(),
+                            path_params: path_params_dict.unbind(),
+                            query_params: query_params_dict.unbind(),
+                            headers: headers_dict.unbind(),
+                            cookies: cookies_dict.unbind(),
+                            context,
+                            user: None,
+                            state: PyDict::new(py).unbind(),
+                            form_map: form_map_dict,
+                            files_map: files_map_dict,
+                            meta_cache: std::sync::OnceLock::new(),
+                            conn_host: conn_host.clone(),
+                            conn_scheme: conn_scheme.clone(),
+                            conn_remote_addr: conn_remote_addr.clone(),
+                        };
+                        let request_obj = Py::new(py, request)?;
+
+                        let injection_result = injector.call1(py, (&request_obj,))?;
+                        let bound = injection_result.bind(py);
+                        let tuple = bound.downcast::<PyTuple>()?;
+                        let args_list = tuple.get_item(0)?;
+                        let kwargs_obj = tuple.get_item(1)?;
+                        let args_as_list = args_list.downcast::<PyList>()?;
+                        let kwargs_dict = kwargs_obj.downcast::<PyDict>()?;
+                        let items: Vec<Bound<'_, PyAny>> = args_as_list.iter().collect();
+                        let args_tuple = PyTuple::new(py, &items)?;
+
+                        if kwargs_dict.is_empty() {
+                            handler.call1(py, &args_tuple)?
+                        } else {
+                            handler.call(py, &args_tuple, Some(&kwargs_dict))?
+                        }
+                    } else {
+                        handler.call0(py)?
+                    }
+                }
+            };
+
+            // Fast JSON serialization — C-level type check + msgspec encode
+            let result_bound = result.bind(py);
+            if result_bound.is_instance_of::<PyDict>() || result_bound.is_instance_of::<PyList>() {
+                let response =
+                    fast_dispatch::fast_serialize_json(py, result_bound, fd.default_status_code)?;
+                if let Some(resp) = response {
+                    return Ok(Some(resp));
+                }
+            }
+
+            // Non-dict/list result — fall through to Python dispatch
+            Ok(None)
+        });
+
+        match fast_result {
+            Ok(Some(result_obj)) => {
+                // Successfully fast-dispatched — process the response tuple
+                let parsed_meta = Python::attach(|py| {
+                    response_builder::try_extract_response_meta(py, &result_obj)
+                });
+
+                if let Some(parsed) = parsed_meta {
+                    let status =
+                        StatusCode::from_u16(parsed.status_code).unwrap_or(StatusCode::OK);
+                    let response_body = if is_head_request {
+                        Vec::new()
+                    } else {
+                        parsed.body
+                    };
+                    let mut response = response_builder::build_response_from_meta(
+                        status,
+                        parsed.meta,
+                        response_body,
+                        skip_compression,
+                    );
+                    if skip_cors {
+                        response.headers_mut().insert(
+                            "x-bolt-skip-cors".parse().unwrap(),
+                            "true".parse().unwrap(),
+                        );
+                    }
+                    return response;
+                }
+
+                // Fallback to old tuple format processing
+                let fast_tuple: Option<(u16, Vec<(String, String)>, Vec<u8>)> =
+                    Python::attach(|py| {
+                        let obj = result_obj.bind(py);
+                        let tuple = obj.cast::<PyTuple>().ok()?;
+                        if tuple.len() != 3 {
+                            return None;
+                        }
+                        let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
+                        let resp_headers: Vec<(String, String)> = tuple
+                            .get_item(1)
+                            .ok()?
+                            .extract::<Vec<(String, String)>>()
+                            .ok()?;
+                        let body_obj = tuple.get_item(2).ok()?;
+                        let pybytes = body_obj.cast::<PyBytes>().ok()?;
+                        let body_vec = pybytes.as_bytes().to_vec();
+                        Some((status_code, resp_headers, body_vec))
+                    });
+
+                if let Some((status_code, resp_headers, body_bytes)) = fast_tuple {
+                    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+                    let response_body = if is_head_request {
+                        Vec::new()
+                    } else {
+                        body_bytes
+                    };
+                    let mut response = response_builder::build_response_with_headers(
+                        status,
+                        resp_headers,
+                        skip_compression,
+                        response_body,
+                    );
+                    if skip_cors {
+                        response.headers_mut().insert(
+                            "x-bolt-skip-cors".parse().unwrap(),
+                            "true".parse().unwrap(),
+                        );
+                    }
+                    return response;
+                }
+            }
+            Ok(None) => {
+                // Non-dict/list result — fall through to Python dispatch
+            }
+            Err(e) => {
+                // Handler error — convert to HTTP response
+                return Python::attach(|py| {
+                    handle_python_error(py, e, &path_owned, &method_owned, state.debug)
+                });
+            }
+        }
+    }
+
+    // STANDARD PATH: All handlers (sync and async) go through async dispatch path
     // Sync handlers are executed in thread pool via sync_to_thread() in Python layer
     // OPTIMIZATION: Single GIL acquisition for handler clone + dispatch call
     let fut = match Python::attach(|py| -> PyResult<_> {

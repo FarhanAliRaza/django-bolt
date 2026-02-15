@@ -674,6 +674,32 @@ class SchemaGenerator:
             if type_name in msgspec_type_map:
                 return msgspec_type_map[type_name]
             # For list/array types from msgspec
+            if type_name == "StructType":
+                # Nested struct from msgspec.inspect — always register as a
+                # component so self-referential types emit a $ref instead of
+                # recursing infinitely.  The sentinel in
+                # _struct_to_component_schema guards against re-entry.
+                return self._struct_to_component_schema(type_annotation.cls)
+            if type_name == "UnionType" and hasattr(type_annotation, "types"):
+                # msgspec.inspect UnionType — the .types attr distinguishes
+                # this from Python's built-in types.UnionType (which uses
+                # .__args__ instead).
+                non_none_types = [
+                    t for t in type_annotation.types
+                    # String comparison because msgspec.inspect.NoneType is
+                    # not the same object as builtins.NoneType.
+                    if type(t).__name__ != "NoneType"
+                ]
+                if len(non_none_types) == 1:
+                    return self._type_to_schema(non_none_types[0], register_component=register_component)
+                if len(non_none_types) > 1:
+                    return Schema(
+                        any_of=[
+                            self._type_to_schema(t, register_component=register_component)
+                            for t in non_none_types
+                        ]
+                    )
+                return Schema(type="object")
             if type_name == "ListType":
                 item_type = getattr(type_annotation, "item_type", None)
                 if item_type:
@@ -778,9 +804,14 @@ class SchemaGenerator:
         """
         schema_name = struct_type.__name__
 
-        # Check if already registered
+        # Check if already registered (or currently being processed)
         if schema_name not in self.schemas:
-            # Register the schema
+            # Insert a sentinel *before* processing fields so that
+            # self-referential types (e.g. TreeNode with children:
+            # list[TreeNode]) hit the guard on re-entry instead of
+            # recursing infinitely.  The sentinel is overwritten once
+            # _struct_to_schema returns the real schema.
+            self.schemas[schema_name] = Schema(type="object")
             self.schemas[schema_name] = self._struct_to_schema(struct_type)
 
         return Reference(ref=f"#/components/schemas/{schema_name}")

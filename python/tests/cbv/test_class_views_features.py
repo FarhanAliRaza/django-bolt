@@ -84,13 +84,13 @@ def test_request_body_validation_error(api):
     with TestClient(api) as client:
         # Missing required field
         response = client.post("/users", json={"username": "test"})
-        assert response.status_code == 422  # Validation error returns 422
+        assert response.status_code == 400  # Validation error returns 400 (Litestar-style)
         data = response.json()
-        assert "detail" in data
-        # Detail is a list of error objects with 'loc', 'msg', 'type' fields
-        errors = data["detail"]
+        assert data["detail"] == "Validation failed"
+        # Errors are in extra as list of {message, key, source}
+        errors = data["extra"]
         assert isinstance(errors, list)
-        assert any("email" in str(err.get("loc", [])) or "email" in err.get("msg", "") for err in errors)
+        assert any("email" in err.get("key", "") or "email" in err.get("message", "") for err in errors)
 
         # Invalid type
         response = client.post(
@@ -101,7 +101,7 @@ def test_request_body_validation_error(api):
                 "password": "secret",
             },
         )
-        assert response.status_code == 422  # Validation error returns 422
+        assert response.status_code == 400  # Validation error returns 400 (Litestar-style)
 
 
 def test_query_parameter_validation(api):
@@ -149,9 +149,9 @@ def test_path_parameter_validation(api):
         assert response.status_code == 200
         assert response.json()["user_id"] == 123
 
-        # Invalid: not a number (raises ValueError, returns 422)
+        # Invalid: not a number (raises ValueError, returns 400)
         response = client.get("/users/abc")
-        assert response.status_code == 422  # Type coercion validation error
+        assert response.status_code == 400  # Type coercion validation error
 
 
 def test_header_parameter_extraction(api):
@@ -176,7 +176,7 @@ def test_header_parameter_extraction(api):
 
         # Missing required header
         response = client.get("/protected")
-        assert response.status_code == 422  # Missing required header returns 422
+        assert response.status_code == 400  # Missing required header returns 400
 
 
 def test_cookie_parameter_extraction(api):
@@ -201,7 +201,7 @@ def test_cookie_parameter_extraction(api):
 
         # Missing required cookie
         response = client.get("/session")
-        assert response.status_code == 422  # Missing required cookie returns 422
+        assert response.status_code == 400  # Missing required cookie returns 400
 
 
 def test_mixed_parameter_sources(api):

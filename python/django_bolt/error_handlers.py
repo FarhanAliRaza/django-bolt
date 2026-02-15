@@ -43,21 +43,25 @@ def format_error_response(
     headers: dict[str, str] | None = None,
     extra: dict[str, Any] | list[Any] | None = None,
 ) -> tuple[int, list[tuple[str, str]], bytes]:
-    """Format an error response.
+    """Format a standardized error response using Litestar-style envelope.
+
+    Every error response follows the consistent ``{status_code, detail, extra}``
+    shape so frontends only need a single code path for error handling.
 
     Args:
         status_code: HTTP status code
-        detail: Error detail (string or structured data)
+        detail: Human-readable error message (string)
         headers: Optional HTTP headers
-        extra: Optional extra data to include in response
+        extra: Optional structured data (validation errors, debug info, etc.)
 
     Returns:
         Tuple of (status_code, headers, body)
     """
-    error_body: dict[str, Any] = {"detail": detail}
-
-    if extra is not None:
-        error_body["extra"] = extra
+    error_body: dict[str, Any] = {
+        "status_code": status_code,
+        "detail": detail,
+        "extra": extra,
+    }
 
     body_bytes = _json.encode(error_body)
 
@@ -169,10 +173,51 @@ def msgspec_validation_error_to_dict(error: msgspec.ValidationError) -> list[dic
     return [{"loc": ["body"], "msg": error_msg, "type": "validation_error"}]
 
 
+def _normalize_validation_error(error: dict[str, Any]) -> dict[str, str]:
+    """Convert an internal validation error dict to Litestar-style {message, key, source}.
+
+    Internal errors may use ``loc``/``msg``/``type`` (FastAPI-style) or already
+    be in the target format.  This normalizer handles both.
+
+    Args:
+        error: Dict with either {loc, msg, type} or {message, key, source}
+
+    Returns:
+        Dict with ``message``, ``key``, ``source`` keys.
+    """
+    # Already in Litestar format
+    if "message" in error and "key" in error and "source" in error:
+        return error
+
+    loc = error.get("loc", [])
+    msg = error.get("msg", str(error))
+
+    # Extract source and key from loc list
+    # Typical loc shapes: ["body", "email"], ["query", "page"], ["body"], ["body", "0.age"]
+    if len(loc) >= 2:
+        source = str(loc[0])
+        key = str(loc[-1])
+    elif len(loc) == 1:
+        source = str(loc[0])
+        key = ""
+    else:
+        source = "body"
+        key = ""
+
+    return {
+        "message": msg,
+        "key": key,
+        "source": source,
+    }
+
+
 def request_validation_error_handler(
     exc: RequestValidationError,
 ) -> tuple[int, list[tuple[str, str]], bytes]:
-    """Handle RequestValidationError and convert to 422 response.
+    """Handle RequestValidationError and convert to 400 response.
+
+    Uses Litestar-style envelope: ``detail`` is a human-readable summary,
+    ``extra`` carries the per-field structured errors for frontend form mapping.
 
     Args:
         exc: RequestValidationError instance
@@ -182,26 +227,27 @@ def request_validation_error_handler(
     """
     errors = exc.errors()
 
-    # Convert errors to structured format if needed
+    # Convert errors to Litestar-style {message, key, source} format
     formatted_errors = []
     for error in errors:
         if isinstance(error, dict):
-            formatted_errors.append(error)
+            formatted_errors.append(_normalize_validation_error(error))
         elif isinstance(error, msgspec.ValidationError):
-            formatted_errors.extend(msgspec_validation_error_to_dict(error))
+            for err_dict in msgspec_validation_error_to_dict(error):
+                formatted_errors.append(_normalize_validation_error(err_dict))
         else:
-            # Generic error
             formatted_errors.append(
                 {
-                    "loc": ["body"],
-                    "msg": str(error),
-                    "type": "validation_error",
+                    "message": str(error),
+                    "key": "",
+                    "source": "body",
                 }
             )
 
     return format_error_response(
-        status_code=422,
-        detail=formatted_errors,
+        status_code=400,
+        detail="Validation failed",
+        extra=formatted_errors,
     )
 
 
@@ -227,22 +273,23 @@ def response_validation_error_handler(
     formatted_errors = []
     for error in errors:
         if isinstance(error, dict):
-            formatted_errors.append(error)
+            formatted_errors.append(_normalize_validation_error(error))
         elif isinstance(error, msgspec.ValidationError):
-            formatted_errors.extend(msgspec_validation_error_to_dict(error))
+            for err_dict in msgspec_validation_error_to_dict(error):
+                formatted_errors.append(_normalize_validation_error(err_dict))
         else:
             formatted_errors.append(
                 {
-                    "loc": ["response"],
-                    "msg": str(error),
-                    "type": "validation_error",
+                    "message": str(error),
+                    "key": "",
+                    "source": "response",
                 }
             )
 
     return format_error_response(
         status_code=500,
         detail="Response validation error",
-        extra={"validation_errors": formatted_errors},
+        extra=formatted_errors,
     )
 
 
@@ -341,9 +388,11 @@ def handle_exception(
     elif isinstance(exc, msgspec.ValidationError):
         # Direct msgspec validation error
         errors = msgspec_validation_error_to_dict(exc)
+        formatted = [_normalize_validation_error(e) for e in errors]
         return format_error_response(
-            status_code=422,
-            detail=errors,
+            status_code=400,
+            detail="Validation failed",
+            extra=formatted,
         )
     elif isinstance(exc, FileNotFoundError):
         # FileNotFoundError from FileResponse - return 404

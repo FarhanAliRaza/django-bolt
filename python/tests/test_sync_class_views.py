@@ -195,7 +195,7 @@ def test_sync_api_view_invalid_body(api):
             "/users",
             json={"username": "john"},  # Missing email
         )
-        assert response.status_code == 422
+        assert response.status_code == 400
 
 
 # --- Sync APIView with Dependencies ---
@@ -492,8 +492,8 @@ def test_sync_and_async_same_validation(api):
         invalid_data = {"name": "John"}  # Missing age
         sync_response = client.post("/sync", json=invalid_data).status_code
         async_response = client.post("/async", json=invalid_data).status_code
-        assert sync_response == 422
-        assert async_response == 422
+        assert sync_response == 400
+        assert async_response == 400
 
 
 def test_sync_and_async_same_parameters(api):
@@ -557,7 +557,7 @@ def test_sync_view_missing_required_param(api):
 
     with TestClient(api) as client:
         response = client.get("/search")
-        assert response.status_code in (400, 422)
+        assert response.status_code == 400
 
 
 # --- Complex Sync ViewSet Scenarios ---

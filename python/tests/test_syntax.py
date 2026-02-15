@@ -687,9 +687,9 @@ def test_large_file_upload_rejected_by_default(api):
             "/upload", files=[("file", ("large.bin", large_content, "application/octet-stream"))]
         )
 
-        # Should fail with 422 (validation error) because file exceeds default 1MB limit
-        # Rust returns 422 for file size validation errors
-        assert response.status_code in (413, 422), f"Expected 413 or 422, got {response.status_code}: {response.text}"
+        # Should fail with 400 (validation error) because file exceeds default 1MB limit
+        # Rust returns 400 for file size validation errors
+        assert response.status_code in (400, 413), f"Expected 400 or 413, got {response.status_code}: {response.text}"
 
 
 def test_large_file_upload_with_increased_limit(api):
@@ -853,12 +853,12 @@ def test_form_struct_with_defaults(client):
 
 
 def test_form_struct_missing_required(client):
-    """Test Form() with Struct returns 422 for missing required fields."""
+    """Test Form() with Struct returns 400 for missing required fields."""
     response = client.post(
         "/form-struct",
         data={"username": "john"},  # missing age
     )
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_form_serializer(client):
@@ -871,12 +871,12 @@ def test_form_serializer(client):
 
 
 def test_form_serializer_validation_error(client):
-    """Test Form() with Serializer runs field_validator and returns 422."""
+    """Test Form() with Serializer runs field_validator and returns 400."""
     response = client.post(
         "/form-serializer",
         data={"username": "ab", "email": "ab@example.com"},  # username too short
     )
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_query_struct(client):
@@ -928,9 +928,9 @@ def test_header_struct(client):
 
 
 def test_header_struct_missing_required(client):
-    """Test Header() with Struct returns 422 for missing required headers."""
+    """Test Header() with Struct returns 400 for missing required headers."""
     response = client.get("/header-struct")  # missing X-Api-Key
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_cookie_struct(client):

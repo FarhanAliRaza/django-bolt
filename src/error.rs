@@ -79,7 +79,9 @@ pub fn is_validation_error(py: Python, exc: &Bound<PyAny>) -> bool {
     .unwrap_or(false)
 }
 
-/// Build an error response from exception information
+/// Build an error response from exception information.
+///
+/// Uses Litestar-style envelope: `{status_code, detail, extra}` for every error.
 pub fn build_error_response(
     py: Python,
     status_code: u16,
@@ -90,10 +92,11 @@ pub fn build_error_response(
 ) -> HttpResponse {
     let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
-    // Build JSON response body
+    // Build JSON response body with consistent {status_code, detail, extra} envelope
     let body_json = if let Some(extra_obj) = extra {
         // Include extra data - use py parameter from function
         let error_dict = PyDict::new(py);
+        error_dict.set_item("status_code", status_code).ok();
         error_dict.set_item("detail", detail).ok();
 
         let extra_bound = extra_obj.bind(py);
@@ -102,8 +105,12 @@ pub fn build_error_response(
         // Serialize to JSON
         serialize_error_dict(py, &error_dict)
     } else {
-        // Simple error response
-        format!(r#"{{"detail":"{}"}}"#, escape_json(&detail))
+        // No extra data - include null for consistent envelope
+        format!(
+            r#"{{"status_code":{},"detail":"{}","extra":null}}"#,
+            status_code,
+            escape_json(&detail)
+        )
     };
 
     let mut builder = HttpResponse::build(status);
@@ -170,7 +177,7 @@ pub fn handle_python_exception(
         }
     }
 
-    // Generic exception handling
+    // Generic exception handling — consistent {status_code, detail, extra} envelope
     let exc_str = exc.to_string();
     let exc_type = exc
         .get_type()
@@ -209,12 +216,15 @@ pub fn handle_python_exception(
 
     let body = if let Some(extra) = extra_info {
         format!(
-            r#"{{"detail":"{}","extra":{}}}"#,
+            r#"{{"status_code":500,"detail":"{}","extra":{}}}"#,
             escape_json(&detail),
             extra
         )
     } else {
-        format!(r#"{{"detail":"{}"}}"#, escape_json(&detail))
+        format!(
+            r#"{{"status_code":500,"detail":"{}","extra":null}}"#,
+            escape_json(&detail)
+        )
     };
 
     HttpResponse::InternalServerError()

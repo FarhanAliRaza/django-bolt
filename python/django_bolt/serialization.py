@@ -85,6 +85,22 @@ _RESPONSE_META_JSON = _build_response_meta("json", None, None)
 _RESPONSE_META_PLAINTEXT = _build_response_meta("plaintext", None, None)
 _RESPONSE_META_OCTETSTREAM = _build_response_meta("octetstream", None, None)
 
+# Pre-computed JSON headers for error responses
+_ERROR_JSON_HEADERS: list[tuple[str, str]] = [("content-type", "application/json")]
+
+
+def _response_validation_error(exc: Exception) -> ResponseTuple:
+    """Build a standardized 500 response for response validation errors.
+
+    Uses the Litestar-style ``{status_code, detail, extra}`` envelope.
+    """
+    body = _json.encode({
+        "status_code": 500,
+        "detail": "Response validation error",
+        "extra": [{"message": str(exc), "key": "", "source": "response"}],
+    })
+    return 500, _ERROR_JSON_HEADERS, body
+
 
 def _convert_serializers(result: Any) -> Any:
     """
@@ -246,8 +262,7 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
                 validated = coerce_to_response_type(result.data, response_tp, meta=meta)
                 data_bytes = _json.encode(validated)
             except Exception as e:
-                err = f"Response validation error: {e}"
-                return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+                return _response_validation_error(e)
         else:
             data_bytes = result.to_bytes()
         cookies = getattr(result, "_cookies", None)
@@ -259,8 +274,7 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
                 validated = coerce_to_response_type(result.content, response_tp, meta=meta)
                 data_bytes = _json.encode(validated) if result.media_type == "application/json" else result.to_bytes()
             except Exception as e:
-                err = f"Response validation error: {e}"
-                return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+                return _response_validation_error(e)
         else:
             data_bytes = result.to_bytes()
 
@@ -296,8 +310,7 @@ async def serialize_generic_response(
             validated = await coerce_to_response_type_async(result.content, response_tp, meta=meta)
             data_bytes = _json.encode(validated) if result.media_type == "application/json" else result.to_bytes()
         except Exception as e:
-            err = f"Response validation error: {e}"
-            return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+            return _response_validation_error(e)
     else:
         data_bytes = result.to_bytes()
 
@@ -327,8 +340,7 @@ async def serialize_json_response(
             validated = await coerce_to_response_type_async(result.data, response_tp, meta=meta)
             data_bytes = _json.encode(validated)
         except Exception as e:
-            err = f"Response validation error: {e}"
-            return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+            return _response_validation_error(e)
     else:
         data_bytes = result.to_bytes()
 
@@ -444,9 +456,7 @@ async def serialize_json_data(result: Any, response_tp: Any | None, meta: Handle
             validated = await coerce_to_response_type_async(result, response_tp, meta=meta)
             data = _json.encode(validated)
         except Exception as e:
-            err = f"Response validation error: {e}"
-            # Error responses use legacy format (simple case)
-            return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+            return _response_validation_error(e)
     else:
         data = _json.encode(result)
 
@@ -464,8 +474,7 @@ def serialize_json_data_sync(result: Any, response_tp: Any | None, meta: Handler
             validated = coerce_to_response_type(result, response_tp, meta=meta)
             data = _json.encode(validated)
         except Exception as e:
-            err = f"Response validation error: {e}"
-            return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+            return _response_validation_error(e)
     else:
         data = _json.encode(result)
 

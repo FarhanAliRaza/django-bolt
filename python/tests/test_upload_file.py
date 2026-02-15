@@ -176,7 +176,7 @@ class TestUploadFileValidation:
         assert response.json()["size"] == 100
 
     def test_max_size_validation_fail(self):
-        """Test that file exceeding max size fails with 422."""
+        """Test that file exceeding max size fails with 400."""
         api = BoltAPI()
 
         @api.post("/upload")
@@ -189,14 +189,14 @@ class TestUploadFileValidation:
             files={"avatar": ("large.txt", b"x" * 200, "text/plain")},
         )
 
-        assert response.status_code == 422
-        errors = response.json()["detail"]
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"] == "Validation failed"
+        errors = data["extra"]
         assert len(errors) == 1
-        assert errors[0]["type"] == "file_too_large"
-        assert errors[0]["loc"] == ["body", "avatar"]
-        assert "maximum size" in errors[0]["msg"]
-        assert errors[0]["ctx"]["max_size"] == 100
-        assert errors[0]["ctx"]["actual_size"] == 200
+        assert "maximum size" in errors[0]["message"]
+        assert errors[0]["key"] == "avatar"
+        assert errors[0]["source"] == "body"
 
     def test_min_size_validation_pass(self):
         """Test that file meeting min size passes."""
@@ -215,7 +215,7 @@ class TestUploadFileValidation:
         assert response.status_code == 200
 
     def test_min_size_validation_fail(self):
-        """Test that file below min size fails with 422."""
+        """Test that file below min size fails with 400."""
         api = BoltAPI()
 
         @api.post("/upload")
@@ -228,14 +228,14 @@ class TestUploadFileValidation:
             files={"avatar": ("small.txt", b"x" * 50, "text/plain")},
         )
 
-        assert response.status_code == 422
-        errors = response.json()["detail"]
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"] == "Validation failed"
+        errors = data["extra"]
         assert len(errors) == 1
-        assert errors[0]["type"] == "file_too_small"
-        assert errors[0]["loc"] == ["body", "avatar"]
-        assert "minimum size" in errors[0]["msg"]
-        assert errors[0]["ctx"]["min_size"] == 100
-        assert errors[0]["ctx"]["actual_size"] == 50
+        assert "minimum size" in errors[0]["message"]
+        assert errors[0]["key"] == "avatar"
+        assert errors[0]["source"] == "body"
 
     def test_allowed_types_exact_match(self):
         """Test allowed_types with exact content type match."""
@@ -260,14 +260,14 @@ class TestUploadFileValidation:
             "/upload",
             files={"doc": ("doc.txt", b"text content", "text/plain")},
         )
-        assert response.status_code == 422
-        errors = response.json()["detail"]
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"] == "Validation failed"
+        errors = data["extra"]
         assert len(errors) == 1
-        assert errors[0]["type"] == "file_invalid_content_type"
-        assert errors[0]["loc"] == ["body", "doc"]
-        assert "text/plain" in errors[0]["msg"]
-        assert errors[0]["ctx"]["allowed_types"] == ["application/pdf"]
-        assert errors[0]["ctx"]["actual_type"] == "text/plain"
+        assert "text/plain" in errors[0]["message"]
+        assert errors[0]["key"] == "doc"
+        assert errors[0]["source"] == "body"
 
     def test_allowed_types_wildcard(self):
         """Test allowed_types with wildcard patterns like 'image/*'."""
@@ -292,7 +292,7 @@ class TestUploadFileValidation:
             "/upload",
             files={"avatar": ("doc.pdf", b"pdf content", "application/pdf")},
         )
-        assert response.status_code == 422
+        assert response.status_code == 400
 
     def test_max_files_validation(self):
         """Test max_files constraint for list[UploadFile]."""
@@ -324,16 +324,16 @@ class TestUploadFileValidation:
                 ("docs", ("doc3.txt", b"content3", "text/plain")),
             ],
         )
-        assert response.status_code == 422
-        errors = response.json()["detail"]
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"] == "Validation failed"
+        errors = data["extra"]
         assert len(errors) == 1
-        assert errors[0]["type"] == "file_too_many"
-        assert errors[0]["loc"] == ["body", "docs"]
-        assert errors[0]["ctx"]["max_files"] == 2
-        assert errors[0]["ctx"]["actual_count"] == 3
+        assert errors[0]["key"] == "docs"
+        assert errors[0]["source"] == "body"
 
     def test_missing_required_file(self):
-        """Test that missing required file returns 422."""
+        """Test that missing required file returns 400."""
         api = BoltAPI()
 
         @api.post("/upload")
@@ -343,12 +343,14 @@ class TestUploadFileValidation:
         client = TestClient(api)
         response = client.post("/upload", data={"name": "test"})
 
-        assert response.status_code == 422
-        errors = response.json()["detail"]
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"] == "Validation failed"
+        errors = data["extra"]
         assert len(errors) == 1
-        assert errors[0]["type"] == "file_missing"
-        assert errors[0]["loc"] == ["body", "avatar"]
-        assert "Missing required file" in errors[0]["msg"]
+        assert "Missing required file" in errors[0]["message"]
+        assert errors[0]["key"] == "avatar"
+        assert errors[0]["source"] == "body"
 
     def test_optional_file(self):
         """Test optional file upload."""
@@ -544,7 +546,7 @@ class TestFormStructWithUploadFile:
         assert response.json()["has_avatar"] is True
 
     def test_struct_missing_required_file(self):
-        """Test that missing required file in struct returns 422."""
+        """Test that missing required file in struct returns 400."""
         api = BoltAPI()
 
         @api.post("/profile")
@@ -554,12 +556,14 @@ class TestFormStructWithUploadFile:
         client = TestClient(api)
         response = client.post("/profile", data={"name": "John"})
 
-        assert response.status_code == 422
-        errors = response.json()["detail"]
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"] == "Validation failed"
+        errors = data["extra"]
         assert len(errors) == 1
-        assert errors[0]["type"] == "file_missing"
-        assert errors[0]["loc"] == ["body", "avatar"]
-        assert "Missing required file" in errors[0]["msg"]
+        assert "Missing required file" in errors[0]["message"]
+        assert errors[0]["key"] == "avatar"
+        assert errors[0]["source"] == "body"
 
 
 class TestBackwardCompatibility:

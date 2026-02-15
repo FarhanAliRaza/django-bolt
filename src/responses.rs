@@ -8,11 +8,15 @@ use std::collections::HashMap;
 
 /// Pre-allocated JSON error bodies for common status codes
 /// These are &'static [u8] to avoid any runtime allocations
-/// The bodies are stored as static byte slices, eliminating allocation in hot paths
-pub static ERROR_BODY_401: &[u8] = br#"{"detail":"Authentication required"}"#;
-pub static ERROR_BODY_403: &[u8] = br#"{"detail":"Permission denied"}"#;
-pub static ERROR_BODY_404: &[u8] = br#"{"detail":"Not Found"}"#;
-pub static ERROR_BODY_400_HEADERS: &[u8] = br#"{"detail":"Too many headers"}"#;
+/// The bodies use the Litestar-style {status_code, detail, extra} envelope
+pub static ERROR_BODY_401: &[u8] =
+    br#"{"status_code":401,"detail":"Authentication required","extra":null}"#;
+pub static ERROR_BODY_403: &[u8] =
+    br#"{"status_code":403,"detail":"Permission denied","extra":null}"#;
+pub static ERROR_BODY_404: &[u8] =
+    br#"{"status_code":404,"detail":"Not Found","extra":null}"#;
+pub static ERROR_BODY_400_HEADERS: &[u8] =
+    br#"{"status_code":400,"detail":"Too many headers","extra":null}"#;
 
 /// Cache for pre-formatted rate limit error bodies (keyed by retry_after seconds)
 /// This avoids allocating the same error message repeatedly
@@ -34,7 +38,7 @@ pub fn get_rate_limit_body(retry_after: u64) -> Vec<u8> {
 
     // Slow path: format and cache
     let body = format!(
-        r#"{{"detail":"Rate limit exceeded. Try again in {} seconds.","retry_after":{}}}"#,
+        r#"{{"status_code":429,"detail":"Rate limit exceeded. Try again in {} seconds.","extra":{{"retry_after":{}}}}}"#,
         retry_after, retry_after
     )
     .into_bytes();
@@ -83,23 +87,24 @@ pub fn error_400_too_many_headers() -> HttpResponse {
 #[inline]
 pub fn error_400_header_too_large(max_size: usize) -> HttpResponse {
     // Use a faster format approach with capacity pre-allocation
-    let mut body = Vec::with_capacity(64);
-    body.extend_from_slice(br#"{"detail":"Header value too large (max "#);
+    let mut body = Vec::with_capacity(96);
+    body.extend_from_slice(br#"{"status_code":400,"detail":"Header value too large (max "#);
     body.extend_from_slice(max_size.to_string().as_bytes());
-    body.extend_from_slice(br#" bytes)"}"#);
+    body.extend_from_slice(br#" bytes)","extra":null}"#);
 
     HttpResponse::BadRequest()
         .content_type("application/json")
         .body(body)
 }
 
-/// 422 Unprocessable Entity for validation errors (type coercion failures)
+/// 400 Bad Request for validation errors (type coercion failures)
 /// Used when path/query parameters fail type validation in Rust
+/// Uses Litestar-style {status_code, detail, extra} envelope
 #[inline]
-pub fn error_422_validation(detail: &str) -> HttpResponse {
+pub fn error_400_validation(detail: &str) -> HttpResponse {
     // Pre-allocate based on expected size (avoid reallocation)
-    let mut body = Vec::with_capacity(32 + detail.len());
-    body.extend_from_slice(br#"{"detail":""#);
+    let mut body = Vec::with_capacity(64 + detail.len());
+    body.extend_from_slice(br#"{"status_code":400,"detail":""#);
     // Escape any quotes in the detail message
     for byte in detail.bytes() {
         if byte == b'"' {
@@ -110,9 +115,9 @@ pub fn error_422_validation(detail: &str) -> HttpResponse {
             body.push(byte);
         }
     }
-    body.extend_from_slice(br#""}"#);
+    body.extend_from_slice(br#"","extra":null}"#);
 
-    HttpResponse::UnprocessableEntity()
+    HttpResponse::BadRequest()
         .content_type("application/json")
         .body(body)
 }
@@ -138,9 +143,10 @@ mod tests {
         // Second call should use cache
         assert_eq!(body1, body2);
 
-        // Verify JSON structure
+        // Verify JSON structure (Litestar-style envelope)
         let json: serde_json::Value = serde_json::from_slice(&body1).unwrap();
-        assert_eq!(json["retry_after"], 60);
+        assert_eq!(json["status_code"], 429);
+        assert_eq!(json["extra"]["retry_after"], 60);
     }
 
     #[test]

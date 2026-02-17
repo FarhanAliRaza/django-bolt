@@ -80,14 +80,14 @@ def extract_parameter_value(
     if source == "path":
         if key in params_map:
             return params_map[key], body_obj, body_loaded
-        raise HTTPException(status_code=422, detail=f"Missing required path parameter: {key}")
+        raise HTTPException(status_code=400, detail=f"Missing required path parameter: {key}")
 
     elif source == "query":
         if key in query_map:
             return query_map[key], body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
-        raise HTTPException(status_code=422, detail=f"Missing required query parameter: {key}")
+        raise HTTPException(status_code=400, detail=f"Missing required query parameter: {key}")
 
     elif source == "header":
         lower_key = key.lower()
@@ -95,21 +95,21 @@ def extract_parameter_value(
             return headers_map[lower_key], body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
-        raise HTTPException(status_code=422, detail=f"Missing required header: {key}")
+        raise HTTPException(status_code=400, detail=f"Missing required header: {key}")
 
     elif source == "cookie":
         if key in cookies_map:
             return cookies_map[key], body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
-        raise HTTPException(status_code=422, detail=f"Missing required cookie: {key}")
+        raise HTTPException(status_code=400, detail=f"Missing required cookie: {key}")
 
     elif source == "form":
         if key in form_map:
             return form_map[key], body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
-        raise HTTPException(status_code=422, detail=f"Missing required form field: {key}")
+        raise HTTPException(status_code=400, detail=f"Missing required form field: {key}")
 
     elif source == "file":
         if key in files_map:
@@ -139,7 +139,7 @@ def extract_parameter_value(
                 return file_info, body_obj, body_loaded
         elif field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
-        raise HTTPException(status_code=422, detail=f"Missing required file: {key}")
+        raise HTTPException(status_code=400, detail=f"Missing required file: {key}")
 
     elif source == "body":
         # Handle body parameter
@@ -155,7 +155,7 @@ def extract_parameter_value(
                         # IMPORTANT: Must catch ValidationError BEFORE DecodeError since ValidationError subclasses DecodeError
                         raise
                     except msgspec.DecodeError as e:
-                        # JSON parsing error (malformed JSON) - return 422 with error details including line/column
+                        # JSON parsing error (malformed JSON) - return 400 with error details including line/column
                         error_detail = parse_msgspec_decode_error(e, body_bytes)
                         raise RequestValidationError(
                             errors=[error_detail],
@@ -169,7 +169,7 @@ def extract_parameter_value(
                         # IMPORTANT: Must catch ValidationError BEFORE DecodeError since ValidationError subclasses DecodeError
                         raise
                     except msgspec.DecodeError as e:
-                        # JSON parsing error (malformed JSON) - return 422 with error details including line/column
+                        # JSON parsing error (malformed JSON) - return 400 with error details including line/column
                         error_detail = parse_msgspec_decode_error(e, body_bytes)
                         raise RequestValidationError(
                             errors=[error_detail],
@@ -181,10 +181,10 @@ def extract_parameter_value(
         else:
             if field.is_optional:
                 return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
-            raise HTTPException(status_code=422, detail=f"Missing required parameter: {name}")
+            raise HTTPException(status_code=400, detail=f"Missing required parameter: {name}")
 
     else:
         # Unknown source
         if field.is_optional:
             return (None if default is inspect.Parameter.empty else default), body_obj, body_loaded
-        raise HTTPException(status_code=422, detail=f"Missing required parameter: {name}")
+        raise HTTPException(status_code=400, detail=f"Missing required parameter: {name}")

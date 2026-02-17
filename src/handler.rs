@@ -242,12 +242,34 @@ pub fn extract_headers(
     Ok(headers)
 }
 
-/// Build HTTP 422 response for validation errors
+/// Build HTTP 400 response for validation errors using Litestar-style envelope.
 pub fn build_validation_error_response(error: &ValidationError) -> HttpResponse {
+    // Convert internal error to Litestar-style {message, key, source}
+    let err_json = error.to_json();
+    let message = err_json
+        .get("msg")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Validation error");
+    let loc = err_json.get("loc").and_then(|v| v.as_array());
+    let (source, key) = match loc {
+        Some(arr) if arr.len() >= 2 => (
+            arr[0].as_str().unwrap_or("body"),
+            arr[arr.len() - 1].as_str().unwrap_or(""),
+        ),
+        Some(arr) if arr.len() == 1 => (arr[0].as_str().unwrap_or("body"), ""),
+        _ => ("body", ""),
+    };
+
     let body = serde_json::json!({
-        "detail": [error.to_json()]
+        "status_code": 400,
+        "detail": "Validation failed",
+        "extra": [{
+            "message": message,
+            "key": key,
+            "source": source,
+        }]
     });
-    HttpResponse::UnprocessableEntity()
+    HttpResponse::BadRequest()
         .content_type("application/json")
         .body(body.to_string())
 }
@@ -479,7 +501,7 @@ pub async fn handle_request(
         .unwrap_or(true);
 
     // Type validation for path and query parameters (Rust-native, no GIL)
-    // This validates parameter types before GIL acquisition, returning 422 for invalid types
+    // This validates parameter types before GIL acquisition, returning 400 for invalid types
     // Performance: Eliminates Python's convert_primitive() overhead for invalid requests
     if let Some(route_meta) = route_metadata {
         if let Some(response) =
@@ -644,7 +666,7 @@ pub async fn handle_request(
                         return HttpResponse::BadRequest()
                             .content_type("application/json")
                             .body(format!(
-                                "{{\"error\": \"Failed to read request body: {}\"}}",
+                                "{{\"status_code\":400,\"detail\":\"Failed to read request body: {}\",\"extra\":null}}",
                                 e
                             ));
                     }

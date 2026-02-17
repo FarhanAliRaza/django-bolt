@@ -21,7 +21,7 @@ pub fn validate_typed_params(
     for (name, value) in path_params {
         // Security: Always validate length for ALL parameters (including strings)
         if value.len() > MAX_PARAM_LENGTH {
-            return Some(responses::error_422_validation(&format!(
+            return Some(responses::error_400_validation(&format!(
                 "Path parameter '{}': Parameter too long: {} bytes (max {} bytes)",
                 name,
                 value.len(),
@@ -33,7 +33,7 @@ pub fn validate_typed_params(
         if let Some(&type_hint) = param_types.get(name) {
             if type_hint != TYPE_STRING {
                 if let Err(error_msg) = coerce_param(value, type_hint) {
-                    return Some(responses::error_422_validation(&format!(
+                    return Some(responses::error_400_validation(&format!(
                         "Path parameter '{}': {}",
                         name, error_msg
                     )));
@@ -46,7 +46,7 @@ pub fn validate_typed_params(
     for (name, value) in query_params {
         // Security: Always validate length for ALL parameters (including strings)
         if value.len() > MAX_PARAM_LENGTH {
-            return Some(responses::error_422_validation(&format!(
+            return Some(responses::error_400_validation(&format!(
                 "Query parameter '{}': Parameter too long: {} bytes (max {} bytes)",
                 name,
                 value.len(),
@@ -58,7 +58,7 @@ pub fn validate_typed_params(
         if let Some(&type_hint) = param_types.get(name) {
             if type_hint != TYPE_STRING {
                 if let Err(error_msg) = coerce_param(value, type_hint) {
-                    return Some(responses::error_422_validation(&format!(
+                    return Some(responses::error_400_validation(&format!(
                         "Query parameter '{}': {}",
                         name, error_msg
                     )));

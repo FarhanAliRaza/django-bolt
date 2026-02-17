@@ -865,13 +865,9 @@ async fn handle_test_request_internal(
             {
                 Ok(result) => (Vec::new(), Some(result)),
                 Err(validation_error) => {
-                    // Return HTTP 422 for validation errors
-                    let body = serde_json::json!({
-                        "detail": [validation_error.to_json()]
-                    });
-                    return HttpResponse::UnprocessableEntity()
-                        .content_type("application/json")
-                        .body(body.to_string());
+                    return crate::handler::build_validation_error_response(
+                        &validation_error,
+                    );
                 }
             }
         } else {
@@ -884,7 +880,7 @@ async fn handle_test_request_internal(
                         return HttpResponse::BadRequest()
                             .content_type("application/json")
                             .body(format!(
-                                "{{\"error\": \"Failed to read request body: {}\"}}",
+                                "{{\"status_code\":400,\"detail\":\"Failed to read request body: {}\",\"extra\":null}}",
                                 e
                             ));
                     }
@@ -909,13 +905,9 @@ async fn handle_test_request_internal(
                         (body.to_vec(), Some(result))
                     }
                     Err(validation_error) => {
-                        // Return HTTP 422 for validation errors
-                        let body = serde_json::json!({
-                            "detail": [validation_error.to_json()]
-                        });
-                        return HttpResponse::UnprocessableEntity()
-                            .content_type("application/json")
-                            .body(body.to_string());
+                        return crate::handler::build_validation_error_response(
+                            &validation_error,
+                        );
                     }
                 }
             } else {

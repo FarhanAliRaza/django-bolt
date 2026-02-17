@@ -20,7 +20,6 @@ except ImportError:
 from django.core.signals import request_finished, request_started
 from django.utils.functional import SimpleLazyObject
 
-from . import _json
 from ._kwargs import (
     compile_argument_injector,
     compile_binder,
@@ -34,7 +33,7 @@ from .auth import get_default_authentication_classes, register_auth_backend
 from .auth.user_loader import load_user_sync
 from .concurrency import sync_to_thread
 from .decorators import ActionHandler
-from .error_handlers import handle_exception
+from .error_handlers import handle_exception, http_exception_handler
 from .exceptions import HTTPException
 from .logging.middleware import LoggingMiddleware, create_logging_middleware
 from .middleware import CompressionConfig
@@ -1000,18 +999,8 @@ class BoltAPI:
         return compile_argument_injector(meta, self._handler_meta, self._compile_binder)
 
     def _handle_http_exception(self, he: HTTPException) -> Response:
-        """Handle HTTPException and return response."""
-        try:
-            body = _json.encode({"detail": he.detail})
-            headers = [("content-type", "application/json")]
-        except Exception:
-            body = str(he.detail).encode()
-            headers = [("content-type", "text/plain; charset=utf-8")]
-
-        if he.headers:
-            headers.extend([(k.lower(), v) for k, v in he.headers.items()])
-
-        return int(he.status_code), headers, body
+        """Handle HTTPException using the standardized error response format."""
+        return http_exception_handler(he)
 
     def _handle_generic_exception(self, e: Exception, request: dict[str, Any] = None) -> Response:
         """Handle generic exception using error_handlers module."""

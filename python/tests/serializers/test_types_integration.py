@@ -449,7 +449,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/users", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_create_user_invalid_username_with_space(self, client):
         """Test that username with space is rejected."""
@@ -459,7 +459,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/users", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_create_contact_invalid_phone(self, client):
         """Test that invalid phone is rejected."""
@@ -470,7 +470,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/contacts", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_create_location_invalid_latitude(self, client):
         """Test that latitude > 90 is rejected."""
@@ -481,7 +481,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/locations", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_create_location_invalid_longitude(self, client):
         """Test that longitude > 180 is rejected."""
@@ -492,7 +492,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/locations", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_create_server_invalid_port_zero(self, client):
         """Test that port 0 is rejected."""
@@ -503,7 +503,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/servers", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_create_server_invalid_port_too_high(self, client):
         """Test that port > 65535 is rejected."""
@@ -514,7 +514,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/servers", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_create_server_invalid_ip(self, client):
         """Test that invalid IP address is rejected."""
@@ -525,7 +525,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/servers", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_create_theme_invalid_hex_color(self, client):
         """Test that invalid hex color is rejected."""
@@ -536,7 +536,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/themes", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_create_theme_invalid_hex_color_short(self, client):
         """Test that short hex color is rejected."""
@@ -547,7 +547,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/themes", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_update_progress_invalid_percentage_negative(self, client):
         """Test that negative percentage is rejected."""
@@ -557,7 +557,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/progress", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_update_progress_invalid_percentage_over_100(self, client):
         """Test that percentage > 100 is rejected."""
@@ -567,7 +567,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/progress", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_create_entity_invalid_uuid(self, client):
         """Test that invalid UUID is rejected."""
@@ -577,7 +577,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/entities", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_create_post_invalid_slug(self, client):
         """Test that invalid slug is rejected."""
@@ -587,7 +587,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/posts", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_create_post_invalid_https_url(self, client):
         """Test that HTTP URL is rejected when HTTPS is required."""
@@ -598,7 +598,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/posts", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_paginate_invalid_page_zero(self, client):
         """Test that page 0 is rejected."""
@@ -609,7 +609,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/paginate", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_paginate_invalid_page_negative(self, client):
         """Test that negative page is rejected."""
@@ -620,7 +620,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/paginate", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_paginate_invalid_total_negative(self, client):
         """Test that negative total is rejected."""
@@ -631,7 +631,7 @@ class TestInvalidTypeInput:
         }
         response = client.post("/paginate", json=payload)
 
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
 
 # =============================================================================

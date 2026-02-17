@@ -205,6 +205,7 @@ pub struct RouteMetadata {
 
     // Optimization flags (skip unused parsing)
     // These are computed in Python at route registration time via static analysis
+    pub needs_body: bool,
     pub needs_query: bool,
     pub needs_headers: bool,
     pub needs_cookies: bool,
@@ -289,6 +290,13 @@ impl RouteMetadata {
 
         // Parse optimization flags (default to true for backward compatibility)
         // These flags indicate which request components the handler actually needs
+        let needs_body = py_meta
+            .get_item("needs_body")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<bool>().ok())
+            .unwrap_or(true);
+
         let needs_query = py_meta
             .get_item("needs_query")
             .ok()
@@ -375,6 +383,7 @@ impl RouteMetadata {
             skip,
             cors_config,
             rate_limit_config,
+            needs_body,
             needs_query,
             needs_headers,
             needs_cookies,

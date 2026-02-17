@@ -16,8 +16,8 @@ use tokio::io::AsyncReadExt;
 
 use crate::error;
 use crate::form_parsing::{
-    parse_multipart, parse_urlencoded, FileContent, FileInfo, FormParseResult, ValidationError,
-    DEFAULT_MAX_PARTS, DEFAULT_MEMORY_LIMIT,
+    parse_multipart, parse_urlencoded, FileContent, FileFieldConstraints, FileInfo,
+    FormParseResult, ValidationError, DEFAULT_MAX_PARTS, DEFAULT_MEMORY_LIMIT,
 };
 use crate::middleware;
 use crate::middleware::auth::populate_auth_context;
@@ -364,11 +364,11 @@ pub async fn handle_request(
 
     // Find the route for the requested method and path
     // RouteMatch enum allows us to skip path param processing for static routes
-    // OPTIMIZATION: Defer handler clone_ref to single GIL acquisition later
-    // This eliminates one GIL acquisition per request (~1-3µs saved)
-    let (path_params, handler_id) = {
+    // Also capture the handler once to avoid a second route lookup before dispatch.
+    let (route_handler, path_params, handler_id) = {
         if let Some(route_match) = router.find(method, path) {
             let handler_id = route_match.handler_id();
+            let handler = Python::attach(|py| route_match.route().handler.clone_ref(py));
             let raw_params = route_match.path_params(); // No allocation for static routes
 
             // URL-decode path parameters for consistency with query string parsing
@@ -379,14 +379,19 @@ pub async fn handle_request(
                 raw_params
                     .into_iter()
                     .map(|(k, v)| {
-                        let decoded = urlencoding::decode(&v)
-                            .unwrap_or_else(|_| std::borrow::Cow::Borrowed(&v))
-                            .into_owned();
+                        let decoded = if v.as_bytes().iter().any(|&b| b == b'%' || b == b'+') {
+                            match urlencoding::decode(&v) {
+                                Ok(cow) => cow.into_owned(),
+                                Err(_) => v,
+                            }
+                        } else {
+                            v
+                        };
                         (k, decoded)
                     })
                     .collect()
             };
-            (path_params, handler_id)
+            (handler, path_params, handler_id)
         } else {
             // No route found - check for trailing slash redirect FIRST
             // This only runs when route doesn't match (minimal overhead)
@@ -447,19 +452,15 @@ pub async fn handle_request(
     let method_owned = method.to_string();
     let path_owned = path.to_string();
 
-    // Get parsed route metadata (Rust-native) - clone to release DashMap lock immediately
-    // This trade-off: small clone cost < lock contention across concurrent requests
-    // NOTE: Fetch metadata EARLY so we can use optimization flags to skip unnecessary parsing
+    // Get parsed route metadata (Rust-native) by reference.
+    // NOTE: Fetch metadata EARLY so we can use optimization flags to skip unnecessary parsing.
     let route_metadata = ROUTE_METADATA
         .get()
-        .and_then(|meta_map| meta_map.get(&handler_id).cloned());
+        .and_then(|meta_map| meta_map.get(&handler_id));
 
     // Optimization: Only parse query string if handler needs it
     // This saves ~0.5-1ms per request for handlers that don't use query params
-    let needs_query = route_metadata
-        .as_ref()
-        .map(|m| m.needs_query)
-        .unwrap_or(true);
+    let needs_query = route_metadata.map(|m| m.needs_query).unwrap_or(true);
 
     let query_params = if needs_query {
         if let Some(q) = req.uri().query() {
@@ -471,10 +472,16 @@ pub async fn handle_request(
         AHashMap::new()
     };
 
+    // Optimization: Skip body buffering for handlers that never read body/form/file params.
+    let needs_body = route_metadata
+        .as_ref()
+        .map(|m| m.needs_body)
+        .unwrap_or(true);
+
     // Type validation for path and query parameters (Rust-native, no GIL)
     // This validates parameter types before GIL acquisition, returning 422 for invalid types
     // Performance: Eliminates Python's convert_primitive() overhead for invalid requests
-    if let Some(ref route_meta) = route_metadata {
+    if let Some(route_meta) = route_metadata {
         if let Some(response) =
             validate_typed_params(&path_params, &query_params, &route_meta.param_types)
         {
@@ -485,21 +492,38 @@ pub async fn handle_request(
     // Optimization: Check if handler needs headers
     // Headers are still needed for auth/rate limiting middleware, so we extract them for Rust
     // but can skip passing them to Python when the handler doesn't use Header() params
-    let needs_headers = route_metadata
-        .as_ref()
-        .map(|m| m.needs_headers)
-        .unwrap_or(true);
+    let needs_headers = route_metadata.map(|m| m.needs_headers).unwrap_or(true);
+
+    // Extract request headers only when needed by auth/rate-limit/cookies/form/Python path params.
+    let needs_cookies = route_metadata.map(|m| m.needs_cookies).unwrap_or(true);
+    let needs_form_parsing = route_metadata
+        .map(|m| m.needs_form_parsing)
+        .unwrap_or(false);
+    let has_route_auth_or_guards = route_metadata
+        .map(|m| !m.auth_backends.is_empty() || !m.guards.is_empty())
+        .unwrap_or(false);
+    let has_route_rate_limit = route_metadata
+        .map(|m| m.rate_limit_config.is_some())
+        .unwrap_or(false);
+    let must_extract_headers = needs_headers
+        || needs_cookies
+        || needs_form_parsing
+        || has_route_auth_or_guards
+        || has_route_rate_limit;
 
     // Compute skip_cors flag for CorsMiddleware
     let skip_cors = route_metadata
-        .as_ref()
         .map(|m| m.skip.contains("cors"))
         .unwrap_or(false);
 
     // Extract and validate headers
-    let headers = match extract_headers(&req, state.max_header_size) {
-        Ok(h) => h,
-        Err(response) => return response,
+    let headers = if must_extract_headers {
+        match extract_headers(&req, state.max_header_size) {
+            Ok(h) => h,
+            Err(response) => return response,
+        }
+    } else {
+        AHashMap::new()
     };
 
     // Get peer address for rate limiting fallback
@@ -516,12 +540,11 @@ pub async fn handle_request(
 
     // Compute skip flags (e.g., skip compression)
     let skip_compression = route_metadata
-        .as_ref()
         .map(|m| m.skip.contains("compression"))
         .unwrap_or(false);
 
     // Process rate limiting (Rust-native, no GIL)
-    if let Some(ref route_meta) = route_metadata {
+    if let Some(route_meta) = route_metadata {
         if let Some(ref rate_config) = route_meta.rate_limit_config {
             if let Some(response) = middleware::rate_limit::check_rate_limit(
                 handler_id,
@@ -538,7 +561,7 @@ pub async fn handle_request(
     }
 
     // Execute authentication and guards using shared validation logic
-    let auth_ctx = if let Some(ref route_meta) = route_metadata {
+    let auth_ctx = if let Some(route_meta) = route_metadata {
         match validate_auth_and_guards(&headers, &route_meta.auth_backends, &route_meta.guards) {
             AuthGuardResult::Allow(ctx) => ctx,
             AuthGuardResult::Unauthorized => {
@@ -556,11 +579,6 @@ pub async fn handle_request(
 
     // Optimization: Only parse cookies if handler needs them
     // Cookie parsing can be expensive for requests with many cookies
-    let needs_cookies = route_metadata
-        .as_ref()
-        .map(|m| m.needs_cookies)
-        .unwrap_or(true);
-
     let cookies = if needs_cookies {
         parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()))
     } else {
@@ -568,11 +586,6 @@ pub async fn handle_request(
     };
 
     // Determine if form parsing is needed and get content type
-    let needs_form_parsing = route_metadata
-        .as_ref()
-        .map(|m| m.needs_form_parsing)
-        .unwrap_or(false);
-
     let content_type = headers
         .get("content-type")
         .map(|s| s.as_str())
@@ -581,27 +594,25 @@ pub async fn handle_request(
     let is_multipart = content_type.starts_with("multipart/form-data");
     let is_urlencoded = content_type.starts_with("application/x-www-form-urlencoded");
 
-    // Read body from payload (before form parsing consumes it for multipart)
-    // For multipart, we need the payload stream directly
+    // Read body from payload only when needed.
+    // For multipart, we need the payload stream directly.
     let (body, form_result): (Vec<u8>, Option<FormParseResult>) =
-        if needs_form_parsing && is_multipart {
+        if !needs_body && !needs_form_parsing {
+            (Vec::new(), None)
+        } else if needs_form_parsing && is_multipart {
             // Multipart form parsing - uses the payload stream directly
+            let empty_form_type_hints: HashMap<String, u8> = HashMap::new();
+            let empty_file_constraints: HashMap<String, FileFieldConstraints> = HashMap::new();
             let form_type_hints = route_metadata
-                .as_ref()
                 .map(|m| &m.form_type_hints)
-                .cloned()
-                .unwrap_or_default();
+                .unwrap_or(&empty_form_type_hints);
             let file_constraints = route_metadata
-                .as_ref()
                 .map(|m| &m.file_constraints)
-                .cloned()
-                .unwrap_or_default();
+                .unwrap_or(&empty_file_constraints);
             let max_upload_size = route_metadata
-                .as_ref()
                 .map(|m| m.max_upload_size)
                 .unwrap_or(1024 * 1024);
             let memory_spool_threshold = route_metadata
-                .as_ref()
                 .map(|m| m.memory_spool_threshold)
                 .unwrap_or(DEFAULT_MEMORY_LIMIT);
 
@@ -610,8 +621,8 @@ pub async fn handle_request(
 
             match parse_multipart(
                 multipart,
-                &form_type_hints,
-                &file_constraints,
+                form_type_hints,
+                file_constraints,
                 max_upload_size,
                 memory_spool_threshold,
                 DEFAULT_MAX_PARTS,
@@ -625,10 +636,10 @@ pub async fn handle_request(
             }
         } else {
             // Read payload as bytes (for non-multipart requests)
-            let mut body_bytes = web::BytesMut::new();
+            let mut body_vec = Vec::new();
             while let Some(chunk) = payload.next().await {
                 match chunk {
-                    Ok(data) => body_bytes.extend_from_slice(&data),
+                    Ok(data) => body_vec.extend_from_slice(&data),
                     Err(e) => {
                         return HttpResponse::BadRequest()
                             .content_type("application/json")
@@ -639,30 +650,28 @@ pub async fn handle_request(
                     }
                 }
             }
-            let body = body_bytes.freeze();
 
             // URL-encoded form parsing
             if needs_form_parsing && is_urlencoded {
+                let empty_form_type_hints: HashMap<String, u8> = HashMap::new();
                 let form_type_hints = route_metadata
-                    .as_ref()
                     .map(|m| &m.form_type_hints)
-                    .cloned()
-                    .unwrap_or_default();
+                    .unwrap_or(&empty_form_type_hints);
 
-                match parse_urlencoded(&body, &form_type_hints) {
+                match parse_urlencoded(&body_vec, form_type_hints) {
                     Ok(form_map) => {
                         let result = FormParseResult {
                             form_map,
                             files_map: HashMap::new(),
                         };
-                        (body.to_vec(), Some(result))
+                        (body_vec, Some(result))
                     }
                     Err(validation_error) => {
                         return build_validation_error_response(&validation_error);
                     }
                 }
             } else {
-                (body.to_vec(), None)
+                (body_vec, None)
             }
         };
 
@@ -673,14 +682,7 @@ pub async fn handle_request(
     // Sync handlers are executed in thread pool via sync_to_thread() in Python layer
     // OPTIMIZATION: Single GIL acquisition for handler clone + dispatch call
     let fut = match Python::attach(|py| -> PyResult<_> {
-        // Get handler directly from router (O(1) for static routes)
-        // This defers clone_ref to here, eliminating earlier GIL acquisition
-        let handler = router
-            .find(&method_owned, &path_owned)
-            .map(|rm| rm.route().handler.clone_ref(py))
-            .ok_or_else(|| {
-                pyo3::exceptions::PyRuntimeError::new_err("Route not found during dispatch")
-            })?;
+        let handler = route_handler.clone_ref(py);
         let dispatch = state.dispatch.clone_ref(py);
 
         // Create context dict only if auth context is present
@@ -693,27 +695,21 @@ pub async fn handle_request(
             None
         };
 
-        // Optimization: Only pass headers to Python if handler needs them
-        // Headers are already extracted for Rust middleware (auth, rate limiting, CORS)
-        // but we can avoid copying them to Python if handler doesn't use Header() params
-        let headers_for_python = if needs_headers {
-            headers.clone()
-        } else {
-            AHashMap::new()
-        };
-
         // Get type hints for type coercion
+        let empty_param_types: HashMap<String, u8> = HashMap::new();
         let param_types = route_metadata
-            .as_ref()
             .map(|m| &m.param_types)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or(&empty_param_types);
 
         // Create typed dicts - convert values to Python types
-        let path_params_dict = params_to_py_dict(py, &path_params, &param_types)?;
-        let query_params_dict = params_to_py_dict(py, &query_params, &param_types)?;
-        let headers_dict = params_to_py_dict(py, &headers_for_python, &param_types)?;
-        let cookies_dict = params_to_py_dict(py, &cookies, &param_types)?;
+        let path_params_dict = params_to_py_dict(py, &path_params, param_types)?;
+        let query_params_dict = params_to_py_dict(py, &query_params, param_types)?;
+        let headers_dict = if needs_headers {
+            params_to_py_dict(py, &headers, param_types)?
+        } else {
+            PyDict::new(py)
+        };
+        let cookies_dict = params_to_py_dict(py, &cookies, param_types)?;
 
         // Create form_map and files_map from form parsing result
         let (form_map_dict, files_map_dict) = if let Some(ref result) = form_result {
@@ -725,7 +721,7 @@ pub async fn handle_request(
         let request = PyRequest {
             method: method_owned.clone(),
             path: path_owned.clone(),
-            body: body.clone(),
+            body,
             path_params: path_params_dict.unbind(),
             query_params: query_params_dict.unbind(),
             headers: headers_dict.unbind(),

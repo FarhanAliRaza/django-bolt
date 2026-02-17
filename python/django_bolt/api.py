@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextvars
 import inspect
 import sys
 import time
@@ -54,7 +53,7 @@ from .openapi.routes import OpenAPIRouteRegistrar
 from .openapi.schema_generator import SchemaGenerator
 from .pagination import extract_pagination_item_type
 from .router import Router
-from .serialization import serialize_response
+from .serialization import serialize_response, serialize_response_sync
 from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
 from .typing import HandlerMetadata
 from .views import APIView, ViewSet
@@ -1068,21 +1067,13 @@ class BoltAPI:
             api: The BoltAPI instance that owns this handler (may be sub-app)
             meta: Handler metadata
         """
-        # Context variable for per-request handler execution
-        # This allows the middleware chain to be built once and reused
-        _handler_context: contextvars.ContextVar[dict] = getattr(api, "_handler_context", None)
-        if _handler_context is None:
-            _handler_context = contextvars.ContextVar("_bolt_handler_context")
-            api._handler_context = _handler_context
-
         # Build middleware chain once per API and cache it
         if not api._middleware_chain_built:
             # Create the innermost get_response - dispatches to the handler from context
             async def inner_handler(req):
                 """The innermost layer that executes the actual handler from context."""
-                ctx = _handler_context.get()
-                _handler = ctx["handler"]
-                _meta = ctx["meta"]
+                _handler = req.state["_bolt_handler"]
+                _meta = req.state["_bolt_meta"]
 
                 # Execute handler based on mode
                 if _meta.get("mode") == "request_only":
@@ -1109,7 +1100,10 @@ class BoltAPI:
                             result = _handler(*args, **kwargs)
 
                 # Serialize response to tuple format
-                response_tuple = await serialize_response(result, _meta)
+                if _meta.get("is_async", True):
+                    response_tuple = await serialize_response(result, _meta)
+                else:
+                    response_tuple = serialize_response_sync(result, _meta)
                 # Convert to MiddlewareResponse for middleware compatibility
                 return MiddlewareResponse.from_tuple(response_tuple)
 
@@ -1133,9 +1127,9 @@ class BoltAPI:
         # This is set at registration time from handler's csrf_exempt attribute
         request.state["_csrf_exempt"] = meta.get("csrf_exempt", False)
 
-        # Set the handler context for this request
-        ctx = {"handler": handler, "meta": meta}
-        token = _handler_context.set(ctx)
+        # Set per-request handler context for inner_handler
+        request.state["_bolt_handler"] = handler
+        request.state["_bolt_meta"] = meta
 
         try:
             # Execute through the cached chain
@@ -1144,7 +1138,8 @@ class BoltAPI:
             # Convert back to tuple format for return
             return middleware_response.to_tuple()
         finally:
-            _handler_context.reset(token)
+            request.state.pop("_bolt_handler", None)
+            request.state.pop("_bolt_meta", None)
 
     async def _dispatch(self, handler: Callable, request: dict[str, Any], handler_id: int = None) -> Response:
         """
@@ -1177,8 +1172,9 @@ class BoltAPI:
             if logging_middleware._should_time_cached:
                 start_time = time.time()
 
-            # Log request if logging enabled (DEBUG-level guard happens inside)
-            logging_middleware.log_request(request)
+            # Skip method call when debug-level request logging is disabled.
+            if logging_middleware._request_debug_enabled_cached:
+                logging_middleware.log_request(request)
 
         try:
             # 1. Direct metadata access using handler_id (int key is faster than callable key)
@@ -1256,7 +1252,10 @@ class BoltAPI:
                             result = handler(*args, **kwargs)
 
                 # 6. Serialize response
-                response = await serialize_response(result, meta)
+                if is_async:
+                    response = await serialize_response(result, meta)
+                else:
+                    response = serialize_response_sync(result, meta)
 
             # Log response if logging enabled
             if logging_middleware and start_time is not None:

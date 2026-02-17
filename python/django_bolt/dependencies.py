@@ -55,8 +55,11 @@ async def resolve_dependency(
         dep_meta = compile_binder(dep_fn, http_method, path)
         handler_meta[dep_fn] = dep_meta
 
-    # Check if dependency is async or sync
-    is_async = inspect.iscoroutinefunction(dep_fn)
+    # Cache async/sync check once per dependency metadata (hot path optimization)
+    is_async = dep_meta.get("_is_async_dep")
+    if is_async is None:
+        is_async = inspect.iscoroutinefunction(dep_fn)
+        dep_meta["_is_async_dep"] = is_async
 
     if dep_meta.get("mode") == "request_only":
         if is_async:

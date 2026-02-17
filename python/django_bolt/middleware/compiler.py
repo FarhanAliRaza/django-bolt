@@ -244,6 +244,7 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
 
     # Copy optimization flags from handler metadata to middleware metadata
     # These will be parsed by Rust's RouteMetadata::from_python()
+    metadata["needs_body"] = handler_meta.get("needs_body", True)
     metadata["needs_query"] = handler_meta.get("needs_query", True)
     metadata["needs_headers"] = handler_meta.get("needs_headers", True)
     metadata["needs_cookies"] = handler_meta.get("needs_cookies", True)

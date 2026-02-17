@@ -16,7 +16,7 @@ class LoggingMiddleware:
     Integrates with Django's logging system and provides structured logging.
     """
 
-    __slots__ = ("config", "logger", "_should_time_cached")
+    __slots__ = ("config", "logger", "_should_time_cached", "_request_debug_enabled_cached")
 
     def __init__(self, config: LoggingConfig | None = None):
         """Initialize logging middleware.
@@ -29,6 +29,14 @@ class LoggingMiddleware:
 
         self.config = config
         self.logger = config.get_logger()
+
+        # Pre-compute debug-level request logging gate at init.
+        request_debug_enabled = False
+        try:
+            request_debug_enabled = self.logger.isEnabledFor(logging.DEBUG)
+        except Exception:
+            request_debug_enabled = False
+        self._request_debug_enabled_cached = request_debug_enabled
 
         # Pre-compute timing decision at init (not per-request)
         should_time = False

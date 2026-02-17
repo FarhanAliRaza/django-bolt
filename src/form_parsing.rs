@@ -4,7 +4,6 @@
 //! eliminating Python GIL overhead for form-heavy endpoints.
 
 use actix_multipart::Multipart;
-use actix_web::web::Bytes;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::io::Write;
@@ -140,7 +139,7 @@ pub struct FormParseResult {
 
 /// Parse URL-encoded form data (application/x-www-form-urlencoded)
 pub fn parse_urlencoded(
-    body: &Bytes,
+    body: &[u8],
     type_hints: &HashMap<String, u8>,
 ) -> Result<HashMap<String, CoercedValue>, ValidationError> {
     let mut result = HashMap::new();
@@ -465,6 +464,7 @@ fn type_hint_name(type_hint: u8) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use actix_web::web::Bytes;
 
     #[test]
     fn test_is_content_type_allowed_exact() {

@@ -1,6 +1,7 @@
 use ahash::AHashMap;
 use matchit::{Match, Router as MatchRouter};
 use pyo3::prelude::*;
+use std::borrow::Cow;
 
 /// Lookup result type that indicates whether path params exist
 /// For static routes, params is always None (avoiding allocation)
@@ -303,27 +304,27 @@ pub fn parse_query_string(query: &str) -> AHashMap<String, String> {
         return params;
     }
 
+    #[inline(always)]
+    fn decode_component(value: &str) -> Cow<'_, str> {
+        if value.as_bytes().iter().any(|&b| b == b'%' || b == b'+') {
+            urlencoding::decode(value).unwrap_or_else(|_| Cow::Borrowed(value))
+        } else {
+            Cow::Borrowed(value)
+        }
+    }
+
     for pair in query.split('&') {
         if let Some(eq_pos) = pair.find('=') {
             let key = &pair[..eq_pos];
             let value = &pair[eq_pos + 1..];
             if !key.is_empty() {
                 params.insert(
-                    urlencoding::decode(key)
-                        .unwrap_or_else(|_| key.into())
-                        .into_owned(),
-                    urlencoding::decode(value)
-                        .unwrap_or_else(|_| value.into())
-                        .into_owned(),
+                    decode_component(key).into_owned(),
+                    decode_component(value).into_owned(),
                 );
             }
         } else if !pair.is_empty() {
-            params.insert(
-                urlencoding::decode(pair)
-                    .unwrap_or_else(|_| pair.into())
-                    .into_owned(),
-                String::new(),
-            );
+            params.insert(decode_component(pair).into_owned(), String::new());
         }
     }
 

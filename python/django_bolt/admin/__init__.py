@@ -1,8 +1,8 @@
 """
 Django admin integration for django-bolt.
 
-This module provides ASGI bridge functionality to integrate Django's admin
-interface with django-bolt's high-performance routing system.
+This module provides Django admin detection utilities for integration with
+django-bolt's ASGI mount system.
 """
 
 from .admin_detection import (
@@ -12,7 +12,6 @@ from .admin_detection import (
     is_admin_installed,
     should_enable_admin,
 )
-from .asgi_bridge import ASGIFallbackHandler
 
 __all__ = [
     "is_admin_installed",
@@ -20,5 +19,4 @@ __all__ = [
     "get_admin_route_patterns",
     "should_enable_admin",
     "get_admin_info",
-    "ASGIFallbackHandler",
 ]

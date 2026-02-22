@@ -13,6 +13,7 @@ use pyo3::types::PyTuple;
 /// Uses static strings to avoid allocation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ResponseType {
+    Empty,
     Json,
     Html,
     PlainText,
@@ -27,6 +28,7 @@ impl ResponseType {
     #[inline]
     pub fn from_str(s: &str) -> Self {
         match s {
+            "empty" => Self::Empty,
             "json" => Self::Json,
             "html" => Self::Html,
             "plaintext" => Self::PlainText,
@@ -41,6 +43,7 @@ impl ResponseType {
     #[inline]
     pub const fn content_type(&self) -> &'static str {
         match self {
+            Self::Empty => "",
             Self::Json => "application/json",
             Self::Html => "text/html; charset=utf-8",
             Self::PlainText => "text/plain; charset=utf-8",
@@ -140,6 +143,7 @@ mod tests {
 
     #[test]
     fn test_response_type_from_str() {
+        assert_eq!(ResponseType::from_str("empty"), ResponseType::Empty);
         assert_eq!(ResponseType::from_str("json"), ResponseType::Json);
         assert_eq!(ResponseType::from_str("html"), ResponseType::Html);
         assert_eq!(ResponseType::from_str("plaintext"), ResponseType::PlainText);
@@ -151,6 +155,7 @@ mod tests {
 
     #[test]
     fn test_response_type_content_type() {
+        assert_eq!(ResponseType::Empty.content_type(), "");
         assert_eq!(ResponseType::Json.content_type(), "application/json");
         assert_eq!(
             ResponseType::Html.content_type(),

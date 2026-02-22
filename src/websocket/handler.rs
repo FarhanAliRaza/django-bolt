@@ -486,7 +486,7 @@ pub async fn handle_websocket_upgrade_with_handler(
 
     // Check rate limiting BEFORE origin validation (reuse HTTP rate limit)
     if let Some(route_metadata) = ROUTE_METADATA.get() {
-        if let Some(route_meta) = route_metadata.get(&handler_id) {
+        if let Some(route_meta) = route_metadata.get(handler_id) {
             if let Some(ref rate_config) = route_meta.rate_limit_config {
                 if let Some(response) = check_rate_limit(
                     handler_id,
@@ -512,7 +512,7 @@ pub async fn handle_websocket_upgrade_with_handler(
 
     // Evaluate authentication and guards before upgrading
     if let Some(route_metadata) = ROUTE_METADATA.get() {
-        if let Some(route_meta) = route_metadata.get(&handler_id) {
+        if let Some(route_meta) = route_metadata.get(handler_id) {
             match validate_auth_and_guards(&headers, &route_meta.auth_backends, &route_meta.guards)
             {
                 AuthGuardResult::Allow(_ctx) => {
@@ -542,7 +542,7 @@ pub async fn handle_websocket_upgrade_with_handler(
     // Get param_types from route metadata for type coercion
     let param_types = ROUTE_METADATA
         .get()
-        .and_then(|m| m.get(&handler_id))
+        .and_then(|m| m.get(handler_id))
         .map(|m| m.param_types.clone())
         .unwrap_or_default();
 

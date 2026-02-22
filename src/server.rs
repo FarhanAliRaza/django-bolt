@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::handler::handle_request;
-use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata};
+use crate::metadata::{CompressionConfig, CorsConfig, RouteMetadata, RouteMetadataStore};
 use crate::middleware::compression::CompressionMiddleware;
 use crate::middleware::cors::CorsMiddleware;
 use crate::router::Router;
@@ -441,10 +441,12 @@ pub fn start_server_async(
         }
 
         // Set the final ROUTE_METADATA with updated version (only set once)
-        let _ = ROUTE_METADATA.set(Arc::new(updated_metadata));
+        let _ = ROUTE_METADATA.set(Arc::new(RouteMetadataStore::from_map(updated_metadata)));
     } else if let Some(metadata_temp) = ROUTE_METADATA_TEMP.get() {
         // No global CORS config, just use the metadata as-is
-        let _ = ROUTE_METADATA.set(Arc::new(metadata_temp.clone()));
+        let _ = ROUTE_METADATA.set(Arc::new(RouteMetadataStore::from_map(
+            metadata_temp.clone(),
+        )));
     }
 
     // Parse compression configuration from Python

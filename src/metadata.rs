@@ -3,7 +3,7 @@
 /// This module handles parsing Python metadata dicts into strongly-typed
 /// Rust enums at registration time, eliminating per-request GIL overhead.
 use actix_web::http::header::HeaderValue;
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use regex::Regex;
@@ -212,6 +212,140 @@ impl Default for CompressionConfig {
     }
 }
 
+/// Compact per-route execution plan used in request hot paths.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RouteExecutionPlan {
+    bits: u16,
+}
+
+impl RouteExecutionPlan {
+    const NEEDS_BODY: u16 = 1 << 0;
+    const NEEDS_QUERY: u16 = 1 << 1;
+    const NEEDS_HEADERS: u16 = 1 << 2;
+    const NEEDS_COOKIES: u16 = 1 << 3;
+    const NEEDS_FORM_PARSING: u16 = 1 << 4;
+    const SKIP_CORS: u16 = 1 << 5;
+    const SKIP_COMPRESSION: u16 = 1 << 6;
+    const HAS_AUTH_OR_GUARDS: u16 = 1 << 7;
+    const HAS_RATE_LIMIT: u16 = 1 << 8;
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts(
+        needs_body: bool,
+        needs_query: bool,
+        needs_headers: bool,
+        needs_cookies: bool,
+        needs_form_parsing: bool,
+        skip_cors: bool,
+        skip_compression: bool,
+        has_auth_or_guards: bool,
+        has_rate_limit: bool,
+    ) -> Self {
+        let mut bits = 0u16;
+        if needs_body {
+            bits |= Self::NEEDS_BODY;
+        }
+        if needs_query {
+            bits |= Self::NEEDS_QUERY;
+        }
+        if needs_headers {
+            bits |= Self::NEEDS_HEADERS;
+        }
+        if needs_cookies {
+            bits |= Self::NEEDS_COOKIES;
+        }
+        if needs_form_parsing {
+            bits |= Self::NEEDS_FORM_PARSING;
+        }
+        if skip_cors {
+            bits |= Self::SKIP_CORS;
+        }
+        if skip_compression {
+            bits |= Self::SKIP_COMPRESSION;
+        }
+        if has_auth_or_guards {
+            bits |= Self::HAS_AUTH_OR_GUARDS;
+        }
+        if has_rate_limit {
+            bits |= Self::HAS_RATE_LIMIT;
+        }
+        Self { bits }
+    }
+
+    #[inline]
+    pub const fn needs_body(self) -> bool {
+        (self.bits & Self::NEEDS_BODY) != 0
+    }
+
+    #[inline]
+    pub const fn needs_query(self) -> bool {
+        (self.bits & Self::NEEDS_QUERY) != 0
+    }
+
+    #[inline]
+    pub const fn needs_headers(self) -> bool {
+        (self.bits & Self::NEEDS_HEADERS) != 0
+    }
+
+    #[inline]
+    pub const fn needs_cookies(self) -> bool {
+        (self.bits & Self::NEEDS_COOKIES) != 0
+    }
+
+    #[inline]
+    pub const fn needs_form_parsing(self) -> bool {
+        (self.bits & Self::NEEDS_FORM_PARSING) != 0
+    }
+
+    #[inline]
+    pub const fn skip_cors(self) -> bool {
+        (self.bits & Self::SKIP_CORS) != 0
+    }
+
+    #[inline]
+    pub const fn skip_compression(self) -> bool {
+        (self.bits & Self::SKIP_COMPRESSION) != 0
+    }
+
+    #[inline]
+    pub const fn has_auth_or_guards(self) -> bool {
+        (self.bits & Self::HAS_AUTH_OR_GUARDS) != 0
+    }
+
+    #[inline]
+    pub const fn has_rate_limit(self) -> bool {
+        (self.bits & Self::HAS_RATE_LIMIT) != 0
+    }
+}
+
+/// Dense metadata table keyed by handler_id.
+#[derive(Debug, Clone, Default)]
+pub struct RouteMetadataStore {
+    by_handler_id: Vec<Option<RouteMetadata>>,
+}
+
+impl RouteMetadataStore {
+    pub fn from_map(map: AHashMap<usize, RouteMetadata>) -> Self {
+        if map.is_empty() {
+            return Self::default();
+        }
+
+        let max_id = map.keys().copied().max().unwrap_or(0);
+        let mut by_handler_id = vec![None; max_id + 1];
+        for (handler_id, metadata) in map {
+            by_handler_id[handler_id] = Some(metadata);
+        }
+        Self { by_handler_id }
+    }
+
+    #[inline]
+    pub fn get(&self, handler_id: usize) -> Option<&RouteMetadata> {
+        self.by_handler_id
+            .get(handler_id)
+            .and_then(|metadata| metadata.as_ref())
+    }
+}
+
 /// Complete route metadata including middleware, auth, and guards
 #[derive(Debug, Clone)]
 pub struct RouteMetadata {
@@ -221,12 +355,6 @@ pub struct RouteMetadata {
     pub cors_config: Option<CorsConfig>,
     pub rate_limit_config: Option<RateLimitConfig>,
 
-    // Optimization flags (skip unused parsing)
-    // These are computed in Python at route registration time via static analysis
-    pub needs_body: bool,
-    pub needs_query: bool,
-    pub needs_headers: bool,
-    pub needs_cookies: bool,
     #[allow(dead_code)] // Reserved for future optimization
     pub needs_path_params: bool,
     #[allow(dead_code)] // Reserved for future optimization
@@ -237,12 +365,12 @@ pub struct RouteMetadata {
     pub param_types: HashMap<String, u8>,
 
     // Form-related metadata for Rust-side form parsing
-    pub needs_form_parsing: bool,
     pub form_type_hints: HashMap<String, u8>,
     pub file_constraints: HashMap<String, FileFieldConstraints>,
     pub max_upload_size: usize,
     pub memory_spool_threshold: usize,
     pub rust_arg_bindings: Option<Vec<RustArgBinding>>,
+    pub plan: RouteExecutionPlan,
 }
 
 impl RouteMetadata {
@@ -369,6 +497,22 @@ impl RouteMetadata {
             .and_then(|v| v.extract::<bool>().ok())
             .unwrap_or(false);
 
+        let skip_cors = skip.contains("cors");
+        let skip_compression = skip.contains("compression");
+        let has_auth_or_guards = !auth_backends.is_empty() || !guards.is_empty();
+        let has_rate_limit = rate_limit_config.is_some();
+        let plan = RouteExecutionPlan::from_parts(
+            needs_body,
+            needs_query,
+            needs_headers,
+            needs_cookies,
+            needs_form_parsing,
+            skip_cors,
+            skip_compression,
+            has_auth_or_guards,
+            has_rate_limit,
+        );
+
         // Form field type hints (same format as param_types)
         let form_type_hints: HashMap<String, u8> = py_meta
             .get_item("form_type_hints")
@@ -405,19 +549,15 @@ impl RouteMetadata {
             skip,
             cors_config,
             rate_limit_config,
-            needs_body,
-            needs_query,
-            needs_headers,
-            needs_cookies,
             needs_path_params,
             is_static_route,
             param_types,
-            needs_form_parsing,
             form_type_hints,
             file_constraints,
             max_upload_size,
             memory_spool_threshold,
             rust_arg_bindings,
+            plan,
         })
     }
 }

@@ -4,44 +4,9 @@
 /// by batching operations and pre-allocating capacity.
 use actix_web::http::header::{HeaderName, HeaderValue};
 use actix_web::{http::StatusCode, HttpResponse, HttpResponseBuilder};
-use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyTuple};
 
 use crate::cookies::format_cookie;
 use crate::response_meta::ResponseMeta;
-
-/// Build a response with pre-allocated capacity for headers
-/// This reduces allocations and mutations compared to the default builder
-#[inline]
-pub fn build_response_with_headers(
-    status: StatusCode,
-    headers: Vec<(String, String)>,
-    skip_compression: bool,
-    body: Vec<u8>,
-) -> HttpResponse {
-    let mut builder = HttpResponse::build(status);
-
-    // Pre-allocate header capacity (typical response has 5-10 headers)
-    // Actix doesn't expose header map directly, but the builder is efficient
-
-    // Add all custom headers in one pass
-    // Use append_header to support multiple headers with the same name
-    // (e.g., multiple Set-Cookie headers). insert_header would replace.
-    for (k, v) in headers {
-        if let Ok(name) = HeaderName::try_from(k) {
-            if let Ok(val) = HeaderValue::try_from(v) {
-                builder.append_header((name, val));
-            }
-        }
-    }
-
-    // Add skip_compression header if needed
-    if skip_compression {
-        builder.insert_header(("content-encoding", "identity"));
-    }
-
-    builder.body(body)
-}
 
 /// Build a streaming response with SSE headers
 /// Pre-bundles common SSE headers to avoid multiple mutations
@@ -126,75 +91,6 @@ pub fn meta_to_headers(meta: &ResponseMeta) -> Vec<(String, String)> {
     headers
 }
 
-/// Parsed response data from Python in the new ResponseMeta format.
-/// Contains status code, metadata, and body bytes extracted from a Python tuple.
-pub struct ParsedResponseMeta {
-    pub status_code: u16,
-    pub meta: ResponseMeta,
-    pub body: Vec<u8>,
-}
-
-/// Try to extract ResponseMeta format from a Python result tuple.
-///
-/// The new format is: (status_code, meta_tuple, body_bytes)
-/// where meta_tuple is a tuple (not a list) containing response metadata.
-///
-/// Returns None if the result is not in the new ResponseMeta format,
-/// allowing fallback to legacy format handling.
-#[inline]
-pub fn try_extract_response_meta(py: Python<'_>, result: &Py<PyAny>) -> Option<ParsedResponseMeta> {
-    let obj = result.bind(py);
-    let tuple = obj.cast::<PyTuple>().ok()?;
-
-    if tuple.len() != 3 {
-        return None;
-    }
-
-    // Element 0: status code
-    let status_code: u16 = tuple.get_item(0).ok()?.extract().ok()?;
-
-    // Element 1: Check if it's a tuple (new format) vs list (old format)
-    let meta_obj = tuple.get_item(1).ok()?;
-    if !meta_obj.is_instance_of::<PyTuple>() {
-        return None;
-    }
-
-    // Extract ResponseMeta from the tuple
-    let meta = ResponseMeta::from_python(&meta_obj).ok()?;
-
-    // Element 2: body (bytes)
-    let body_obj = tuple.get_item(2).ok()?;
-    let pybytes = body_obj.cast::<PyBytes>().ok()?;
-    let body = pybytes.as_bytes().to_vec();
-
-    Some(ParsedResponseMeta {
-        status_code,
-        meta,
-        body,
-    })
-}
-
-/// Extract file path from response metadata custom headers.
-/// Returns the file path and a filtered list of headers without the file path marker.
-#[inline]
-pub fn extract_file_path_from_meta(meta: &ResponseMeta) -> Option<String> {
-    meta.custom_headers.as_ref().and_then(|headers| {
-        headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("x-bolt-file-path"))
-            .map(|(_, v)| v.clone())
-    })
-}
-
-/// Build headers from ResponseMeta, filtering out the file path marker.
-#[inline]
-pub fn meta_to_headers_without_file_path(meta: &ResponseMeta) -> Vec<(String, String)> {
-    meta_to_headers(meta)
-        .into_iter()
-        .filter(|(k, _)| !k.eq_ignore_ascii_case("x-bolt-file-path"))
-        .collect()
-}
-
 /// Build HTTP response with all headers from ResponseMeta.
 /// This is the unified path for all response types.
 ///
@@ -255,19 +151,6 @@ pub fn build_response_from_meta(
 mod tests {
     use super::*;
     use crate::response_meta::{CookieData, ResponseType};
-
-    #[test]
-    fn test_build_response_with_headers() {
-        let headers = vec![
-            ("content-type".to_string(), "application/json".to_string()),
-            ("x-custom".to_string(), "value".to_string()),
-        ];
-
-        let response =
-            build_response_with_headers(StatusCode::OK, headers, false, b"test".to_vec());
-
-        assert_eq!(response.status(), StatusCode::OK);
-    }
 
     #[test]
     fn test_build_rate_limit_response() {

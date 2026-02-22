@@ -23,22 +23,24 @@ use pyo3::types::PyDict;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::asgi_http;
 use crate::form_parsing::{
     parse_multipart, parse_urlencoded, FormParseResult, DEFAULT_MAX_PARTS, DEFAULT_MEMORY_LIMIT,
 };
-use crate::metadata::{CorsConfig, RouteMetadata};
+use crate::metadata::{CorsConfig, RouteMetadata, RouteMetadataStore};
 use crate::middleware::compression::CompressionMiddleware;
 use crate::middleware::cors::CorsMiddleware;
 use crate::router::Router;
-use crate::state::{AppState, StaticFilesConfig, TASK_LOCALS};
+use crate::state::{find_asgi_mount, AppState, AsgiMount, StaticFilesConfig, TASK_LOCALS};
 use crate::websocket::WebSocketRouter;
 use actix_multipart::Multipart;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 
-use crate::handler::{build_prebound_args_kwargs, coerced_value_to_py, form_result_to_py};
+use crate::handler::{
+    build_prebound_args_kwargs, coerced_value_to_py, form_result_to_py, response_from_wire_result,
+};
 use crate::request_pipeline::validate_and_cache_typed_params;
-use crate::response_meta::ResponseMeta;
 use crate::static_files::handle_static_file;
 use crate::type_coercion::{coerce_param, params_to_py_dict, TYPE_STRING};
 
@@ -105,10 +107,15 @@ fn ensure_task_locals_initialized() {
                 });
             });
 
-            // Wait for the background thread to signal it's ready
-            let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
-            // Give it a tiny bit more time to actually enter run_forever
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            // Wait for the background thread while releasing the GIL.
+            // Otherwise the thread cannot acquire Python and start run_forever().
+            Python::attach(|py| {
+                py.detach(move || {
+                    let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+                    // Give it a tiny bit more time to actually enter run_forever.
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                });
+            });
         }
     });
 }
@@ -117,7 +124,8 @@ fn ensure_task_locals_initialized() {
 pub struct TestAppState {
     pub router: Arc<Router>,
     pub websocket_router: Arc<WebSocketRouter>,
-    pub route_metadata: Arc<AHashMap<usize, RouteMetadata>>,
+    pub asgi_mounts: Arc<Vec<AsgiMount>>,
+    pub route_metadata: Arc<RouteMetadataStore>,
     pub dispatch: Py<PyAny>,
     pub global_cors_config: Option<CorsConfig>,
     pub debug: bool,
@@ -131,83 +139,6 @@ pub struct TestAppState {
 /// Registry for test app instances
 static TEST_REGISTRY: OnceCell<DashMap<u64, Arc<RwLock<TestAppState>>>> = OnceCell::new();
 static TEST_ID_GEN: AtomicU64 = AtomicU64::new(1);
-
-/// Cached StreamingResponse class to avoid repeated imports
-static STREAMING_RESPONSE_CLASS: OnceCell<Py<PyAny>> = OnceCell::new();
-
-fn get_streaming_response_class(py: Python<'_>) -> &Py<PyAny> {
-    STREAMING_RESPONSE_CLASS.get_or_init(|| {
-        py.import("django_bolt.responses")
-            .unwrap()
-            .getattr("StreamingResponse")
-            .unwrap()
-            .unbind()
-    })
-}
-
-/// Collect streaming content synchronously for test assertions.
-/// Handles both sync generators and async generators.
-fn collect_streaming_content(
-    py: Python<'_>,
-    content: &Bound<'_, PyAny>,
-    is_async: bool,
-) -> Vec<u8> {
-    let mut chunks: Vec<u8> = Vec::new();
-
-    if is_async {
-        // For async generators, use asyncio.run() to collect
-        let asyncio = match py.import("asyncio") {
-            Ok(m) => m,
-            Err(_) => return chunks,
-        };
-
-        let locals = PyDict::new(py);
-        let code = pyo3::ffi::c_str!(
-            r#"
-async def _collect_async_gen(gen):
-    result = []
-    async for item in gen:
-        if isinstance(item, bytes):
-            result.append(item)
-        elif isinstance(item, bytearray):
-            result.append(bytes(item))
-        elif isinstance(item, memoryview):
-            result.append(bytes(item))
-        elif isinstance(item, str):
-            result.append(item.encode('utf-8'))
-        else:
-            result.append(str(item).encode('utf-8'))
-    return b''.join(result)
-"#
-        );
-        if py.run(code, None, Some(&locals)).is_ok() {
-            if let Ok(Some(collect_fn)) = locals.get_item("_collect_async_gen") {
-                if let Ok(coro) = collect_fn.call1((content,)) {
-                    if let Ok(result) = asyncio.call_method1("run", (coro,)) {
-                        if let Ok(bytes) = result.extract::<Vec<u8>>() {
-                            chunks = bytes;
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        // Sync generator - iterate directly
-        if let Ok(iter) = content.try_iter() {
-            for item in iter {
-                if let Ok(item) = item {
-                    if let Ok(bytes) = item.extract::<Vec<u8>>() {
-                        chunks.extend(bytes);
-                    } else if let Ok(s) = item.extract::<String>() {
-                        chunks.extend(s.as_bytes());
-                    }
-                }
-            }
-        }
-    }
-
-    chunks
-}
 
 fn registry() -> &'static DashMap<u64, Arc<RwLock<TestAppState>>> {
     TEST_REGISTRY.get_or_init(DashMap::new)
@@ -366,7 +297,8 @@ pub fn create_test_app(
     let app = TestAppState {
         router: Arc::new(Router::new()),
         websocket_router: Arc::new(WebSocketRouter::new()),
-        route_metadata: Arc::new(AHashMap::new()),
+        asgi_mounts: Arc::new(Vec::new()),
+        route_metadata: Arc::new(RouteMetadataStore::default()),
         dispatch: dispatch.clone_ref(py),
         global_cors_config,
         debug,
@@ -430,6 +362,33 @@ pub fn register_test_websocket_routes(
     Ok(())
 }
 
+/// Register HTTP ASGI mounts for a test app.
+#[pyfunction]
+pub fn register_test_asgi_mounts(
+    _py: Python<'_>,
+    app_id: u64,
+    mounts: Vec<(String, Py<PyAny>)>,
+) -> PyResult<()> {
+    let entry = registry()
+        .get(&app_id)
+        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Invalid test app id"))?;
+
+    let mut app = entry.write();
+    let mut asgi_mounts: Vec<AsgiMount> = Vec::with_capacity(mounts.len());
+
+    for (prefix, mount_app) in mounts {
+        asgi_mounts.push(AsgiMount {
+            prefix,
+            app: mount_app,
+        });
+    }
+
+    // Longest-prefix match requires descending sort.
+    asgi_mounts.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
+    app.asgi_mounts = Arc::new(asgi_mounts);
+    Ok(())
+}
+
 /// Register middleware metadata for a test app
 #[pyfunction]
 pub fn register_test_middleware_metadata(
@@ -450,7 +409,7 @@ pub fn register_test_middleware_metadata(
             if let Ok(parsed) = RouteMetadata::from_python(py_dict, py) {
                 // Inject global CORS config if route doesn't have explicit config
                 let mut route_meta = parsed;
-                if route_meta.cors_config.is_none() && !route_meta.skip.contains("cors") {
+                if route_meta.cors_config.is_none() && !route_meta.plan.skip_cors() {
                     route_meta.cors_config = app.global_cors_config.clone();
                 }
                 parsed_metadata.insert(handler_id, route_meta);
@@ -458,7 +417,7 @@ pub fn register_test_middleware_metadata(
         }
     }
 
-    app.route_metadata = Arc::new(parsed_metadata);
+    app.route_metadata = Arc::new(RouteMetadataStore::from_map(parsed_metadata));
     Ok(())
 }
 
@@ -480,7 +439,7 @@ pub fn register_test_middleware_metadata(
 /// a local tokio runtime for each request instead.
 #[pyfunction]
 pub fn test_request(
-    _py: Python<'_>,
+    py: Python<'_>,
     app_id: u64,
     method: String,
     path: String,
@@ -488,160 +447,165 @@ pub fn test_request(
     body: Vec<u8>,
     query_string: Option<String>,
 ) -> PyResult<(u16, Vec<(String, String)>, Vec<u8>)> {
-    // Ensure TASK_LOCALS is initialized for SSE/streaming support
-    ensure_task_locals_initialized();
+    py.detach(move || {
+        // Ensure TASK_LOCALS is initialized for SSE/streaming support
+        ensure_task_locals_initialized();
 
-    // Get test app state
-    let entry = registry()
-        .get(&app_id)
-        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Invalid test app id"))?;
+        // Get test app state
+        let entry = registry()
+            .get(&app_id)
+            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Invalid test app id"))?;
 
-    let app_state = entry.clone();
-    drop(entry); // Release DashMap lock
+        let app_state = entry.clone();
+        drop(entry); // Release DashMap lock
 
-    // Use the global runtime (initialized by pyo3_async_runtimes::tokio::init())
-    // This ensures handler execution and streaming use the same runtime context
-    let runtime_handle = pyo3_async_runtimes::tokio::get_runtime();
+        // Use the global runtime (initialized by pyo3_async_runtimes::tokio::init())
+        // This ensures handler execution and streaming use the same runtime context
+        let runtime_handle = pyo3_async_runtimes::tokio::get_runtime();
 
-    runtime_handle.block_on(async {
-        // Read test app state
-        let (
-            router,
-            route_metadata,
-            dispatch,
-            global_cors_config,
-            debug,
-            max_payload_size,
-            _trailing_slash,
-            static_files_config,
-        ) = {
-            let state = app_state.read();
-            (
-                state.router.clone(),
-                state.route_metadata.clone(),
-                Python::attach(|py| state.dispatch.clone_ref(py)),
-                state.global_cors_config.clone(),
-                state.debug,
-                state.max_payload_size,
-                state.trailing_slash.clone(),
-                state.static_files_config.clone(),
-            )
-        };
+        runtime_handle.block_on(async {
+            // Read test app state
+            let (
+                router,
+                route_metadata,
+                asgi_mounts,
+                dispatch,
+                global_cors_config,
+                debug,
+                max_payload_size,
+                _trailing_slash,
+                static_files_config,
+            ) = {
+                let state = app_state.read();
+                (
+                    state.router.clone(),
+                    state.route_metadata.clone(),
+                    state.asgi_mounts.clone(),
+                    Python::attach(|py| state.dispatch.clone_ref(py)),
+                    state.global_cors_config.clone(),
+                    state.debug,
+                    state.max_payload_size,
+                    state.trailing_slash.clone(),
+                    state.static_files_config.clone(),
+                )
+            };
 
-        // Build AppState matching production
-        // Include router and route_metadata so CorsMiddleware can find route-level CORS config
-        let app_state_arc = Arc::new(AppState {
-            dispatch,
-            debug,
-            max_header_size: 8192,
-            global_cors_config: global_cors_config.clone(),
-            cors_origin_regexes: vec![],
-            global_compression_config: None,
-            router: Some(router.clone()),
-            route_metadata: Some(route_metadata.clone()),
-            static_files_config: static_files_config.clone(),
-        });
+            // Build AppState matching production
+            // Include router and route_metadata so CorsMiddleware can find route-level CORS config
+            let app_state_arc = Arc::new(AppState {
+                dispatch,
+                debug,
+                max_header_size: 8192,
+                global_cors_config: global_cors_config.clone(),
+                cors_origin_regexes: vec![],
+                global_compression_config: None,
+                router: Some(router.clone()),
+                route_metadata: Some(route_metadata.clone()),
+                asgi_mounts: Some(asgi_mounts.clone()),
+                static_files_config: static_files_config.clone(),
+            });
 
-        // Clone the Arc values for the handler closure
-        let router_for_handler = router.clone();
-        let metadata_for_handler = route_metadata.clone();
+            // Clone the Arc values for the handler closure
+            let router_for_handler = router.clone();
+            let metadata_for_handler = route_metadata.clone();
 
-        // Create the test handler that uses per-instance state
-        // Use web::Payload to support multipart form parsing (which needs the stream)
-        let handler = move |req: HttpRequest, payload: web::Payload| {
-            let router = router_for_handler.clone();
-            let metadata = metadata_for_handler.clone();
+            // Create the test handler that uses per-instance state
+            // Use web::Payload to support multipart form parsing (which needs the stream)
+            let handler = move |req: HttpRequest, payload: web::Payload| {
+                let router = router_for_handler.clone();
+                let metadata = metadata_for_handler.clone();
 
-            async move { handle_test_request_internal(req, payload, router, metadata).await }
-        };
+                async move { handle_test_request_internal(req, payload, router, metadata).await }
+            };
 
-        // Create Actix test service with production middleware stack
-        // Use MergeOnly for NormalizePath (only normalizes // -> /)
-        // Trailing slash handling is done via Starlette-style redirect in handler
-        let app = if let Some(ref config) = static_files_config {
-            // With static files: register static file handler before default service
-            let static_dirs = web::Data::new(config.directories.clone());
-            let static_csp = web::Data::new(config.csp_header.clone());
-            let static_route = format!("{}{{path:.*}}", config.url_prefix);
+            // Create Actix test service with production middleware stack
+            // Use MergeOnly for NormalizePath (only normalizes // -> /)
+            // Trailing slash handling is done via Starlette-style redirect in handler
+            let app = if let Some(ref config) = static_files_config {
+                // With static files: register static file handler before default service
+                let static_dirs = web::Data::new(config.directories.clone());
+                let static_csp = web::Data::new(config.csp_header.clone());
+                let static_route = format!("{}{{path:.*}}", config.url_prefix);
 
-            test::init_service(
-                App::new()
-                    .app_data(web::Data::new(app_state_arc.clone()))
-                    .app_data(web::PayloadConfig::new(max_payload_size))
-                    .app_data(static_dirs)
-                    .app_data(static_csp)
-                    .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
-                    .wrap(CorsMiddleware::new())
-                    .wrap(CompressionMiddleware::new())
-                    .route(&static_route, web::get().to(handle_static_file))
-                    .default_service(web::to(handler)),
-            )
-            .await
-        } else {
-            // Without static files: just the default handler
-            test::init_service(
-                App::new()
-                    .app_data(web::Data::new(app_state_arc.clone()))
-                    .app_data(web::PayloadConfig::new(max_payload_size))
-                    .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
-                    .wrap(CorsMiddleware::new())
-                    .wrap(CompressionMiddleware::new())
-                    .default_service(web::to(handler)),
-            )
-            .await
-        };
+                test::init_service(
+                    App::new()
+                        .app_data(web::Data::new(app_state_arc.clone()))
+                        .app_data(web::PayloadConfig::new(max_payload_size))
+                        .app_data(static_dirs)
+                        .app_data(static_csp)
+                        .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
+                        .wrap(CorsMiddleware::new())
+                        .wrap(CompressionMiddleware::new())
+                        .route(&static_route, web::get().to(handle_static_file))
+                        .default_service(web::to(handler)),
+                )
+                .await
+            } else {
+                // Without static files: just the default handler
+                test::init_service(
+                    App::new()
+                        .app_data(web::Data::new(app_state_arc.clone()))
+                        .app_data(web::PayloadConfig::new(max_payload_size))
+                        .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
+                        .wrap(CorsMiddleware::new())
+                        .wrap(CompressionMiddleware::new())
+                        .default_service(web::to(handler)),
+                )
+                .await
+            };
 
-        // Build full URI
-        let uri = if let Some(qs) = query_string {
-            format!("{}?{}", path, qs)
-        } else {
-            path.clone()
-        };
+            // Build full URI
+            let uri = if let Some(qs) = query_string {
+                format!("{}?{}", path, qs)
+            } else {
+                path.clone()
+            };
 
-        // Create test request
-        let mut req = test::TestRequest::with_uri(&uri);
+            // Create test request
+            let mut req = test::TestRequest::with_uri(&uri);
 
-        // Set method
-        req = match method.to_uppercase().as_str() {
-            "GET" => req.method(actix_web::http::Method::GET),
-            "POST" => req.method(actix_web::http::Method::POST),
-            "PUT" => req.method(actix_web::http::Method::PUT),
-            "PATCH" => req.method(actix_web::http::Method::PATCH),
-            "DELETE" => req.method(actix_web::http::Method::DELETE),
-            "OPTIONS" => req.method(actix_web::http::Method::OPTIONS),
-            "HEAD" => req.method(actix_web::http::Method::HEAD),
-            _ => req.method(actix_web::http::Method::GET),
-        };
+            // Set method
+            req = match method.to_uppercase().as_str() {
+                "GET" => req.method(actix_web::http::Method::GET),
+                "POST" => req.method(actix_web::http::Method::POST),
+                "PUT" => req.method(actix_web::http::Method::PUT),
+                "PATCH" => req.method(actix_web::http::Method::PATCH),
+                "DELETE" => req.method(actix_web::http::Method::DELETE),
+                "OPTIONS" => req.method(actix_web::http::Method::OPTIONS),
+                "HEAD" => req.method(actix_web::http::Method::HEAD),
+                _ => req.method(actix_web::http::Method::GET),
+            };
 
-        // Set headers
-        for (name, value) in headers {
-            req = req.insert_header((name, value));
-        }
+            // Set headers
+            for (name, value) in headers {
+                req = req.insert_header((name, value));
+            }
 
-        // Set body
-        if !body.is_empty() {
-            req = req.set_payload(Bytes::from(body));
-        }
+            // Set body
+            if !body.is_empty() {
+                req = req.set_payload(Bytes::from(body));
+            }
 
-        // Execute request
-        let request = req.to_request();
-        let response = app.call(request).await.map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("Service call failed: {}", e))
-        })?;
+            // Execute request
+            let request = req.to_request();
+            let response = app.call(request).await.map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!("Service call failed: {}", e))
+            })?;
 
-        // Extract response
-        let status = response.status().as_u16();
+            // Extract response
+            let status = response.status().as_u16();
 
-        let resp_headers: Vec<(String, String)> = response
-            .headers()
-            .iter()
-            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
-            .collect();
+            let resp_headers: Vec<(String, String)> = response
+                .headers()
+                .iter()
+                .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+                .collect();
 
-        // Use test::read_body which handles various body types including Encoder
-        let resp_body = test::read_body(response).await.to_vec();
+            // Use test::read_body which handles various body types including Encoder
+            let resp_body = test::read_body(response).await.to_vec();
 
-        Ok((status, resp_headers, resp_body))
+            Ok((status, resp_headers, resp_body))
+        })
     })
 }
 
@@ -651,18 +615,15 @@ async fn handle_test_request_internal(
     req: HttpRequest,
     mut payload: web::Payload,
     router: Arc<Router>,
-    route_metadata: Arc<AHashMap<usize, RouteMetadata>>,
+    route_metadata: Arc<RouteMetadataStore>,
 ) -> HttpResponse {
     use crate::handler::{extract_headers, handle_python_error};
     use crate::middleware;
     use crate::middleware::auth::populate_auth_context;
     use crate::request::PyRequest;
-    use crate::response_builder;
     use crate::responses;
     use crate::router::parse_query_string;
     use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
-    use actix_web::http::StatusCode;
-    use pyo3::types::{PyBytes, PyTuple};
 
     let method = req.method().as_str();
     let path = req.path();
@@ -716,7 +677,17 @@ async fn handle_test_request_internal(
                         .insert_header(("Content-Type", "application/json"))
                         .finish();
                 }
+            }
 
+            // HTTP ASGI mount fallback:
+            // - only after Bolt route miss
+            // - only after trailing-slash/API-method near-miss checks above
+            if let Some(asgi_mount) = find_asgi_mount(&state, path) {
+                return asgi_http::handle_asgi_mount_request(req, payload, asgi_mount, state.debug)
+                    .await;
+            }
+
+            if method == "OPTIONS" {
                 // Handle OPTIONS preflight for non-existent routes
                 if state.global_cors_config.is_some() {
                     return HttpResponse::NoContent().finish();
@@ -728,10 +699,13 @@ async fn handle_test_request_internal(
     };
 
     // Get route metadata
-    let route_meta = route_metadata.get(&handler_id).cloned();
+    let route_meta = route_metadata.get(handler_id).cloned();
 
     // Parse query string
-    let needs_query = route_meta.as_ref().map(|m| m.needs_query).unwrap_or(true);
+    let needs_query = route_meta
+        .as_ref()
+        .map(|m| m.plan.needs_query())
+        .unwrap_or(true);
     let query_params = if needs_query {
         if let Some(q) = req.uri().query() {
             parse_query_string(q)
@@ -753,14 +727,17 @@ async fn handle_test_request_internal(
     };
 
     // Extract headers
-    let needs_headers = route_meta.as_ref().map(|m| m.needs_headers).unwrap_or(true);
+    let needs_headers = route_meta
+        .as_ref()
+        .map(|m| m.plan.needs_headers())
+        .unwrap_or(true);
     let skip_cors = route_meta
         .as_ref()
-        .map(|m| m.skip.contains("cors"))
+        .map(|m| m.plan.skip_cors())
         .unwrap_or(false);
     let skip_compression = route_meta
         .as_ref()
-        .map(|m| m.skip.contains("compression"))
+        .map(|m| m.plan.skip_compression())
         .unwrap_or(false);
 
     let headers = match extract_headers(&req, state.max_header_size) {
@@ -807,7 +784,10 @@ async fn handle_test_request_internal(
     };
 
     // Cookies
-    let needs_cookies = route_meta.as_ref().map(|m| m.needs_cookies).unwrap_or(true);
+    let needs_cookies = route_meta
+        .as_ref()
+        .map(|m| m.plan.needs_cookies())
+        .unwrap_or(true);
     let cookies = if needs_cookies {
         parse_cookies_inline(headers.get("cookie").map(|s| s.as_str()))
     } else {
@@ -817,7 +797,7 @@ async fn handle_test_request_internal(
     // Form parsing (URL-encoded and multipart)
     let needs_form_parsing = route_meta
         .as_ref()
-        .map(|m| m.needs_form_parsing)
+        .map(|m| m.plan.needs_form_parsing())
         .unwrap_or(false);
 
     let content_type = headers
@@ -1046,370 +1026,19 @@ async fn handle_test_request_internal(
         }
     };
 
-    // Process the result
-    match Ok::<_, PyErr>(result_obj) {
-        Ok(result_obj) => {
-            // Try new ResponseMeta format first: (status, meta_tuple, body)
-            // Performance: All header building happens in Rust using static strings
-            let parsed_meta =
-                Python::attach(|py| response_builder::try_extract_response_meta(py, &result_obj));
-
-            // Handle new ResponseMeta format
-            if let Some(parsed) = parsed_meta {
-                let status = StatusCode::from_u16(parsed.status_code).unwrap_or(StatusCode::OK);
-
-                // Check for file serving: x-bolt-file-path in custom headers
-                if let Some(fpath) = response_builder::extract_file_path_from_meta(&parsed.meta) {
-                    let headers = response_builder::meta_to_headers_without_file_path(&parsed.meta);
-                    return crate::handler::build_file_response(
-                        &fpath,
-                        status,
-                        headers,
-                        skip_compression,
-                        is_head_request,
-                    )
-                    .await;
-                }
-
-                let response_body = if is_head_request {
-                    Vec::new()
-                } else {
-                    parsed.body
-                };
-
-                let mut response = response_builder::build_response_from_meta(
-                    status,
-                    parsed.meta,
-                    response_body,
-                    skip_compression,
-                );
-
-                if skip_cors {
-                    response
-                        .headers_mut()
-                        .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
-                }
-
-                return response;
-            }
-
-            // Fallback to old format: (status, headers_list, body)
-            // Fast-path: tuple extraction
-            let fast_tuple: Option<(u16, Vec<(String, String)>, Vec<u8>)> = Python::attach(|py| {
-                let obj = result_obj.bind(py);
-                let tuple = obj.cast::<PyTuple>().ok()?;
-                if tuple.len() != 3 {
-                    return None;
-                }
-
-                let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
-                let resp_headers: Vec<(String, String)> = tuple
-                    .get_item(1)
-                    .ok()?
-                    .extract::<Vec<(String, String)>>()
-                    .ok()?;
-                let body_obj = tuple.get_item(2).ok()?;
-                let pybytes = body_obj.cast::<PyBytes>().ok()?;
-                let body_vec = pybytes.as_bytes().to_vec();
-                Some((status_code, resp_headers, body_vec))
-            });
-
-            if let Some((status_code, resp_headers, body_bytes)) = fast_tuple {
-                let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
-                let mut file_path: Option<String> = None;
-                let mut headers: Vec<(String, String)> = Vec::with_capacity(resp_headers.len());
-
-                for (k, v) in resp_headers {
-                    if k.eq_ignore_ascii_case("x-bolt-file-path") {
-                        file_path = Some(v);
-                    } else {
-                        headers.push((k, v));
-                    }
-                }
-
-                if let Some(fpath) = file_path {
-                    return crate::handler::build_file_response(
-                        &fpath,
-                        status,
-                        headers,
-                        skip_compression,
-                        is_head_request,
-                    )
-                    .await;
-                } else {
-                    let response_body = if is_head_request {
-                        Vec::new()
-                    } else {
-                        body_bytes
-                    };
-
-                    let mut response = response_builder::build_response_with_headers(
-                        status,
-                        headers,
-                        skip_compression,
-                        response_body,
-                    );
-
-                    if skip_cors {
-                        response
-                            .headers_mut()
-                            .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
-                    }
-
-                    return response;
-                }
-            }
-
-            // Fallback: streaming response handling
-            if let Ok((status_code, resp_headers, body_bytes)) =
-                Python::attach(|py| result_obj.extract::<(u16, Vec<(String, String)>, Vec<u8>)>(py))
-            {
-                let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
-                let mut headers: Vec<(String, String)> = Vec::with_capacity(resp_headers.len());
-
-                for (k, v) in resp_headers {
-                    if !k.eq_ignore_ascii_case("x-bolt-file-path") {
-                        headers.push((k, v));
-                    }
-                }
-
-                let mut builder = HttpResponse::build(status);
-                for (k, v) in headers {
-                    builder.append_header((k, v));
-                }
-
-                if skip_compression {
-                    builder.append_header(("Content-Encoding", "identity"));
-                }
-                if skip_cors {
-                    builder.append_header(("x-bolt-skip-cors", "true"));
-                }
-
-                let response_body = if is_head_request {
-                    Vec::new()
-                } else {
-                    body_bytes
-                };
-
-                return builder.body(response_body);
-            }
-
-            // Check for tuple with StreamingResponse body (middleware path)
-            // This handles the case where serialize_response returns (status, headers/meta, StreamingResponse)
-            let streaming_tuple = Python::attach(|py| {
-                let obj = result_obj.bind(py);
-                let tuple = obj.cast::<PyTuple>().ok()?;
-                if tuple.len() != 3 {
-                    return None;
-                }
-                // Extract body (element 2) and check if it's a StreamingResponse
-                let body_obj = tuple.get_item(2).ok()?;
-                let streaming_cls = get_streaming_response_class(py);
-                if !body_obj
-                    .is_instance(streaming_cls.bind(py))
-                    .unwrap_or(false)
-                {
-                    return None;
-                }
-
-                // Extract headers: try new ResponseMeta format first, then legacy format
-                let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
-                let meta_or_headers = tuple.get_item(1).ok()?;
-                let tuple_headers: Vec<(String, String)> =
-                    if meta_or_headers.is_instance_of::<PyTuple>() {
-                        // New ResponseMeta format: build headers from meta
-                        let meta = ResponseMeta::from_python(&meta_or_headers).ok()?;
-                        response_builder::meta_to_headers(&meta)
-                    } else {
-                        // Legacy format: list of header tuples
-                        meta_or_headers.extract::<Vec<(String, String)>>().ok()?
-                    };
-
-                let media_type: String = body_obj
-                    .getattr(pyo3::intern!(py, "media_type"))
-                    .and_then(|v| v.extract())
-                    .unwrap_or_else(|_| "application/octet-stream".to_string());
-                let content_obj: Py<PyAny> = body_obj
-                    .getattr(pyo3::intern!(py, "content"))
-                    .ok()?
-                    .unbind();
-                let is_async_generator: bool = body_obj
-                    .getattr(pyo3::intern!(py, "is_async_generator"))
-                    .and_then(|v| v.extract())
-                    .unwrap_or(false);
-                Some((
-                    status_code,
-                    tuple_headers,
-                    media_type,
-                    content_obj,
-                    is_async_generator,
-                ))
-            });
-            if let Some((status_code, headers, media_type, content_obj, is_async_generator)) =
-                streaming_tuple
-            {
-                let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
-
-                // For tests, collect streaming content synchronously
-                let collected_body = Python::attach(|py| {
-                    collect_streaming_content(py, content_obj.bind(py), is_async_generator)
-                });
-
-                let mut builder = HttpResponse::build(status);
-                for (k, v) in headers {
-                    builder.append_header((k, v));
-                }
-
-                // Add SSE-specific headers for text/event-stream
-                if media_type == "text/event-stream" {
-                    builder.insert_header(("X-Accel-Buffering", "no"));
-                    builder.insert_header(("Cache-Control", "no-cache, no-store, must-revalidate"));
-                    builder.insert_header(("Pragma", "no-cache"));
-                    builder.insert_header(("Expires", "0"));
-                }
-
-                if skip_compression {
-                    builder.append_header(("Content-Encoding", "identity"));
-                }
-                if skip_cors {
-                    builder.append_header(("x-bolt-skip-cors", "true"));
-                }
-
-                return builder.body(collected_body);
-            }
-
-            // Streaming response path (direct StreamingResponse object)
-            let streaming = Python::attach(|py| {
-                let obj = result_obj.bind(py);
-                // Use cached StreamingResponse class to avoid repeated imports
-                let streaming_cls = get_streaming_response_class(py);
-                let is_streaming = obj.is_instance(streaming_cls.bind(py)).unwrap_or(false);
-
-                if !is_streaming && !obj.hasattr("content").unwrap_or(false) {
-                    return None;
-                }
-
-                let status_code: u16 = obj
-                    .getattr("status_code")
-                    .and_then(|v| v.extract())
-                    .unwrap_or(200);
-
-                let mut headers: Vec<(String, String)> = Vec::new();
-                if let Ok(hobj) = obj.getattr("headers") {
-                    if let Ok(hdict) = hobj.cast::<PyDict>() {
-                        for (k, v) in hdict {
-                            if let (Ok(ks), Ok(vs)) = (k.extract::<String>(), v.extract::<String>())
-                            {
-                                headers.push((ks, vs));
-                            }
-                        }
-                    }
-                }
-
-                let media_type: String = obj
-                    .getattr("media_type")
-                    .and_then(|v| v.extract())
-                    .unwrap_or_else(|_| "application/octet-stream".to_string());
-
-                let has_ct = headers
-                    .iter()
-                    .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
-                if !has_ct {
-                    headers.push(("content-type".to_string(), media_type.clone()));
-                }
-
-                let content_obj: Py<PyAny> = match obj.getattr("content") {
-                    Ok(c) => c.unbind(),
-                    Err(_) => return None,
-                };
-
-                let is_async_generator: bool = obj
-                    .getattr("is_async_generator")
-                    .and_then(|v| v.extract())
-                    .unwrap_or(false);
-
-                Some((
-                    status_code,
-                    headers,
-                    media_type,
-                    content_obj,
-                    is_async_generator,
-                ))
-            });
-
-            if let Some((status_code, headers, media_type, content_obj, is_async_generator)) =
-                streaming
-            {
-                let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
-
-                // For tests, collect streaming content synchronously
-                let collected_body = Python::attach(|py| {
-                    collect_streaming_content(py, content_obj.bind(py), is_async_generator)
-                });
-
-                if media_type == "text/event-stream" {
-                    if is_head_request {
-                        let mut builder =
-                            response_builder::build_sse_response(status, headers, skip_compression);
-                        let mut response = builder.body(Vec::<u8>::new());
-                        if skip_cors {
-                            response.headers_mut().insert(
-                                "x-bolt-skip-cors".parse().unwrap(),
-                                "true".parse().unwrap(),
-                            );
-                        }
-                        return response;
-                    }
-
-                    let mut builder =
-                        response_builder::build_sse_response(status, headers, skip_compression);
-                    let mut response = builder.body(collected_body);
-                    if skip_cors {
-                        response
-                            .headers_mut()
-                            .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
-                    }
-                    return response;
-                } else {
-                    let mut builder = HttpResponse::build(status);
-                    for (k, v) in headers {
-                        builder.append_header((k, v));
-                    }
-
-                    if is_head_request {
-                        if skip_compression {
-                            builder.append_header(("Content-Encoding", "identity"));
-                        }
-                        if skip_cors {
-                            builder.append_header(("x-bolt-skip-cors", "true"));
-                        }
-                        return builder.body(Vec::<u8>::new());
-                    }
-
-                    if skip_compression {
-                        builder.append_header(("Content-Encoding", "identity"));
-                    }
-                    if skip_cors {
-                        builder.append_header(("x-bolt-skip-cors", "true"));
-                    }
-
-                    return builder.body(collected_body);
-                }
-            }
-
-            // Unsupported response type
-            Python::attach(|py| {
-                crate::error::build_error_response(
-                    py,
-                    500,
-                    "Handler returned unsupported response type".to_string(),
-                    vec![],
-                    None,
-                    state.debug,
-                )
-            })
-        }
-        Err(e) => Python::attach(|py| handle_python_error(py, e, path, method, state.debug)),
+    match response_from_wire_result(result_obj, skip_compression, skip_cors, is_head_request).await
+    {
+        Ok(response) => response,
+        Err(e) => Python::attach(|py| {
+            crate::error::build_error_response(
+                py,
+                500,
+                format!("Handler returned unsupported response wire format: {}", e),
+                vec![],
+                None,
+                state.debug,
+            )
+        }),
     }
 }
 
@@ -1479,7 +1108,7 @@ pub fn handle_test_websocket(
     let handler = route.handler.clone_ref(py);
 
     // Rate limiting for WebSocket
-    if let Some(route_meta) = app.route_metadata.get(&handler_id) {
+    if let Some(route_meta) = app.route_metadata.get(handler_id) {
         if let Some(ref rate_config) = route_meta.rate_limit_config {
             if crate::middleware::rate_limit::check_rate_limit(
                 handler_id,
@@ -1499,7 +1128,7 @@ pub fn handle_test_websocket(
     }
 
     // Auth and guards for WebSocket
-    if let Some(route_meta) = app.route_metadata.get(&handler_id) {
+    if let Some(route_meta) = app.route_metadata.get(handler_id) {
         let auth_ctx = if !route_meta.auth_backends.is_empty() {
             authenticate(&header_map, &route_meta.auth_backends)
         } else {
@@ -1526,7 +1155,7 @@ pub fn handle_test_websocket(
     // Get param_types from route metadata for type coercion
     let param_types = app
         .route_metadata
-        .get(&handler_id)
+        .get(handler_id)
         .map(|m| &m.param_types)
         .cloned()
         .unwrap_or_default();
@@ -1610,7 +1239,7 @@ pub fn handle_test_websocket(
     scope_dict.set_item("client", client_tuple)?;
 
     // Add auth context if present
-    if let Some(route_meta) = app.route_metadata.get(&handler_id) {
+    if let Some(route_meta) = app.route_metadata.get(handler_id) {
         let auth_ctx = if !route_meta.auth_backends.is_empty() {
             authenticate(&header_map, &route_meta.auth_backends)
         } else {

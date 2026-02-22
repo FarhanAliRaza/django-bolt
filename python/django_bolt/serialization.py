@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import mimetypes
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import msgspec
 from asgiref.sync import sync_to_async
@@ -33,12 +33,12 @@ ResponseMetaTuple = tuple[
     list[CookieTuple] | None,  # cookies: list of raw cookie tuples or None
 ]
 
-# ResponseTuple body can be bytes (normal) or StreamingResponse (for streaming)
-# Rust handler.rs checks if body is StreamingResponse and handles it specially
-# The second element can be either:
-# - list[tuple[str, str]]: legacy format with pre-built headers
-# - ResponseMetaTuple: new format for Rust-side header building
-ResponseTuple = tuple[int, list[tuple[str, str]] | ResponseMetaTuple, bytes | StreamingResponse]
+BodyKind = Literal["bytes", "stream", "file"]
+ResponseWireV1 = tuple[int, ResponseMetaTuple, BodyKind, bytes | StreamingResponse | str]
+
+_BODY_BYTES: BodyKind = "bytes"
+_BODY_STREAM: BodyKind = "stream"
+_BODY_FILE: BodyKind = "file"
 
 
 def _build_response_meta(
@@ -80,10 +80,23 @@ def _build_response_meta(
     return (response_type, custom_ct, headers_list, cookies_data)
 
 
+def _wire_bytes(status: int, meta: ResponseMetaTuple, body: bytes) -> ResponseWireV1:
+    return int(status), meta, _BODY_BYTES, body
+
+
+def _wire_stream(status: int, meta: ResponseMetaTuple, stream: StreamingResponse) -> ResponseWireV1:
+    return int(status), meta, _BODY_STREAM, stream
+
+
+def _wire_file(status: int, meta: ResponseMetaTuple, path: str) -> ResponseWireV1:
+    return int(status), meta, _BODY_FILE, path
+
+
 # Pre-computed response metadata tuples for common cases (module-level constants)
 _RESPONSE_META_JSON = _build_response_meta("json", None, None)
 _RESPONSE_META_PLAINTEXT = _build_response_meta("plaintext", None, None)
 _RESPONSE_META_OCTETSTREAM = _build_response_meta("octetstream", None, None)
+_RESPONSE_META_EMPTY = _build_response_meta("empty", None, None)
 
 
 def _convert_serializers(result: Any) -> Any:
@@ -115,18 +128,12 @@ def _convert_serializers(result: Any) -> Any:
 
 
 def _dispatch_non_json_type(
-    result: Any, response_tp: Any | None, meta: HandlerMetadata, status_code: int, is_async: bool = True
-) -> ResponseTuple | None:
+    result: Any, response_tp: Any | None, meta: HandlerMetadata, status_code: int
+) -> ResponseWireV1 | None:
     """Shared type dispatch for non-dict/list response types.
 
-    Returns ResponseTuple for handled types, or None if type needs async handling.
+    Returns ResponseWireV1 for handled types, or None if type needs async handling.
     """
-    # Check if result is already a raw response tuple (status, headers, body)
-    if isinstance(result, tuple) and len(result) == 3:
-        status, headers, body = result
-        if isinstance(status, int) and isinstance(headers, list) and isinstance(body, (bytes, bytearray)):
-            return status, headers, bytes(body)
-
     # Handle different response types (ordered by frequency for performance)
     if isinstance(result, JSON):
         return None  # JSON needs async/sync-specific handling
@@ -136,7 +143,7 @@ def _dispatch_non_json_type(
             custom_headers.update(result.headers)
         cookies = getattr(result, "_cookies", None)
         resp_meta = _build_response_meta("streaming", custom_headers, cookies)
-        return (result.status_code, resp_meta, result)
+        return _wire_stream(result.status_code, resp_meta, result)
     if isinstance(result, PlainText):
         return serialize_plaintext_response(result)
     if isinstance(result, HTML):
@@ -162,7 +169,7 @@ def _dispatch_non_json_type(
     return None  # Signal unhandled type
 
 
-async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTuple:
+async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseWireV1:
     """Serialize handler result to HTTP response."""
     # Direct access -- keys guaranteed at registration time
     status_code = meta["default_status_code"]
@@ -170,7 +177,7 @@ async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTupl
 
     # Handle 204 No Content
     if result is None and status_code == 204:
-        return 204, [], b""
+        return _wire_bytes(204, _RESPONSE_META_EMPTY, b"")
 
     # Fast path: dict/list are the most common response types (90%+ of handlers)
     if isinstance(result, dict):
@@ -209,7 +216,7 @@ async def serialize_response(result: Any, meta: HandlerMetadata) -> ResponseTupl
     )
 
 
-def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple:
+def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseWireV1:
     """Serialize handler result to HTTP response (sync version for sync handlers)."""
     # Direct access -- keys guaranteed at registration time
     status_code = meta["default_status_code"]
@@ -217,7 +224,7 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
 
     # Handle 204 No Content
     if result is None and status_code == 204:
-        return 204, [], b""
+        return _wire_bytes(204, _RESPONSE_META_EMPTY, b"")
 
     # Fast path: dict/list are the most common response types (90%+ of handlers)
     if isinstance(result, dict):
@@ -235,7 +242,7 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
         return serialize_json_data_sync(result, response_tp, meta)
 
     # Try shared dispatch first (handles most non-JSON types)
-    shared_result = _dispatch_non_json_type(result, response_tp, meta, status_code, is_async=False)
+    shared_result = _dispatch_non_json_type(result, response_tp, meta, status_code)
     if shared_result is not None:
         return shared_result
 
@@ -247,12 +254,20 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
                 data_bytes = _json.encode(validated)
             except Exception as e:
                 err = f"Response validation error: {e}"
-                return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+                return _wire_bytes(
+                    500,
+                    _build_response_meta(
+                        "plaintext",
+                        {"content-type": "text/plain; charset=utf-8"},
+                        None,
+                    ),
+                    err.encode(),
+                )
         else:
             data_bytes = result.to_bytes()
         cookies = getattr(result, "_cookies", None)
         resp_meta = _build_response_meta("json", result.headers, cookies)
-        return int(result.status_code), resp_meta, data_bytes
+        return _wire_bytes(result.status_code, resp_meta, data_bytes)
     elif isinstance(result, ResponseClass):
         if response_tp is not None:
             try:
@@ -260,7 +275,15 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
                 data_bytes = _json.encode(validated) if result.media_type == "application/json" else result.to_bytes()
             except Exception as e:
                 err = f"Response validation error: {e}"
-                return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+                return _wire_bytes(
+                    500,
+                    _build_response_meta(
+                        "plaintext",
+                        {"content-type": "text/plain; charset=utf-8"},
+                        None,
+                    ),
+                    err.encode(),
+                )
         else:
             data_bytes = result.to_bytes()
 
@@ -272,7 +295,7 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
 
         cookies = getattr(result, "_cookies", None)
         resp_meta = _build_response_meta(response_type, headers, cookies)
-        return int(result.status_code), resp_meta, data_bytes
+        return _wire_bytes(result.status_code, resp_meta, data_bytes)
     elif isinstance(result, msgspec.Struct):
         return serialize_json_data_sync(result, response_tp, meta)
     elif isinstance(result, QuerySet):
@@ -286,7 +309,7 @@ def serialize_response_sync(result: Any, meta: HandlerMetadata) -> ResponseTuple
 
 async def serialize_generic_response(
     result: ResponseClass, response_tp: Any | None, meta: HandlerMetadata | None = None
-) -> ResponseTuple:
+) -> ResponseWireV1:
     """Serialize generic Response object with custom headers.
 
     Uses the new ResponseMeta tuple format for Rust-side header building.
@@ -297,7 +320,15 @@ async def serialize_generic_response(
             data_bytes = _json.encode(validated) if result.media_type == "application/json" else result.to_bytes()
         except Exception as e:
             err = f"Response validation error: {e}"
-            return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+            return _wire_bytes(
+                500,
+                _build_response_meta(
+                    "plaintext",
+                    {"content-type": "text/plain; charset=utf-8"},
+                    None,
+                ),
+                err.encode(),
+            )
     else:
         data_bytes = result.to_bytes()
 
@@ -312,12 +343,12 @@ async def serialize_generic_response(
 
     cookies = getattr(result, "_cookies", None)
     resp_meta = _build_response_meta(response_type, headers, cookies)
-    return int(result.status_code), resp_meta, data_bytes
+    return _wire_bytes(result.status_code, resp_meta, data_bytes)
 
 
 async def serialize_json_response(
     result: JSON, response_tp: Any | None, meta: HandlerMetadata | None = None
-) -> ResponseTuple:
+) -> ResponseWireV1:
     """Serialize JSON response object.
 
     Uses the new ResponseMeta tuple format for Rust-side header building.
@@ -328,36 +359,44 @@ async def serialize_json_response(
             data_bytes = _json.encode(validated)
         except Exception as e:
             err = f"Response validation error: {e}"
-            return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+            return _wire_bytes(
+                500,
+                _build_response_meta(
+                    "plaintext",
+                    {"content-type": "text/plain; charset=utf-8"},
+                    None,
+                ),
+                err.encode(),
+            )
     else:
         data_bytes = result.to_bytes()
 
     cookies = getattr(result, "_cookies", None)
     resp_meta = _build_response_meta("json", result.headers, cookies)
-    return int(result.status_code), resp_meta, data_bytes
+    return _wire_bytes(result.status_code, resp_meta, data_bytes)
 
 
-def serialize_plaintext_response(result: PlainText) -> ResponseTuple:
+def serialize_plaintext_response(result: PlainText) -> ResponseWireV1:
     """Serialize plain text response.
 
     Uses the new ResponseMeta tuple format for Rust-side header building.
     """
     cookies = getattr(result, "_cookies", None)
     resp_meta = _build_response_meta("plaintext", result.headers, cookies)
-    return int(result.status_code), resp_meta, result.to_bytes()
+    return _wire_bytes(result.status_code, resp_meta, result.to_bytes())
 
 
-def serialize_html_response(result: HTML) -> ResponseTuple:
+def serialize_html_response(result: HTML) -> ResponseWireV1:
     """Serialize HTML response.
 
     Uses the new ResponseMeta tuple format for Rust-side header building.
     """
     cookies = getattr(result, "_cookies", None)
     resp_meta = _build_response_meta("html", result.headers, cookies)
-    return int(result.status_code), resp_meta, result.to_bytes()
+    return _wire_bytes(result.status_code, resp_meta, result.to_bytes())
 
 
-def serialize_redirect_response(result: Redirect) -> ResponseTuple:
+def serialize_redirect_response(result: Redirect) -> ResponseWireV1:
     """Serialize redirect response.
 
     Uses the new ResponseMeta tuple format for Rust-side header building.
@@ -369,30 +408,30 @@ def serialize_redirect_response(result: Redirect) -> ResponseTuple:
 
     cookies = getattr(result, "_cookies", None)
     resp_meta = _build_response_meta("redirect", custom_headers, cookies)
-    return int(result.status_code), resp_meta, b""
+    return _wire_bytes(result.status_code, resp_meta, b"")
 
 
-def serialize_django_response(result: DjangoHttpResponse) -> ResponseTuple:
+def serialize_django_response(result: DjangoHttpResponse) -> ResponseWireV1:
     """Serialize Django HttpResponse types (e.g., from @login_required decorator).
 
     Only called in fallback path - no overhead for normal Bolt responses.
     """
     # Handle redirects specially (HttpResponseRedirect, HttpResponsePermanentRedirect)
     if isinstance(result, DjangoHttpResponseRedirect):
-        headers = [("location", result.url)]
+        headers: dict[str, str] = {"location": result.url}
         # Copy other headers from Django response
         for key, value in result.items():
             if key.lower() != "location":
-                headers.append((key.lower(), value))
-        return result.status_code, headers, b""
+                headers[key] = value
+        return _wire_bytes(result.status_code, _build_response_meta("redirect", headers, None), b"")
 
     # Generic Django HttpResponse - extract content and headers
-    headers = [(key.lower(), value) for key, value in result.items()]
+    headers = {key: value for key, value in result.items()}
     content = result.content if isinstance(result.content, bytes) else result.content.encode()
-    return result.status_code, headers, content
+    return _wire_bytes(result.status_code, _build_response_meta("octetstream", headers, None), content)
 
 
-def serialize_file_response(result: File) -> ResponseTuple:
+def serialize_file_response(result: File) -> ResponseWireV1:
     """Serialize file response.
 
     Uses the new ResponseMeta tuple format for Rust-side header building.
@@ -409,10 +448,10 @@ def serialize_file_response(result: File) -> ResponseTuple:
 
     cookies = getattr(result, "_cookies", None)
     resp_meta = _build_response_meta("file", custom_headers, cookies)
-    return int(result.status_code), resp_meta, data
+    return _wire_bytes(result.status_code, resp_meta, data)
 
 
-def serialize_file_streaming_response(result: FileResponse) -> ResponseTuple:
+def serialize_file_streaming_response(result: FileResponse) -> ResponseWireV1:
     """Serialize file streaming response.
 
     Uses the new ResponseMeta tuple format for Rust-side header building.
@@ -421,7 +460,6 @@ def serialize_file_streaming_response(result: FileResponse) -> ResponseTuple:
 
     # Build custom headers
     custom_headers: dict[str, str] = {
-        "x-bolt-file-path": result.path,
         "content-type": ctype,
     }
     if result.filename:
@@ -431,10 +469,10 @@ def serialize_file_streaming_response(result: FileResponse) -> ResponseTuple:
 
     cookies = getattr(result, "_cookies", None)
     resp_meta = _build_response_meta("file", custom_headers, cookies)
-    return int(result.status_code), resp_meta, b""
+    return _wire_file(result.status_code, resp_meta, result.path)
 
 
-async def serialize_json_data(result: Any, response_tp: Any | None, meta: HandlerMetadata) -> ResponseTuple:
+async def serialize_json_data(result: Any, response_tp: Any | None, meta: HandlerMetadata) -> ResponseWireV1:
     """Serialize dict/list/other data as JSON.
 
     Uses the new ResponseMeta tuple format for Rust-side header building.
@@ -445,16 +483,23 @@ async def serialize_json_data(result: Any, response_tp: Any | None, meta: Handle
             data = _json.encode(validated)
         except Exception as e:
             err = f"Response validation error: {e}"
-            # Error responses use legacy format (simple case)
-            return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+            return _wire_bytes(
+                500,
+                _build_response_meta(
+                    "plaintext",
+                    {"content-type": "text/plain; charset=utf-8"},
+                    None,
+                ),
+                err.encode(),
+            )
     else:
         data = _json.encode(result)
 
     status = meta["default_status_code"]
-    return status, _RESPONSE_META_JSON, data
+    return _wire_bytes(status, _RESPONSE_META_JSON, data)
 
 
-def serialize_json_data_sync(result: Any, response_tp: Any | None, meta: HandlerMetadata) -> ResponseTuple:
+def serialize_json_data_sync(result: Any, response_tp: Any | None, meta: HandlerMetadata) -> ResponseWireV1:
     """Serialize dict/list/other data as JSON (sync version for sync handlers).
 
     Uses the new ResponseMeta tuple format for Rust-side header building.
@@ -465,9 +510,17 @@ def serialize_json_data_sync(result: Any, response_tp: Any | None, meta: Handler
             data = _json.encode(validated)
         except Exception as e:
             err = f"Response validation error: {e}"
-            return 500, [("content-type", "text/plain; charset=utf-8")], err.encode()
+            return _wire_bytes(
+                500,
+                _build_response_meta(
+                    "plaintext",
+                    {"content-type": "text/plain; charset=utf-8"},
+                    None,
+                ),
+                err.encode(),
+            )
     else:
         data = _json.encode(result)
 
     status = meta["default_status_code"]
-    return status, _RESPONSE_META_JSON, data
+    return _wire_bytes(status, _RESPONSE_META_JSON, data)

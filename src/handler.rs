@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
+use crate::asgi_http;
 use crate::error;
 use crate::form_parsing::{
     parse_multipart, parse_urlencoded, FileContent, FileFieldConstraints, FileInfo,
@@ -28,7 +29,7 @@ use crate::response_builder;
 use crate::response_meta::ResponseMeta;
 use crate::responses;
 use crate::router::parse_query_string;
-use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
+use crate::state::{find_asgi_mount, AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
 use crate::streaming::{create_python_stream, create_sse_stream};
 use crate::type_coercion::{params_to_py_dict, CoercedValue};
 use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
@@ -352,6 +353,174 @@ pub fn form_result_to_py(
     Ok((form_dict.unbind(), files_dict.unbind()))
 }
 
+enum ResponseWireBody {
+    Bytes(Vec<u8>),
+    FilePath(String),
+    Stream {
+        media_type: String,
+        content_obj: Py<PyAny>,
+        is_async_generator: bool,
+    },
+}
+
+struct ParsedResponseWire {
+    status: StatusCode,
+    meta: ResponseMeta,
+    body: ResponseWireBody,
+}
+
+fn parse_response_wire(py: Python<'_>, result_obj: &Py<PyAny>) -> PyResult<ParsedResponseWire> {
+    let obj = result_obj.bind(py);
+    let tuple = obj.cast::<PyTuple>()?;
+    if tuple.len() != 4 {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "ResponseWireV1 must be a 4-tuple: (status, meta, body_kind, body_payload)",
+        ));
+    }
+
+    let status_code: u16 = tuple.get_item(0)?.extract()?;
+    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+    let meta = ResponseMeta::from_python(&tuple.get_item(1)?)?;
+    let body_kind: String = tuple.get_item(2)?.extract()?;
+    let payload = tuple.get_item(3)?;
+
+    let body = match body_kind.as_str() {
+        "bytes" => {
+            if let Ok(py_bytes) = payload.cast::<PyBytes>() {
+                ResponseWireBody::Bytes(py_bytes.as_bytes().to_vec())
+            } else {
+                ResponseWireBody::Bytes(payload.extract::<Vec<u8>>()?)
+            }
+        }
+        "file" => ResponseWireBody::FilePath(payload.extract::<String>()?),
+        "stream" => {
+            let streaming_cls = get_streaming_response_class(py);
+            if !payload.is_instance(streaming_cls.bind(py))? {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "stream payload must be StreamingResponse",
+                ));
+            }
+            let media_type: String = payload
+                .getattr(pyo3::intern!(py, "media_type"))?
+                .extract()
+                .unwrap_or_else(|_| "application/octet-stream".to_string());
+            let content_obj: Py<PyAny> = payload.getattr(pyo3::intern!(py, "content"))?.unbind();
+            let is_async_generator: bool = payload
+                .getattr(pyo3::intern!(py, "is_async_generator"))?
+                .extract()
+                .unwrap_or(false);
+
+            ResponseWireBody::Stream {
+                media_type,
+                content_obj,
+                is_async_generator,
+            }
+        }
+        other => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Unsupported response body kind: {}",
+                other
+            )))
+        }
+    };
+
+    Ok(ParsedResponseWire { status, meta, body })
+}
+
+#[inline]
+fn mark_skip_cors(response: &mut HttpResponse, skip_cors: bool) {
+    if skip_cors {
+        response
+            .headers_mut()
+            .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
+    }
+}
+
+pub async fn response_from_wire_result(
+    result_obj: Py<PyAny>,
+    skip_compression: bool,
+    skip_cors: bool,
+    is_head_request: bool,
+) -> PyResult<HttpResponse> {
+    let parsed = Python::attach(|py| parse_response_wire(py, &result_obj))?;
+
+    match parsed.body {
+        ResponseWireBody::Bytes(body_bytes) => {
+            let response_body = if is_head_request {
+                Vec::new()
+            } else {
+                body_bytes
+            };
+            let mut response = response_builder::build_response_from_meta(
+                parsed.status,
+                parsed.meta,
+                response_body,
+                skip_compression,
+            );
+            mark_skip_cors(&mut response, skip_cors);
+            Ok(response)
+        }
+        ResponseWireBody::FilePath(file_path) => {
+            let headers = response_builder::meta_to_headers(&parsed.meta);
+            let mut response = build_file_response(
+                &file_path,
+                parsed.status,
+                headers,
+                skip_compression,
+                is_head_request,
+            )
+            .await;
+            mark_skip_cors(&mut response, skip_cors);
+            Ok(response)
+        }
+        ResponseWireBody::Stream {
+            media_type,
+            content_obj,
+            is_async_generator,
+        } => {
+            let headers = response_builder::meta_to_headers(&parsed.meta);
+            if media_type == "text/event-stream" {
+                if is_head_request {
+                    let mut response = response_builder::build_sse_response(
+                        parsed.status,
+                        headers,
+                        skip_compression,
+                    )
+                    .body(Vec::<u8>::new());
+                    mark_skip_cors(&mut response, skip_cors);
+                    return Ok(response);
+                }
+                let stream = create_sse_stream(content_obj, is_async_generator);
+                let mut response =
+                    response_builder::build_sse_response(parsed.status, headers, skip_compression)
+                        .streaming(stream);
+                mark_skip_cors(&mut response, skip_cors);
+                return Ok(response);
+            }
+
+            let mut builder = HttpResponse::build(parsed.status);
+            for (k, v) in headers {
+                builder.append_header((k, v));
+            }
+            if is_head_request {
+                if skip_compression {
+                    builder.append_header(("Content-Encoding", "identity"));
+                }
+                let mut response = builder.body(Vec::<u8>::new());
+                mark_skip_cors(&mut response, skip_cors);
+                return Ok(response);
+            }
+            if skip_compression {
+                builder.append_header(("Content-Encoding", "identity"));
+            }
+            let stream = create_python_stream(content_obj, is_async_generator);
+            let mut response = builder.streaming(stream);
+            mark_skip_cors(&mut response, skip_cors);
+            Ok(response)
+        }
+    }
+}
+
 /// Build prebound Python args/kwargs from Rust binding metadata.
 ///
 /// Returns None if any required binding value is missing so Python injector can
@@ -466,6 +635,14 @@ pub async fn handle_request(
                 }
             }
 
+            // HTTP ASGI mount fallback:
+            // - only after Bolt route miss
+            // - only after trailing-slash/API-method near-miss checks above
+            if let Some(asgi_mount) = find_asgi_mount(state.get_ref(), path) {
+                return asgi_http::handle_asgi_mount_request(req, payload, asgi_mount, state.debug)
+                    .await;
+            }
+
             // Handle OPTIONS preflight for non-existent routes
             // IMPORTANT: Preflight MUST return 2xx status for browser to proceed with actual request
             // Browsers reject preflight responses with non-2xx status codes (like 404)
@@ -492,11 +669,11 @@ pub async fn handle_request(
     // NOTE: Fetch metadata EARLY so we can use optimization flags to skip unnecessary parsing.
     let route_metadata = ROUTE_METADATA
         .get()
-        .and_then(|meta_map| meta_map.get(&handler_id));
+        .and_then(|meta_map| meta_map.get(handler_id));
 
     // Optimization: Only parse query string if handler needs it
     // This saves ~0.5-1ms per request for handlers that don't use query params
-    let needs_query = route_metadata.map(|m| m.needs_query).unwrap_or(true);
+    let needs_query = route_metadata.map(|m| m.plan.needs_query()).unwrap_or(true);
 
     let query_params = if needs_query {
         if let Some(q) = req.uri().query() {
@@ -509,10 +686,7 @@ pub async fn handle_request(
     };
 
     // Optimization: Skip body buffering for handlers that never read body/form/file params.
-    let needs_body = route_metadata
-        .as_ref()
-        .map(|m| m.needs_body)
-        .unwrap_or(true);
+    let needs_body = route_metadata.map(|m| m.plan.needs_body()).unwrap_or(true);
 
     // Type validation for path and query parameters (Rust-native, no GIL)
     // This validates parameter types before GIL acquisition, returning 422 for invalid types.
@@ -533,18 +707,22 @@ pub async fn handle_request(
     // Optimization: Check if handler needs headers
     // Headers are still needed for auth/rate limiting middleware, so we extract them for Rust
     // but can skip passing them to Python when the handler doesn't use Header() params
-    let needs_headers = route_metadata.map(|m| m.needs_headers).unwrap_or(true);
+    let needs_headers = route_metadata
+        .map(|m| m.plan.needs_headers())
+        .unwrap_or(true);
 
     // Extract request headers only when needed by auth/rate-limit/cookies/form/Python path params.
-    let needs_cookies = route_metadata.map(|m| m.needs_cookies).unwrap_or(true);
+    let needs_cookies = route_metadata
+        .map(|m| m.plan.needs_cookies())
+        .unwrap_or(true);
     let needs_form_parsing = route_metadata
-        .map(|m| m.needs_form_parsing)
+        .map(|m| m.plan.needs_form_parsing())
         .unwrap_or(false);
     let has_route_auth_or_guards = route_metadata
-        .map(|m| !m.auth_backends.is_empty() || !m.guards.is_empty())
+        .map(|m| m.plan.has_auth_or_guards())
         .unwrap_or(false);
     let has_route_rate_limit = route_metadata
-        .map(|m| m.rate_limit_config.is_some())
+        .map(|m| m.plan.has_rate_limit())
         .unwrap_or(false);
     let must_extract_headers = needs_headers
         || needs_cookies
@@ -553,9 +731,7 @@ pub async fn handle_request(
         || has_route_rate_limit;
 
     // Compute skip_cors flag for CorsMiddleware
-    let skip_cors = route_metadata
-        .map(|m| m.skip.contains("cors"))
-        .unwrap_or(false);
+    let skip_cors = route_metadata.map(|m| m.plan.skip_cors()).unwrap_or(false);
 
     // Extract and validate headers
     let headers = if must_extract_headers {
@@ -581,7 +757,7 @@ pub async fn handle_request(
 
     // Compute skip flags (e.g., skip compression)
     let skip_compression = route_metadata
-        .map(|m| m.skip.contains("compression"))
+        .map(|m| m.plan.skip_compression())
         .unwrap_or(false);
 
     // Process rate limiting (Rust-native, no GIL)
@@ -828,434 +1004,26 @@ pub async fn handle_request(
     };
 
     match fut.await {
-        Ok(result_obj) => {
-            // Try new ResponseMeta format first: (status, meta_tuple, body)
-            // Performance: All header building happens in Rust using static strings
-            let parsed_meta =
-                Python::attach(|py| response_builder::try_extract_response_meta(py, &result_obj));
-
-            // Handle new ResponseMeta format
-            if let Some(parsed) = parsed_meta {
-                let status = StatusCode::from_u16(parsed.status_code).unwrap_or(StatusCode::OK);
-
-                // Check for file serving: x-bolt-file-path in custom headers
-                if let Some(fpath) = response_builder::extract_file_path_from_meta(&parsed.meta) {
-                    let headers = response_builder::meta_to_headers_without_file_path(&parsed.meta);
-                    return build_file_response(
-                        &fpath,
-                        status,
-                        headers,
-                        skip_compression,
-                        is_head_request,
-                    )
-                    .await;
-                }
-
-                let response_body = if is_head_request {
-                    Vec::new()
-                } else {
-                    parsed.body
-                };
-
-                let mut response = response_builder::build_response_from_meta(
-                    status,
-                    parsed.meta,
-                    response_body,
-                    skip_compression,
-                );
-
-                // Set skip-cors marker if @skip_middleware("cors") is used
-                if skip_cors {
-                    response
-                        .headers_mut()
-                        .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
-                }
-
-                // CORS headers will be added by CorsMiddleware
-                return response;
-            }
-
-            // Fallback to old format: (status, headers_list, body)
-            // Fast-path: extract and copy body in single GIL acquisition (eliminates separate GIL for drop)
-            let fast_tuple: Option<(u16, Vec<(String, String)>, Vec<u8>)> = Python::attach(|py| {
-                let obj = result_obj.bind(py);
-                let tuple = obj.cast::<PyTuple>().ok()?;
-                if tuple.len() != 3 {
-                    return None;
-                }
-
-                // 0: status
-                let status_code: u16 = tuple.get_item(0).ok()?.extract::<u16>().ok()?;
-
-                // 1: headers
-                let resp_headers: Vec<(String, String)> = tuple
-                    .get_item(1)
-                    .ok()?
-                    .extract::<Vec<(String, String)>>()
-                    .ok()?;
-
-                // 2: body (bytes) - copy within GIL, drop Python object before releasing GIL
-                let body_obj = tuple.get_item(2).ok()?;
-                let pybytes = body_obj.cast::<PyBytes>().ok()?;
-                let body_vec = pybytes.as_bytes().to_vec();
-                // Python object drops automatically when this scope ends (still holding GIL)
-                Some((status_code, resp_headers, body_vec))
-            });
-
-            if let Some((status_code, resp_headers, body_bytes)) = fast_tuple {
-                let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
-                let mut file_path: Option<String> = None;
-                let mut headers: Vec<(String, String)> = Vec::with_capacity(resp_headers.len());
-                for (k, v) in resp_headers {
-                    if k.eq_ignore_ascii_case("x-bolt-file-path") {
-                        file_path = Some(v);
-                    } else {
-                        headers.push((k, v));
-                    }
-                }
-                if let Some(fpath) = file_path {
-                    return build_file_response(
-                        &fpath,
-                        status,
-                        headers,
-                        skip_compression,
-                        is_head_request,
-                    )
-                    .await;
-                } else {
-                    // Non-file response path: body already copied within GIL scope above
-                    // Use optimized response builder
-                    let response_body = if is_head_request {
-                        Vec::new()
-                    } else {
-                        body_bytes
-                    };
-
-                    let mut response = response_builder::build_response_with_headers(
-                        status,
-                        headers,
-                        skip_compression,
-                        response_body,
-                    );
-
-                    // Set skip-cors marker if @skip_middleware("cors") is used
-                    if skip_cors {
-                        response
-                            .headers_mut()
-                            .insert("x-bolt-skip-cors".parse().unwrap(), "true".parse().unwrap());
-                    }
-
-                    // CORS headers will be added by CorsMiddleware
-                    return response;
-                }
-            } else {
-                // Fallback: handle tuple by extracting Vec<u8> under the GIL (compat path)
-                if let Ok((status_code, resp_headers, body_bytes)) = Python::attach(|py| {
-                    result_obj.extract::<(u16, Vec<(String, String)>, Vec<u8>)>(py)
-                }) {
-                    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
-                    let mut file_path: Option<String> = None;
-                    let mut headers: Vec<(String, String)> = Vec::with_capacity(resp_headers.len());
-                    for (k, v) in resp_headers {
-                        if k.eq_ignore_ascii_case("x-bolt-file-path") {
-                            file_path = Some(v);
-                        } else {
-                            headers.push((k, v));
-                        }
-                    }
-                    if let Some(fpath) = file_path {
-                        return build_file_response(
-                            &fpath,
-                            status,
-                            headers,
-                            skip_compression,
-                            is_head_request,
-                        )
-                        .await;
-                    } else {
-                        let mut builder = HttpResponse::build(status);
-                        for (k, v) in headers {
-                            builder.append_header((k, v));
-                        }
-                        if skip_compression {
-                            builder.append_header(("Content-Encoding", "identity"));
-                        }
-                        // Set skip-cors marker if @skip_middleware("cors") is used
-                        if skip_cors {
-                            builder.append_header(("x-bolt-skip-cors", "true"));
-                        }
-                        let response_body = if is_head_request {
-                            Vec::new()
-                        } else {
-                            body_bytes
-                        };
-                        // CORS headers will be added by CorsMiddleware
-                        return builder.body(response_body);
-                    }
-                }
-                // Check for tuple with StreamingResponse body (middleware path)
-                // This handles the case where serialize_response returns (status, headers/meta, StreamingResponse)
-                // allowing streaming responses to work with middleware (CORS, rate limiting, etc.)
-                let streaming_tuple = Python::attach(|py| {
-                    let obj = result_obj.bind(py);
-                    let tuple = obj.cast::<PyTuple>().ok()?;
-                    if tuple.len() != 3 {
-                        return None;
-                    }
-                    // Extract body (element 2) and check if it's a StreamingResponse
-                    let body_obj = tuple.get_item(2).ok()?;
-                    let streaming_cls = get_streaming_response_class(py);
-                    if !body_obj
-                        .is_instance(streaming_cls.bind(py))
-                        .unwrap_or(false)
-                    {
-                        return None;
-                    }
-
-                    // Extract headers: try new ResponseMeta format first, then legacy format
-                    let meta_or_headers = tuple.get_item(1).ok()?;
-                    let tuple_headers: Vec<(String, String)> =
-                        if meta_or_headers.is_instance_of::<PyTuple>() {
-                            // New ResponseMeta format: build headers from meta
-                            let meta = ResponseMeta::from_python(&meta_or_headers).ok()?;
-                            response_builder::meta_to_headers(&meta)
-                        } else {
-                            // Legacy format: list of header tuples
-                            meta_or_headers.extract::<Vec<(String, String)>>().ok()?
-                        };
-
-                    let media_type: String = body_obj
-                        .getattr(pyo3::intern!(py, "media_type"))
-                        .and_then(|v| v.extract())
-                        .unwrap_or_else(|_| "application/octet-stream".to_string());
-                    let content_obj: Py<PyAny> = body_obj
-                        .getattr(pyo3::intern!(py, "content"))
-                        .ok()?
-                        .unbind();
-                    let is_async_generator: bool = body_obj
-                        .getattr(pyo3::intern!(py, "is_async_generator"))
-                        .and_then(|v| v.extract())
-                        .unwrap_or(false);
-                    // Use headers from the tuple (processed by middleware) rather than StreamingResponse.headers
-                    Some((tuple_headers, media_type, content_obj, is_async_generator))
-                });
-                if let Some((headers, media_type, content_obj, is_async_generator)) =
-                    streaming_tuple
-                {
-                    // Extract status from tuple element 0
-                    // Headers already include content-type from serialize_response
-                    let status = Python::attach(|py| {
-                        let obj = result_obj.bind(py);
-                        if let Ok(tuple) = obj.cast::<PyTuple>() {
-                            tuple
-                                .get_item(0)
-                                .ok()
-                                .and_then(|v| v.extract::<u16>().ok())
-                                .map(|s| StatusCode::from_u16(s).unwrap_or(StatusCode::OK))
-                                .unwrap_or(StatusCode::OK)
-                        } else {
-                            StatusCode::OK
-                        }
-                    });
-
-                    if media_type == "text/event-stream" {
-                        if is_head_request {
-                            let mut builder = response_builder::build_sse_response(
-                                status,
-                                headers,
-                                skip_compression,
-                            );
-                            let mut response = builder.body(Vec::<u8>::new());
-                            if skip_cors {
-                                response.headers_mut().insert(
-                                    "x-bolt-skip-cors".parse().unwrap(),
-                                    "true".parse().unwrap(),
-                                );
-                            }
-                            return response;
-                        }
-                        let stream = create_sse_stream(content_obj, is_async_generator);
-                        let mut response =
-                            response_builder::build_sse_response(status, headers, skip_compression)
-                                .streaming(stream);
-                        if skip_cors {
-                            response.headers_mut().insert(
-                                "x-bolt-skip-cors".parse().unwrap(),
-                                "true".parse().unwrap(),
-                            );
-                        }
-                        return response;
-                    } else {
-                        // Non-SSE streaming responses
-                        let mut builder = HttpResponse::build(status);
-                        for (k, v) in headers {
-                            builder.append_header((k, v));
-                        }
-                        if is_head_request {
-                            if skip_compression {
-                                builder.append_header(("Content-Encoding", "identity"));
-                            }
-                            if skip_cors {
-                                builder.append_header(("x-bolt-skip-cors", "true"));
-                            }
-                            return builder.body(Vec::<u8>::new());
-                        }
-                        if skip_compression {
-                            builder.append_header(("Content-Encoding", "identity"));
-                        }
-                        if skip_cors {
-                            builder.append_header(("x-bolt-skip-cors", "true"));
-                        }
-                        let stream = create_python_stream(content_obj, is_async_generator);
-                        return builder.streaming(stream);
-                    }
-                }
-                let streaming = Python::attach(|py| {
-                    let obj = result_obj.bind(py);
-                    // Use cached StreamingResponse class to avoid repeated imports
-                    let streaming_cls = get_streaming_response_class(py);
-                    let is_streaming = obj.is_instance(streaming_cls.bind(py)).unwrap_or(false);
-                    // OPTIMIZATION: Use interned strings for attribute checks
-                    if !is_streaming && !obj.hasattr(pyo3::intern!(py, "content")).unwrap_or(false)
-                    {
-                        return None;
-                    }
-                    let status_code: u16 = obj
-                        .getattr(pyo3::intern!(py, "status_code"))
-                        .and_then(|v| v.extract())
-                        .unwrap_or(200);
-                    let mut headers: Vec<(String, String)> = Vec::new();
-                    if let Ok(hobj) = obj.getattr(pyo3::intern!(py, "headers")) {
-                        if let Ok(hdict) = hobj.cast::<PyDict>() {
-                            for (k, v) in hdict {
-                                if let (Ok(ks), Ok(vs)) =
-                                    (k.extract::<String>(), v.extract::<String>())
-                                {
-                                    headers.push((ks, vs));
-                                }
-                            }
-                        }
-                    }
-                    let media_type: String = obj
-                        .getattr(pyo3::intern!(py, "media_type"))
-                        .and_then(|v| v.extract())
-                        .unwrap_or_else(|_| "application/octet-stream".to_string());
-                    let has_ct = headers
-                        .iter()
-                        .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
-                    if !has_ct {
-                        headers.push(("content-type".to_string(), media_type.clone()));
-                    }
-                    let content_obj: Py<PyAny> = match obj.getattr(pyo3::intern!(py, "content")) {
-                        Ok(c) => c.unbind(),
-                        Err(_) => return None,
-                    };
-                    // Extract pre-computed is_async_generator metadata (detected at StreamingResponse instantiation)
-                    let is_async_generator: bool = obj
-                        .getattr(pyo3::intern!(py, "is_async_generator"))
-                        .and_then(|v| v.extract())
-                        .unwrap_or(false);
-                    Some((
-                        status_code,
-                        headers,
-                        media_type,
-                        content_obj,
-                        is_async_generator,
-                    ))
-                });
-
-                if let Some((status_code, headers, media_type, content_obj, is_async_generator)) =
-                    streaming
-                {
-                    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
-
-                    if media_type == "text/event-stream" {
-                        // HEAD requests must have empty body per RFC 7231
-                        if is_head_request {
-                            // Use optimized SSE response builder (batches all SSE headers)
-                            let mut builder = response_builder::build_sse_response(
-                                status,
-                                headers,
-                                skip_compression,
-                            );
-                            let mut response = builder.body(Vec::<u8>::new());
-
-                            // Set skip-cors marker if @skip_middleware("cors") is used
-                            if skip_cors {
-                                response.headers_mut().insert(
-                                    "x-bolt-skip-cors".parse().unwrap(),
-                                    "true".parse().unwrap(),
-                                );
-                            }
-
-                            // CORS headers will be added by CorsMiddleware
-                            return response;
-                        }
-
-                        // Use optimized SSE response builder (batches all SSE headers)
-                        let final_content_obj = content_obj;
-                        let mut builder =
-                            response_builder::build_sse_response(status, headers, skip_compression);
-                        let stream = create_sse_stream(final_content_obj, is_async_generator);
-                        let mut response = builder.streaming(stream);
-
-                        // Set skip-cors marker if @skip_middleware("cors") is used
-                        if skip_cors {
-                            response.headers_mut().insert(
-                                "x-bolt-skip-cors".parse().unwrap(),
-                                "true".parse().unwrap(),
-                            );
-                        }
-
-                        // CORS headers will be added by CorsMiddleware
-                        return response;
-                    } else {
-                        // Non-SSE streaming responses
-                        let mut builder = HttpResponse::build(status);
-                        for (k, v) in headers {
-                            builder.append_header((k, v));
-                        }
-
-                        // HEAD requests must have empty body per RFC 7231
-                        if is_head_request {
-                            if skip_compression {
-                                builder.append_header(("Content-Encoding", "identity"));
-                            }
-                            // Set skip-cors marker if @skip_middleware("cors") is used
-                            if skip_cors {
-                                builder.append_header(("x-bolt-skip-cors", "true"));
-                            }
-                            // CORS headers will be added by CorsMiddleware
-                            return builder.body(Vec::<u8>::new());
-                        }
-
-                        let final_content = content_obj;
-                        // Use unified streaming for all streaming responses (sync and async)
-                        if skip_compression {
-                            builder.append_header(("Content-Encoding", "identity"));
-                        }
-                        // Set skip-cors marker if @skip_middleware("cors") is used
-                        if skip_cors {
-                            builder.append_header(("x-bolt-skip-cors", "true"));
-                        }
-                        let stream = create_python_stream(final_content, is_async_generator);
-                        // CORS headers will be added by CorsMiddleware
-                        return builder.streaming(stream);
-                    }
-                } else {
-                    return Python::attach(|py| {
-                        error::build_error_response(
-                        py,
-                        500,
-                        "Handler returned unsupported response type (expected tuple or StreamingResponse)".to_string(),
-                        vec![],
-                        None,
-                        state.debug,
-                    )
-                    });
-                }
-            }
-        }
+        Ok(result_obj) => match response_from_wire_result(
+            result_obj,
+            skip_compression,
+            skip_cors,
+            is_head_request,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(e) => Python::attach(|py| {
+                error::build_error_response(
+                    py,
+                    500,
+                    format!("Handler returned unsupported response wire format: {}", e),
+                    vec![],
+                    None,
+                    state.debug,
+                )
+            }),
+        },
         Err(e) => {
             return Python::attach(|py| {
                 handle_python_error(py, e, &path_owned, &method_owned, state.debug)

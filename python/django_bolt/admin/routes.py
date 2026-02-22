@@ -1,21 +1,21 @@
 """
 Django admin route registration for BoltAPI.
 
-This module handles the registration of Django admin routes via ASGI bridge,
-keeping the BoltAPI class lean and focused.
+This module handles registration of Django admin via ASGI mounts.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from django_bolt.admin.admin_detection import get_admin_route_patterns, should_enable_admin
-from django_bolt.admin.asgi_bridge import ASGIFallbackHandler
+from django.core.asgi import get_asgi_application
+
+from django_bolt.admin.admin_detection import detect_admin_url_prefix, should_enable_admin
 
 if TYPE_CHECKING:
     from django_bolt.api import BoltAPI
 
 
 class AdminRouteRegistrar:
-    """Handles registration of Django admin routes via ASGI bridge."""
+    """Handles registration of Django admin via ASGI mount."""
 
     def __init__(self, api: "BoltAPI"):
         """Initialize the registrar with a BoltAPI instance.
@@ -26,73 +26,60 @@ class AdminRouteRegistrar:
         self.api = api
 
     def register_routes(self, host: str = "localhost", port: int = 8000) -> None:
-        """Register Django admin routes via ASGI bridge.
+        """Register Django admin using mount_asgi().
 
-        This method auto-registers routes for Django admin if it's installed
-        and enabled. The routes use an ASGI bridge to handle Django's middleware
-        stack (sessions, CSRF, auth, etc.).
-
-        Args:
-            host: Server hostname for ASGI scope
-            port: Server port for ASGI scope
+        host/port are accepted for backward compatibility and ignored.
         """
+        _ = (host, port)
         if self.api._admin_routes_registered:
             return
 
-        # Check if admin should be enabled
         if not should_enable_admin():
             return
 
-        # Get admin route patterns
-        route_patterns = get_admin_route_patterns()
-        if not route_patterns:
+        admin_prefix = detect_admin_url_prefix()
+        if not admin_prefix:
             return
 
-        # Lazy-load ASGI handler
-        if self.api._asgi_handler is None:
-            self.api._asgi_handler = ASGIFallbackHandler(host, port)
+        mount_path = f"/{admin_prefix.strip('/')}"
+        django_app = get_asgi_application()
 
-        # Register admin routes for each method
-        for path_pattern, methods in route_patterns:
-            for method in methods:
-                self._register_admin_route(method, path_pattern)
+        async def admin_mount_wrapper(scope: dict[str, Any], receive: Any, send: Any) -> None:
+            if scope.get("type") != "http":
+                await django_app(scope, receive, send)
+                return
 
+            # Mounted scopes arrive with path stripped to subpath and root_path set to mount prefix.
+            # For Django admin URL resolution, restore full path and clear root_path so URLconf
+            # containing /admin/... patterns resolves correctly.
+            subpath = scope.get("path") or "/"
+            if not isinstance(subpath, str):
+                subpath = str(subpath)
+            if not subpath.startswith("/"):
+                subpath = "/" + subpath
+
+            full_path = f"{mount_path}/" if subpath == "/" else f"{mount_path}{subpath}"
+            full_raw_path = full_path.encode("utf-8")
+
+            raw_path_obj = scope.get("raw_path")
+            if isinstance(raw_path_obj, memoryview):
+                raw_path = raw_path_obj.tobytes()
+            elif isinstance(raw_path_obj, (bytes, bytearray)):
+                raw_path = bytes(raw_path_obj)
+            elif isinstance(raw_path_obj, str):
+                raw_path = raw_path_obj.encode("utf-8")
+            else:
+                raw_path = subpath.encode("utf-8")
+
+            if not raw_path.startswith(mount_path.encode("utf-8")):
+                full_raw_path = mount_path.encode("utf-8") + raw_path
+
+            django_scope = dict(scope)
+            django_scope["path"] = full_path
+            django_scope["raw_path"] = full_raw_path
+            django_scope["root_path"] = ""
+
+            await django_app(django_scope, receive, send)
+
+        self.api.mount_asgi(mount_path, admin_mount_wrapper)
         self.api._admin_routes_registered = True
-
-    def _register_admin_route(self, method: str, path_pattern: str) -> None:
-        """Register a single admin route.
-
-        Args:
-            method: HTTP method (GET, POST, etc.)
-            path_pattern: URL path pattern
-        """
-
-        # Create handler that delegates to ASGI bridge
-        # NOTE: We need to create a new function for each route to avoid closure issues
-        def make_admin_handler(asgi_handler):
-            async def admin_handler(request):
-                return await asgi_handler.handle_request(request)
-
-            return admin_handler
-
-        admin_handler = make_admin_handler(self.api._asgi_handler)
-
-        # Register the route using internal route registration
-        # This bypasses the decorator to avoid async enforcement issues
-        handler_id = self.api._next_handler_id
-        self.api._next_handler_id += 1
-
-        self.api._routes.append((method, path_pattern, handler_id, admin_handler))
-        self.api._handlers[handler_id] = admin_handler
-
-        # Create minimal metadata for admin handlers
-        # Keys must match what _dispatch and serialize_response access directly
-        meta = {
-            "mode": "request_only",
-            "is_async": True,
-            "sig": None,
-            "fields": [],
-            "default_status_code": 200,
-            "response_type": None,
-        }
-        self.api._handler_meta[handler_id] = meta

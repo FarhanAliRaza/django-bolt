@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 
+mod asgi_http;
 mod cookies;
 mod cors;
 mod error;
@@ -41,11 +42,11 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[pymodule]
 fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     use crate::server::{
-        register_middleware_metadata, register_routes, register_websocket_routes,
-        start_server_async,
+        register_asgi_mounts, register_middleware_metadata, register_routes,
+        register_websocket_routes, start_server_async,
     };
     use crate::testing::{
-        create_test_app, destroy_test_app, handle_test_websocket,
+        create_test_app, destroy_test_app, handle_test_websocket, register_test_asgi_mounts,
         register_test_middleware_metadata, register_test_routes, register_test_websocket_routes,
         test_request,
     };
@@ -53,6 +54,7 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Production server functions
     m.add_function(wrap_pyfunction!(register_routes, m)?)?;
     m.add_function(wrap_pyfunction!(register_websocket_routes, m)?)?;
+    m.add_function(wrap_pyfunction!(register_asgi_mounts, m)?)?;
     m.add_function(wrap_pyfunction!(register_middleware_metadata, m)?)?;
     m.add_function(wrap_pyfunction!(start_server_async, m)?)?;
 
@@ -61,6 +63,7 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(destroy_test_app, m)?)?;
     m.add_function(wrap_pyfunction!(register_test_routes, m)?)?;
     m.add_function(wrap_pyfunction!(register_test_websocket_routes, m)?)?;
+    m.add_function(wrap_pyfunction!(register_test_asgi_mounts, m)?)?;
     m.add_function(wrap_pyfunction!(register_test_middleware_metadata, m)?)?;
     m.add_function(wrap_pyfunction!(test_request, m)?)?;
     m.add_function(wrap_pyfunction!(handle_test_websocket, m)?)?;

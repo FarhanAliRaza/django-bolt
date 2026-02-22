@@ -19,6 +19,7 @@ except ImportError:
 
 # Import local modules
 from django.core.signals import request_finished, request_started
+from django.db.models import QuerySet
 from django.utils.functional import SimpleLazyObject
 
 from . import _json
@@ -55,13 +56,13 @@ from .openapi.routes import OpenAPIRouteRegistrar
 from .openapi.schema_generator import SchemaGenerator
 from .pagination import extract_pagination_item_type
 from .router import Router
-from .serialization import serialize_response, serialize_response_sync
+from .serialization import ResponseWireV1, serialize_response, serialize_response_sync
 from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
 from .typing import HandlerMetadata
 from .views import APIView, ViewSet
 from .websocket import mark_websocket_handler
 
-Response = tuple[int, list[tuple[str, str]], bytes]
+Response = ResponseWireV1
 
 
 # Global registry for BoltAPI instances (used by autodiscovery)
@@ -91,6 +92,165 @@ def _normalize_path(path: str, trailing_slash: str = "strip") -> str:
         return path if path.endswith("/") else path + "/"
     else:  # "keep"
         return path
+
+
+def _normalize_mount_prefix(path: str) -> str:
+    """Normalize an ASGI mount prefix to a static path."""
+    mount_path = "/" + path.strip("/") if path else "/"
+    if mount_path != "/" and mount_path.endswith("/"):
+        mount_path = mount_path.rstrip("/")
+
+    if "{" in mount_path or "}" in mount_path:
+        raise ValueError(
+            f"ASGI mount path must be static (no dynamic parameters), got: {mount_path}"
+        )
+
+    return mount_path
+
+
+def _rewrite_scope_for_django_mount(scope: dict[str, Any]) -> dict[str, Any]:
+    """
+    Adjust scope for Django mounted under a non-empty root_path.
+
+    Django's ASGI request handling expects ``scope["path"]`` to include
+    ``scope["root_path"]`` so it can derive ``path_info`` and redirects
+    correctly (for example APPEND_SLASH redirects).
+    """
+    if scope.get("type") != "http":
+        return scope
+
+    root_path = scope.get("root_path") or ""
+    if not root_path:
+        return scope
+
+    path = scope.get("path") or "/"
+    if not isinstance(path, str):
+        path = str(path)
+    if not path.startswith("/"):
+        path = "/" + path
+
+    # Already full path.
+    if path.startswith(root_path):
+        return scope
+
+    full_path = f"{root_path}{path}"
+
+    raw_path_obj = scope.get("raw_path")
+    raw_path: bytes
+    if isinstance(raw_path_obj, memoryview):
+        raw_path = raw_path_obj.tobytes()
+    elif isinstance(raw_path_obj, (bytes, bytearray)):
+        raw_path = bytes(raw_path_obj)
+    elif isinstance(raw_path_obj, str):
+        raw_path = raw_path_obj.encode("utf-8")
+    else:
+        raw_path = path.encode("utf-8")
+
+    root_path_bytes = root_path.encode("utf-8")
+    if raw_path.startswith(root_path_bytes):
+        full_raw_path = raw_path
+    elif raw_path.startswith(b"/"):
+        full_raw_path = root_path_bytes + raw_path
+    else:
+        full_raw_path = full_path.encode("utf-8")
+
+    new_scope = dict(scope)
+    new_scope["path"] = full_path
+    new_scope["raw_path"] = full_raw_path
+    return new_scope
+
+
+def _rewrite_django_mount_redirect_message(
+    message: dict[str, Any], root_path: str
+) -> dict[str, Any]:
+    """
+    Rewrite root-relative redirect locations to stay inside the mount prefix.
+
+    Example:
+    - root_path="/django"
+    - Location: "/accounts/" -> "/django/accounts/"
+    """
+    if not root_path:
+        return message
+
+    if message.get("type") != "http.response.start":
+        return message
+
+    status = message.get("status")
+    if status not in (301, 302, 303, 307, 308):
+        return message
+
+    headers = message.get("headers")
+    if not isinstance(headers, (list, tuple)):
+        return message
+
+    changed = False
+    rewritten: list[tuple[Any, Any]] = []
+
+    for header_name, header_value in headers:
+        # Keep original types where possible (ASGI headers are usually bytes).
+        name_bytes = (
+            header_name.tobytes()
+            if isinstance(header_name, memoryview)
+            else bytes(header_name)
+            if isinstance(header_name, (bytes, bytearray))
+            else str(header_name).encode("latin1")
+        )
+
+        if name_bytes.lower() != b"location":
+            rewritten.append((header_name, header_value))
+            continue
+
+        value_bytes = (
+            header_value.tobytes()
+            if isinstance(header_value, memoryview)
+            else bytes(header_value)
+            if isinstance(header_value, (bytes, bytearray))
+            else str(header_value).encode("latin1")
+        )
+        location = value_bytes.decode("latin1")
+
+        # Rewrite only root-relative redirects and keep absolute/protocol-relative untouched.
+        if location.startswith("/") and not location.startswith("//"):
+            if not (location == root_path or location.startswith(root_path + "/")):
+                location = f"{root_path}{location}"
+                changed = True
+                if isinstance(header_value, memoryview):
+                    rewritten.append((header_name, location.encode("latin1")))
+                elif isinstance(header_value, (bytes, bytearray)):
+                    rewritten.append((header_name, location.encode("latin1")))
+                else:
+                    rewritten.append((header_name, location))
+                continue
+
+        rewritten.append((header_name, header_value))
+
+    if not changed:
+        return message
+
+    new_message = dict(message)
+    new_message["headers"] = rewritten
+    return new_message
+
+
+def _wire_from_error_parts(status: int, headers: list[tuple[str, str]], body: bytes) -> ResponseWireV1:
+    """Convert error-handler parts into ResponseWireV1."""
+    custom_content_type = None
+    custom_headers: list[tuple[str, str]] = []
+
+    for key, value in headers:
+        if key.lower() == "content-type":
+            custom_content_type = value
+        else:
+            custom_headers.append((key, value))
+
+    meta = (
+        "octetstream",
+        custom_content_type,
+        custom_headers or None,
+        None,
+    )
+    return int(status), meta, "bytes", body
 
 
 class BoltAPI:
@@ -149,6 +309,9 @@ class BoltAPI:
         # Add custom middleware
         if middleware:
             self._middleware.extend(normalize_middleware_specs(middleware, context="api"))
+        self._has_python_global_middleware = any(
+            self._is_python_middleware_spec(spec) for spec in self._middleware
+        )
 
         # Logging configuration (opt-in, setup happens at server startup)
         self._enable_logging = enable_logging
@@ -210,7 +373,7 @@ class BoltAPI:
         # Django admin configuration (controlled by --no-admin flag)
         self._admin_routes_registered = False
         self._static_routes_registered = False
-        self._asgi_handler = None
+        self._asgi_mounts: list[tuple[str, Callable[..., Any]]] = []
 
         # Middleware chain (built lazily on first request)
         self._middleware_chain_built = False
@@ -959,6 +1122,7 @@ class BoltAPI:
             meta["injector"] = injector
             # Store whether injector is async (avoids runtime check with inspect.iscoroutinefunction)
             meta["injector_is_async"] = inspect.iscoroutinefunction(injector)
+            meta["_handler_executor"] = self._compile_handler_executor(meta)
 
             # Normalize route-level middleware declared via @middleware / @cors / @rate_limit.
             # Validation happens at registration time to fail fast and deterministically.
@@ -1033,6 +1197,57 @@ class BoltAPI:
         """Delegate to compile_argument_injector in api_compilation module."""
         return compile_argument_injector(meta, self._handler_meta, self._compile_binder)
 
+    def _compile_handler_executor(self, meta: HandlerMetadata) -> Callable[..., Any]:
+        """Compile per-handler execution callable for the request hot path."""
+        mode = meta["mode"]
+        is_async = meta["is_async"]
+        is_blocking = meta.get("is_blocking", False)
+        injector = meta["injector"]
+        injector_is_async = meta["injector_is_async"]
+
+        async def execute(handler: Callable, request: dict[str, Any]) -> ResponseWireV1:
+            if hasattr(request, "state"):
+                request_state = request.state
+            elif isinstance(request, dict):
+                request_state = request.setdefault("state", {})
+            else:
+                request_state = {}
+
+            if mode == "request_only":
+                if is_async:
+                    result = await handler(request)
+                elif is_blocking:
+                    result = await sync_to_thread(handler, request)
+                else:
+                    result = handler(request)
+            else:
+                prebound_args = request_state.pop("_bolt_prebound_args", None)
+                prebound_kwargs = request_state.pop("_bolt_prebound_kwargs", None)
+                has_prebound = prebound_args is not None and prebound_kwargs is not None
+
+                if has_prebound:
+                    args, kwargs = prebound_args, prebound_kwargs
+                elif injector_is_async:
+                    args, kwargs = await injector(request)
+                else:
+                    args, kwargs = injector(request)
+
+                if is_async:
+                    result = await handler(*args, **kwargs)
+                elif is_blocking:
+                    result = await sync_to_thread(handler, *args, **kwargs)
+                else:
+                    result = handler(*args, **kwargs)
+
+            if is_async:
+                return await serialize_response(result, meta)
+
+            if is_blocking or isinstance(result, QuerySet):
+                return await sync_to_thread(serialize_response_sync, result, meta)
+            return serialize_response_sync(result, meta)
+
+        return execute
+
     def _handle_http_exception(self, he: HTTPException) -> Response:
         """Handle HTTPException and return response."""
         try:
@@ -1045,12 +1260,15 @@ class BoltAPI:
         if he.headers:
             headers.extend([(k.lower(), v) for k, v in he.headers.items()])
 
-        return int(he.status_code), headers, body
+        return _wire_from_error_parts(int(he.status_code), headers, body)
 
     def _handle_generic_exception(self, e: Exception, request: dict[str, Any] = None) -> Response:
         """Handle generic exception using error_handlers module."""
         # Use the error handler which respects Django DEBUG setting
-        return handle_exception(e, debug=None, request=request)  # debug will be checked dynamically
+        status, headers, body = handle_exception(
+            e, debug=None, request=request
+        )  # debug will be checked dynamically
+        return _wire_from_error_parts(status, headers, body)
 
     @staticmethod
     def _is_python_middleware_spec(middleware_spec: Any) -> bool:
@@ -1140,33 +1358,7 @@ class BoltAPI:
         meta: dict[str, Any],
     ) -> MiddlewareResponse:
         """Execute handler using middleware semantics and return MiddlewareResponse."""
-        if meta.get("mode") == "request_only":
-            if meta.get("is_async", True):
-                result = await handler(request)
-            else:
-                if meta.get("is_blocking", False):
-                    result = await sync_to_thread(handler, request)
-                else:
-                    result = handler(request)
-        else:
-            if meta.get("injector_is_async", False):
-                args, kwargs = await meta["injector"](request)
-            else:
-                args, kwargs = meta["injector"](request)
-
-            if meta.get("is_async", True):
-                result = await handler(*args, **kwargs)
-            else:
-                if meta.get("is_blocking", False):
-                    result = await sync_to_thread(handler, *args, **kwargs)
-                else:
-                    result = handler(*args, **kwargs)
-
-        if meta.get("is_async", True):
-            response_tuple = await serialize_response(result, meta)
-        else:
-            response_tuple = serialize_response_sync(result, meta)
-
+        response_tuple = await meta["_handler_executor"](handler, request)
         return MiddlewareResponse.from_tuple(response_tuple)
 
     def _build_route_executor(
@@ -1251,13 +1443,11 @@ class BoltAPI:
             middleware_response = await api._middleware_chain(request)
             if isinstance(middleware_response, MiddlewareResponse):
                 return middleware_response.to_tuple()
-            if hasattr(middleware_response, "to_tuple"):
-                return middleware_response.to_tuple()
             if isinstance(middleware_response, tuple):
-                return middleware_response
+                return MiddlewareResponse.from_tuple(middleware_response).to_tuple()
             raise TypeError(
                 f"Middleware chain returned unsupported response type: {type(middleware_response).__name__}. "
-                "Expected MiddlewareResponse or response tuple."
+                "Expected MiddlewareResponse or ResponseWireV1 tuple."
             )
         finally:
             if request_state:
@@ -1310,7 +1500,7 @@ class BoltAPI:
             if user_id:
                 backend_name = auth_context.get("auth_backend")
                 # Use pre-computed is_async from handler metadata (avoids runtime loop check)
-                # Default True for ASGI bridge handlers that don't set is_async
+                # Default True for handlers without explicit async metadata
                 is_async_ctx = meta.get("is_async", True)
                 # Use functools.partial instead of lambda - faster, no closure overhead
                 request["user"] = SimpleLazyObject(
@@ -1324,9 +1514,7 @@ class BoltAPI:
             # - Global Python middleware on the owning app
             # - Router/route Python middleware on this handler
             middleware_owner = original_api if original_api is not None else self
-            has_python_global_middleware = any(
-                self._is_python_middleware_spec(spec) for spec in middleware_owner._middleware
-            )
+            has_python_global_middleware = middleware_owner._has_python_global_middleware
             has_route_python_middleware = bool(meta.get("_has_route_python_middleware", False))
             api_with_middleware = middleware_owner if (has_python_global_middleware or has_route_python_middleware) else None
 
@@ -1334,71 +1522,13 @@ class BoltAPI:
                 # Execute through middleware chain (Django-style)
                 response = await self._dispatch_with_middleware(handler, request, handler_id, api_with_middleware, meta)
             else:
-                # Fast path: no middleware, execute handler directly
-                # Optional Rust-prebound args/kwargs for simple handlers.
-                if hasattr(request, "state"):
-                    request_state = request.state
-                elif isinstance(request, dict):
-                    request_state = request.setdefault("state", {})
-                else:
-                    request_state = {}
-
-                prebound_args = request_state.pop("_bolt_prebound_args", None)
-                prebound_kwargs = request_state.pop("_bolt_prebound_kwargs", None)
-                has_prebound = prebound_args is not None and prebound_kwargs is not None
-
-                # Direct access -- keys guaranteed by compile_binder + _route_decorator
-                mode = meta["mode"]
-                is_async = meta["is_async"]
-                is_blocking = meta.get("is_blocking", False)
-
-                # 3. Fast path for request-only handlers (no parameter extraction)
-                if mode == "request_only":
-                    if is_async:
-                        result = await handler(request)
-                    else:
-                        # Smart thread pool: only use for blocking handlers
-                        if is_blocking:
-                            result = await sync_to_thread(handler, request)
-                        else:
-                            result = handler(request)
-                else:
-                    # 4. Prefer Rust-prebound args/kwargs when available.
-                    # Fallback to pre-compiled injector for all other handlers.
-                    if has_prebound:
-                        args, kwargs = prebound_args, prebound_kwargs
-                    else:
-                        # Direct access -- injector_is_async set in _route_decorator
-                        if meta["injector_is_async"]:
-                            args, kwargs = await meta["injector"](request)
-                        else:
-                            args, kwargs = meta["injector"](request)
-
-                    # 5. Execute handler (async or sync)
-                    if is_async:
-                        result = await handler(*args, **kwargs)
-                    else:
-                        # Sync handler execution with smart thread pool usage:
-                        # - is_blocking=True (ORM/IO detected): Use thread pool to avoid blocking event loop
-                        # - is_blocking=False (pure CPU): Call directly for maximum performance
-                        if is_blocking:
-                            # Handler does blocking I/O (ORM, file, network) - use thread pool
-                            result = await sync_to_thread(handler, *args, **kwargs)
-                        else:
-                            # Pure sync handler (no blocking I/O) - call directly
-                            # This avoids thread pool overhead per request
-                            result = handler(*args, **kwargs)
-
-                # 6. Serialize response
-                if is_async:
-                    response = await serialize_response(result, meta)
-                else:
-                    response = serialize_response_sync(result, meta)
+                # Fast path: no middleware, execute pre-compiled handler executor directly.
+                response = await meta["_handler_executor"](handler, request)
 
             # Log response if logging enabled
             if logging_middleware and start_time is not None:
                 duration = time.time() - start_time
-                # Response is usually a tuple (status, headers, body) but StreamingResponse is passed through
+                # Response is ResponseWireV1 tuple.
                 status_code = response[0] if isinstance(response, tuple) else 200
                 logging_middleware.log_response(request, status_code, duration)
 
@@ -1455,13 +1585,13 @@ class BoltAPI:
         registrar.register_routes()
 
     def _register_admin_routes(self, host: str = "localhost", port: int = 8000) -> None:
-        """Register Django admin routes via ASGI bridge.
+        """Register Django admin as an ASGI mount.
 
         Delegates to AdminRouteRegistrar for cleaner separation of concerns.
 
         Args:
-            host: Server hostname for ASGI scope
-            port: Server port for ASGI scope
+            host: Reserved for backward compatibility
+            port: Reserved for backward compatibility
         """
 
         registrar = AdminRouteRegistrar(self)
@@ -1587,9 +1717,64 @@ class BoltAPI:
             # _handler_api_map is always initialized in __init__
             self._handler_api_map[new_handler_id] = app
 
+        # Copy ASGI mounts from sub-app to this app with path prefix
+        for asgi_prefix, asgi_app in app._asgi_mounts:
+            if mount_path:
+                if asgi_prefix == "/":
+                    new_asgi_prefix = _normalize_mount_prefix(mount_path)
+                else:
+                    new_asgi_prefix = _normalize_mount_prefix(mount_path + asgi_prefix)
+            else:
+                new_asgi_prefix = asgi_prefix
+
+            if any(existing == new_asgi_prefix for existing, _ in self._asgi_mounts):
+                raise ValueError(f"Duplicate ASGI mount prefix: {new_asgi_prefix}")
+            self._asgi_mounts.append((new_asgi_prefix, asgi_app))
+
         # Remove sub-app from global registry (parent handles its routes now)
         if app in _BOLT_API_REGISTRY:
             _BOLT_API_REGISTRY.remove(app)
+
+    def mount_asgi(self, path: str, app: Callable[..., Any]) -> None:
+        """Mount a generic HTTP ASGI application at a static path prefix."""
+        if not callable(app):
+            raise TypeError(
+                f"mount_asgi() expects a callable ASGI application, got {type(app).__name__}"
+            )
+
+        mount_path = _normalize_mount_prefix(path)
+
+        # Apply API prefix semantics (same as route registration).
+        if self.prefix:
+            if mount_path == "/":
+                mount_path = _normalize_mount_prefix(self.prefix)
+            else:
+                mount_path = _normalize_mount_prefix(self.prefix + mount_path)
+
+        if any(existing == mount_path for existing, _ in self._asgi_mounts):
+            raise ValueError(f"Duplicate ASGI mount prefix: {mount_path}")
+
+        self._asgi_mounts.append((mount_path, app))
+
+    def mount_django(self, path: str, app: Any | None = None) -> None:
+        """Mount Django's ASGI application (or a custom ASGI app) at a path prefix."""
+        asgi_app = app
+        if asgi_app is None:
+            from django.core.asgi import get_asgi_application
+
+            asgi_app = get_asgi_application()
+
+        async def django_mount_wrapper(scope, receive, send):
+            django_scope = _rewrite_scope_for_django_mount(scope)
+            root_path = django_scope.get("root_path") or ""
+
+            async def django_send(message):
+                rewritten = _rewrite_django_mount_redirect_message(message, root_path)
+                await send(rewritten)
+
+            await asgi_app(django_scope, receive, django_send)
+
+        self.mount_asgi(path, django_mount_wrapper)
 
     def include_router(self, router: Router, prefix: str = "") -> None:
         """

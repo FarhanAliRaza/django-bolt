@@ -181,6 +181,10 @@ api.mount("/api/v1", users_api)
 
 Routes from `users_api` are now available at `/api/v1/users`.
 
+## ASGI mounts
+
+If you want to mount Django or other ASGI apps under path prefixes, see [ASGI Mounts](asgi-mounts.md).
+
 ## Trailing slash handling
 
 Django-Bolt normalizes trailing slashes at route registration time and uses **Starlette-style redirects** at runtime. By default, trailing slashes are stripped from paths:

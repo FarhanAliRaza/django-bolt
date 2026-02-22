@@ -216,11 +216,11 @@ fn find_cors_for_method<'a>(
 
         // Try AppState metadata first (tests), then global metadata (production)
         let meta = if let Some(ref meta_map) = state.route_metadata {
-            meta_map.get(&handler_id)
+            meta_map.get(handler_id)
         } else {
             ROUTE_METADATA
                 .get()
-                .and_then(|meta_map| meta_map.get(&handler_id))
+                .and_then(|meta_map| meta_map.get(handler_id))
         };
 
         if let Some(meta) = meta {

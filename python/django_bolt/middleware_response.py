@@ -13,10 +13,8 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .responses import StreamingResponse
-
-# Response tuple body can be bytes (normal) or StreamingResponse (for streaming)
-# Rust handler.rs detects StreamingResponse in the body and handles streaming
-Response = tuple[int, list[tuple[str, str]], "bytes | StreamingResponse"]
+else:
+    StreamingResponse = Any
 
 # Raw cookie tuple type (matches serialization.py CookieTuple)
 CookieTuple = tuple[str, str, str, int | None, str | None, str | None, bool, bool, str | None]
@@ -28,6 +26,9 @@ ResponseMetaTuple = tuple[
     list[tuple[str, str]] | None,  # custom_headers
     list[CookieTuple] | None,  # cookies (raw tuples, NOT serialized)
 ]
+
+ResponseBody = bytes | StreamingResponse | str
+Response = tuple[int, ResponseMetaTuple, str, ResponseBody]
 
 
 class MiddlewareResponse:
@@ -43,56 +44,52 @@ class MiddlewareResponse:
     so Rust can handle all header/cookie serialization.
     """
 
-    __slots__ = ("status_code", "headers", "body", "_response_type", "_raw_cookies")
+    __slots__ = ("status_code", "headers", "body", "_response_type", "_raw_cookies", "_body_kind")
 
     def __init__(
         self,
         status_code: int,
         headers: dict[str, str],
-        body: bytes | StreamingResponse,
+        body: bytes | StreamingResponse | str,
         response_type: str = "json",
         raw_cookies: list[CookieTuple] | None = None,
+        body_kind: str = "bytes",
     ):
         self.status_code = status_code
         self.headers = headers  # Dict for easy middleware modification
         self.body = body
         self._response_type = response_type  # Preserve for Rust content-type
         self._raw_cookies = raw_cookies or []  # Raw tuples, Rust serializes
+        self._body_kind = body_kind
 
     @classmethod
-    def from_tuple(cls, response: Response) -> MiddlewareResponse:
+    def from_tuple(cls, response: Any) -> MiddlewareResponse:
         """Create from internal tuple format.
 
-        Handles both legacy format (status, headers_list, body) and new
-        ResponseMeta format (status, meta_tuple, body).
-
+        Expects ResponseWireV1: (status, meta_tuple, body_kind, body_payload).
         IMPORTANT: Does NOT serialize cookies - preserves raw tuples for Rust.
         """
-        status_code, headers_or_meta, body = response
+        if not (isinstance(response, tuple) and len(response) == 4):
+            raise TypeError("Middleware response must be a ResponseWireV1 4-tuple.")
 
-        # Check if this is the new ResponseMeta format (tuple) vs legacy format (list)
-        if isinstance(headers_or_meta, tuple) and len(headers_or_meta) == 4:
-            # New ResponseMeta format: (response_type, custom_ct, custom_headers, cookies)
-            response_type, custom_ct, custom_headers, cookies = headers_or_meta
-            headers: dict[str, str] = {}
+        status_code, meta, body_kind, body = response
+        if not (isinstance(meta, tuple) and len(meta) == 4):
+            raise TypeError("Invalid middleware response metadata tuple")
+        if body_kind not in {"bytes", "stream", "file"}:
+            raise TypeError(f"Invalid middleware response body_kind {body_kind!r}")
 
-            # Add content-type to headers dict for middleware access
-            if custom_ct:
-                headers["content-type"] = custom_ct
+        response_type, custom_ct, custom_headers, cookies = meta
+        headers: dict[str, str] = {}
 
-            # Add custom headers for middleware access
-            if custom_headers:
-                for k, v in custom_headers:
-                    headers[k.lower()] = v
+        if custom_ct:
+            headers["content-type"] = custom_ct
+        if custom_headers:
+            for k, v in custom_headers:
+                headers[k.lower()] = v
 
-            # Store raw cookie tuples - Rust will serialize them
-            return cls(status_code, headers, body, response_type, cookies)
-        else:
-            # Legacy format: list of (header_name, header_value) tuples
-            headers = dict(headers_or_meta)
-            return cls(status_code, headers, body)
+        return cls(status_code, headers, body, response_type, cookies, body_kind=body_kind)
 
-    def to_tuple(self) -> Any:
+    def to_tuple(self) -> Response:
         """Convert back to internal tuple format.
 
         Returns ResponseMeta format so Rust handles all header/cookie serialization.
@@ -112,4 +109,17 @@ class MiddlewareResponse:
             custom_headers,
             self._raw_cookies if self._raw_cookies else None,
         )
-        return (self.status_code, meta, self.body)
+
+        body_kind = self._body_kind
+        if hasattr(self.body, "content"):
+            body_kind = "stream"
+        elif isinstance(self.body, (bytes, bytearray)):
+            body_kind = "bytes"
+        elif isinstance(self.body, str):
+            # file responses pass filesystem path as body
+            body_kind = "file"
+        else:
+            body_kind = "bytes"
+
+        body_payload = bytes(self.body) if isinstance(self.body, bytearray) else self.body
+        return (self.status_code, meta, body_kind, body_payload)

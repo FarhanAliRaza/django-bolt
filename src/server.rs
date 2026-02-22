@@ -18,8 +18,8 @@ use crate::middleware::compression::CompressionMiddleware;
 use crate::middleware::cors::CorsMiddleware;
 use crate::router::Router;
 use crate::state::{
-    AppState, StaticFilesConfig, GLOBAL_ROUTER, GLOBAL_WEBSOCKET_ROUTER, ROUTE_METADATA,
-    ROUTE_METADATA_TEMP, TASK_LOCALS,
+    AppState, AsgiMount, StaticFilesConfig, GLOBAL_ASGI_MOUNTS, GLOBAL_ROUTER,
+    GLOBAL_WEBSOCKET_ROUTER, ROUTE_METADATA, ROUTE_METADATA_TEMP, TASK_LOCALS,
 };
 use crate::static_files::handle_static_file;
 use crate::websocket::{
@@ -53,6 +53,51 @@ pub fn register_websocket_routes(
     GLOBAL_WEBSOCKET_ROUTER.set(Arc::new(router)).map_err(|_| {
         pyo3::exceptions::PyRuntimeError::new_err("WebSocket router already initialized")
     })?;
+    Ok(())
+}
+
+#[pyfunction]
+pub fn register_asgi_mounts(_py: Python<'_>, mounts: Vec<(String, Py<PyAny>)>) -> PyResult<()> {
+    let mut asgi_mounts: Vec<AsgiMount> = Vec::with_capacity(mounts.len());
+
+    for (prefix, app) in mounts {
+        if prefix.is_empty() || !prefix.starts_with('/') {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid ASGI mount prefix: {}",
+                prefix
+            )));
+        }
+
+        if prefix.len() > 1 && prefix.ends_with('/') {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "ASGI mount prefix must not end with '/': {}",
+                prefix
+            )));
+        }
+
+        asgi_mounts.push(AsgiMount {
+            prefix,
+            app: app.into(),
+        });
+    }
+
+    // Longest-prefix match requires descending sort.
+    asgi_mounts.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
+
+    // Exact-duplicate prefixes are invalid.
+    for idx in 1..asgi_mounts.len() {
+        if asgi_mounts[idx - 1].prefix == asgi_mounts[idx].prefix {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Duplicate ASGI mount prefix: {}",
+                asgi_mounts[idx].prefix
+            )));
+        }
+    }
+
+    GLOBAL_ASGI_MOUNTS.set(Arc::new(asgi_mounts)).map_err(|_| {
+        pyo3::exceptions::PyRuntimeError::new_err("ASGI mounts already initialized")
+    })?;
+
     Ok(())
 }
 
@@ -464,6 +509,7 @@ pub fn start_server_async(
         global_compression_config: global_compression_config.clone(),
         router: None,         // Production uses GLOBAL_ROUTER
         route_metadata: None, // Production uses ROUTE_METADATA
+        asgi_mounts: None,    // Production uses GLOBAL_ASGI_MOUNTS
         static_files_config: static_files_config.clone(),
     });
 

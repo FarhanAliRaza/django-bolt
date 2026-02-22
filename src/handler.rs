@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
+use crate::asgi_http;
 use crate::error;
 use crate::form_parsing::{
     parse_multipart, parse_urlencoded, FileContent, FileFieldConstraints, FileInfo,
@@ -28,7 +29,7 @@ use crate::response_builder;
 use crate::response_meta::ResponseMeta;
 use crate::responses;
 use crate::router::parse_query_string;
-use crate::state::{AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
+use crate::state::{find_asgi_mount, AppState, GLOBAL_ROUTER, ROUTE_METADATA, TASK_LOCALS};
 use crate::streaming::{create_python_stream, create_sse_stream};
 use crate::type_coercion::{params_to_py_dict, CoercedValue};
 use crate::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
@@ -464,6 +465,14 @@ pub async fn handle_request(
                         .insert_header(("Content-Type", "application/json"))
                         .finish();
                 }
+            }
+
+            // HTTP ASGI mount fallback:
+            // - only after Bolt route miss
+            // - only after trailing-slash/API-method near-miss checks above
+            if let Some(asgi_mount) = find_asgi_mount(state.get_ref(), path) {
+                return asgi_http::handle_asgi_mount_request(req, payload, asgi_mount, state.debug)
+                    .await;
             }
 
             // Handle OPTIONS preflight for non-existent routes

@@ -22,6 +22,8 @@ from django_bolt.testing import TestClient
 
 from .test_models import Article
 
+TEST_JWT_SECRET = "test-secret-key-for-sync-functions-012345"
+
 # ========================
 # Shared Models
 # ========================
@@ -144,7 +146,7 @@ def api():
     # Auth Handlers
     # ========================
 
-    auth_config = JWTAuthentication(secret="test-secret-key", algorithms=["HS256"])
+    auth_config = JWTAuthentication(secret=TEST_JWT_SECRET, algorithms=["HS256"])
 
     @api.get("/sync/protected", auth=[auth_config], guards=[IsAuthenticated()])
     def sync_protected_handler():
@@ -573,7 +575,7 @@ class TestSyncAuthentication:
         """Sync protected handler should accept valid token."""
         token = jwt.encode(
             {"sub": "user123", "exp": int(time.time()) + 3600},
-            "test-secret-key",
+            TEST_JWT_SECRET,
             algorithm="HS256",
         )
         response = client.get(
@@ -661,7 +663,7 @@ class TestAsyncSyncParityAuthentication:
         """Async and sync protected handlers should both accept valid token."""
         token = jwt.encode(
             {"sub": "user123", "exp": int(time.time()) + 3600},
-            "test-secret-key",
+            TEST_JWT_SECRET,
             algorithm="HS256",
         )
         headers = {"Authorization": f"Bearer {token}"}
@@ -732,6 +734,11 @@ def orm_api():
             queryset = queryset.filter(status=status)
         articles = list(queryset[:limit].values("id", "title", "content", "status", "author", "is_published"))
         return {"articles": articles, "count": len(articles)}
+
+    @api.get("/sync/articles/raw-values")
+    def sync_list_articles_raw_values():
+        """Sync handler returning an unevaluated ValuesQuerySet."""
+        return Article.objects.order_by("id").values("id", "title", "status")
 
     @api.get("/sync/articles/{article_id}")
     def sync_get_article(article_id: int):
@@ -1132,6 +1139,24 @@ class TestSyncORMOperations:
         assert response.status_code == 200
         data = response.json()
         assert data["count"] == 3
+
+    def test_sync_raw_values_queryset_response(self, orm_client):
+        """Sync handler returning a raw ValuesQuerySet should serialize successfully."""
+        orm_client.post(
+            "/sync/articles",
+            json={"title": "Raw One", "content": "Raw content one", "author": "Raw", "status": "draft"},
+        )
+        orm_client.post(
+            "/sync/articles",
+            json={"title": "Raw Two", "content": "Raw content two", "author": "Raw", "status": "published"},
+        )
+
+        response = orm_client.get("/sync/articles/raw-values")
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) >= 2
+        assert {"id", "title", "status"}.issubset(data[0].keys())
 
 
 @pytest.mark.django_db(transaction=True)

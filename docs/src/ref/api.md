@@ -231,6 +231,18 @@ Mount another BoltAPI under a prefix.
 api.mount("/v1", v1_api)
 ```
 
+#### api.mount_asgi(path, app)
+
+Mount an HTTP ASGI application under a static prefix.
+
+See [ASGI Mounts](../topics/asgi-mounts.md) for full behavior, examples, and constraints.
+
+#### api.mount_django(path, app=None)
+
+Convenience wrapper for mounting Django's ASGI app (or a custom ASGI app) under a prefix.
+
+See [ASGI Mounts](../topics/asgi-mounts.md) for usage examples and dispatch/conflict rules.
+
 ## Dependency injection
 
 ### Depends

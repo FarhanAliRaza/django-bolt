@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import time
 from typing import Annotated, Protocol
@@ -97,6 +98,53 @@ async def items100() -> list[Item]:
 from .middleware_demo import middleware_api
 
 api.mount("/middleware", middleware_api)
+
+
+# ============================================================================
+# ASGI Mount Demo
+# ============================================================================
+
+
+async def asgi_mount_demo(scope, receive, send):
+    """
+    Simple ASGI app mounted under /asgi-demo.
+
+    Try:
+    - /asgi-demo
+    - /asgi-demo/hello?name=bolt
+    """
+    payload = {
+        "source": "mount_asgi",
+        "type": scope.get("type"),
+        "method": scope.get("method"),
+        "root_path": scope.get("root_path"),
+        "path": scope.get("path"),
+        "query_string": scope.get("query_string", b"").decode("latin-1"),
+    }
+    body = json.dumps(payload).encode("utf-8")
+
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"content-type", b"application/json")],
+        }
+    )
+    await send({"type": "http.response.body", "body": body, "more_body": False})
+
+
+# Generic HTTP ASGI mount demo (scope/root_path/path behavior)
+api.mount_asgi("/asgi-demo", asgi_mount_demo)
+
+# Mount Django URLconf as a sub-application:
+# - /django/admin/
+# - /django/
+# - /django/accounts/
+# - /django/accounts/login/
+# - /django/accounts/profile/
+# - /django/accounts/provider/callback/?code=demo&state=xyz
+# - /django/accounts/allauth/ (if django-allauth is installed/configured)
+api.mount_django("/django")
 
 
 @api.get("/health")

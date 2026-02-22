@@ -227,6 +227,9 @@ class Command(BaseCommand):
         else:
             self.stdout.write(self.style.SUCCESS(f"[django-bolt] Found {len(merged_api._routes)} routes"))
 
+        # Validate ASGI mount conflicts after all framework/admin/docs routes are added.
+        self.validate_asgi_mount_conflicts(merged_api._routes, merged_api._asgi_mounts)
+
         # Register routes with Rust
         rust_routes = []
         for method, path, handler_id, handler in merged_api._routes:
@@ -236,6 +239,16 @@ class Command(BaseCommand):
             rust_routes.append((method, norm_path, handler_id, handler))
 
         _core.register_routes(rust_routes)
+
+        # Register HTTP ASGI mounts with Rust
+        if merged_api._asgi_mounts:
+            _core.register_asgi_mounts(merged_api._asgi_mounts)
+            if process_id is not None:
+                self.stdout.write(
+                    f"[django-bolt] Process {process_id}: Registered {len(merged_api._asgi_mounts)} ASGI mounts"
+                )
+            else:
+                self.stdout.write(f"[django-bolt] Registered {len(merged_api._asgi_mounts)} ASGI mounts")
 
         # Register WebSocket routes with Rust (including pre-compiled injectors)
         ws_routes = []
@@ -517,7 +530,38 @@ class Command(BaseCommand):
                 if old_ws_handler_id in api._handler_middleware:
                     merged._handler_middleware[new_ws_handler_id] = api._handler_middleware[old_ws_handler_id]
 
+            # Merge HTTP ASGI mounts from this API
+            for asgi_prefix, asgi_app in getattr(api, "_asgi_mounts", []):
+                asgi_key = f"ASGI {asgi_prefix}"
+                if asgi_key in route_map:
+                    raise CommandError(
+                        f"ASGI mount conflict: {asgi_prefix} defined in both "
+                        f"{route_map[asgi_key]} and {api_path}"
+                    )
+
+                route_map[asgi_key] = api_path
+                merged._asgi_mounts.append((asgi_prefix, asgi_app))
+
         # Update next handler ID
         merged._next_handler_id = next_handler_id
 
         return merged
+
+    def validate_asgi_mount_conflicts(self, routes, asgi_mounts):
+        """Validate exact-path conflicts for ASGI mounts."""
+        if not asgi_mounts:
+            return
+
+        route_paths = {path for _method, path, _handler_id, _handler in routes}
+        seen_mounts = set()
+
+        for mount_prefix, _asgi_app in asgi_mounts:
+            if mount_prefix in seen_mounts:
+                raise CommandError(f"Duplicate ASGI mount prefix: {mount_prefix}")
+            seen_mounts.add(mount_prefix)
+
+            if mount_prefix in route_paths:
+                raise CommandError(
+                    f"ASGI mount prefix {mount_prefix} conflicts with an existing HTTP route "
+                    f"(exact collision is not allowed)."
+                )

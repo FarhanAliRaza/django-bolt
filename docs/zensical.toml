@@ -59,6 +59,7 @@ nav = [
   ]},
   { "Topic Guides" = [
     { "Routing" = "topics/routing.md" },
+    { "ASGI Mounts" = "topics/asgi-mounts.md" },
     { "Request Handling" = "topics/requests.md" },
     { "Responses" = "topics/responses.md" },
     { "Serializers" = "topics/serializers.md" },
@@ -355,5 +356,4 @@ link = "https://github.com/FarhanAliRaza/django-bolt"
 [[project.extra.social]]
 icon = "fontawesome/brands/python"
 link = "https://pypi.org/project/django-bolt/"
-
 

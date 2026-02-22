@@ -23,6 +23,7 @@ use pyo3::types::PyDict;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::asgi_http;
 use crate::form_parsing::{
     parse_multipart, parse_urlencoded, FormParseResult, DEFAULT_MAX_PARTS, DEFAULT_MEMORY_LIMIT,
 };
@@ -30,7 +31,7 @@ use crate::metadata::{CorsConfig, RouteMetadata};
 use crate::middleware::compression::CompressionMiddleware;
 use crate::middleware::cors::CorsMiddleware;
 use crate::router::Router;
-use crate::state::{AppState, StaticFilesConfig, TASK_LOCALS};
+use crate::state::{find_asgi_mount, AppState, AsgiMount, StaticFilesConfig, TASK_LOCALS};
 use crate::websocket::WebSocketRouter;
 use actix_multipart::Multipart;
 use futures_util::StreamExt;
@@ -105,10 +106,15 @@ fn ensure_task_locals_initialized() {
                 });
             });
 
-            // Wait for the background thread to signal it's ready
-            let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
-            // Give it a tiny bit more time to actually enter run_forever
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            // Wait for the background thread while releasing the GIL.
+            // Otherwise the thread cannot acquire Python and start run_forever().
+            Python::attach(|py| {
+                py.detach(move || {
+                    let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+                    // Give it a tiny bit more time to actually enter run_forever.
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                });
+            });
         }
     });
 }
@@ -117,6 +123,7 @@ fn ensure_task_locals_initialized() {
 pub struct TestAppState {
     pub router: Arc<Router>,
     pub websocket_router: Arc<WebSocketRouter>,
+    pub asgi_mounts: Arc<Vec<AsgiMount>>,
     pub route_metadata: Arc<AHashMap<usize, RouteMetadata>>,
     pub dispatch: Py<PyAny>,
     pub global_cors_config: Option<CorsConfig>,
@@ -366,6 +373,7 @@ pub fn create_test_app(
     let app = TestAppState {
         router: Arc::new(Router::new()),
         websocket_router: Arc::new(WebSocketRouter::new()),
+        asgi_mounts: Arc::new(Vec::new()),
         route_metadata: Arc::new(AHashMap::new()),
         dispatch: dispatch.clone_ref(py),
         global_cors_config,
@@ -430,6 +438,33 @@ pub fn register_test_websocket_routes(
     Ok(())
 }
 
+/// Register HTTP ASGI mounts for a test app.
+#[pyfunction]
+pub fn register_test_asgi_mounts(
+    _py: Python<'_>,
+    app_id: u64,
+    mounts: Vec<(String, Py<PyAny>)>,
+) -> PyResult<()> {
+    let entry = registry()
+        .get(&app_id)
+        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Invalid test app id"))?;
+
+    let mut app = entry.write();
+    let mut asgi_mounts: Vec<AsgiMount> = Vec::with_capacity(mounts.len());
+
+    for (prefix, mount_app) in mounts {
+        asgi_mounts.push(AsgiMount {
+            prefix,
+            app: mount_app,
+        });
+    }
+
+    // Longest-prefix match requires descending sort.
+    asgi_mounts.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
+    app.asgi_mounts = Arc::new(asgi_mounts);
+    Ok(())
+}
+
 /// Register middleware metadata for a test app
 #[pyfunction]
 pub fn register_test_middleware_metadata(
@@ -480,7 +515,7 @@ pub fn register_test_middleware_metadata(
 /// a local tokio runtime for each request instead.
 #[pyfunction]
 pub fn test_request(
-    _py: Python<'_>,
+    py: Python<'_>,
     app_id: u64,
     method: String,
     path: String,
@@ -488,160 +523,165 @@ pub fn test_request(
     body: Vec<u8>,
     query_string: Option<String>,
 ) -> PyResult<(u16, Vec<(String, String)>, Vec<u8>)> {
-    // Ensure TASK_LOCALS is initialized for SSE/streaming support
-    ensure_task_locals_initialized();
+    py.detach(move || {
+        // Ensure TASK_LOCALS is initialized for SSE/streaming support
+        ensure_task_locals_initialized();
 
-    // Get test app state
-    let entry = registry()
-        .get(&app_id)
-        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Invalid test app id"))?;
+        // Get test app state
+        let entry = registry()
+            .get(&app_id)
+            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Invalid test app id"))?;
 
-    let app_state = entry.clone();
-    drop(entry); // Release DashMap lock
+        let app_state = entry.clone();
+        drop(entry); // Release DashMap lock
 
-    // Use the global runtime (initialized by pyo3_async_runtimes::tokio::init())
-    // This ensures handler execution and streaming use the same runtime context
-    let runtime_handle = pyo3_async_runtimes::tokio::get_runtime();
+        // Use the global runtime (initialized by pyo3_async_runtimes::tokio::init())
+        // This ensures handler execution and streaming use the same runtime context
+        let runtime_handle = pyo3_async_runtimes::tokio::get_runtime();
 
-    runtime_handle.block_on(async {
-        // Read test app state
-        let (
-            router,
-            route_metadata,
-            dispatch,
-            global_cors_config,
-            debug,
-            max_payload_size,
-            _trailing_slash,
-            static_files_config,
-        ) = {
-            let state = app_state.read();
-            (
-                state.router.clone(),
-                state.route_metadata.clone(),
-                Python::attach(|py| state.dispatch.clone_ref(py)),
-                state.global_cors_config.clone(),
-                state.debug,
-                state.max_payload_size,
-                state.trailing_slash.clone(),
-                state.static_files_config.clone(),
-            )
-        };
+        runtime_handle.block_on(async {
+            // Read test app state
+            let (
+                router,
+                route_metadata,
+                asgi_mounts,
+                dispatch,
+                global_cors_config,
+                debug,
+                max_payload_size,
+                _trailing_slash,
+                static_files_config,
+            ) = {
+                let state = app_state.read();
+                (
+                    state.router.clone(),
+                    state.route_metadata.clone(),
+                    state.asgi_mounts.clone(),
+                    Python::attach(|py| state.dispatch.clone_ref(py)),
+                    state.global_cors_config.clone(),
+                    state.debug,
+                    state.max_payload_size,
+                    state.trailing_slash.clone(),
+                    state.static_files_config.clone(),
+                )
+            };
 
-        // Build AppState matching production
-        // Include router and route_metadata so CorsMiddleware can find route-level CORS config
-        let app_state_arc = Arc::new(AppState {
-            dispatch,
-            debug,
-            max_header_size: 8192,
-            global_cors_config: global_cors_config.clone(),
-            cors_origin_regexes: vec![],
-            global_compression_config: None,
-            router: Some(router.clone()),
-            route_metadata: Some(route_metadata.clone()),
-            static_files_config: static_files_config.clone(),
-        });
+            // Build AppState matching production
+            // Include router and route_metadata so CorsMiddleware can find route-level CORS config
+            let app_state_arc = Arc::new(AppState {
+                dispatch,
+                debug,
+                max_header_size: 8192,
+                global_cors_config: global_cors_config.clone(),
+                cors_origin_regexes: vec![],
+                global_compression_config: None,
+                router: Some(router.clone()),
+                route_metadata: Some(route_metadata.clone()),
+                asgi_mounts: Some(asgi_mounts.clone()),
+                static_files_config: static_files_config.clone(),
+            });
 
-        // Clone the Arc values for the handler closure
-        let router_for_handler = router.clone();
-        let metadata_for_handler = route_metadata.clone();
+            // Clone the Arc values for the handler closure
+            let router_for_handler = router.clone();
+            let metadata_for_handler = route_metadata.clone();
 
-        // Create the test handler that uses per-instance state
-        // Use web::Payload to support multipart form parsing (which needs the stream)
-        let handler = move |req: HttpRequest, payload: web::Payload| {
-            let router = router_for_handler.clone();
-            let metadata = metadata_for_handler.clone();
+            // Create the test handler that uses per-instance state
+            // Use web::Payload to support multipart form parsing (which needs the stream)
+            let handler = move |req: HttpRequest, payload: web::Payload| {
+                let router = router_for_handler.clone();
+                let metadata = metadata_for_handler.clone();
 
-            async move { handle_test_request_internal(req, payload, router, metadata).await }
-        };
+                async move { handle_test_request_internal(req, payload, router, metadata).await }
+            };
 
-        // Create Actix test service with production middleware stack
-        // Use MergeOnly for NormalizePath (only normalizes // -> /)
-        // Trailing slash handling is done via Starlette-style redirect in handler
-        let app = if let Some(ref config) = static_files_config {
-            // With static files: register static file handler before default service
-            let static_dirs = web::Data::new(config.directories.clone());
-            let static_csp = web::Data::new(config.csp_header.clone());
-            let static_route = format!("{}{{path:.*}}", config.url_prefix);
+            // Create Actix test service with production middleware stack
+            // Use MergeOnly for NormalizePath (only normalizes // -> /)
+            // Trailing slash handling is done via Starlette-style redirect in handler
+            let app = if let Some(ref config) = static_files_config {
+                // With static files: register static file handler before default service
+                let static_dirs = web::Data::new(config.directories.clone());
+                let static_csp = web::Data::new(config.csp_header.clone());
+                let static_route = format!("{}{{path:.*}}", config.url_prefix);
 
-            test::init_service(
-                App::new()
-                    .app_data(web::Data::new(app_state_arc.clone()))
-                    .app_data(web::PayloadConfig::new(max_payload_size))
-                    .app_data(static_dirs)
-                    .app_data(static_csp)
-                    .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
-                    .wrap(CorsMiddleware::new())
-                    .wrap(CompressionMiddleware::new())
-                    .route(&static_route, web::get().to(handle_static_file))
-                    .default_service(web::to(handler)),
-            )
-            .await
-        } else {
-            // Without static files: just the default handler
-            test::init_service(
-                App::new()
-                    .app_data(web::Data::new(app_state_arc.clone()))
-                    .app_data(web::PayloadConfig::new(max_payload_size))
-                    .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
-                    .wrap(CorsMiddleware::new())
-                    .wrap(CompressionMiddleware::new())
-                    .default_service(web::to(handler)),
-            )
-            .await
-        };
+                test::init_service(
+                    App::new()
+                        .app_data(web::Data::new(app_state_arc.clone()))
+                        .app_data(web::PayloadConfig::new(max_payload_size))
+                        .app_data(static_dirs)
+                        .app_data(static_csp)
+                        .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
+                        .wrap(CorsMiddleware::new())
+                        .wrap(CompressionMiddleware::new())
+                        .route(&static_route, web::get().to(handle_static_file))
+                        .default_service(web::to(handler)),
+                )
+                .await
+            } else {
+                // Without static files: just the default handler
+                test::init_service(
+                    App::new()
+                        .app_data(web::Data::new(app_state_arc.clone()))
+                        .app_data(web::PayloadConfig::new(max_payload_size))
+                        .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
+                        .wrap(CorsMiddleware::new())
+                        .wrap(CompressionMiddleware::new())
+                        .default_service(web::to(handler)),
+                )
+                .await
+            };
 
-        // Build full URI
-        let uri = if let Some(qs) = query_string {
-            format!("{}?{}", path, qs)
-        } else {
-            path.clone()
-        };
+            // Build full URI
+            let uri = if let Some(qs) = query_string {
+                format!("{}?{}", path, qs)
+            } else {
+                path.clone()
+            };
 
-        // Create test request
-        let mut req = test::TestRequest::with_uri(&uri);
+            // Create test request
+            let mut req = test::TestRequest::with_uri(&uri);
 
-        // Set method
-        req = match method.to_uppercase().as_str() {
-            "GET" => req.method(actix_web::http::Method::GET),
-            "POST" => req.method(actix_web::http::Method::POST),
-            "PUT" => req.method(actix_web::http::Method::PUT),
-            "PATCH" => req.method(actix_web::http::Method::PATCH),
-            "DELETE" => req.method(actix_web::http::Method::DELETE),
-            "OPTIONS" => req.method(actix_web::http::Method::OPTIONS),
-            "HEAD" => req.method(actix_web::http::Method::HEAD),
-            _ => req.method(actix_web::http::Method::GET),
-        };
+            // Set method
+            req = match method.to_uppercase().as_str() {
+                "GET" => req.method(actix_web::http::Method::GET),
+                "POST" => req.method(actix_web::http::Method::POST),
+                "PUT" => req.method(actix_web::http::Method::PUT),
+                "PATCH" => req.method(actix_web::http::Method::PATCH),
+                "DELETE" => req.method(actix_web::http::Method::DELETE),
+                "OPTIONS" => req.method(actix_web::http::Method::OPTIONS),
+                "HEAD" => req.method(actix_web::http::Method::HEAD),
+                _ => req.method(actix_web::http::Method::GET),
+            };
 
-        // Set headers
-        for (name, value) in headers {
-            req = req.insert_header((name, value));
-        }
+            // Set headers
+            for (name, value) in headers {
+                req = req.insert_header((name, value));
+            }
 
-        // Set body
-        if !body.is_empty() {
-            req = req.set_payload(Bytes::from(body));
-        }
+            // Set body
+            if !body.is_empty() {
+                req = req.set_payload(Bytes::from(body));
+            }
 
-        // Execute request
-        let request = req.to_request();
-        let response = app.call(request).await.map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("Service call failed: {}", e))
-        })?;
+            // Execute request
+            let request = req.to_request();
+            let response = app.call(request).await.map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!("Service call failed: {}", e))
+            })?;
 
-        // Extract response
-        let status = response.status().as_u16();
+            // Extract response
+            let status = response.status().as_u16();
 
-        let resp_headers: Vec<(String, String)> = response
-            .headers()
-            .iter()
-            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
-            .collect();
+            let resp_headers: Vec<(String, String)> = response
+                .headers()
+                .iter()
+                .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+                .collect();
 
-        // Use test::read_body which handles various body types including Encoder
-        let resp_body = test::read_body(response).await.to_vec();
+            // Use test::read_body which handles various body types including Encoder
+            let resp_body = test::read_body(response).await.to_vec();
 
-        Ok((status, resp_headers, resp_body))
+            Ok((status, resp_headers, resp_body))
+        })
     })
 }
 
@@ -716,7 +756,17 @@ async fn handle_test_request_internal(
                         .insert_header(("Content-Type", "application/json"))
                         .finish();
                 }
+            }
 
+            // HTTP ASGI mount fallback:
+            // - only after Bolt route miss
+            // - only after trailing-slash/API-method near-miss checks above
+            if let Some(asgi_mount) = find_asgi_mount(&state, path) {
+                return asgi_http::handle_asgi_mount_request(req, payload, asgi_mount, state.debug)
+                    .await;
+            }
+
+            if method == "OPTIONS" {
                 // Handle OPTIONS preflight for non-existent routes
                 if state.global_cors_config.is_some() {
                     return HttpResponse::NoContent().finish();

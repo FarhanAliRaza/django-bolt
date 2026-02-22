@@ -309,6 +309,27 @@ class TestClient(httpx.Client):
         except (ImportError, AttributeError):
             return None
 
+    @staticmethod
+    def _validate_asgi_mount_conflicts(api: BoltAPI) -> None:
+        """Validate exact-path conflicts for ASGI mounts (same rule as production startup)."""
+        asgi_mounts = getattr(api, "_asgi_mounts", [])
+        if not asgi_mounts:
+            return
+
+        route_paths = {path for _method, path, _handler_id, _handler in api._routes}
+        seen_mounts: set[str] = set()
+
+        for mount_prefix, _mount_app in asgi_mounts:
+            if mount_prefix in seen_mounts:
+                raise ValueError(f"Duplicate ASGI mount prefix: {mount_prefix}")
+            seen_mounts.add(mount_prefix)
+
+            if mount_prefix in route_paths:
+                raise ValueError(
+                    f"ASGI mount prefix {mount_prefix} conflicts with an existing HTTP route "
+                    "(exact collision is not allowed)."
+                )
+
     def __init__(
         self,
         api: BoltAPI,
@@ -360,6 +381,9 @@ class TestClient(httpx.Client):
         debug = getattr(settings, "DEBUG", False) if settings else False
         self.app_id = _core.create_test_app(api._dispatch, debug, cors_config, trailing_slash, static_config)
 
+        # Validate mount collisions to mirror production startup behavior.
+        self._validate_asgi_mount_conflicts(api)
+
         # Register routes
         rust_routes = [(method, path, handler_id, handler) for method, path, handler_id, handler in api._routes]
         _core.register_test_routes(self.app_id, rust_routes)
@@ -373,6 +397,10 @@ class TestClient(httpx.Client):
             ws_routes.append((path, handler_id, handler, injector))
         if ws_routes:
             _core.register_test_websocket_routes(self.app_id, ws_routes)
+
+        # Register HTTP ASGI mounts
+        if api._asgi_mounts:
+            _core.register_test_asgi_mounts(self.app_id, list(api._asgi_mounts))
 
         # Register middleware metadata if any exists
         if api._handler_middleware:
@@ -582,6 +610,9 @@ class AsyncTestClient(httpx.AsyncClient):
         debug = getattr(settings, "DEBUG", False) if settings else False
         self.app_id = _core.create_test_app(api._dispatch, debug, cors_config, trailing_slash, static_config)
 
+        # Validate mount collisions to mirror production startup behavior.
+        TestClient._validate_asgi_mount_conflicts(api)
+
         # Register routes
         rust_routes = [(method, path, handler_id, handler) for method, path, handler_id, handler in api._routes]
         _core.register_test_routes(self.app_id, rust_routes)
@@ -594,6 +625,10 @@ class AsyncTestClient(httpx.AsyncClient):
             ws_routes.append((path, handler_id, handler, injector))
         if ws_routes:
             _core.register_test_websocket_routes(self.app_id, ws_routes)
+
+        # Register HTTP ASGI mounts
+        if api._asgi_mounts:
+            _core.register_test_asgi_mounts(self.app_id, list(api._asgi_mounts))
 
         # Register middleware metadata
         if api._handler_middleware:

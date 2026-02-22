@@ -19,10 +19,11 @@ use crate::form_parsing::{
     parse_multipart, parse_urlencoded, FileContent, FileFieldConstraints, FileInfo,
     FormParseResult, ValidationError, DEFAULT_MAX_PARTS, DEFAULT_MEMORY_LIMIT,
 };
+use crate::metadata::{RustArgBinding, RustArgSource};
 use crate::middleware;
 use crate::middleware::auth::populate_auth_context;
 use crate::request::PyRequest;
-use crate::request_pipeline::validate_typed_params;
+use crate::request_pipeline::validate_and_cache_typed_params;
 use crate::response_builder;
 use crate::response_meta::ResponseMeta;
 use crate::responses;
@@ -351,6 +352,41 @@ pub fn form_result_to_py(
     Ok((form_dict.unbind(), files_dict.unbind()))
 }
 
+/// Build prebound Python args/kwargs from Rust binding metadata.
+///
+/// Returns None if any required binding value is missing so Python injector can
+/// execute as a safe fallback and preserve error semantics.
+pub(crate) fn build_prebound_args_kwargs(
+    py: Python<'_>,
+    bindings: &[RustArgBinding],
+    path_params: &Bound<'_, PyDict>,
+    query_params: &Bound<'_, PyDict>,
+    headers: &Bound<'_, PyDict>,
+    cookies: &Bound<'_, PyDict>,
+) -> Option<(Py<PyList>, Py<PyDict>)> {
+    let args = PyList::empty(py);
+    let kwargs = PyDict::new(py);
+
+    for binding in bindings {
+        let source_dict = match binding.source {
+            RustArgSource::Path => path_params,
+            RustArgSource::Query => query_params,
+            RustArgSource::Header => headers,
+            RustArgSource::Cookie => cookies,
+        };
+
+        let value = source_dict.get_item(&binding.lookup_key).ok().flatten()?;
+
+        if binding.positional {
+            args.append(&value).ok()?;
+        } else {
+            kwargs.set_item(&binding.arg_name, &value).ok()?;
+        }
+    }
+
+    Some((args.unbind(), kwargs.unbind()))
+}
+
 pub async fn handle_request(
     req: HttpRequest,
     mut payload: web::Payload,
@@ -479,15 +515,20 @@ pub async fn handle_request(
         .unwrap_or(true);
 
     // Type validation for path and query parameters (Rust-native, no GIL)
-    // This validates parameter types before GIL acquisition, returning 422 for invalid types
-    // Performance: Eliminates Python's convert_primitive() overhead for invalid requests
-    if let Some(route_meta) = route_metadata {
-        if let Some(response) =
-            validate_typed_params(&path_params, &query_params, &route_meta.param_types)
+    // This validates parameter types before GIL acquisition, returning 422 for invalid types.
+    // It also caches non-string coerced values so we can avoid re-parsing during Python dict build.
+    let (path_coerced, query_coerced): (
+        AHashMap<String, CoercedValue>,
+        AHashMap<String, CoercedValue>,
+    ) = if let Some(route_meta) = route_metadata {
+        match validate_and_cache_typed_params(&path_params, &query_params, &route_meta.param_types)
         {
-            return response;
+            Ok(cached) => cached,
+            Err(response) => return response,
         }
-    }
+    } else {
+        (AHashMap::new(), AHashMap::new())
+    };
 
     // Optimization: Check if handler needs headers
     // Headers are still needed for auth/rate limiting middleware, so we extract them for Rust
@@ -701,15 +742,46 @@ pub async fn handle_request(
             .map(|m| &m.param_types)
             .unwrap_or(&empty_param_types);
 
-        // Create typed dicts - convert values to Python types
-        let path_params_dict = params_to_py_dict(py, &path_params, param_types)?;
-        let query_params_dict = params_to_py_dict(py, &query_params, param_types)?;
+        // Create typed dicts - reuse pre-coerced path/query values from validation phase.
+        let path_params_dict = PyDict::new(py);
+        for (name, value) in &path_params {
+            if let Some(coerced) = path_coerced.get(name) {
+                path_params_dict.set_item(name, coerced_value_to_py(py, coerced))?;
+            } else {
+                path_params_dict.set_item(name, value)?;
+            }
+        }
+
+        let query_params_dict = PyDict::new(py);
+        for (name, value) in &query_params {
+            if let Some(coerced) = query_coerced.get(name) {
+                query_params_dict.set_item(name, coerced_value_to_py(py, coerced))?;
+            } else {
+                query_params_dict.set_item(name, value)?;
+            }
+        }
+
         let headers_dict = if needs_headers {
             params_to_py_dict(py, &headers, param_types)?
         } else {
             PyDict::new(py)
         };
         let cookies_dict = params_to_py_dict(py, &cookies, param_types)?;
+
+        let state_dict = PyDict::new(py);
+        if let Some(bindings) = route_metadata.and_then(|m| m.rust_arg_bindings.as_deref()) {
+            if let Some((pre_args, pre_kwargs)) = build_prebound_args_kwargs(
+                py,
+                bindings,
+                &path_params_dict,
+                &query_params_dict,
+                &headers_dict,
+                &cookies_dict,
+            ) {
+                state_dict.set_item("_bolt_prebound_args", pre_args)?;
+                state_dict.set_item("_bolt_prebound_kwargs", pre_kwargs)?;
+            }
+        }
 
         // Create form_map and files_map from form parsing result
         let (form_map_dict, files_map_dict) = if let Some(ref result) = form_result {
@@ -728,7 +800,7 @@ pub async fn handle_request(
             cookies: cookies_dict.unbind(),
             context,
             user: None,
-            state: PyDict::new(py).unbind(), // Empty state dict for middleware and dynamic attributes
+            state: state_dict.unbind(), // State dict for middleware and dynamic attributes
             form_map: form_map_dict,
             files_map: files_map_dict,
             meta_cache: std::sync::OnceLock::new(),

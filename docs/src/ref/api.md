@@ -22,7 +22,7 @@ api = BoltAPI()
 BoltAPI(
     prefix="",                 # URL prefix for all routes
     trailing_slash="strip",    # Trailing slash handling: "strip", "append", or "keep"
-    middleware=None,           # List of middleware instances
+    middleware=None,           # List of middleware classes (or DjangoMiddleware wrappers)
     django_middleware=None,    # Django middleware configuration
     enable_logging=True,       # Enable request/response logging
     logging_config=None,       # Custom logging configuration
@@ -37,7 +37,7 @@ BoltAPI(
 |-----------|------|---------|-------------|
 | `prefix` | `str` | `""` | URL prefix applied to all routes (e.g., `/api/v1`) |
 | `trailing_slash` | `str` | `"strip"` | How to handle trailing slashes in route paths |
-| `middleware` | `list` | `None` | Middleware instances to apply |
+| `middleware` | `list` | `None` | Middleware classes to apply (or `DjangoMiddleware(...)` / `DjangoMiddlewareStack(...)` wrappers) |
 | `django_middleware` | `bool`, `list`, or `dict` | `None` | Django middleware configuration |
 | `enable_logging` | `bool` | `True` | Enable request/response logging |
 | `logging_config` | `LoggingConfig` | `None` | Custom logging configuration |

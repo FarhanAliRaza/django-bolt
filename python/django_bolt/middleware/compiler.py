@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import decimal
+import inspect
 import logging
 import uuid
 from collections.abc import Callable
@@ -222,6 +223,60 @@ def _extract_type_hints_from_field(
         target[field.name] = type_hint
 
 
+def _compile_rust_arg_bindings(handler_meta: dict[str, Any]) -> list[dict[str, str]] | None:
+    """Build a Rust-side argument binding plan for simple non-body handlers.
+
+    The plan is used by Rust to pre-bind handler args/kwargs from request maps,
+    allowing Python dispatch to skip injector execution on the no-middleware fast path.
+    """
+    fields = handler_meta.get("fields", [])
+    if not fields:
+        return None
+
+    mode = handler_meta.get("mode")
+    if mode == "request_only":
+        return None
+
+    bindings: list[dict[str, str]] = []
+
+    for field in fields:
+        source = field.source
+        if source not in ("path", "query", "header", "cookie"):
+            return None
+
+        # Keep semantics simple and safe: only required scalar params.
+        if field.is_optional:
+            return None
+        if not field.is_simple_type:
+            return None
+        if field.origin is not None:
+            return None
+
+        # Unsupported Python parameter kinds fall back to injector.
+        if field.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            arg_kind = "positional"
+        elif field.kind == inspect.Parameter.KEYWORD_ONLY:
+            arg_kind = "keyword"
+        else:
+            return None
+
+        if source == "header":
+            lookup_key = (field.alias or field.name).lower().replace("_", "-")
+        else:
+            lookup_key = field.alias or field.name
+
+        bindings.append(
+            {
+                "source": source,
+                "lookup_key": lookup_key,
+                "arg_name": field.name,
+                "arg_kind": arg_kind,
+            }
+        )
+
+    return bindings if bindings else None
+
+
 def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_meta: dict[str, Any]) -> dict[str, Any]:
     """
     Add optimization flags to middleware metadata.
@@ -251,6 +306,12 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
     metadata["needs_path_params"] = handler_meta.get("needs_path_params", True)
     metadata["is_static_route"] = handler_meta.get("is_static_route", False)
     metadata["needs_form_parsing"] = handler_meta.get("needs_form_parsing", False)
+
+    # Compile a Rust-side argument binding plan for simple handlers.
+    # Rust uses this to pre-bind args/kwargs so Python can skip injector work.
+    rust_arg_bindings = _compile_rust_arg_bindings(handler_meta)
+    if rust_arg_bindings:
+        metadata["rust_arg_bindings"] = rust_arg_bindings
 
     # Extract type hints for all parameter sources
     # This enables Rust-side type coercion, eliminating Python overhead

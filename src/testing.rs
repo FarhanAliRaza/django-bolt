@@ -36,8 +36,8 @@ use actix_multipart::Multipart;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 
-use crate::handler::{coerced_value_to_py, form_result_to_py};
-use crate::request_pipeline::validate_typed_params;
+use crate::handler::{build_prebound_args_kwargs, coerced_value_to_py, form_result_to_py};
+use crate::request_pipeline::validate_and_cache_typed_params;
 use crate::response_meta::ResponseMeta;
 use crate::static_files::handle_static_file;
 use crate::type_coercion::{coerce_param, params_to_py_dict, TYPE_STRING};
@@ -742,14 +742,15 @@ async fn handle_test_request_internal(
         AHashMap::new()
     };
 
-    // Validate typed parameters before GIL acquisition
-    if let Some(ref meta) = route_meta {
-        if let Some(response) =
-            validate_typed_params(&path_params, &query_params, &meta.param_types)
-        {
-            return response;
+    // Validate typed parameters before GIL acquisition and cache non-string coerced values.
+    let (path_coerced, query_coerced) = if let Some(ref meta) = route_meta {
+        match validate_and_cache_typed_params(&path_params, &query_params, &meta.param_types) {
+            Ok(cached) => cached,
+            Err(response) => return response,
         }
-    }
+    } else {
+        (AHashMap::new(), AHashMap::new())
+    };
 
     // Extract headers
     let needs_headers = route_meta.as_ref().map(|m| m.needs_headers).unwrap_or(true);
@@ -953,11 +954,45 @@ async fn handle_test_request_internal(
             .cloned()
             .unwrap_or_default();
 
-        // Create typed dicts - convert values to Python types
-        let path_params_dict = params_to_py_dict(py, &path_params, &param_types)?;
-        let query_params_dict = params_to_py_dict(py, &query_params, &param_types)?;
+        // Create typed dicts - reuse pre-coerced path/query values from validation phase.
+        let path_params_dict = PyDict::new(py);
+        for (name, value) in &path_params {
+            if let Some(coerced) = path_coerced.get(name) {
+                path_params_dict.set_item(name, coerced_value_to_py(py, coerced))?;
+            } else {
+                path_params_dict.set_item(name, value)?;
+            }
+        }
+
+        let query_params_dict = PyDict::new(py);
+        for (name, value) in &query_params {
+            if let Some(coerced) = query_coerced.get(name) {
+                query_params_dict.set_item(name, coerced_value_to_py(py, coerced))?;
+            } else {
+                query_params_dict.set_item(name, value)?;
+            }
+        }
+
         let headers_dict = params_to_py_dict(py, &headers_for_python, &param_types)?;
         let cookies_dict = params_to_py_dict(py, &cookies, &param_types)?;
+
+        let state_dict = PyDict::new(py);
+        if let Some(bindings) = route_meta
+            .as_ref()
+            .and_then(|m| m.rust_arg_bindings.as_deref())
+        {
+            if let Some((pre_args, pre_kwargs)) = build_prebound_args_kwargs(
+                py,
+                bindings,
+                &path_params_dict,
+                &query_params_dict,
+                &headers_dict,
+                &cookies_dict,
+            ) {
+                state_dict.set_item("_bolt_prebound_args", pre_args)?;
+                state_dict.set_item("_bolt_prebound_kwargs", pre_kwargs)?;
+            }
+        }
 
         // Create form_map and files_map from form parsing result
         let (form_map_dict, files_map_dict) = if let Some(ref result) = form_result {
@@ -977,7 +1012,7 @@ async fn handle_test_request_internal(
             cookies: cookies_dict.unbind(),
             context,
             user: None,
-            state: PyDict::new(py).unbind(),
+            state: state_dict.unbind(),
             form_map: form_map_dict,
             files_map: files_map_dict,
             meta_cache: std::sync::OnceLock::new(),

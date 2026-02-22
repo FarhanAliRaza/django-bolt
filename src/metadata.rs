@@ -5,13 +5,31 @@
 use actix_web::http::header::HeaderValue;
 use ahash::AHashSet;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
 use crate::form_parsing::FileFieldConstraints;
 use crate::middleware::auth::AuthBackend;
 use crate::permissions::Guard;
+
+/// Request value source for Rust-side argument prebinding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RustArgSource {
+    Path,
+    Query,
+    Header,
+    Cookie,
+}
+
+/// One argument binding entry used by Rust-side prebinding.
+#[derive(Debug, Clone)]
+pub struct RustArgBinding {
+    pub source: RustArgSource,
+    pub lookup_key: String,
+    pub arg_name: String,
+    pub positional: bool,
+}
 
 /// CORS configuration parsed at startup
 #[derive(Debug, Clone)]
@@ -224,6 +242,7 @@ pub struct RouteMetadata {
     pub file_constraints: HashMap<String, FileFieldConstraints>,
     pub max_upload_size: usize,
     pub memory_spool_threshold: usize,
+    pub rust_arg_bindings: Option<Vec<RustArgBinding>>,
 }
 
 impl RouteMetadata {
@@ -377,6 +396,9 @@ impl RouteMetadata {
             .and_then(|v| v.extract::<usize>().ok())
             .unwrap_or(1024 * 1024);
 
+        // Optional Rust-side argument binding plan.
+        let rust_arg_bindings = parse_rust_arg_bindings(py_meta);
+
         Ok(RouteMetadata {
             auth_backends,
             guards,
@@ -395,6 +417,7 @@ impl RouteMetadata {
             file_constraints,
             max_upload_size,
             memory_spool_threshold,
+            rust_arg_bindings,
         })
     }
 }
@@ -639,4 +662,79 @@ fn parse_file_constraints(
     }
 
     result
+}
+
+/// Parse Rust-side argument binding plan from Python metadata.
+///
+/// Expected format:
+/// [
+///   {"source": "path|query|header|cookie", "lookup_key": "...", "arg_name": "...", "arg_kind": "positional|keyword"},
+///   ...
+/// ]
+fn parse_rust_arg_bindings(py_meta: &Bound<'_, PyDict>) -> Option<Vec<RustArgBinding>> {
+    let bindings_obj = py_meta.get_item("rust_arg_bindings").ok().flatten()?;
+    let py_list = bindings_obj.cast::<PyList>().ok()?;
+
+    let mut bindings = Vec::with_capacity(py_list.len());
+
+    for item in py_list.iter() {
+        let entry = item.cast::<PyDict>().ok()?;
+
+        let source = match entry
+            .get_item("source")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<String>().ok())
+            .as_deref()
+        {
+            Some("path") => RustArgSource::Path,
+            Some("query") => RustArgSource::Query,
+            Some("header") => RustArgSource::Header,
+            Some("cookie") => RustArgSource::Cookie,
+            _ => return None,
+        };
+
+        let lookup_key = entry
+            .get_item("lookup_key")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<String>().ok())?;
+        if lookup_key.is_empty() {
+            return None;
+        }
+
+        let arg_name = entry
+            .get_item("arg_name")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<String>().ok())?;
+        if arg_name.is_empty() {
+            return None;
+        }
+
+        let positional = match entry
+            .get_item("arg_kind")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<String>().ok())
+            .as_deref()
+        {
+            Some("positional") => true,
+            Some("keyword") => false,
+            _ => return None,
+        };
+
+        bindings.push(RustArgBinding {
+            source,
+            lookup_key,
+            arg_name,
+            positional,
+        });
+    }
+
+    if bindings.is_empty() {
+        None
+    } else {
+        Some(bindings)
+    }
 }

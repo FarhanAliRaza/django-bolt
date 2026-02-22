@@ -112,7 +112,8 @@ class BoltAPI:
                 - "strip": Remove trailing slashes (default, cleaner URLs)
                 - "append": Add trailing slashes (Django convention)
                 - "keep": No normalization, keep as registered
-            middleware: List of Bolt middleware instances
+            middleware: List of Bolt middleware classes (Django-style) or
+                DjangoMiddleware/DjangoMiddlewareStack wrappers
             django_middleware: Django middleware configuration. Can be:
                 - True: Use all middleware from settings.MIDDLEWARE (excluding CSRF, etc.)
                 - False/None: Don't use Django middleware
@@ -1181,6 +1182,19 @@ class BoltAPI:
             # Integer hashing is O(1) with minimal overhead vs callable hashing
             meta = self._handler_meta[handler_id]
 
+            # Optional Rust-prebound args/kwargs (fast path for simple handlers).
+            # Only used in no-middleware execution path; middleware path keeps current semantics.
+            if hasattr(request, "state"):
+                request_state = request.state
+            elif isinstance(request, dict):
+                request_state = request.setdefault("state", {})
+            else:
+                request_state = {}
+
+            prebound_args = request_state.pop("_bolt_prebound_args", None)
+            prebound_kwargs = request_state.pop("_bolt_prebound_kwargs", None)
+            has_prebound = prebound_args is not None and prebound_kwargs is not None
+
             # 2. Lazy user loading using SimpleLazyObject (Django pattern)
             # User is only loaded from DB when request.user is actually accessed
             auth_context = request.get("auth")
@@ -1229,12 +1243,16 @@ class BoltAPI:
                         else:
                             result = handler(request)
                 else:
-                    # 4. Use pre-compiled injector (sync or async based on needs)
-                    # Direct access -- injector_is_async set in _route_decorator
-                    if meta["injector_is_async"]:
-                        args, kwargs = await meta["injector"](request)
+                    # 4. Prefer Rust-prebound args/kwargs when available.
+                    # Fallback to pre-compiled injector for all other handlers.
+                    if has_prebound:
+                        args, kwargs = prebound_args, prebound_kwargs
                     else:
-                        args, kwargs = meta["injector"](request)
+                        # Direct access -- injector_is_async set in _route_decorator
+                        if meta["injector_is_async"]:
+                            args, kwargs = await meta["injector"](request)
+                        else:
+                            args, kwargs = meta["injector"](request)
 
                     # 5. Execute handler (async or sync)
                     if is_async:
@@ -1283,7 +1301,13 @@ class BoltAPI:
             # Auto-cleanup UploadFiles to prevent resource leaks
             # Only runs for handlers with file uploads (optimization: skip for 95%+ of requests)
             if meta.get("has_file_uploads"):
-                upload_files = request.state.get("_upload_files", [])
+                if hasattr(request, "state"):
+                    request_state = request.state
+                elif isinstance(request, dict):
+                    request_state = request.get("state", {})
+                else:
+                    request_state = {}
+                upload_files = request_state.get("_upload_files", [])
                 for upload in upload_files:
                     with suppress(Exception):
                         upload.close_sync()

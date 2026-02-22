@@ -9,6 +9,7 @@ Python middleware classes (TimingMiddleware, etc.) run for custom logic only.
 import asyncio
 import json
 import time
+from typing import Annotated
 
 import jwt
 import msgspec
@@ -17,6 +18,7 @@ import pytest
 from django_bolt import BoltAPI
 from django_bolt.auth import APIKeyAuthentication, IsAuthenticated, JWTAuthentication
 from django_bolt.middleware import Middleware, cors, rate_limit, skip_middleware
+from django_bolt.params import Cookie, Header
 from django_bolt.testing import TestClient
 
 
@@ -229,6 +231,137 @@ class TestMiddlewareMetadata:
             response = client.get("/with-cors", headers={"Origin": "https://example.com"})
             assert response.status_code == 200
             assert response.headers.get("Access-Control-Allow-Origin") == "https://example.com"
+
+    def test_rust_arg_prebinding_skips_injector_on_http_fast_path(self):
+        """Simple path/query handlers should execute without calling Python injector."""
+        api = BoltAPI()
+
+        @api.get("/items/{item_id}")
+        async def get_item(item_id: int, q: str):
+            return {"item_id": item_id, "q": q}
+
+        handler_id = 0
+        meta = api._handler_meta[handler_id]
+        middleware_meta = api._handler_middleware[handler_id]
+
+        # Ensure route is eligible for Rust-side prebinding.
+        assert "rust_arg_bindings" in middleware_meta
+        assert len(middleware_meta["rust_arg_bindings"]) == 2
+
+        # If injector is called, this test must fail.
+        def failing_injector(_request):
+            raise AssertionError("Injector should be bypassed by Rust prebinding")
+
+        meta["injector"] = failing_injector
+        meta["injector_is_async"] = False
+
+        with TestClient(api, use_http_layer=True) as client:
+            response = client.get("/items/123?q=hello")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["item_id"] == 123
+            assert data["q"] == "hello"
+
+    def test_rust_arg_prebinding_skips_injector_for_header_cookie_fast_path(self):
+        """Header/Cookie bindings should also bypass injector on no-middleware fast path."""
+        api = BoltAPI()
+
+        @api.get("/auth/{item_id}")
+        async def get_auth_data(
+            item_id: int,
+            token: Annotated[str, Header(alias="x-token")],
+            session_id: Annotated[str, Cookie(alias="session")],
+        ):
+            return {"item_id": item_id, "token": token, "session_id": session_id}
+
+        handler_id = 0
+        meta = api._handler_meta[handler_id]
+        middleware_meta = api._handler_middleware[handler_id]
+
+        assert "rust_arg_bindings" in middleware_meta
+        sources = {entry["source"] for entry in middleware_meta["rust_arg_bindings"]}
+        assert sources == {"path", "header", "cookie"}
+
+        def failing_injector(_request):
+            raise AssertionError("Injector should be bypassed by Rust prebinding")
+
+        meta["injector"] = failing_injector
+        meta["injector_is_async"] = False
+
+        with TestClient(api, use_http_layer=True) as client:
+            response = client.get("/auth/7", headers={"x-token": "token-123"}, cookies={"session": "sess-abc"})
+            assert response.status_code == 200
+            data = response.json()
+            assert data["item_id"] == 7
+            assert data["token"] == "token-123"
+            assert data["session_id"] == "sess-abc"
+
+    def test_rust_arg_prebinding_missing_value_falls_back_to_injector(self):
+        """Missing prebound values must fall back to injector to preserve 422 semantics."""
+        api = BoltAPI()
+
+        @api.get("/requires-header")
+        async def requires_header(api_key: Annotated[str, Header(alias="x-api-key")]):
+            return {"api_key": api_key}
+
+        handler_id = 0
+        meta = api._handler_meta[handler_id]
+        middleware_meta = api._handler_middleware[handler_id]
+
+        assert "rust_arg_bindings" in middleware_meta
+        original_injector = meta["injector"]
+        calls = {"count": 0}
+
+        def counting_injector(request):
+            calls["count"] += 1
+            return original_injector(request)
+
+        meta["injector"] = counting_injector
+        meta["injector_is_async"] = False
+
+        with TestClient(api, use_http_layer=True) as client:
+            response = client.get("/requires-header")
+            assert response.status_code == 422
+            assert response.json()["detail"] == "Missing required header: x-api-key"
+
+        assert calls["count"] == 1
+
+    def test_rust_arg_prebinding_keeps_injector_path_when_python_middleware_present(self):
+        """Prebound args/kwargs are not used when Python middleware chain is active."""
+        class PassThroughMiddleware(Middleware):
+            call_count = 0
+
+            async def process_request(self, request):
+                PassThroughMiddleware.call_count += 1
+                return await self.get_response(request)
+
+        api = BoltAPI(middleware=[PassThroughMiddleware])
+
+        @api.get("/items/{item_id}")
+        async def get_item(item_id: int, q: str):
+            return {"item_id": item_id, "q": q}
+
+        handler_id = 0
+        meta = api._handler_meta[handler_id]
+        middleware_meta = api._handler_middleware[handler_id]
+
+        assert "rust_arg_bindings" in middleware_meta
+        calls = {"count": 0}
+
+        def counting_injector(request):
+            calls["count"] += 1
+            return ([request["params"]["item_id"], request["query"]["q"]], {})
+
+        meta["injector"] = counting_injector
+        meta["injector_is_async"] = False
+
+        with TestClient(api, use_http_layer=True) as client:
+            response = client.get("/items/42?q=hello")
+            assert response.status_code == 200
+            assert response.json() == {"item_id": 42, "q": "hello"}
+
+        assert calls["count"] == 1
+        assert PassThroughMiddleware.call_count == 1
 
 
 class TestMiddlewareExecution:

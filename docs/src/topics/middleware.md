@@ -169,6 +169,31 @@ async def timed_endpoint():
     return {"status": "ok"}
 ```
 
+### Global middleware classes
+
+For global middleware configured via `BoltAPI(middleware=[...])`, pass middleware classes (Django-style), not instances:
+
+```python
+from django_bolt import BoltAPI
+from django_bolt.middleware import Middleware
+
+
+class RequestIdMiddleware(Middleware):
+    async def process_request(self, request):
+        response = await self.get_response(request)
+        response.headers["X-Request-ID"] = "test-id"
+        return response
+
+
+api = BoltAPI(
+    middleware=[
+        RequestIdMiddleware,  # pass class
+    ]
+)
+```
+
+`DjangoMiddleware(...)` and `DjangoMiddlewareStack(...)` are also valid entries in `middleware=[...]`.
+
 ## Django middleware integration
 
 Django-Bolt seamlessly integrates with Django's middleware system, allowing you to use existing Django middleware with your API endpoints.

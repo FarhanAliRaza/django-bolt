@@ -13,6 +13,7 @@ Performance is the utmost priority - the middleware system is designed for zero 
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 import time
@@ -21,9 +22,11 @@ import uuid
 import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from re import Pattern
 from typing import (
     TYPE_CHECKING,
+    Any,
     Protocol,
     Union,
     runtime_checkable,
@@ -50,6 +53,97 @@ MiddlewareType = Union[
     "MiddlewareProtocol",
     type["BaseMiddleware"],
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionMiddlewareSpec:
+    """Marker for function-style middleware attached to route handlers."""
+
+    func: Callable
+
+
+def _ensure_handler_middleware_list(handler: Callable) -> list[Any]:
+    """Get/create per-handler middleware metadata list."""
+    if not hasattr(handler, "__bolt_middleware__"):
+        handler.__bolt_middleware__ = []
+    return handler.__bolt_middleware__
+
+
+def _is_function_middleware_callable(spec: Any) -> bool:
+    """Return True only for plain function-style middleware callables."""
+    return inspect.isfunction(spec) or inspect.ismethod(spec) or inspect.isbuiltin(spec)
+
+
+def normalize_middleware_specs(
+    middleware_specs: list[Any] | tuple[Any, ...] | None,
+    *,
+    context: str,
+    allow_function_middleware: bool = False,
+) -> list[Any]:
+    """
+    Normalize and validate middleware specs.
+
+    Allowed forms:
+    - Middleware classes (Django-style __init__(get_response))
+    - DjangoMiddleware / DjangoMiddlewareStack wrapper instances
+    - Dict middleware metadata (Rust-handled middleware)
+    - FunctionMiddlewareSpec (route-level only)
+    - Raw middleware functions (route-level only; converted to FunctionMiddlewareSpec)
+    """
+    normalized: list[Any] = []
+    if not middleware_specs:
+        return normalized
+
+    for spec in middleware_specs:
+        if isinstance(spec, dict):
+            normalized.append(spec)
+            continue
+
+        if isinstance(spec, FunctionMiddlewareSpec):
+            if not allow_function_middleware:
+                raise TypeError(
+                    f"{context} middleware does not support function-style middleware. "
+                    "Use middleware classes or DjangoMiddleware/DjangoMiddlewareStack wrappers."
+                )
+            normalized.append(spec)
+            continue
+
+        # Fail-fast for plain middleware instances.
+        if isinstance(spec, (BaseMiddleware, Middleware)):
+            raise TypeError(
+                f"{context} middleware does not accept middleware instances ({type(spec).__name__}). "
+                "Pass middleware classes instead, e.g. middleware=[MyMiddleware]."
+            )
+
+        # Django middleware wrappers are instance-based by design.
+        if hasattr(spec, "_create_middleware_instance"):
+            normalized.append(spec)
+            continue
+
+        if isinstance(spec, type):
+            normalized.append(spec)
+            continue
+
+        if callable(spec):
+            if allow_function_middleware and _is_function_middleware_callable(spec):
+                normalized.append(FunctionMiddlewareSpec(spec))
+                continue
+            if not isinstance(spec, type):
+                raise TypeError(
+                    f"{context} middleware does not accept middleware instances ({type(spec).__name__}). "
+                    "Pass middleware classes instead, e.g. middleware=[MyMiddleware]."
+                )
+            raise TypeError(
+                f"{context} middleware entry '{spec}' must be a middleware class "
+                "or DjangoMiddleware/DjangoMiddlewareStack wrapper."
+            )
+
+        raise TypeError(
+            f"Unsupported {context} middleware entry: {spec!r}. "
+            "Expected middleware class, DjangoMiddleware wrapper, dict config, or function middleware (route-level only)."
+        )
+
+    return normalized
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -266,25 +360,34 @@ def middleware(*args, **kwargs):
             return {"uploaded": True}
     """
 
-    def decorator(func):
-        if not hasattr(func, "__bolt_middleware__"):
-            func.__bolt_middleware__ = []
+    def attach_middleware(handler: Callable, middleware_spec: Any) -> Callable:
+        handler_middleware = _ensure_handler_middleware_list(handler)
+        handler_middleware.append(middleware_spec)
+        return handler
 
-        for arg in args:
-            if isinstance(arg, (BaseMiddleware, Middleware, type)):
-                func.__bolt_middleware__.append(arg)
-            elif callable(arg):
-                # Support raw callables as middleware
-                func.__bolt_middleware__.append(arg)
+    # @middleware used directly on a function-style middleware declaration:
+    #     @middleware
+    #     async def my_middleware(request, call_next): ...
+    # Returns a route decorator that attaches function middleware to handlers.
+    if len(args) == 1 and callable(args[0]) and not kwargs and not isinstance(args[0], (type,)):
+        fn_spec = normalize_middleware_specs([args[0]], context="route", allow_function_middleware=True)[0]
 
+        def route_decorator(handler: Callable) -> Callable:
+            return attach_middleware(handler, fn_spec)
+
+        return route_decorator
+
+    def decorator(handler: Callable) -> Callable:
+        normalized = normalize_middleware_specs(args, context="route", allow_function_middleware=True)
+        for spec in normalized:
+            attach_middleware(handler, spec)
+
+        # Support dict-style middleware metadata (e.g. @middleware(type="cors", ...))
         if kwargs:
-            func.__bolt_middleware__.append(kwargs)
+            attach_middleware(handler, kwargs)
 
-        return func
+        return handler
 
-    # Support both @middleware and @middleware()
-    if len(args) == 1 and callable(args[0]) and not isinstance(args[0], (BaseMiddleware, Middleware, type)):
-        return decorator(args[0])
     return decorator
 
 
@@ -574,6 +677,8 @@ __all__ = [
     "Middleware",
     "GetResponse",
     "MiddlewareType",
+    "FunctionMiddlewareSpec",
+    "normalize_middleware_specs",
     # Decorators
     "middleware",
     "rate_limit",

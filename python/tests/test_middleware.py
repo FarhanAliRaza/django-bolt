@@ -15,9 +15,9 @@ import jwt
 import msgspec
 import pytest
 
-from django_bolt import BoltAPI
+from django_bolt import BoltAPI, Router
 from django_bolt.auth import APIKeyAuthentication, IsAuthenticated, JWTAuthentication
-from django_bolt.middleware import Middleware, cors, rate_limit, skip_middleware
+from django_bolt.middleware import DjangoMiddlewareStack, Middleware, cors, middleware, rate_limit, skip_middleware
 from django_bolt.params import Cookie, Header
 from django_bolt.testing import TestClient
 
@@ -30,17 +30,11 @@ class ItemModel(msgspec.Struct):
 
 # Custom test middleware
 class CustomTestMiddleware(Middleware):
-    def __init__(self, name: str):
-        self.name = name
-        self.call_count = 0
+    call_count = 0
 
-    async def process_request(self, request, call_next):
-        self.call_count += 1
-        # Add marker to context
-        if request.get("context"):
-            request["context"][f"test_{self.name}"] = True
-        response = await call_next(request)
-        return response
+    async def process_request(self, request):
+        type(self).call_count += 1
+        return await self.get_response(request)
 
 
 class TestMiddlewareDecorators:
@@ -148,15 +142,167 @@ class TestMiddlewareDecorators:
 class TestGlobalMiddleware:
     """Test global middleware configuration"""
 
-    def test_global_middleware_instances(self):
-        """Test setting global middleware instances (Python middleware)"""
-        # Create custom Python middleware instances
-        custom_mw = CustomTestMiddleware("global1")
+    def test_global_middleware_rejects_instances(self):
+        """Global middleware must be passed as classes, not instances."""
 
-        api = BoltAPI(middleware=[custom_mw])
+        class NoOpMiddleware:
+            def __init__(self, get_response):
+                self.get_response = get_response
 
-        assert len(api._middleware) == 1
-        assert api._middleware[0] == custom_mw
+            async def __call__(self, request):
+                return await self.get_response(request)
+
+        no_op_instance = NoOpMiddleware(lambda request: request)
+
+        with pytest.raises(TypeError, match="Pass middleware classes instead"):
+            BoltAPI(middleware=[no_op_instance])
+
+    def test_global_middleware_accepts_class_and_wrapper(self):
+        """Class and wrapper middleware forms should remain supported."""
+
+        class NoOpMiddleware:
+            def __init__(self, get_response):
+                self.get_response = get_response
+
+            async def __call__(self, request):
+                return await self.get_response(request)
+
+        stack = DjangoMiddlewareStack([NoOpMiddleware])
+        api = BoltAPI(middleware=[NoOpMiddleware, stack])
+
+        assert api._middleware[0] is NoOpMiddleware
+        assert api._middleware[1] is stack
+
+
+class TestRouterMiddlewareContract:
+    """Test router middleware contract validation."""
+
+    def test_router_middleware_rejects_instances(self):
+        class NoOpMiddleware:
+            def __init__(self, get_response):
+                self.get_response = get_response
+
+            async def __call__(self, request):
+                return await self.get_response(request)
+
+        no_op_instance = NoOpMiddleware(lambda request: request)
+        with pytest.raises(TypeError, match="Pass middleware classes instead"):
+            Router(prefix="/api", middleware=[no_op_instance])
+
+
+class TestMiddlewareOrderingAndExecution:
+    """Behavior tests for Global -> Router -> Route -> Handler ordering."""
+
+    def test_router_and_route_middleware_execute_in_strict_order(self):
+        events = []
+
+        class GlobalMiddleware(Middleware):
+            async def process_request(self, request):
+                events.append("global:before")
+                response = await self.get_response(request)
+                events.append("global:after")
+                return response
+
+        class ParentRouterMiddleware(Middleware):
+            async def process_request(self, request):
+                events.append("parent-router:before")
+                response = await self.get_response(request)
+                events.append("parent-router:after")
+                return response
+
+        class ChildRouterMiddleware(Middleware):
+            async def process_request(self, request):
+                events.append("child-router:before")
+                response = await self.get_response(request)
+                events.append("child-router:after")
+                return response
+
+        class RouteMiddleware(Middleware):
+            async def process_request(self, request):
+                events.append("route:before")
+                response = await self.get_response(request)
+                events.append("route:after")
+                return response
+
+        api = BoltAPI(middleware=[GlobalMiddleware])
+        parent_router = Router(prefix="/parent", middleware=[ParentRouterMiddleware])
+        child_router = Router(prefix="/child", middleware=[ChildRouterMiddleware])
+
+        @child_router.get("/items")
+        @middleware(RouteMiddleware)
+        async def list_items():
+            events.append("handler")
+            return {"ok": True}
+
+        parent_router.include_router(child_router)
+        api.include_router(parent_router)
+
+        with TestClient(api, use_http_layer=True) as client:
+            response = client.get("/parent/child/items")
+            assert response.status_code == 200
+            assert response.json() == {"ok": True}
+
+        assert events == [
+            "global:before",
+            "parent-router:before",
+            "child-router:before",
+            "route:before",
+            "handler",
+            "route:after",
+            "child-router:after",
+            "parent-router:after",
+            "global:after",
+        ]
+
+    def test_router_dict_middleware_is_compiled_for_rust_metadata(self):
+        api = BoltAPI()
+        router = Router(
+            prefix="/rl",
+            middleware=[
+                {
+                    "type": "rate_limit",
+                    "rps": 7,
+                    "burst": 14,
+                    "key": "ip",
+                }
+            ],
+        )
+
+        @router.get("/items")
+        async def list_items():
+            return {"ok": True}
+
+        api.include_router(router)
+        middleware_meta = api._handler_middleware[0]
+        assert "middleware" in middleware_meta
+        assert middleware_meta["middleware"][0]["type"] == "rate_limit"
+
+    def test_function_style_middleware_decorator_executes(self):
+        events = []
+
+        @middleware
+        async def function_mw(request, call_next):
+            events.append("function:before")
+            response = await call_next(request)
+            response.headers["X-Function-Middleware"] = "true"
+            events.append("function:after")
+            return response
+
+        api = BoltAPI()
+
+        @api.get("/fn")
+        @function_mw
+        async def fn_handler():
+            events.append("handler")
+            return {"ok": True}
+
+        with TestClient(api, use_http_layer=True) as client:
+            response = client.get("/fn")
+            assert response.status_code == 200
+            assert response.headers.get("X-Function-Middleware") == "true"
+            assert response.json() == {"ok": True}
+
+        assert events == ["function:before", "handler", "function:after"]
 
 
 class TestMiddlewareMetadata:
@@ -406,16 +552,18 @@ class TestMiddlewareExecution:
     @pytest.mark.asyncio
     async def test_custom_middleware_execution(self):
         """Test custom middleware execution"""
-        test_mw = CustomTestMiddleware("test1")
-        api = BoltAPI(middleware=[test_mw])
+        CustomTestMiddleware.call_count = 0
+        api = BoltAPI(middleware=[CustomTestMiddleware])
 
         @api.get("/test")
         async def test_endpoint():
             return {"status": "ok"}
 
-        # Note: This tests the Python side only
-        # Rust middleware execution happens in the server
-        assert test_mw.call_count == 0  # Not executed yet
+        with TestClient(api, use_http_layer=True) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+
+        assert CustomTestMiddleware.call_count == 1
 
     @pytest.mark.asyncio
     async def test_response_model_with_middleware(self):
@@ -566,7 +714,8 @@ if __name__ == "__main__":
 
     print("\nTesting global middleware...")
     test_global = TestGlobalMiddleware()
-    test_global.test_global_middleware_instances()
+    test_global.test_global_middleware_rejects_instances()
+    test_global.test_global_middleware_accepts_class_and_wrapper()
     print("✓ Global middleware tests passed")
 
     print("\nTesting middleware metadata...")

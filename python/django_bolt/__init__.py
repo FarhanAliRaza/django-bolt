@@ -38,8 +38,8 @@ Middleware:
         middleware=[
             DjangoMiddleware(SessionMiddleware),
             DjangoMiddleware(AuthenticationMiddleware),
-            TimingMiddleware(),
-            LoggingMiddleware(),
+            TimingMiddleware,
+            LoggingMiddleware,
         ]
     )
 """

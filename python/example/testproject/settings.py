@@ -186,7 +186,8 @@ if not DEBUG:
         "loggers": {
             "django": {"handlers": ["console"], "level": "ERROR"},
             "django.server": {"handlers": ["console"], "level": "ERROR", "propagate": False},
-            "django_bolt": {"handlers": ["console"], "level": "ERROR", "propagate": False},
+            "django_bolt": {"handlers": ["console"], "level": "INFO", "propagate": False},
+            "django.security.csrf": {"handlers": ["console"], "level": "INFO", "propagate": False},
         },
         "root": {"handlers": ["console"], "level": "ERROR"},
     }
@@ -209,6 +210,7 @@ else:
             "django": {"handlers": ["console"], "level": "INFO"},
             "django.server": {"handlers": ["console"], "level": "INFO", "propagate": False},
             "django_bolt": {"handlers": ["console"], "level": "INFO", "propagate": False},
+            "django.security.csrf": {"handlers": ["console"], "level": "INFO", "propagate": False},
         },
         "root": {"handlers": ["console"], "level": "INFO"},
     }

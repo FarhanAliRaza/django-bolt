@@ -199,6 +199,17 @@ impl PyRequest {
     #[getter]
     #[allow(non_snake_case)]
     fn META<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
+        // If Django middleware synced a META dict into request.state, reuse it.
+        // This keeps template-time CSRF token generation aligned with middleware validation.
+        let state_dict = self.state.bind(py);
+        if let Some(state_meta) = state_dict.get_item("META")? {
+            if let Ok(state_meta_dict) = state_meta.cast::<PyDict>() {
+                let meta_unbind = state_meta_dict.clone().unbind();
+                let _ = self.meta_cache.set(meta_unbind.clone_ref(py));
+                return Ok(meta_unbind);
+            }
+        }
+
         // Return cached if already built (zero-overhead check)
         if let Some(meta) = self.meta_cache.get() {
             return Ok(meta.clone_ref(py));

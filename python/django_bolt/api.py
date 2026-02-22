@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import sys
+import threading
 import time
 import types
 from collections.abc import Callable
@@ -40,6 +41,7 @@ from .logging.middleware import LoggingMiddleware, create_logging_middleware
 from .middleware import CompressionConfig
 from .middleware.compiler import add_optimization_flags_to_metadata, compile_middleware_meta
 from .middleware.django_loader import load_django_middleware
+from .middleware.middleware import FunctionMiddlewareSpec, normalize_middleware_specs
 from .middleware_response import MiddlewareResponse
 from .openapi import (
     OpenAPIConfig,
@@ -146,7 +148,7 @@ class BoltAPI:
 
         # Add custom middleware
         if middleware:
-            self._middleware.extend(middleware)
+            self._middleware.extend(normalize_middleware_specs(middleware, context="api"))
 
         # Logging configuration (opt-in, setup happens at server startup)
         self._enable_logging = enable_logging
@@ -213,6 +215,9 @@ class BoltAPI:
         # Middleware chain (built lazily on first request)
         self._middleware_chain_built = False
         self._middleware_chain = None  # Will be the outermost middleware instance
+        self._middleware_chain_lock = threading.Lock()
+        self._route_executor_cache: dict[Callable, Callable] = {}
+        self._route_executor_lock = threading.Lock()
 
         # Handler-to-API mapping for merged APIs (initialized here to avoid hasattr in hot path)
         self._handler_api_map: dict[int, BoltAPI] = {}
@@ -858,6 +863,7 @@ class BoltAPI:
         summary: str | None = None,
         description: str | None = None,
         _skip_prefix: bool = False,
+        _router_middleware: list[Any] | None = None,
     ):
         def decorator(fn: Callable):
             # Detect if handler is async or sync
@@ -954,10 +960,36 @@ class BoltAPI:
             # Store whether injector is async (avoids runtime check with inspect.iscoroutinefunction)
             meta["injector_is_async"] = inspect.iscoroutinefunction(injector)
 
+            # Normalize route-level middleware declared via @middleware / @cors / @rate_limit.
+            # Validation happens at registration time to fail fast and deterministically.
+            route_middleware = normalize_middleware_specs(
+                getattr(fn, "__bolt_middleware__", []),
+                context="route",
+                allow_function_middleware=True,
+            )
+            if route_middleware or hasattr(fn, "__bolt_middleware__"):
+                fn.__bolt_middleware__ = route_middleware
+
+            router_middleware = normalize_middleware_specs(_router_middleware, context="router")
+
+            # Preserve normalized middleware layers in handler metadata for runtime execution.
+            meta["_router_middleware"] = router_middleware
+            meta["_route_middleware"] = route_middleware
+            meta["_has_route_python_middleware"] = any(
+                not isinstance(spec, dict) for spec in [*router_middleware, *route_middleware]
+            )
+
             self._handler_meta[handler_id] = meta
 
             # Compile middleware metadata for this handler (including guards and auth)
-            middleware_meta = compile_middleware_meta(fn, method, full_path, self._middleware, guards=guards, auth=auth)
+            middleware_meta = compile_middleware_meta(
+                fn,
+                method,
+                full_path,
+                [*self._middleware, *router_middleware],
+                guards=guards,
+                auth=auth,
+            )
 
             # Add optimization flags to middleware metadata
             # These are parsed by Rust's RouteMetadata::from_python() to skip unused parsing
@@ -966,7 +998,8 @@ class BoltAPI:
             # Python middleware requires cookies and headers regardless of handler params
             # Django middleware needs cookies/headers (CSRF, session, auth, etc.)
             # Custom middleware may also inspect headers for routing, auth, etc.
-            if self._has_django_middleware or self._middleware:
+            has_python_global_middleware = any(not isinstance(spec, dict) for spec in self._middleware)
+            if self._has_django_middleware or has_python_global_middleware or meta["_has_route_python_middleware"]:
                 middleware_meta["needs_cookies"] = True
                 middleware_meta["needs_headers"] = True
 
@@ -1019,28 +1052,164 @@ class BoltAPI:
         # Use the error handler which respects Django DEBUG setting
         return handle_exception(e, debug=None, request=request)  # debug will be checked dynamically
 
+    @staticmethod
+    def _is_python_middleware_spec(middleware_spec: Any) -> bool:
+        """Return True for middleware entries that execute in Python."""
+        return not isinstance(middleware_spec, dict)
+
+    @staticmethod
+    def _clone_wrapper_middleware_spec(middleware_spec: Any) -> Any:
+        """Clone supported middleware wrapper instances for per-route chains."""
+        clone = getattr(middleware_spec, "clone", None)
+        if callable(clone):
+            return clone()
+
+        # DjangoMiddleware wrapper
+        if hasattr(middleware_spec, "middleware_class") and hasattr(middleware_spec, "init_kwargs"):
+            return middleware_spec.__class__(middleware_spec.middleware_class, **middleware_spec.init_kwargs)
+
+        # DjangoMiddlewareStack wrapper
+        if hasattr(middleware_spec, "middleware_classes"):
+            return middleware_spec.__class__(list(middleware_spec.middleware_classes))
+
+        raise TypeError(
+            f"Unsupported middleware wrapper instance '{type(middleware_spec).__name__}'. "
+            "Pass a middleware class or supported DjangoMiddleware/DjangoMiddlewareStack wrapper."
+        )
+
+    def _wrap_middleware_spec(
+        self,
+        middleware_spec: Any,
+        get_response: Callable[[Any], Any],
+        *,
+        clone_wrapper: bool = False,
+    ) -> Callable[[Any], Any]:
+        """Wrap a get_response callable with a normalized middleware spec."""
+        if isinstance(middleware_spec, FunctionMiddlewareSpec):
+
+            async def function_middleware(request):
+                result = middleware_spec.func(request, get_response)
+                if inspect.isawaitable(result):
+                    return await result
+                return result
+
+            return function_middleware
+
+        if hasattr(middleware_spec, "_create_middleware_instance"):
+            wrapper_instance = (
+                self._clone_wrapper_middleware_spec(middleware_spec) if clone_wrapper else middleware_spec
+            )
+            wrapper_instance._create_middleware_instance(get_response)
+            return wrapper_instance
+
+        if isinstance(middleware_spec, type):
+            return middleware_spec(get_response)
+
+        raise TypeError(
+            f"Unsupported middleware entry '{middleware_spec!r}'. "
+            "Expected middleware class, middleware wrapper, or function middleware spec."
+        )
+
     def _build_middleware_chain(self, api: BoltAPI) -> Callable | None:
         """
-        Build the middleware chain for an API instance (Django-style).
-
-        Creates a chain where each middleware wraps the next:
-        - Outermost middleware is called first
-        - Each middleware receives `get_response` (the next layer)
-        - Innermost layer is the handler execution
+        Build the cached global middleware chain for an API instance.
 
         Args:
             api: The BoltAPI instance to build chain for
 
         Returns:
-            The outermost middleware callable, or None if no middleware
+            The outermost middleware callable.
         """
-        if not api._middleware:
-            return None
+        # Route executors are request-scoped and injected via request.state.
+        async def inner_handler(req):
+            route_executor = req.state["_bolt_route_executor"]
+            return await route_executor(req)
 
-        # The innermost "get_response" is a placeholder - it will be replaced per-request
-        # by the actual handler execution. We use a sentinel callable here.
-        # The real handler dispatch happens in _dispatch_with_middleware.
-        return api._middleware  # Return middleware classes for per-request chain building
+        chain = inner_handler
+        for middleware_spec in reversed(api._middleware):
+            if not self._is_python_middleware_spec(middleware_spec):
+                continue
+            chain = self._wrap_middleware_spec(middleware_spec, chain)
+
+        return chain
+
+    async def _execute_handler_as_middleware_response(
+        self,
+        handler: Callable,
+        request: dict[str, Any],
+        meta: dict[str, Any],
+    ) -> MiddlewareResponse:
+        """Execute handler using middleware semantics and return MiddlewareResponse."""
+        if meta.get("mode") == "request_only":
+            if meta.get("is_async", True):
+                result = await handler(request)
+            else:
+                if meta.get("is_blocking", False):
+                    result = await sync_to_thread(handler, request)
+                else:
+                    result = handler(request)
+        else:
+            if meta.get("injector_is_async", False):
+                args, kwargs = await meta["injector"](request)
+            else:
+                args, kwargs = meta["injector"](request)
+
+            if meta.get("is_async", True):
+                result = await handler(*args, **kwargs)
+            else:
+                if meta.get("is_blocking", False):
+                    result = await sync_to_thread(handler, *args, **kwargs)
+                else:
+                    result = handler(*args, **kwargs)
+
+        if meta.get("is_async", True):
+            response_tuple = await serialize_response(result, meta)
+        else:
+            response_tuple = serialize_response_sync(result, meta)
+
+        return MiddlewareResponse.from_tuple(response_tuple)
+
+    def _build_route_executor(
+        self,
+        handler: Callable,
+        meta: dict[str, Any],
+    ) -> Callable[[Any], Any]:
+        """Build per-handler route executor (router+route middleware + handler)."""
+        router_middleware = meta.get("_router_middleware", [])
+        route_middleware = meta.get("_route_middleware", getattr(handler, "__bolt_middleware__", []))
+        combined_specs = [*router_middleware, *route_middleware]
+        normalized_specs = normalize_middleware_specs(combined_specs, context="route", allow_function_middleware=True)
+
+        async def execute_handler(req):
+            return await self._execute_handler_as_middleware_response(handler, req, meta)
+
+        chain = execute_handler
+        for middleware_spec in reversed(normalized_specs):
+            if not self._is_python_middleware_spec(middleware_spec):
+                continue
+            # Route executors are cached per handler, so wrapper instances must be cloned.
+            chain = self._wrap_middleware_spec(middleware_spec, chain, clone_wrapper=True)
+
+        return chain
+
+    def _get_route_executor(
+        self,
+        api: BoltAPI,
+        handler: Callable,
+        meta: dict[str, Any],
+    ) -> Callable[[Any], Any]:
+        """Get or lazily build the cached route executor for a handler."""
+        cached_executor = api._route_executor_cache.get(handler)
+        if cached_executor is not None:
+            return cached_executor
+
+        with api._route_executor_lock:
+            cached_executor = api._route_executor_cache.get(handler)
+            if cached_executor is None:
+                cached_executor = self._build_route_executor(handler, meta)
+                api._route_executor_cache[handler] = cached_executor
+
+        return cached_executor
 
     async def _dispatch_with_middleware(
         self,
@@ -1051,15 +1220,7 @@ class BoltAPI:
         meta: dict[str, Any],
     ) -> Response:
         """
-        Execute the middleware chain and then the handler (Django-style).
-
-        Builds the chain ONCE per API and caches it. Uses a context variable to pass
-        the actual handler execution to the innermost layer, allowing middleware
-        instances to maintain state across requests.
-
-        The inner handler returns a MiddlewareResponse object (not a tuple) so that
-        middleware can modify response.headers and response.status_code. After the
-        middleware chain completes, we convert back to tuple format.
+        Execute global middleware + per-handler route executor.
 
         Args:
             handler: The route handler function
@@ -1068,79 +1229,39 @@ class BoltAPI:
             api: The BoltAPI instance that owns this handler (may be sub-app)
             meta: Handler metadata
         """
-        # Build middleware chain once per API and cache it
+        # Build global middleware chain once per API and cache it.
         if not api._middleware_chain_built:
-            # Create the innermost get_response - dispatches to the handler from context
-            async def inner_handler(req):
-                """The innermost layer that executes the actual handler from context."""
-                _handler = req.state["_bolt_handler"]
-                _meta = req.state["_bolt_meta"]
+            with api._middleware_chain_lock:
+                if not api._middleware_chain_built:
+                    api._middleware_chain = self._build_middleware_chain(api)
+                    api._middleware_chain_built = True
 
-                # Execute handler based on mode
-                if _meta.get("mode") == "request_only":
-                    if _meta.get("is_async", True):
-                        result = await _handler(req)
-                    else:
-                        if _meta.get("is_blocking", False):
-                            result = await sync_to_thread(_handler, req)
-                        else:
-                            result = _handler(req)
-                else:
-                    # Use pre-compiled injector
-                    if _meta.get("injector_is_async", False):
-                        args, kwargs = await _meta["injector"](req)
-                    else:
-                        args, kwargs = _meta["injector"](req)
+        if hasattr(request, "state"):
+            request_state = request.state
+        elif isinstance(request, dict):
+            request_state = request.setdefault("state", {})
+        else:
+            request_state = {}
 
-                    if _meta.get("is_async", True):
-                        result = await _handler(*args, **kwargs)
-                    else:
-                        if _meta.get("is_blocking", False):
-                            result = await sync_to_thread(_handler, *args, **kwargs)
-                        else:
-                            result = _handler(*args, **kwargs)
-
-                # Serialize response to tuple format
-                if _meta.get("is_async", True):
-                    response_tuple = await serialize_response(result, _meta)
-                else:
-                    response_tuple = serialize_response_sync(result, _meta)
-                # Convert to MiddlewareResponse for middleware compatibility
-                return MiddlewareResponse.from_tuple(response_tuple)
-
-            # Build the middleware chain (innermost to outermost)
-            # Each middleware class receives get_response in __init__
-            chain = inner_handler
-            for middleware_cls in reversed(api._middleware):
-                # Check if this is a DjangoMiddleware instance (pre-configured wrapper)
-                if hasattr(middleware_cls, "_create_middleware_instance"):
-                    # DjangoMiddleware: call _create_middleware_instance with get_response
-                    middleware_cls._create_middleware_instance(chain)
-                    chain = middleware_cls
-                else:
-                    # Regular middleware class: instantiate with get_response
-                    chain = middleware_cls(chain)
-
-            api._middleware_chain = chain
-            api._middleware_chain_built = True
-
-        # Store csrf_exempt in request.state for CSRF middleware to check
-        # This is set at registration time from handler's csrf_exempt attribute
-        request.state["_csrf_exempt"] = meta.get("csrf_exempt", False)
-
-        # Set per-request handler context for inner_handler
-        request.state["_bolt_handler"] = handler
-        request.state["_bolt_meta"] = meta
+        # Store csrf_exempt in request.state for CSRF middleware to check.
+        request_state["_csrf_exempt"] = meta.get("csrf_exempt", False)
+        request_state["_bolt_route_executor"] = self._get_route_executor(api, handler, meta)
 
         try:
-            # Execute through the cached chain
             middleware_response = await api._middleware_chain(request)
-
-            # Convert back to tuple format for return
-            return middleware_response.to_tuple()
+            if isinstance(middleware_response, MiddlewareResponse):
+                return middleware_response.to_tuple()
+            if hasattr(middleware_response, "to_tuple"):
+                return middleware_response.to_tuple()
+            if isinstance(middleware_response, tuple):
+                return middleware_response
+            raise TypeError(
+                f"Middleware chain returned unsupported response type: {type(middleware_response).__name__}. "
+                "Expected MiddlewareResponse or response tuple."
+            )
         finally:
-            request.state.pop("_bolt_handler", None)
-            request.state.pop("_bolt_meta", None)
+            if request_state:
+                request_state.pop("_bolt_route_executor", None)
 
     async def _dispatch(self, handler: Callable, request: dict[str, Any], handler_id: int = None) -> Response:
         """
@@ -1182,19 +1303,6 @@ class BoltAPI:
             # Integer hashing is O(1) with minimal overhead vs callable hashing
             meta = self._handler_meta[handler_id]
 
-            # Optional Rust-prebound args/kwargs (fast path for simple handlers).
-            # Only used in no-middleware execution path; middleware path keeps current semantics.
-            if hasattr(request, "state"):
-                request_state = request.state
-            elif isinstance(request, dict):
-                request_state = request.setdefault("state", {})
-            else:
-                request_state = {}
-
-            prebound_args = request_state.pop("_bolt_prebound_args", None)
-            prebound_kwargs = request_state.pop("_bolt_prebound_kwargs", None)
-            has_prebound = prebound_args is not None and prebound_kwargs is not None
-
             # 2. Lazy user loading using SimpleLazyObject (Django pattern)
             # User is only loaded from DB when request.user is actually accessed
             auth_context = request.get("auth")
@@ -1213,20 +1321,32 @@ class BoltAPI:
 
             # 3. Check if we need to execute middleware
             # Middleware runs for:
-            # - Mounted sub-apps (original_api has middleware)
-            # - Main API (self has middleware)
-            if original_api and original_api._middleware:
-                api_with_middleware = original_api
-            elif self._middleware:
-                api_with_middleware = self
-            else:
-                api_with_middleware = None
+            # - Global Python middleware on the owning app
+            # - Router/route Python middleware on this handler
+            middleware_owner = original_api if original_api is not None else self
+            has_python_global_middleware = any(
+                self._is_python_middleware_spec(spec) for spec in middleware_owner._middleware
+            )
+            has_route_python_middleware = bool(meta.get("_has_route_python_middleware", False))
+            api_with_middleware = middleware_owner if (has_python_global_middleware or has_route_python_middleware) else None
 
             if api_with_middleware:
                 # Execute through middleware chain (Django-style)
                 response = await self._dispatch_with_middleware(handler, request, handler_id, api_with_middleware, meta)
             else:
                 # Fast path: no middleware, execute handler directly
+                # Optional Rust-prebound args/kwargs for simple handlers.
+                if hasattr(request, "state"):
+                    request_state = request.state
+                elif isinstance(request, dict):
+                    request_state = request.setdefault("state", {})
+                else:
+                    request_state = {}
+
+                prebound_args = request_state.pop("_bolt_prebound_args", None)
+                prebound_kwargs = request_state.pop("_bolt_prebound_kwargs", None)
+                has_prebound = prebound_args is not None and prebound_kwargs is not None
+
                 # Direct access -- keys guaranteed by compile_binder + _route_decorator
                 mode = meta["mode"]
                 is_async = meta["is_async"]
@@ -1513,26 +1633,31 @@ class BoltAPI:
         # Get all routes from router (including nested routers)
         all_routes = router.get_all_routes()
 
-        # Get router middleware chain (including parent routers)
-        router.get_middleware_chain()
-
         for method, route_path, handler, meta in all_routes:
+            route_meta = dict(meta)
+
             # Compute full path with optional prefix
             full_path = prefix.rstrip("/") + route_path if prefix else route_path
 
             # Extract route-specific overrides from meta
-            route_auth = meta.pop("auth", None)
-            route_guards = meta.pop("guards", None)
-            route_tags = meta.pop("tags", None)
-            meta.pop("_router_middleware", [])
+            route_auth = route_meta.pop("auth", None)
+            route_guards = route_meta.pop("guards", None)
+            route_tags = route_meta.pop("tags", None)
+            route_router_middleware = route_meta.pop("_router_middleware", [])
 
-            # Get the appropriate decorator based on method
-            decorator_method = getattr(self, method.lower(), None)
-            if decorator_method is None:
+            # Register route with merged settings and preserved router middleware.
+            if method.upper() not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
                 continue
 
-            # Register route with merged settings
-            decorator = decorator_method(full_path, auth=route_auth, guards=route_guards, tags=route_tags, **meta)
+            decorator = self._route_decorator(
+                method.upper(),
+                full_path,
+                auth=route_auth,
+                guards=route_guards,
+                tags=route_tags,
+                _router_middleware=route_router_middleware,
+                **route_meta,
+            )
 
             # Apply decorator to register handler
             decorator(handler)

@@ -7,6 +7,8 @@ actually runs and modifies requests/responses through the complete pipeline.
 
 from __future__ import annotations
 
+import re
+
 import msgspec
 import pytest
 from django.contrib.auth.middleware import AuthenticationMiddleware
@@ -626,6 +628,190 @@ class TestMiddlewareCategorization:
             assert handler_called["called"] is False
 
 
+@pytest.mark.django_db
+class TestDjangoMiddlewareHookBehavior:
+    """Behavior-focused tests for hook execution order and short-circuit semantics."""
+
+    def test_process_request_short_circuit_still_runs_process_response(self):
+        class RequestShortCircuitMiddleware:
+            def __init__(self, get_response):
+                self.get_response = get_response
+
+            def process_request(self, request):
+                return HttpResponse("blocked early", status=418)
+
+            def process_response(self, request, response):
+                response["X-Response-Hook"] = "applied"
+                return response
+
+            def __call__(self, request):
+                response = self.process_request(request)
+                if response is None:
+                    response = self.get_response(request)
+                return self.process_response(request, response)
+
+        api = BoltAPI()
+        api._middleware = [DjangoMiddlewareStack([RequestShortCircuitMiddleware])]
+
+        handler_called = {"called": False}
+
+        @api.get("/test")
+        async def test_route():
+            handler_called["called"] = True
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 418
+            assert response.headers.get("X-Response-Hook") == "applied"
+            assert handler_called["called"] is False
+
+    def test_process_view_short_circuit_still_runs_process_response(self):
+        class ViewShortCircuitMiddleware:
+            def __init__(self, get_response):
+                self.get_response = get_response
+
+            def process_view(self, request, view_func, view_args, view_kwargs):
+                return HttpResponse("blocked in process_view", status=409)
+
+            def process_response(self, request, response):
+                response["X-View-Response-Hook"] = "applied"
+                return response
+
+            def __call__(self, request):
+                return self.get_response(request)
+
+        api = BoltAPI()
+        api._middleware = [DjangoMiddlewareStack([ViewShortCircuitMiddleware])]
+
+        handler_called = {"called": False}
+
+        @api.get("/test")
+        async def test_route():
+            handler_called["called"] = True
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 409
+            assert response.headers.get("X-View-Response-Hook") == "applied"
+            assert handler_called["called"] is False
+
+    def test_process_view_only_middleware_invocation_and_short_circuit(self):
+        class ProcessViewOnlyMiddleware:
+            call_count = 0
+
+            def __init__(self, get_response):
+                self.get_response = get_response
+
+            def process_view(self, request, view_func, view_args, view_kwargs):
+                type(self).call_count += 1
+                if request.META.get("HTTP_X_STOP"):
+                    return HttpResponse("stopped by process_view", status=406)
+                return None
+
+            def __call__(self, request):
+                return self.get_response(request)
+
+        api = BoltAPI()
+        api._middleware = [DjangoMiddlewareStack([ProcessViewOnlyMiddleware])]
+
+        handler_called = {"count": 0}
+
+        @api.get("/test")
+        async def test_route():
+            handler_called["count"] += 1
+            return {"status": "ok"}
+
+        ProcessViewOnlyMiddleware.call_count = 0
+        with TestClient(api) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+            assert response.json() == {"status": "ok"}
+
+            response = client.get("/test", headers={"X-Stop": "1"})
+            assert response.status_code == 406
+            assert b"stopped by process_view" in response.content
+
+        assert ProcessViewOnlyMiddleware.call_count == 2
+        assert handler_called["count"] == 1
+
+    def test_mixed_hook_and_call_only_stack_preserves_declared_order(self):
+        events = []
+
+        class HookA:
+            def __init__(self, get_response):
+                self.get_response = get_response
+
+            def process_request(self, request):
+                events.append("a:request")
+                return None
+
+            def process_view(self, request, view_func, view_args, view_kwargs):
+                events.append("a:view")
+                return None
+
+            def process_response(self, request, response):
+                events.append("a:response")
+                return response
+
+            def __call__(self, request):
+                return self.get_response(request)
+
+        class CallOnly:
+            def __init__(self, get_response):
+                self.get_response = get_response
+
+            def __call__(self, request):
+                events.append("call:before")
+                response = self.get_response(request)
+                events.append("call:after")
+                return response
+
+        class HookB:
+            def __init__(self, get_response):
+                self.get_response = get_response
+
+            def process_request(self, request):
+                events.append("b:request")
+                return None
+
+            def process_view(self, request, view_func, view_args, view_kwargs):
+                events.append("b:view")
+                return None
+
+            def process_response(self, request, response):
+                events.append("b:response")
+                return response
+
+            def __call__(self, request):
+                return self.get_response(request)
+
+        api = BoltAPI()
+        api._middleware = [DjangoMiddlewareStack([HookA, CallOnly, HookB])]
+
+        @api.get("/ordered")
+        async def ordered_route():
+            events.append("handler")
+            return {"status": "ok"}
+
+        with TestClient(api) as client:
+            response = client.get("/ordered")
+            assert response.status_code == 200
+
+        assert events == [
+            "a:request",
+            "call:before",
+            "b:request",
+            "a:view",
+            "b:view",
+            "handler",
+            "b:response",
+            "call:after",
+            "a:response",
+        ]
+
+
 class TestMiddlewareCategorizationUnit:
     """Unit tests for middleware categorization helper functions."""
 
@@ -686,7 +872,8 @@ class TestMiddlewareCategorizationUnit:
         # Verify categorization - SessionMiddleware is now in thirdparty
         assert len(stack._django_hook_middleware) == 0  # No Django safe middleware
         assert len(stack._thirdparty_hook_middleware) == 2  # SessionMiddleware + HookBasedThirdPartyMiddleware
-        assert stack._call_middleware_chain is not None  # CallOnlyMiddleware in chain
+        assert stack._compatibility_chain is not None
+        assert stack._call_middleware_chain is None
 
     def test_stack_no_call_only_middleware(self):
         """Test stack without __call__-only middleware has no chain."""
@@ -704,6 +891,7 @@ class TestMiddlewareCategorizationUnit:
 
         # Verify no chain created (fast path)
         assert stack._call_middleware_chain is None
+        assert stack._compatibility_chain is None
 
 
 class TestRequestConversion:
@@ -1054,6 +1242,56 @@ class TestCSRFMiddleware:
         with TestClient(api) as client:
             response = client.options("/test")
             assert response.status_code == 200
+
+    def test_csrf_template_token_matches_cookie(self):
+        """
+        Test that template-rendered csrf_token matches middleware cookie secret.
+
+        This guards the middleware bridge contract: handlers/templates must see the
+        same META dict that CSRF middleware uses for validation/cookie updates.
+        """
+        from django.middleware.csrf import _does_token_match
+        from django.template import RequestContext, Template
+
+        from django_bolt.responses import HTML
+
+        api = BoltAPI(
+            django_middleware=[
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.middleware.csrf.CsrfViewMiddleware",
+            ]
+        )
+
+        @api.get("/form")
+        async def form_route(request):
+            template = Template(
+                "<form method='post'>{% csrf_token %}<input name='value' value='x'></form>"
+            )
+            return HTML(template.render(RequestContext(request, {})))
+
+        @api.post("/submit")
+        async def submit_route():
+            return {"status": "submitted"}
+
+        with TestClient(api, raise_server_exceptions=False) as client:
+            get_response = client.get("/form")
+            assert get_response.status_code == 200
+
+            cookie_token = client.cookies.get("csrftoken")
+            assert cookie_token is not None
+
+            match = re.search(
+                r"name=['\"]csrfmiddlewaretoken['\"] value=['\"]([^'\"]+)['\"]",
+                get_response.text,
+            )
+            assert match is not None
+            form_token = match.group(1)
+
+            assert _does_token_match(form_token, cookie_token)
+
+            post_response = client.post("/submit", data={"csrfmiddlewaretoken": form_token})
+            assert post_response.status_code == 200
+            assert post_response.json() == {"status": "submitted"}
 
 
 # =============================================================================

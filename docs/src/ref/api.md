@@ -22,7 +22,7 @@ api = BoltAPI()
 BoltAPI(
     prefix="",                 # URL prefix for all routes
     trailing_slash="strip",    # Trailing slash handling: "strip", "append", or "keep"
-    middleware=None,           # List of middleware classes (or DjangoMiddleware wrappers)
+    middleware=None,           # Middleware classes/wrappers (instances rejected)
     django_middleware=None,    # Django middleware configuration
     enable_logging=True,       # Enable request/response logging
     logging_config=None,       # Custom logging configuration
@@ -37,12 +37,55 @@ BoltAPI(
 |-----------|------|---------|-------------|
 | `prefix` | `str` | `""` | URL prefix applied to all routes (e.g., `/api/v1`) |
 | `trailing_slash` | `str` | `"strip"` | How to handle trailing slashes in route paths |
-| `middleware` | `list` | `None` | Middleware classes to apply (or `DjangoMiddleware(...)` / `DjangoMiddlewareStack(...)` wrappers) |
+| `middleware` | `list` | `None` | Global middleware entries: classes, `DjangoMiddleware(...)`, `DjangoMiddlewareStack(...)`, or dict middleware configs |
 | `django_middleware` | `bool`, `list`, or `dict` | `None` | Django middleware configuration |
 | `enable_logging` | `bool` | `True` | Enable request/response logging |
 | `logging_config` | `LoggingConfig` | `None` | Custom logging configuration |
 | `compression` | `CompressionConfig` | `None` | Response compression settings |
 | `openapi_config` | `OpenAPIConfig` | `None` | Configuration for OpenAPI documentation |
+
+`middleware` fails fast for unsupported instances. Pass middleware classes (`pass class, not instance`) for global/router lists.
+
+Python middleware order is: `Global -> Router -> Route -> Handler` (reversed on response).
+
+#### Middleware usage examples
+
+Function-style route middleware:
+
+```python
+from django_bolt.middleware import middleware
+
+@middleware
+async def audit_middleware(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Audited"] = "true"
+    return response
+
+@api.get("/reports")
+@audit_middleware
+async def reports():
+    return {"ok": True}
+```
+
+Class-based middleware:
+
+```python
+from django_bolt import BoltAPI, Router
+from django_bolt.middleware import Middleware
+
+class RequestIdMiddleware(Middleware):
+    async def process_request(self, request):
+        response = await self.get_response(request)
+        response.headers["X-Request-ID"] = "demo"
+        return response
+
+# Global (all routes)
+api = BoltAPI(middleware=[RequestIdMiddleware])
+
+# Router-level (routes in this router)
+admin_router = Router(prefix="/admin", middleware=[RequestIdMiddleware])
+api.include_router(admin_router)
+```
 
 #### Trailing slash modes
 

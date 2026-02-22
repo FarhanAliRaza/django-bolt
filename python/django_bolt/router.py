@@ -8,6 +8,8 @@ Routes defined on a router inherit the router's middleware, auth, and guards.
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Optional
 
+from .middleware.middleware import normalize_middleware_specs
+
 if TYPE_CHECKING:
     from .auth.backends import AuthenticationBackend
     from .auth.guards import Guard
@@ -28,7 +30,7 @@ class Router:
         # Create router with middleware
         admin_router = Router(
             prefix="/admin",
-            middleware=[AdminAuthMiddleware()],
+            middleware=[AdminAuthMiddleware],
             tags=["admin"],
         )
 
@@ -85,7 +87,7 @@ class Router:
         self.prefix = prefix.rstrip("/")
         self.tags = tags or []
         self.dependencies = dependencies or []
-        self.middleware = middleware or []
+        self.middleware = normalize_middleware_specs(middleware, context="router")
         self.auth = auth
         self.guards = guards
         self._routes: list[tuple[str, str, Callable, dict[str, Any]]] = []
@@ -105,8 +107,7 @@ class Router:
             meta["auth"] = self.auth
         if self.guards is not None and "guards" not in meta:
             meta["guards"] = self.guards
-        if self.middleware:
-            meta["_router_middleware"] = self.middleware
+        meta["_owner_router"] = self
         self._routes.append((method, full, handler, meta))
 
     def get(self, path: str, **kwargs: Any):
@@ -209,7 +210,13 @@ class Router:
 
         Returns list of (method, path, handler, meta) tuples.
         """
-        routes = list(self._routes)
+        routes = []
+        for method, path, handler, meta in self._routes:
+            route_meta = dict(meta)
+            owner_router = route_meta.pop("_owner_router", self)
+            route_meta["_router_middleware"] = owner_router.get_middleware_chain()
+            routes.append((method, path, handler, route_meta))
+
         for child in self._children:
             # Prepend parent prefix to child routes
             for method, path, handler, meta in child.get_all_routes():

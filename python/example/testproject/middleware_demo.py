@@ -6,8 +6,8 @@ from django.contrib.auth import alogin, alogout
 from django.contrib.auth.models import User
 from django.views.decorators.csrf import csrf_exempt
 
-from django_bolt import BoltAPI, Request
-from django_bolt.middleware import BaseMiddleware, TimingMiddleware
+from django_bolt import BoltAPI, Request, Router
+from django_bolt.middleware import BaseMiddleware, Middleware, TimingMiddleware, middleware
 from django_bolt.params import Form
 from django_bolt.shortcuts import render
 from django_bolt.views import APIView
@@ -82,6 +82,93 @@ middleware_api = BoltAPI(
         TimingMiddleware,  # Built-in: adds X-Response-Time header
     ],
 )
+
+
+# =============================================================================
+# DOCS EXAMPLES - verify middleware docs snippets are runnable
+# =============================================================================
+
+
+@middleware
+async def docs_timing_middleware(request, call_next):
+    """Function-style route middleware example from docs."""
+    request.state["timing_enabled"] = True
+    response = await call_next(request)
+    response.headers["X-Timing"] = "enabled"
+    return response
+
+
+class DocsRouteMiddleware(Middleware):
+    """Class-based route middleware example from docs."""
+
+    async def process_request(self, request):
+        request.state["docs_route_middleware"] = True
+        response = await self.get_response(request)
+        response.headers["X-Docs-Route"] = "true"
+        return response
+
+
+class DocsRouterMiddleware(Middleware):
+    """Class-based router middleware example from docs."""
+
+    async def process_request(self, request):
+        request.state["docs_router_middleware"] = True
+        response = await self.get_response(request)
+        response.headers["X-Docs-Router"] = "true"
+        return response
+
+
+docs_router = Router(
+    prefix="/docs/router",
+    middleware=[DocsRouterMiddleware],
+)
+
+
+@docs_router.get("/users")
+async def docs_router_users(request: Request):
+    return {
+        "items": [],
+        "docs_router_middleware": request.state.get("docs_router_middleware", False),
+        "request_id": request.state.get("request_id"),
+        "tenant_id": request.state.get("tenant_id"),
+    }
+
+
+middleware_api.include_router(docs_router)
+
+
+@middleware_api.get("/docs/function")
+@docs_timing_middleware
+async def docs_function_middleware_example(request: Request):
+    """Function-style middleware usage example."""
+    return {
+        "ok": True,
+        "timing_enabled": request.state.get("timing_enabled", False),
+        "request_id": request.state.get("request_id"),
+        "tenant_id": request.state.get("tenant_id"),
+    }
+
+
+@middleware_api.get("/docs/class-route")
+@middleware(DocsRouteMiddleware)
+async def docs_class_route_middleware_example(request: Request):
+    """Class-based per-route middleware usage example."""
+    return {
+        "ok": True,
+        "docs_route_middleware": request.state.get("docs_route_middleware", False),
+        "request_id": request.state.get("request_id"),
+        "tenant_id": request.state.get("tenant_id"),
+    }
+
+
+@middleware_api.get("/docs/class-global")
+async def docs_class_global_middleware_example(request: Request):
+    """Class-based global middleware usage example (from BoltAPI middleware list)."""
+    return {
+        "ok": True,
+        "request_id": request.state.get("request_id"),
+        "tenant_id": request.state.get("tenant_id"),
+    }
 
 
 @middleware_api.get("/demo")

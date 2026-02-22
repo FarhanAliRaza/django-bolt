@@ -149,18 +149,18 @@ api = BoltAPI(
 
 ## Custom middleware
 
-Create custom middleware by defining a middleware function:
+### Function-style middleware (per-route)
+
+Use `@middleware` on a function that accepts `(request, call_next)`:
 
 ```python
 from django_bolt.middleware import middleware
 
 @middleware
 async def timing_middleware(request, call_next):
-    import time
-    start = time.time()
+    request.state["timing_enabled"] = True
     response = await call_next(request)
-    duration = time.time() - start
-    response.headers["X-Response-Time"] = f"{duration:.3f}s"
+    response.headers["X-Timing"] = "enabled"
     return response
 
 @api.get("/timed")
@@ -169,30 +169,78 @@ async def timed_endpoint():
     return {"status": "ok"}
 ```
 
-### Global middleware classes
+In this form, `@middleware` creates a **route decorator** and runs with the `(request, call_next)` contract.
 
-For global middleware configured via `BoltAPI(middleware=[...])`, pass middleware classes (Django-style), not instances:
+### Class-based middleware (global)
+
+Define a Django-style middleware class and pass the **class** to `BoltAPI(middleware=[...])`:
 
 ```python
 from django_bolt import BoltAPI
 from django_bolt.middleware import Middleware
+import uuid
 
 
 class RequestIdMiddleware(Middleware):
     async def process_request(self, request):
+        request_id = str(uuid.uuid4())
+        request.state["request_id"] = request_id
         response = await self.get_response(request)
-        response.headers["X-Request-ID"] = "test-id"
+        response.headers["X-Request-ID"] = request_id
         return response
 
 
 api = BoltAPI(
     middleware=[
-        RequestIdMiddleware,  # pass class
+        RequestIdMiddleware,  # pass class, not instance
     ]
 )
 ```
 
-`DjangoMiddleware(...)` and `DjangoMiddlewareStack(...)` are also valid entries in `middleware=[...]`.
+### Class-based middleware (per-route)
+
+You can apply class-based middleware to a single route with `@middleware(MyMiddlewareClass)`:
+
+```python
+from django_bolt.middleware import middleware
+
+@api.get("/admin-only")
+@middleware(RequestIdMiddleware)
+async def admin_only():
+    return {"ok": True}
+```
+
+### Class-based middleware (router-level)
+
+Router middleware applies to all routes in that router (including nested routers):
+
+```python
+from django_bolt import Router
+
+admin_router = Router(
+    prefix="/admin",
+    middleware=[
+        RequestIdMiddleware,
+    ]
+)
+
+@admin_router.get("/users")
+async def list_users():
+    return {"items": []}
+
+api.include_router(admin_router)
+```
+
+### Allowed middleware entries
+
+- Middleware classes (`__init__(get_response)`)
+- `DjangoMiddleware(...)` wrappers
+- `DjangoMiddlewareStack(...)` wrappers
+- Dict middleware configs for Rust-handled middleware (`cors`, `rate_limit`)
+
+Passing plain middleware instances in these lists fails fast with `TypeError` (`pass class, not instance`).
+
+Router middleware is inherited parent-to-child and executes in declared order.
 
 ## Django middleware integration
 
@@ -334,17 +382,20 @@ Django-Bolt optimizes middleware execution with a three-tier system:
 
 The `DjangoMiddlewareStack` automatically categorizes your middleware for optimal performance.
 
+If a `DjangoMiddlewareStack` mixes hook middleware (`process_request` / `process_view` / `process_response`) with `__call__`-only middleware, Django-Bolt uses a correctness-first compatibility path to preserve strict declared order and hook semantics. This path is slower than the pure hook fast path.
+
 ## Middleware order
 
-Middleware is executed in the order specified:
+Python middleware execution order is explicit and strict:
 
-1. CORS (handles preflight requests)
-2. Rate limiting
-3. Authentication (via `auth=` parameter)
-4. Guards (via `guards=` parameter)
-5. Your handler
+1. Global middleware (`BoltAPI(middleware=[...])`)
+2. Router middleware (parent router to child router)
+3. Route middleware (`@middleware(...)` / function-style `@middleware`)
+4. Handler
 
 For responses, the order is reversed.
+
+Rust-handled middleware configs (for example `@cors` and `@rate_limit`) are still compiled from metadata and executed in Rust.
 
 ## Performance
 

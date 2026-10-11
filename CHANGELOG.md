@@ -14,6 +14,7 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 
+- **`BasePermission`** - The class is gone from `django_bolt.auth`. It had no behavior: a guard is `AllowAny`, `IsAuthenticated` or `Requires`, and Rust runs it. A subclass with its own `to_metadata()` compiled to a check it did not make, and a Python `__call__` or `has_permission()` on it never ran, so the route was open with no error ([#392](https://github.com/dj-bolt/django-bolt/issues/392), [#270](https://github.com/dj-bolt/django-bolt/issues/270)). Registration now accepts only the three guard types and rejects a subclass or a look-alike with `ImproperlyConfigured`. To migrate, name a `Requires` instance: `IsAdmin = Requires("role", "admin")`. Do a database check in a dependency that raises `HTTPException(403)`.
 - **`OpenAPIConfig(django_auth=...)`** - The docs routes take `auth` and `guards`, as every route does. For docs behind a Django login, use `auth=[SessionAuthentication(login_url="/admin/login/")]` and `guards=[Requires("is_staff", True)]`. `django_auth` wrapped the docs in a Django decorator and still used the global default auth. With a JWT default, a browser got 401 for every user ([#378](https://github.com/dj-bolt/django-bolt/issues/378)). See [Protecting documentation](docs/src/topics/openapi.md#protecting-documentation).
 
 ### Security

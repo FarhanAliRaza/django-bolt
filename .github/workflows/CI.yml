@@ -487,28 +487,19 @@ jobs:
   # A tag push measures the commit of a master push again. CodSpeed can then
   # take the later upload as the base of a pull request, so tags skip the job.
   codspeed:
-    name: CodSpeed benchmarks (${{ matrix.mode }})
+    name: CodSpeed benchmarks (${{ matrix.mode }} ${{ matrix.trial }})
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ${{ matrix.runner }}
     needs: [python-versions, linux-amd64, linux-arm64]
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - mode: simulation
-            runner: ubuntu-latest
-            wheels: wheels-linux-x86_64-*
-            launcher: ""
-          # The ARM64 Graviton macro runner, so the job installs the wheel of
-          # linux-arm64. A public repository can use the runner only if the
-          # Default runner group of the organization allows public repositories.
-          # taskset keeps all threads on one core. Without it, the scheduler
-          # places the client, server and pool threads differently in each run.
-          # A case with a thread pool hop then changes by up to 18% (#430).
-          - mode: walltime
-            runner: codspeed-macro-arm64-graviton-ubuntu-22-04
-            wheels: wheels-linux-aarch64-*
-            launcher: "taskset -c 3 "
+        # A/A check for #430: five pinned walltime runs of one commit. Throwaway branch.
+        mode: [walltime]
+        runner: [codspeed-macro-arm64-graviton-ubuntu-22-04]
+        wheels: [wheels-linux-aarch64-*]
+        launcher: ["taskset -c 3 "]
+        trial: [1, 2, 3, 4, 5]
     permissions:
       contents: read
       # CodSpeed identifies the repository with an OIDC token. It needs no secret.

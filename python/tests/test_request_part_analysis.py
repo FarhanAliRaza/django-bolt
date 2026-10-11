@@ -17,6 +17,7 @@ from typing import Annotated, Any
 import pytest
 
 from django_bolt import BoltAPI, ViewSet, action
+from django_bolt.analysis import analyze_handler
 from django_bolt.params import Depends
 from django_bolt.testing import TestClient
 
@@ -58,6 +59,28 @@ class RequestHolder:
     """The source of this class has no __init__."""
 
     request: Any
+
+
+def reads_the_token_header_of_a_method(fn):
+    @functools.wraps(fn)
+    def wrapper(self, request):
+        return {"token": request.headers.get("x-token"), **fn(self, request)}
+
+    return wrapper
+
+
+class TokenReader:
+    """A callable dependency. The decorator of __call__ reads the header."""
+
+    @reads_the_token_header_of_a_method
+    def __call__(self, request):
+        return {}
+
+
+def _request_parts(api: BoltAPI, path: str) -> tuple[str, ...]:
+    """Return the request parts that Rust parses for the route."""
+    meta = next(api._handler_middleware[hid] for _method, route, hid, _fn in api._routes if route == path)
+    return tuple(part for part in ("body", "query", "headers", "cookies") if meta[f"needs_{part}"])
 
 
 def test_a_lambda_handler_gets_the_query():
@@ -168,3 +191,60 @@ def test_a_sync_handler_that_calls_urlopen_runs_in_the_thread_pool():
         response = client.get("/fetch")
 
     assert response.json()["thread"].startswith("bolt_default")
+
+
+def test_a_callable_dependency_gets_the_header_that_the_decorator_of_its_call_reads():
+    api = BoltAPI()
+
+    @api.get("/items")
+    def items(token: Annotated[dict, Depends(TokenReader())]):
+        return token
+
+    with TestClient(api) as client:
+        response = client.get("/items", headers={"x-token": "secret"})
+
+    assert response.json() == {"token": "secret"}
+
+
+def test_a_lambda_dependency_makes_its_route_parse_only_what_it_reads():
+    api = BoltAPI()
+
+    @api.get("/search")
+    def search(query: Annotated[dict, Depends(lambda_dependency)]):
+        return query
+
+    assert _request_parts(api, "/search") == ("query",)
+
+
+def test_a_class_dependency_makes_its_route_parse_only_what_its_init_reads():
+    api = BoltAPI()
+
+    @api.get("/items")
+    def items(holder: Annotated[TokenInInit, Depends(TokenInInit)]):
+        return {"token": holder.token}
+
+    assert _request_parts(api, "/items") == ("headers",)
+
+
+def test_a_line_with_two_lambdas_makes_the_route_parse_every_part():
+    api = BoltAPI()
+
+    @api.get("/search")
+    def search(query: Annotated[dict, Depends(two_lambdas_on_a_line[0])]):
+        return query
+
+    assert _request_parts(api, "/search") == ("body", "query", "headers", "cookies")
+
+
+@pytest.mark.parametrize(
+    ("index", "name"),
+    [(0, "<lambda>"), (1, "__init__")],
+    ids=["two lambdas", "no init"],
+)
+def test_the_failed_analysis_names_the_definition_that_it_did_not_find(index, name):
+    target = (two_lambdas_on_a_line[0], RequestHolder)[index]
+
+    analysis = analyze_handler(target, {"request"})
+
+    assert analysis.analysis_failed is True
+    assert analysis.failure_reason == f"Could not find one definition of {name} in its source"

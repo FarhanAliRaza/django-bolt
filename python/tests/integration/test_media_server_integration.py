@@ -393,22 +393,20 @@ def test_media_cache_control_not_applied_to_404(make_server_project):
 
 
 @pytest.mark.parametrize("bad_value", ["-1", '"oops"', "True", "False"])
-def test_media_invalid_max_age_falls_back_silently(make_server_project, bad_value):
-    """Negative / non-int / bool BOLT_MEDIA_MAX_AGE values must not crash startup or emit a header.
+def test_media_invalid_max_age_stops_startup(make_server_project, bad_value):
+    """A negative, non-int or bool BOLT_MEDIA_MAX_AGE stops runbolt at startup.
 
-    Booleans are a Python subclass of int, so a naive `extract::<i64>` would
-    silently turn `True` into `max-age=1`. The Rust side rejects them explicitly.
+    A bool is an int in Python, so `True` must not become `max-age=1`.
     """
     project = _media_project(
         make_server_project,
         extra_settings=f"BOLT_MEDIA_MAX_AGE = {bad_value}",
     )
 
-    with project.start() as server:
-        response = server.get("/media/upload.txt")
-
-    assert response.status_code == 200
-    assert "cache-control" not in {k.lower() for k in response.headers}
+    with pytest.raises(AssertionError) as excinfo, project.start():
+        pass
+    assert "runbolt exited before the server became ready" in str(excinfo.value)
+    assert "BOLT_MEDIA_MAX_AGE must be an int of 0 or more" in str(excinfo.value)
 
 
 def test_media_serves_csp_header_when_configured(make_server_project):

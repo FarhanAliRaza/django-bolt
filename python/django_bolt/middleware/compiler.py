@@ -15,7 +15,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
 from ..auth.backends import get_default_authentication_classes
-from ..auth.guards import BasePermission, get_default_permission_classes
+from ..auth.guards import GUARD_TYPES, get_default_permission_classes
 from ..typing import is_msgspec_struct, resolve_type_alias, unwrap_optional
 
 # Type hint constants - MUST match src/type_coercion.rs
@@ -104,11 +104,15 @@ def _compile_guard(guard: Any, method: str, path: str) -> dict[str, Any]:
                 f"e.g. guards=[{guard.__name__}(...)]."
             ) from e
 
-    if not isinstance(instance, BasePermission):
+    # Exact types, not isinstance: a subclass could override to_metadata()
+    # and compile to a check it does not make (#392).
+    if type(instance) not in GUARD_TYPES:
         raise ImproperlyConfigured(
             f"Guard {type(instance).__name__} on {method} {path} is not a guard. "
-            f"Guards must subclass django_bolt.auth.BasePermission — use AllowAny, "
-            f"IsAuthenticated, or Requires."
+            f"A guard is AllowAny, IsAuthenticated, or Requires. Guards run in "
+            f"Rust, so a Python class cannot be one. Declare a custom check as "
+            f'a named Requires: {type(instance).__name__} = Requires("<claim>", <value>, ...). '
+            f"Do a database check in a dependency that raises HTTPException(403)."
         )
 
     return instance.to_metadata()

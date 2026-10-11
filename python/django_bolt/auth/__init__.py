@@ -18,7 +18,6 @@ from .backends import (
 # Permission guards
 from .guards import (
     AllowAny,
-    BasePermission,
     IsAuthenticated,
     Requires,
     get_default_permission_classes,
@@ -75,7 +74,6 @@ __all__ = [
     "AuthContext",
     "get_default_authentication_classes",
     # Guards/Permissions
-    "BasePermission",
     "AllowAny",
     "IsAuthenticated",
     "Requires",

@@ -35,37 +35,7 @@ QUANT_ALL = 1
 QUANT_NONE = 2
 
 
-class BasePermission:
-    """
-    Internal base for the built-in guards.
-
-    Do not subclass this to build custom checks — declare them with
-    ``Requires`` and give them a name by assignment:
-
-        IsClient = Requires("role", "client")
-        IsStaff = Requires("is_staff", True)
-
-        @api.get("/orders", auth=[...], guards=[IsAuthenticated(), IsClient])
-    """
-
-    __slots__ = ()
-
-    def to_metadata(self) -> dict[str, Any]:
-        """
-        Compile this guard into metadata for Rust.
-
-        Each built-in guard overrides this. A subclass that doesn't is a
-        configuration error caught at registration — guards run natively in
-        Rust, so there is nothing a bare subclass could enforce.
-        """
-        raise ImproperlyConfigured(
-            f"{type(self).__name__} is not a usable guard. Custom checks are "
-            f"declared with Requires, not by subclassing: "
-            f'{type(self).__name__} = Requires("<claim>", <value>, ...)'
-        )
-
-
-class AllowAny(BasePermission):
+class AllowAny:
     """
     Allow any request, authenticated or not.
 
@@ -79,7 +49,7 @@ class AllowAny(BasePermission):
         return {"type": "allow_any"}
 
 
-class IsAuthenticated(BasePermission):
+class IsAuthenticated:
     """
     Require that the request is authenticated.
 
@@ -92,7 +62,7 @@ class IsAuthenticated(BasePermission):
         return {"type": "is_authenticated"}
 
 
-class Requires(BasePermission):
+class Requires:
     """
     The permission check: require a token claim to be present, optionally
     matching expected values.
@@ -213,7 +183,12 @@ class Requires(BasePermission):
         return f"Requires({args})"
 
 
-def get_default_permission_classes() -> list[BasePermission]:
+# The guard types. A guard is one of these three, not a subclass of them.
+GUARD_TYPES = (AllowAny, IsAuthenticated, Requires)
+Guard = AllowAny | IsAuthenticated | Requires
+
+
+def get_default_permission_classes() -> list[Guard]:
     """
     Get default permission classes from Django settings.
 

@@ -26,7 +26,7 @@ from .spec import (
 
 if TYPE_CHECKING:
     from django_bolt.auth.backends import BaseAuthentication
-    from django_bolt.auth.guards import BasePermission
+    from django_bolt.auth.guards import Guard
 
     from .plugins import OpenAPIRenderPlugin
 
@@ -191,7 +191,7 @@ class OpenAPIConfig:
         ```
     """
 
-    guards: list[BasePermission] | None = field(default=None)
+    guards: list[Guard] | None = field(default=None)
     """Permission guards to protect OpenAPI documentation endpoints.
 
     When set, all documentation routes (JSON schema, YAML schema, and UI endpoints)

@@ -19,11 +19,12 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 
+import django_bolt.auth
+import django_bolt.auth.guards
 from django_bolt import BoltAPI
 from django_bolt.auth import (
     AllowAny,
     APIKeyAuthentication,
-    BasePermission,
     IsAuthenticated,
     JWTAuthentication,
     Requires,
@@ -375,15 +376,32 @@ class TestRegistrationFailures:
         with pytest.raises(ImproperlyConfigured, match="message"):
             Requires("role", "client", message="")
 
-    def test_base_permission_subclass_is_not_a_guard(self):
-        """Subclassing is not the way to build checks — Requires is."""
+    def test_no_guard_base_class(self):
+        """There is no class to subclass. A custom check is a named Requires."""
+        assert not hasattr(django_bolt.auth, "BasePermission")
+        assert not hasattr(django_bolt.auth.guards, "BasePermission")
 
-        class HomeMade(BasePermission):
-            __slots__ = ()
+    def test_home_made_guard_with_allow_any_metadata_fails_loudly(self):
+        """A look-alike with its own to_metadata() cannot register (#392)."""
+
+        class RequireRole:
+            def to_metadata(self):
+                return {"type": "allow_any"}
+
+            async def __call__(self, request):
+                return False
 
         with pytest.raises(ImproperlyConfigured, match="Requires"):
-            make_api([HomeMade()])
+            make_api([RequireRole()])
+
+    def test_requires_subclass_fails_loudly(self):
+        class HomeMade(Requires):
+            def to_metadata(self):
+                return {"type": "allow_any"}
+
+        with pytest.raises(ImproperlyConfigured, match="Requires"):
+            make_api([HomeMade("role", "x")])
 
     def test_non_guard_object_fails_loudly(self):
-        with pytest.raises(ImproperlyConfigured, match="BasePermission"):
+        with pytest.raises(ImproperlyConfigured, match="Requires"):
             make_api([object()])

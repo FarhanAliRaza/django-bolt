@@ -114,6 +114,12 @@ run-dev:
 test-py:
     uv run pytest python/tests -s -vv -n auto
 
+# Check and test the example project in python/example (CI runs these)
+test-example:
+    cd python/example && uv run python manage.py check
+    cd python/example && uv run python manage.py makemigrations --check --dry-run
+    cd python/example && uv run pytest . -o python_files="test_*.py tests.py"
+
 # Run the Rust unit tests (CI runs these). `uv run` makes PyO3 build against
 # the project venv, not an older python3 on PATH.
 test-rs:
@@ -122,6 +128,27 @@ test-rs:
 # Lint the Rust code; CI fails on any warning
 clippy:
     uv run cargo clippy --workspace --all-targets -- -D warnings
+
+# Fuzz one request parser; the targets are in fuzz/Cargo.toml (needs nightly and cargo-fuzz)
+fuzz target seconds="60":
+    cd fuzz && cargo +nightly fuzz run {{target}} -- -max_total_time={{seconds}}
+
+# `uv run` builds PyO3 against the project environment. The fixed proptest
+# seed gives each run the same cases, as in CI, so two runs can be compared.
+# Each job builds in its own copy of the tree. The default is half the CPUs,
+# at most 8: cargo-mutants warns above 8. Set another count with `just mutants 2`.
+# Mutation-test the Rust files in .cargo/mutants.toml; results go to mutants.out/ (needs cargo-mutants)
+mutants jobs=`n=$(getconf _NPROCESSORS_ONLN); echo $(( n > 16 ? 8 : (n > 1 ? n / 2 : 1) ))`:
+    PROPTEST_RNG_SEED=0 uv run cargo mutants --workspace --jobs {{jobs}}
+
+# Mutation-test the Python modules in [tool.mutmut] of pyproject.toml; results go to mutants-work/
+mutmut:
+    ./scripts/mutmut.sh
+
+# The script puts back the extension build that it found.
+# Measure Python and Rust coverage; reports go to coverage/ (needs cargo-llvm-cov)
+coverage:
+    ./scripts/coverage.sh
 
 # Run the tests that need PostgreSQL (`@pytest.mark.postgres`) against a
 # throwaway Docker server. These skip in `test-py` unless
@@ -273,6 +300,12 @@ docs: docs-serve
 # Serve documentation locally
 docs-serve:
     cd docs && uv run python build_llms_full.py && uv run --group docs zensical serve -a localhost:8080
+
+# The script needs only the standard library, but Python 3.12 or later: it parses
+# the package source. `uv run` finds such a Python; a python3 on PATH can be older.
+# Check the Python examples in docs/src and the readmes: they parse, and their imports exist
+docs-check:
+    uv run --no-project --python ">=3.12" python scripts/check_doc_snippets.py
 
 # Build documentation (also regenerates llms-full.txt for AI crawlers)
 docs-build:

@@ -1,26 +1,62 @@
 """
 Pytest configuration for Django-Bolt tests.
 
-Ensures Django settings are properly reset between tests.
-Provides utilities for subprocess-based testing.
+Configures Django once for the test process. Each test process gets a new
+SQLite database in a temporary directory, removed at the end of each session,
+so no schema from an earlier run survives.
 """
 
-import builtins
-import contextlib
 import logging
 import os
-import platform
-import signal
-import socket
-import subprocess
+import shutil
 import sys
 import sysconfig
-import time
+import tempfile
 
 import pytest
+from hypothesis import settings as hypothesis_settings
+from hypothesis.database import DirectoryBasedExampleDatabase
 
 # Suppress httpx INFO logs during tests
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# Hypothesis profiles. On CI, Hypothesis loads its own "ci" profile: the same
+# examples on each run and no deadline. A test request takes a variable time,
+# so the local profile has no deadline either.
+hypothesis_settings.register_profile("default", deadline=None)
+# The scheduled fuzz job (--hypothesis-profile=fuzz): new random examples,
+# many more of them. The job keeps the database of failing examples.
+hypothesis_settings.register_profile(
+    "fuzz",
+    deadline=None,
+    derandomize=False,
+    max_examples=5000,
+    print_blob=True,
+    database=DirectoryBasedExampleDatabase(".hypothesis/examples"),
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _gil_stays_disabled():
+    """Fail a free-threaded run when an import turns the GIL back on.
+
+    CPython enables the GIL when it loads a C extension that does not declare
+    free-threading support. The run then tests GIL behavior, not free threading.
+    A run with PYTHON_GIL=1 asks for the GIL, so the check skips it.
+    The bolt-mcp suite has a copy of this fixture.
+    """
+    yield
+    if sysconfig.get_config_var("Py_GIL_DISABLED") and sys.flags.gil is None and sys._is_gil_enabled():
+        pytest.fail(
+            "An imported C extension enabled the GIL. A RuntimeWarning names the module. "
+            "Find it in stderr at startup, or in the error of the test that imported it."
+        )
+
+
+# One database directory per test process (each xdist worker has its own).
+# Django keeps this path for the life of the process. `pytest_unconfigure`
+# removes the directory, and `django_db_setup` makes it again.
+_DB_DIR = tempfile.mkdtemp(prefix="django_bolt_test_")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -114,11 +150,10 @@ def pytest_configure(config):
             DATABASES={
                 "default": {
                     "ENGINE": "django.db.backends.sqlite3",
-                    # File-based for better thread isolation. One file per xdist worker
-                    # (PYTEST_XDIST_WORKER is unset in serial runs): concurrent workers
-                    # sharing a single SQLite file fail with locked-database, UNIQUE
-                    # (django_content_type), and FK errors.
-                    "NAME": f"/tmp/django_bolt_test{os.environ.get('PYTEST_XDIST_WORKER', '')}.sqlite3",
+                    # A file, not :memory:, so that threads share the database.
+                    # Concurrent workers sharing one SQLite file fail with
+                    # locked-database, UNIQUE and FK errors, so each has its own.
+                    "NAME": os.path.join(_DB_DIR, "db.sqlite3"),
                 }
             },
             USE_TZ=True,
@@ -159,7 +194,7 @@ def django_db_setup(django_db_blocker):
         call_command("migrate", "--run-syncdb", verbosity=0)
 
         # Create test model tables manually since they're not in migrations
-        # But only if they don't already exist (for persistent file-based databases)
+        # migrate --run-syncdb can already create them; create only the missing ones.
         with connection.schema_editor() as schema_editor:
             from .test_models import (  # noqa: PLC0415
                 Article,
@@ -179,45 +214,14 @@ def django_db_setup(django_db_blocker):
                     schema_editor.create_model(model)
 
 
-def spawn_process(command):
-    """Spawn a subprocess in a new process group"""
-    if platform.system() == "Windows":
-        process = subprocess.Popen(
-            command,
-            shell=True,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    else:
-        process = subprocess.Popen(command, preexec_fn=os.setsid, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    return process
+def pytest_unconfigure(config):
+    """Remove the database directory at the end of the session.
 
+    mutmut ends each child process with `os._exit`, which skips atexit
+    handlers. A later session in the same process opens a new database at the
+    same path, so the connections of this thread close first.
+    """
+    from django.db import connections  # noqa: PLC0415
 
-def kill_process(process):
-    """Kill a subprocess and its process group"""
-    if platform.system() == "Windows":
-        with contextlib.suppress(builtins.BaseException):
-            process.send_signal(signal.CTRL_BREAK_EVENT)
-        with contextlib.suppress(builtins.BaseException):
-            process.kill()
-    else:
-        with contextlib.suppress(Exception):
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-
-
-def wait_for_server(host, port, timeout=15):
-    """Wait for server to be reachable"""
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        try:
-            sock = socket.create_connection((host, port), timeout=2)
-            sock.close()
-            return True
-        except Exception:
-            time.sleep(0.5)
-    return False
-
-
-# Django configuration is now handled by pytest-django
-# via pytest_configure above
+    connections.close_all()
+    shutil.rmtree(_DB_DIR, ignore_errors=True)

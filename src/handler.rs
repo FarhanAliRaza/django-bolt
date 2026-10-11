@@ -36,8 +36,8 @@ use bolt_core::response_builder;
 use bolt_core::response_meta::ResponseMeta;
 use bolt_core::responses;
 use bolt_core::router::{parse_query_string, QueryParams};
-use bolt_core::state::{find_asgi_mount, AppState, GLOBAL_ROUTER, ROUTE_METADATA};
-use bolt_core::streaming::{create_python_stream, create_sse_stream};
+use bolt_core::state::{find_asgi_mount, AppState};
+use bolt_core::streaming::{create_python_stream, create_sse_stream, StreamConfig};
 use bolt_core::type_coercion::{
     coerced_value_to_py, string_map_to_py_dict, CoercedValue, TypeHints,
 };
@@ -425,6 +425,7 @@ async fn build_response_from_parsed(
     skip_cors: bool,
     is_head_request: bool,
     req: &HttpRequest,
+    stream_config: StreamConfig,
 ) -> HttpResponse {
     let meta_ref = parsed.meta.as_ref();
 
@@ -512,8 +513,13 @@ async fn build_response_from_parsed(
                     mark_skip_cors(&mut response, skip_cors);
                     return response;
                 }
-                let stream =
-                    create_sse_stream(content_obj, is_async_generator, ping_interval, codec);
+                let stream = create_sse_stream(
+                    content_obj,
+                    is_async_generator,
+                    ping_interval,
+                    codec,
+                    stream_config,
+                );
                 let mut response = response_builder::build_sse_response(
                     parsed.status,
                     headers,
@@ -550,7 +556,7 @@ async fn build_response_from_parsed(
                 mark_skip_cors(&mut response, skip_cors);
                 return response;
             }
-            let inner = create_python_stream(content_obj, is_async_generator);
+            let inner = create_python_stream(content_obj, is_async_generator, stream_config);
             let stream = bolt_core::streaming::maybe_wrap_codec(inner, codec);
             let mut response = builder.streaming(stream);
             mark_skip_cors(&mut response, skip_cors);
@@ -565,9 +571,18 @@ pub async fn response_from_wire_result(
     skip_cors: bool,
     is_head_request: bool,
     req: &HttpRequest,
+    stream_config: StreamConfig,
 ) -> PyResult<HttpResponse> {
     let parsed = Python::attach(|py| parse_response_wire(py, &result_obj))?;
-    Ok(build_response_from_parsed(parsed, skip_compression, skip_cors, is_head_request, req).await)
+    Ok(build_response_from_parsed(
+        parsed,
+        skip_compression,
+        skip_cors,
+        is_head_request,
+        req,
+        stream_config,
+    )
+    .await)
 }
 
 /// One request source as Rust holds it: the string map and its coerced values.
@@ -678,32 +693,11 @@ pub(crate) fn content_length_exceeds_limit(
     matches!(content_length, Some(len) if len > max_payload_size)
 }
 
-thread_local! {
-    static TSTATE_PINNED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Pin a Python thread state to this (actix worker) thread on first use.
-/// Without it every `Python::attach` creates+destroys a PyThreadState, and a
-/// fresh thread state mmaps/munmaps a 16KiB frame-datastack chunk — measured
-/// as exactly one mmap+munmap syscall pair PER REQUEST. Actix worker threads
-/// live for the process lifetime, so the pinned state is never torn down.
-#[inline]
-fn ensure_pinned_thread_state() {
-    TSTATE_PINNED.with(|c| {
-        if !c.get() {
-            bolt_core::state::pin_python_thread_state();
-            c.set(true);
-        }
-    });
-}
-
 pub async fn handle_request<const ACCESS_LOG: bool>(
     req: HttpRequest,
     mut payload: web::Payload,
     state: web::Data<Arc<AppState>>,
 ) -> HttpResponse {
-    ensure_pinned_thread_state();
-
     // Keep as &str - no allocation, only clone on error paths
     let method = req.method().as_str();
     let path = req.path();
@@ -715,7 +709,7 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
         None
     };
 
-    let router = GLOBAL_ROUTER.get().expect("Router not initialized");
+    let router = &state.router;
 
     // Find the route for the requested method and path.
     // RouteMatch enum allows us to skip path param processing for static routes.
@@ -824,9 +818,7 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
 
     // Get parsed route metadata (Rust-native) by reference.
     // NOTE: Fetch metadata EARLY so we can use optimization flags to skip unnecessary parsing.
-    let route_metadata = ROUTE_METADATA
-        .get()
-        .and_then(|meta_map| meta_map.get(handler_id));
+    let route_metadata = state.route_metadata.get(handler_id);
 
     // OPTIMIZATION: Extract the execution plan bitfield once (Copy u16).
     // All subsequent flag reads are direct bit-tests, avoiding repeated Option::map closures.
@@ -918,6 +910,7 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
     if let Some(config) = rate_config {
         if let Some(headers_map) = headers.as_ref() {
             if let Some(response) = middleware::rate_limit::check_before_auth(
+                &state.rate_limiters,
                 handler_id,
                 headers_map,
                 client_ip.as_ref(),
@@ -973,6 +966,7 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
     if let Some(config) = rate_config {
         if let Some(headers_map) = headers.as_ref() {
             if let Some(response) = middleware::rate_limit::check_after_auth(
+                &state.rate_limiters,
                 handler_id,
                 headers_map,
                 client_ip.as_ref(),
@@ -1410,8 +1404,15 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
         // Sync dispatch completed but body needs async post-processing (stream/file).
         // Already parsed — no duplicate GIL acquire or wire re-parse.
         Ok(DispatchOutcome::SyncResult(parsed)) => {
-            build_response_from_parsed(parsed, skip_compression, skip_cors, is_head_request, &req)
-                .await
+            build_response_from_parsed(
+                parsed,
+                skip_compression,
+                skip_cors,
+                is_head_request,
+                &req,
+                state.stream_config,
+            )
+            .await
         }
         Ok(DispatchOutcome::Pending(fut)) => match fut.await {
             Ok(result_obj) => {
@@ -1421,6 +1422,7 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
                     skip_cors,
                     is_head_request,
                     &req,
+                    state.stream_config,
                 )
                 .await
                 {

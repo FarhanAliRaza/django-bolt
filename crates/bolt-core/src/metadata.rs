@@ -168,7 +168,7 @@ impl CorsConfig {
             .filter_map(|pattern| {
                 Regex::new(pattern).ok().or_else(|| {
                     eprintln!(
-                        "[django-bolt] Warning: Invalid route-level CORS origin regex pattern: {}",
+                        "[django-bolt] Warning: Invalid CORS origin regex pattern: {}",
                         pattern
                     );
                     None
@@ -576,6 +576,24 @@ pub struct RouteMetadata {
     pub websocket_revocation_check: Option<Arc<Py<PyAny>>>,
 }
 
+/// Read a byte size of the route metadata, or the default when the key is missing.
+/// A value that is not an int of 0 or more is a TypeError.
+fn optional_size(py_meta: &Bound<'_, PyDict>, key: &str, default: usize) -> PyResult<usize> {
+    let Some(value) = py_meta.get_item(key)? else {
+        return Ok(default);
+    };
+    if !value.is_instance_of::<PyBool>() {
+        if let Ok(size) = value.extract::<usize>() {
+            return Ok(size);
+        }
+    }
+    Err(PyTypeError::new_err(format!(
+        "Route metadata '{}' must be an int of 0 or more, got {}",
+        key,
+        value.get_type().name()?
+    )))
+}
+
 /// Return "METHOD /path" of the route, for registration errors.
 fn route_label(py_meta: &Bound<'_, PyDict>) -> String {
     let part = |key: &str| {
@@ -815,20 +833,10 @@ impl RouteMetadata {
         let file_constraints = parse_file_constraints(py_meta, py);
 
         // Max upload size (default 1MB)
-        let max_upload_size = py_meta
-            .get_item("max_upload_size")
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<usize>().ok())
-            .unwrap_or(1024 * 1024);
+        let max_upload_size = optional_size(py_meta, "max_upload_size", 1024 * 1024)?;
 
         // Memory spool threshold - when to spool files to disk (default 1MB)
-        let memory_spool_threshold = py_meta
-            .get_item("memory_spool_threshold")
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<usize>().ok())
-            .unwrap_or(1024 * 1024);
+        let memory_spool_threshold = optional_size(py_meta, "memory_spool_threshold", 1024 * 1024)?;
 
         // Optional Rust-side argument binding plan.
         let rust_arg_bindings = parse_rust_arg_bindings(py_meta);

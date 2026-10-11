@@ -83,6 +83,8 @@ dev = [
     "pytest-asyncio>=1.4.0", # 1.3 leaves an unclosed event loop on Python 3.12 and 3.13
     "pytest-django>=4.9.0",
     "pytest-xdist>=3.6", # CI and `just test-py` run with -n auto
+    "pytest-cov>=6.0", # `just coverage` and the Coverage workflow
+    "coverage>=7.10.4", # [tool.coverage.run] patch = ["fork"] needs 7.10.4
     "pydantic>=2",
     "pyyaml>=5.2",
     "maturin>=1.9.6",
@@ -102,6 +104,7 @@ dev = [
     "psycopg>=3.2", # PostgreSQL recovery tests (`just test-pg`)
     "django-tenants>=3.14", # request lane tests with real schemas (`just test-pg`)
     "django-allauth>=65.19", # session login through allauth, read by Bolt routes
+    "hypothesis>=6.140",
 ]
 docs = [
     "zensical",
@@ -144,3 +147,36 @@ indent-style = "space"
 [tool.ty.environment]
 python-version = "3.12"
 extra-paths = ["python"]
+
+[tool.coverage.run]
+source = ["django_bolt", "bolt_mcp"]
+branch = true
+# Measure the runbolt servers that the integration tests start, too. The
+# workers of `runbolt --processes N` are forked and end with os._exit(), so
+# they need the fork and _exit patches to save their data.
+patch = ["subprocess", "fork", "_exit"]
+parallel = true
+
+[tool.coverage.paths]
+django_bolt = ["python/django_bolt", "*/site-packages/django_bolt"]
+bolt_mcp = ["python/bolt-mcp/src/bolt_mcp", "*/site-packages/bolt_mcp"]
+
+[tool.coverage.report]
+skip_empty = true
+precision = 1
+
+# mutmut (Python mutation testing). scripts/mutmut.sh copies python/django_bolt
+# to django_bolt/ and python/tests to tests/ in a work directory, because
+# mutmut looks for the code in ./, src/ or source/. The paths are in that layout.
+[tool.mutmut]
+source_paths = ["django_bolt"]
+only_mutate = [
+    "django_bolt/analysis.py",
+    "django_bolt/middleware/compiler.py",
+]
+# The test client starts Rust threads, and a forked child has none of them.
+# The fork server forks each mutant from a process that ran no test.
+process_isolation = "forkserver"
+forkserver_warmup = "none"
+# The integration tests run the code in a runbolt process, which mutmut does not reach.
+pytest_add_cli_args_test_selection = ["tests", "--ignore=tests/integration", "-m", "not postgres"]

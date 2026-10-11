@@ -29,26 +29,45 @@ use tokio::sync::oneshot;
 
 const DEFAULT_IDLE_SECONDS: f64 = 10.0;
 
-/// The idle time after which a lane stops. `DJANGO_BOLT_LANE_IDLE_SECONDS` sets it.
+static IDLE: OnceLock<Duration> = OnceLock::new();
+
+/// The idle time after which a lane stops. `DJANGO_BOLT_LANE_IDLE_SECONDS` sets
+/// it at startup (see `configure_idle_time`).
 fn idle_time() -> Duration {
-    static IDLE: OnceLock<Duration> = OnceLock::new();
-    *IDLE.get_or_init(|| parse_idle_time(std::env::var("DJANGO_BOLT_LANE_IDLE_SECONDS").ok()))
+    *IDLE.get_or_init(|| Duration::from_secs_f64(DEFAULT_IDLE_SECONDS))
 }
 
-/// A value that is not a positive number in the range of `Duration` gives the default.
-fn parse_idle_time(raw: Option<String>) -> Duration {
-    raw.and_then(|raw| raw.parse::<f64>().ok())
-        .filter(|seconds| *seconds > 0.0)
-        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
-        .unwrap_or(Duration::from_secs_f64(DEFAULT_IDLE_SECONDS))
+/// Read `DJANGO_BOLT_LANE_IDLE_SECONDS` once at startup, before a lane exists.
+/// An invalid value raises `ImproperlyConfigured`. The first call sets the idle
+/// time of the process; a later call only checks the variable.
+pub fn configure_idle_time(py: Python<'_>) -> PyResult<()> {
+    let raw =
+        crate::settings::read_env(py, "DJANGO_BOLT_LANE_IDLE_SECONDS", "a number more than 0")?;
+    let idle = parse_idle_time(raw.as_deref())
+        .map_err(|message| crate::settings::improperly_configured(py, message))?;
+    let _ = IDLE.set(idle);
+    Ok(())
+}
+
+fn parse_idle_time(raw: Option<&str>) -> Result<Duration, String> {
+    let seconds = crate::settings::parse_env(
+        "DJANGO_BOLT_LANE_IDLE_SECONDS",
+        raw,
+        "a number more than 0",
+        |seconds: &f64| *seconds > 0.0 && Duration::try_from_secs_f64(*seconds).is_ok(),
+    )?;
+    Ok(Duration::from_secs_f64(
+        seconds.unwrap_or(DEFAULT_IDLE_SECONDS),
+    ))
 }
 
 enum Job {
-    /// A complete sync request. The lane is idle again after it.
+    /// A complete sync request. The lane is idle again after it. The server
+    /// awaits the result on its Tokio runtime.
     Request {
         callable: Py<PyAny>,
         request: Py<PyAny>,
-        done: Done,
+        done: oneshot::Sender<PyResult<Py<PyAny>>>,
     },
     /// One sync call of an async request. The request keeps the lane until `Release`.
     Call {
@@ -63,14 +82,6 @@ enum Job {
     /// Stop the lane. The sender, if one exists, gets a message after the
     /// lane closed its database connections.
     Stop(Option<Sender<()>>),
-}
-
-/// Where the result of a complete request goes.
-enum Done {
-    /// The server awaits the result on its Tokio runtime.
-    Async(oneshot::Sender<PyResult<Py<PyAny>>>),
-    /// The TestClient blocks its thread. Tokio channels cannot block inside a runtime.
-    Blocking(Sender<PyResult<Py<PyAny>>>),
 }
 
 struct IdleLane {
@@ -169,10 +180,7 @@ fn lane_main(id: u64, sender: Sender<Job>, pending: Arc<AtomicUsize>, receiver: 
                 owned = false;
                 let stopping = !go_idle(id, &sender, &pending);
                 // The receiver is gone when the client disconnected.
-                match done {
-                    Done::Async(done) => drop(done.send(result)),
-                    Done::Blocking(done) => drop(done.send(result)),
-                }
+                drop(done.send(result));
                 if stopping {
                     break;
                 }
@@ -277,7 +285,11 @@ fn call_concurrency_attached(py: Python<'_>, function: &str) {
     }
 }
 
-fn submit_request(callable: Py<PyAny>, request: Py<PyAny>, done: Done) -> PyResult<()> {
+fn submit_request(
+    callable: Py<PyAny>,
+    request: Py<PyAny>,
+    done: oneshot::Sender<PyResult<Py<PyAny>>>,
+) -> PyResult<()> {
     acquire()?
         .sender
         .send(Job::Request {
@@ -298,24 +310,11 @@ pub fn dispatch(
     request: Py<PyAny>,
 ) -> impl std::future::Future<Output = PyResult<Py<PyAny>>> + Send + 'static {
     let (done, result) = oneshot::channel();
-    let submitted = submit_request(callable, request, Done::Async(done));
+    let submitted = submit_request(callable, request, done);
     async move {
         submitted?;
         result.await.unwrap_or_else(lane_stopped)
     }
-}
-
-/// Run `callable(request)` on a lane and block the calling thread. The GIL is
-/// released during the wait. The TestClient uses this form.
-pub fn dispatch_blocking(
-    py: Python<'_>,
-    callable: Py<PyAny>,
-    request: Py<PyAny>,
-) -> PyResult<Py<PyAny>> {
-    let (done, result) = channel();
-    submit_request(callable, request, Done::Blocking(done))?;
-    py.detach(move || result.recv())
-        .unwrap_or_else(lane_stopped)
 }
 
 /// Stop all idle lanes. A busy lane stops after its current request.
@@ -524,17 +523,28 @@ mod tests {
     #[test]
     fn idle_time_uses_a_valid_value() {
         assert_eq!(
-            parse_idle_time(Some("1.5".into())),
-            Duration::from_millis(1500)
+            parse_idle_time(Some("1.5")),
+            Ok(Duration::from_millis(1500))
         );
     }
 
     #[test]
-    fn idle_time_falls_back_to_the_default() {
+    fn idle_time_defaults_when_unset_or_empty() {
         let default = Duration::from_secs_f64(DEFAULT_IDLE_SECONDS);
+        assert_eq!(parse_idle_time(None), Ok(default));
+        assert_eq!(parse_idle_time(Some("")), Ok(default));
+    }
+
+    #[test]
+    fn idle_time_rejects_an_invalid_value() {
         for raw in ["1e100", "inf", "nan", "0", "-1", "soon"] {
-            assert_eq!(parse_idle_time(Some(raw.into())), default, "{raw}");
+            assert_eq!(
+                parse_idle_time(Some(raw)),
+                Err(format!(
+                    "DJANGO_BOLT_LANE_IDLE_SECONDS must be a number more than 0, got '{raw}'."
+                )),
+                "{raw}"
+            );
         }
-        assert_eq!(parse_idle_time(None), default);
     }
 }

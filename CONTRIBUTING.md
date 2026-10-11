@@ -51,6 +51,14 @@ just lint-lib
 | `just rebuild` | Clean and rebuild from scratch |
 | `just clean` | Remove build artifacts |
 | `just test-py` | Run the Python test suite |
+| `just test-rs` | Run the Rust unit tests |
+| `just test-example` | Check and test the example project |
+| `just docs-check` | Check the Python examples in the docs and the readmes |
+| `just clippy` | Lint the Rust code (CI fails on any warning) |
+| `just coverage` | Measure Python and Rust coverage into `coverage/` (needs `cargo-llvm-cov`) |
+| `just fuzz TARGET [SECONDS]` | Fuzz one request parser (needs nightly Rust and `cargo-fuzz`) |
+| `just mutants [JOBS]` | Mutation-test the Rust parsers and security checks (needs `cargo-mutants`). JOBS defaults to half the CPUs, at most 8 |
+| `just mutmut` | Mutation-test the Python modules in `[tool.mutmut]` |
 | `just lint` | Run ruff on library, tests, and examples |
 | `just lint-lib` | Lint library code only (must always pass) |
 | `just ruff-fix` | Auto-fix lint errors |
@@ -98,13 +106,16 @@ Anything on the per-request path (`api.py:_dispatch`, `serialization.py`, `_kwar
 ## Testing
 
 ```bash
-just test-py                                                    # everything
-uv run --with pytest pytest python/tests/test_syntax.py -s -vv  # one file
-uv run --with pytest pytest python/tests/test_syntax.py::test_name -s -vv
+just test-py                                         # everything
+uv run pytest python/tests/test_syntax.py -s -vv     # one file
+uv run pytest python/tests/test_syntax.py::test_name -s -vv
+just test-rs                                         # Rust unit tests
 ```
 
 Guidelines:
 
+- **Warnings fail the tests.** `pytest.ini` turns each warning into an error. Fix the cause of a warning. If you must silence a warning, add an `ignore` line to `filterwarnings` and give the reason.
+- **Do not skip on a missing dev dependency.** Add the dependency to the `dev` group in `pyproject.toml`.
 - **Red-Green.** Write the test first and confirm it fails without your change. A test that passes without the fix is not testing the fix.
 - **Use `TestClient`** for integration tests. It runs requests through the full Rust pipeline in-process — fast and deterministic:
 
@@ -124,7 +135,9 @@ Guidelines:
 
 - **PostgreSQL tests** (`@pytest.mark.postgres`) skip unless `DJANGO_BOLT_TEST_POSTGRES_DSN` is set. `just test-pg` starts a Docker server and runs them. On macOS, set `PGGSSENCMODE=disable` (for example `PGGSSENCMODE=disable just test-pg`), because forked `runbolt` workers can hang in libpq. See [the FAQ](docs/src/faq.md#why-does-runbolt-hang-on-macos-when-it-connects-to-postgresql).
 - **Subprocess (`runbolt`) tests** are only for behavior `TestClient` cannot exercise: startup wiring, auto-reload, multi-process, real TCP, streaming, WebSocket handshakes. Mark them `@pytest.mark.server_integration` and author the app as a real module in `python/tests/integration/apps/`.
+- **Mutation testing.** `just mutants` (Rust) and `just mutmut` (Python) change the code in small ways and check that a test fails. A mutant that no test catches shows a gap in the tests. To close a gap, add a test that fails for that mutant. If the mutant cannot change the behavior, make the code simpler. cargo-mutants runs only the Rust tests, so it cannot see the Python tests of a function. CI does not run these: a full run takes a long time.
 - **Test behavior, not implementation.** Assert on HTTP responses and observable side effects.
+- **Property tests for parsers.** A parser of request data (query, form, cookies, typed values) gets a property: a rule for every input. In Python, write a Hypothesis test in `python/tests/test_properties.py`, and compare with Django where Django has the same parser. In Rust, write a `proptest!` block next to the parser. CI runs both with fixed cases. Each week, the Fuzz workflow runs many random cases and the `cargo-fuzz` targets in `fuzz/`. To run more cases locally, use `uv run pytest python/tests/test_properties.py --hypothesis-profile=fuzz` or `PROPTEST_CASES=20000 just test-rs`.
 - **Don't delete or skip failing asserts** to make a test pass — investigate the root cause.
 
 ## Code style
@@ -145,11 +158,16 @@ Always publish the conditions (processes, concurrency, request count, machine) n
 
 Docs live in `docs/src/` and are published at [bolt.farhana.li](https://bolt.farhana.li/). If your change adds or alters user-facing behavior, update the relevant topic guide in `docs/src/topics/` and, for notable changes, add an entry to `CHANGELOG.md`.
 
+CI checks each Python code block in the docs and in the package readmes: it must parse, and each name that it imports from `django_bolt` or `bolt_mcp` must exist. Run the check with `just docs-check`. A block that is not complete code, for example a signature, needs the line `<!-- fragment -->` directly before it.
+
+The example project in `python/example/` is checked too. CI runs its Django checks, checks that its migrations match its models, and runs its tests. `test_docs_testing_guide.py` runs each pattern of the testing guide. Run all of this with `just test-example`.
+
 ## Submitting a pull request
 
 1. Make sure `just test-py` and `just lint-lib` pass.
-2. If you touched Rust, make sure `just build` succeeds from clean (`just rebuild`).
-3. If you touched hot paths, include before/after numbers from `4. Push your branch and open a PR against `master`. Fill in the [pull request template](.github/PULL_REQUEST_TEMPLATE.md).
+2. If you touched Rust, make sure `just build` succeeds from clean (`just rebuild`), and that `just clippy` and `just test-rs` pass.
+3. If you touched hot paths, include before/after numbers from `just save-bench`.
+4. Push your branch and open a PR against `master`. Fill in the [pull request template](.github/PULL_REQUEST_TEMPLATE.md).
 5. Keep the PR description focused on **what** changed and **why**; link related issues.
 
 A maintainer will review your PR. Please be patient — and feel free to ping on Discord if it has been quiet for a while.

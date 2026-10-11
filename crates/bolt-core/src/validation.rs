@@ -1,3 +1,4 @@
+use crate::cookies::cookie_pairs;
 use crate::middleware::auth::{authenticate, session_context, AuthBackend, AuthContext};
 use crate::permissions::{evaluate_guards, GuardDenial, GuardResult, GuardSet};
 use actix_web::http::uri::Authority;
@@ -7,30 +8,16 @@ use ahash::AHashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-/// Parse HTTP cookies from Cookie header
-/// Returns HashMap of cookie name -> cookie value
-///
-/// # Performance
-/// - Zero allocations if no cookies
-/// - Pre-allocated capacity for 8 cookies (typical case)
-/// - Inlined for zero-cost abstraction
+/// Parse the `Cookie` header into a map of name to value, as Django
+/// `request.COOKIES` does (see `cookies::cookie_pairs`).
 #[inline(always)]
 pub fn parse_cookies_inline(cookie_header: Option<&str>) -> AHashMap<String, String> {
     let mut cookies: AHashMap<String, String> = AHashMap::with_capacity(8);
-
     if let Some(raw_cookie) = cookie_header {
-        for pair in raw_cookie.split(';') {
-            let part = pair.trim();
-            if let Some(eq) = part.find('=') {
-                let (k, v) = part.split_at(eq);
-                let v2 = &v[1..]; // Skip '=' character
-                if !k.is_empty() {
-                    cookies.insert(k.to_string(), v2.to_string());
-                }
-            }
+        for (name, value) in cookie_pairs(raw_cookie) {
+            cookies.insert(name.to_owned(), value.into_owned());
         }
     }
-
     cookies
 }
 
@@ -240,6 +227,48 @@ pub fn validate_auth_and_guards(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::permissions::{ClaimKey, Guard, Quantifier};
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn an_origin_matches_its_own_host(
+            https in any::<bool>(),
+            host in "[a-z][a-z0-9-]{0,10}(\\.[a-z]{2,5}){0,2}",
+            port in prop::option::of(1u16..),
+        ) {
+            let (scheme, other, default_port) = if https { ("https", "http", 443) } else { ("http", "https", 80) };
+            let authority = port.map_or_else(|| host.clone(), |port| format!("{host}:{port}"));
+            let same = [
+                format!("{scheme}://{authority}"),
+                format!("{scheme}://{authority}/path?q#f"),
+            ];
+            let other = [format!("{other}://{authority}"), format!("{scheme}://evil.{authority}")];
+            for url in same {
+                prop_assert!(origin_matches(&url, scheme, &authority), "{}", url);
+            }
+            // The default port is the port of a host with no port.
+            let default_url = format!("{scheme}://{host}:{default_port}");
+            prop_assert!(origin_matches(&default_url, scheme, &host), "{}", default_url);
+            for url in other {
+                prop_assert!(!origin_matches(&url, scheme, &authority), "{}", url);
+            }
+        }
+
+        #[test]
+        fn origin_matching_never_panics(url in any::<String>(), host in any::<String>(), https in any::<bool>()) {
+            let _ = origin_matches(&url, if https { "https" } else { "http" }, &host);
+        }
+
+        #[test]
+        fn cookies_are_the_last_value_of_each_pair(header in "[a-z =;\"\\\\]{0,30}") {
+            let mut expected = AHashMap::new();
+            for (name, value) in cookie_pairs(&header) {
+                expected.insert(name.to_owned(), value.into_owned());
+            }
+            prop_assert_eq!(parse_cookies_inline(Some(&header)), expected);
+        }
+    }
 
     #[test]
     fn test_parse_cookies_empty() {
@@ -273,7 +302,51 @@ mod tests {
     fn test_validate_auth_no_config() {
         let headers = AHashMap::new();
         let result = validate_auth_and_guards(&headers, &[], &GuardSet::default());
-        matches!(result, AuthGuardResult::Allow(None));
+        assert!(matches!(result, AuthGuardResult::Allow(None)));
+    }
+
+    fn api_key_backend() -> AuthBackend {
+        AuthBackend::APIKey {
+            api_keys: ["k1".to_string()].into(),
+            header: "x-api-key".to_string(),
+            key_permissions: [("k1".to_string(), vec!["read".to_string()])].into(),
+        }
+    }
+
+    fn permission_guard(permission: &str) -> GuardSet {
+        GuardSet::from_guards(vec![Guard::Requires {
+            claim: ClaimKey::Permissions,
+            values: vec![serde_json::Value::from(permission)],
+            quantifier: Quantifier::Any,
+            denial: None,
+        }])
+    }
+
+    #[test]
+    fn guards_run_without_a_backend() {
+        let guards = GuardSet::from_guards(vec![Guard::IsAuthenticated]);
+        let result = validate_auth_and_guards(&AHashMap::new(), &[], &guards);
+        assert!(matches!(result, AuthGuardResult::Unauthorized));
+    }
+
+    #[test]
+    fn a_backend_runs_without_guards() {
+        let headers = headers_with(&[("x-api-key", "k1")]);
+        let result = validate_auth_and_guards(&headers, &[api_key_backend()], &GuardSet::default());
+        assert!(matches!(result, AuthGuardResult::Allow(Some(_))));
+    }
+
+    #[test]
+    fn guards_see_the_context_of_the_backend() {
+        let backends = [api_key_backend()];
+        let headers = headers_with(&[("x-api-key", "k1")]);
+        let result = validate_auth_and_guards(&headers, &backends, &permission_guard("read"));
+        assert!(matches!(result, AuthGuardResult::Allow(Some(_))));
+        let result = validate_auth_and_guards(&headers, &backends, &permission_guard("write"));
+        assert!(matches!(result, AuthGuardResult::Forbidden(None)));
+        let result =
+            validate_auth_and_guards(&AHashMap::new(), &backends, &permission_guard("read"));
+        assert!(matches!(result, AuthGuardResult::Unauthorized));
     }
 
     fn headers_with(pairs: &[(&str, &str)]) -> AHashMap<String, String> {
@@ -288,14 +361,6 @@ mod tests {
             cookie: "sessionid".to_string(),
             csrf: true,
             login_redirect: false,
-        }
-    }
-
-    fn api_key_backend() -> AuthBackend {
-        AuthBackend::APIKey {
-            api_keys: ["key-1".to_string()].into_iter().collect(),
-            header: "x-api-key".to_string(),
-            key_permissions: Default::default(),
         }
     }
 
@@ -396,7 +461,7 @@ mod tests {
     #[test]
     fn a_verified_credential_wins_over_a_session_cookie() {
         // The session backend comes first, but Rust cannot verify a session.
-        let headers = headers_with(&[("cookie", "sessionid=abc"), ("x-api-key", "key-1")]);
+        let headers = headers_with(&[("cookie", "sessionid=abc"), ("x-api-key", "k1")]);
         let backends = [session_backend(), api_key_backend()];
         match validate_auth_and_guards(&headers, &backends, &requires_login()) {
             AuthGuardResult::Allow(Some(ctx)) => {

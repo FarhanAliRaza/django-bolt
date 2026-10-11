@@ -9,6 +9,7 @@ use actix_web::http::StatusCode;
 use actix_web::{web, HttpRequest, HttpResponse};
 use actix_web_actors::ws;
 use ahash::AHashMap;
+use bolt_core::cookies::cookie_pairs;
 use futures_util::FutureExt;
 use once_cell::sync::OnceCell;
 use pyo3::prelude::*;
@@ -21,15 +22,16 @@ use bolt_core::metadata::{CorsConfig, RouteMetadata};
 use bolt_core::middleware::auth::{populate_auth_context, AuthContext};
 use bolt_core::middleware::rate_limit::{check_after_auth, check_before_auth};
 use bolt_core::request_pipeline::{
-    query_sequences, set_declared_item, set_param_item, set_query_sequences, EMPTY_TYPES,
+    insert_header_line, query_sequences, set_declared_item, set_param_item, set_query_sequences,
+    EMPTY_TYPES,
 };
 use bolt_core::router::parse_query_string;
-use bolt_core::state::{AppState, ROUTE_METADATA};
+use bolt_core::state::AppState;
 use bolt_core::type_coercion::TypeHints;
 use bolt_core::validation::{validate_auth_and_guards, AuthGuardResult};
 
 use super::actor::WebSocketActor;
-use super::config::WS_CONFIG;
+use super::config::WsConfig;
 use super::messages::{SendToClient, WsMessage};
 use super::{ConnectionSlot, ACTIVE_WS_CONNECTIONS};
 
@@ -119,9 +121,11 @@ pub fn requested_subprotocols<'a>(values: impl Iterator<Item = &'a str>) -> Vec<
 ///
 /// Parses and coerces query, path, header and cookie values to typed Python
 /// objects using the same type coercion as HTTP handlers.
+/// `headers` holds the request headers, with the `Cookie` lines joined.
 fn build_scope(
     py: Python<'_>,
     req: &HttpRequest,
+    headers: &AHashMap<String, String>,
     subprotocols: &[String],
     path_params: &AHashMap<String, String>,
     route_meta: Option<&RouteMetadata>,
@@ -167,21 +171,18 @@ fn build_scope(
     scope_dict.set_item("query_string", req.query_string().as_bytes())?;
 
     // Add headers as dict (FastAPI style)
-    // OPTIMIZATION: HeaderName::as_str() already returns lowercase (http crate canonical form)
     // A typed header with a bad value rejects the upgrade, as in HTTP.
     let headers_dict = PyDict::new(py);
-    for (key, value) in req.headers().iter() {
-        if let Ok(v) = value.to_str() {
-            set_declared_item(
-                py,
-                &headers_dict,
-                key.as_str(),
-                v,
-                header_types,
-                max_param_length,
-                "Header",
-            )?;
-        }
+    for (key, value) in headers {
+        set_declared_item(
+            py,
+            &headers_dict,
+            key,
+            value,
+            header_types,
+            max_param_length,
+            "Header",
+        )?;
     }
     scope_dict.set_item("headers", headers_dict)?;
 
@@ -202,24 +203,17 @@ fn build_scope(
 
     // Add cookies
     let cookies_dict = PyDict::new(py);
-    if let Some(cookie_header) = req.headers().get("cookie") {
-        if let Ok(cookie_str) = cookie_header.to_str() {
-            for pair in cookie_str.split(';') {
-                let pair = pair.trim();
-                if let Some(eq_pos) = pair.find('=') {
-                    let key = &pair[..eq_pos];
-                    let value = &pair[eq_pos + 1..];
-                    set_declared_item(
-                        py,
-                        &cookies_dict,
-                        key,
-                        value,
-                        cookie_types,
-                        max_param_length,
-                        "Cookie",
-                    )?;
-                }
-            }
+    if let Some(cookie_str) = headers.get("cookie") {
+        for (key, value) in cookie_pairs(cookie_str) {
+            set_declared_item(
+                py,
+                &cookies_dict,
+                key,
+                &value,
+                cookie_types,
+                max_param_length,
+                "Cookie",
+            )?;
         }
     }
     scope_dict.set_item("cookies", cookies_dict)?;
@@ -659,8 +653,8 @@ fn validate_origin(req: &HttpRequest, state: &AppState) -> bool {
 }
 
 /// Check if an origin is allowed by the CORS configuration
-/// Reuses the same logic as HTTP CORS validation
-fn is_origin_allowed(
+/// Reuses the same logic as HTTP CORS validation. The test client calls it too.
+pub fn is_origin_allowed(
     origin: &str,
     cors_config: &CorsConfig,
     global_regexes: &[regex::Regex],
@@ -744,8 +738,10 @@ pub async fn handle_websocket_upgrade(
         WsTarget::Route { handler_id, .. } => Some(*handler_id),
         WsTarget::AsgiMount { .. } => None,
     };
-    // Use cached config - no Python/GIL access
-    let config = &*WS_CONFIG;
+    // The server read the config at startup - no Python/GIL access
+    let Some(config) = state.extensions.get::<Arc<WsConfig>>().cloned() else {
+        return Ok(HttpResponse::InternalServerError().body("WebSocket config is not loaded"));
+    };
 
     // Validate request is actually a WebSocket upgrade
     if !is_websocket_upgrade(&req) {
@@ -780,12 +776,12 @@ pub async fn handle_websocket_upgrade(
             .body(r#"{"detail":"Too many WebSocket connections"}"#));
     }
 
-    // Extract headers for rate limiting and auth
+    // Extract headers for rate limiting, auth and the scope
     // OPTIMIZATION: HeaderName::as_str() already returns lowercase (http crate canonical form)
     let mut headers: AHashMap<String, String> = AHashMap::new();
     for (key, value) in req.headers().iter() {
         if let Ok(v) = value.to_str() {
-            headers.insert(key.as_str().to_owned(), v.to_owned());
+            insert_header_line(&mut headers, key.as_str(), v);
         }
     }
 
@@ -793,7 +789,7 @@ pub async fn handle_websocket_upgrade(
     // Address and header keys run here; identity keys run after auth below.
     let mut client_ip = None;
     if let Some(handler_id) = route_handler_id {
-        if let Some(route_meta) = ROUTE_METADATA.get().and_then(|m| m.get(handler_id)) {
+        if let Some(route_meta) = state.route_metadata.get(handler_id) {
             if let Some(ref rate_config) = route_meta.rate_limit_config {
                 if !matches!(
                     rate_config.key,
@@ -806,6 +802,7 @@ pub async fn handle_websocket_upgrade(
                     );
                 }
                 if let Some(response) = check_before_auth(
+                    &state.rate_limiters,
                     handler_id,
                     &headers,
                     client_ip.as_ref(),
@@ -829,12 +826,13 @@ pub async fn handle_websocket_upgrade(
 
     // Evaluate authentication and guards before upgrading
     if let Some(handler_id) = route_handler_id {
-        if let Some(route_meta) = ROUTE_METADATA.get().and_then(|m| m.get(handler_id)) {
+        if let Some(route_meta) = state.route_metadata.get(handler_id) {
             match validate_auth_and_guards(&headers, &route_meta.auth_backends, &route_meta.guards)
             {
                 AuthGuardResult::Allow(ctx) => {
                     if let Some(ref rate_config) = route_meta.rate_limit_config {
                         if let Some(response) = check_after_auth(
+                            &state.rate_limiters,
                             handler_id,
                             &headers,
                             client_ip.as_ref(),
@@ -893,10 +891,11 @@ pub async fn handle_websocket_upgrade(
             ..
         } => {
             // Route metadata holds the type hints and the sequence query keys
-            let route_meta = ROUTE_METADATA.get().and_then(|m| m.get(*handler_id));
+            let route_meta = state.route_metadata.get(*handler_id);
             build_scope(
                 py,
                 &req,
+                &headers,
                 &subprotocols,
                 path_params,
                 route_meta,
@@ -932,7 +931,7 @@ pub async fn handle_websocket_upgrade(
             headers,
             ready,
         }) => {
-            let actor = WebSocketActor::new(to_python_tx, slot);
+            let actor = WebSocketActor::new(to_python_tx, slot, &config);
             // Set the header here: actix reads only the first header line of the client.
             let protocol = subprotocol
                 .map(|selected| {

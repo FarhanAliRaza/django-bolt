@@ -7,6 +7,8 @@ from datetime import datetime
 from http.cookies import SimpleCookie
 from typing import Literal
 
+from ._core import format_cookie_date
+
 SameSitePolicy = Literal["Strict", "Lax", "None", False]
 
 
@@ -57,7 +59,7 @@ class Cookie:
 
         if self.expires is not None:
             if isinstance(self.expires, datetime):
-                cookie["expires"] = self.expires.strftime("%a, %d %b %Y %H:%M:%S GMT")
+                cookie["expires"] = format_cookie_date(self.expires)
             else:
                 cookie["expires"] = self.expires
 
@@ -90,10 +92,7 @@ class Cookie:
         """
         expires_str: str | None = None
         if self.expires is not None:
-            if isinstance(self.expires, datetime):
-                expires_str = self.expires.strftime("%a, %d %b %Y %H:%M:%S GMT")
-            else:
-                expires_str = self.expires
+            expires_str = format_cookie_date(self.expires) if isinstance(self.expires, datetime) else self.expires
 
         # samesite: False means omit, otherwise use the string value
         samesite_str: str | None = self.samesite if self.samesite else None

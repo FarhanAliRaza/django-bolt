@@ -8,7 +8,6 @@
 
 use actix_web::dev::Service;
 use actix_web::http::header::HeaderValue;
-use actix_web::middleware::{NormalizePath, TrailingSlash};
 use actix_web::{test, web, App};
 use ahash::AHashMap;
 use bytes::Bytes;
@@ -618,6 +617,7 @@ pub fn test_request(
                         static_files_config: config.static_files_config,
                         media_files_config: config.media_files_config,
                         access_logger: None,
+                        access_log_levels: 0,
                     });
 
                     // Create Actix test service with production middleware stack
@@ -627,7 +627,7 @@ pub fn test_request(
                         App::new()
                             .app_data(web::Data::new(app_state_arc.clone()))
                             .app_data(web::PayloadConfig::new(max_payload_size))
-                            .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
+                            .wrap(crate::normalize::MergeSlashes)
                             .wrap(CorsMiddleware::new())
                             .wrap(CompressionMiddleware::new())
                             .configure(|cfg| configure_file_scopes(cfg, &app_state_arc))

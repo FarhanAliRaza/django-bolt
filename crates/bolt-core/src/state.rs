@@ -126,6 +126,7 @@ pub struct AppState {
     pub extensions: http::Extensions, // Per-app state owned by higher-level crates (e.g. bolt-mcp mounts).
     pub static_files_config: Option<Arc<ScopeConfig>>,
     pub media_files_config: Option<Arc<ScopeConfig>>,
+    pub access_log_levels: u8, // INFO, WARNING, ERROR bits, read at startup.
     pub access_logger: Option<Py<PyAny>>, // Python logger instance for access logging (django.server). None when disabled.
 }
 

@@ -1548,9 +1548,13 @@ class BoltAPI:
                 analyzed_request_names = {next(iter(meta["sig"].parameters))}
             handler_analysis = analyze_handler(fn, request_param_names=analyzed_request_names)
 
-            if request_param_names:
-                if handler_analysis.analysis_failed:
-                    # Preserve correctness when source introspection is unavailable.
+            if analyzed_request_names:
+                if (
+                    handler_analysis.analysis_failed
+                    or hasattr(fn, "__wrapped__")
+                    or hasattr(fn, "__signature__")
+                ):
+                    # Wrappers and synthetic signatures can hide reads from source analysis.
                     meta["needs_body"] = True
                     meta["needs_query"] = True
                     meta["needs_headers"] = True
@@ -1560,14 +1564,7 @@ class BoltAPI:
                     meta["needs_query"] = meta.get("needs_query", False) or handler_analysis.request_needs_query
                     meta["needs_headers"] = meta.get("needs_headers", False) or handler_analysis.request_needs_headers
                     meta["needs_cookies"] = meta.get("needs_cookies", False) or handler_analysis.request_needs_cookies
-            elif meta["mode"] == "request_only":
-                # The handler gets only the request and can read every part of it.
-                # Set the flags here, not in compile_binder: a dependency with
-                # no flags does not force its route to parse the request.
-                meta["needs_body"] = True
-                meta["needs_query"] = True
-                meta["needs_headers"] = True
-                meta["needs_cookies"] = True
+            if meta["mode"] == "request_only":
                 meta["needs_path_params"] = True
                 meta["needs_form_parsing"] = False
 

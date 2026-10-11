@@ -90,11 +90,12 @@ pub fn format_cookie(c: &CookieData) -> Option<String> {
 
     // SameSite
     if let Some(ref samesite) = c.samesite {
-        let ss = match samesite.to_lowercase().as_str() {
-            "strict" => SameSite::Strict,
-            "none" => SameSite::None,
-            // "lax", and Lax for an invalid value
-            _ => SameSite::Lax,
+        let ss = if samesite.eq_ignore_ascii_case("strict") {
+            SameSite::Strict
+        } else if samesite.eq_ignore_ascii_case("none") {
+            SameSite::None
+        } else {
+            SameSite::Lax
         };
         cookie = cookie.same_site(ss);
     }
@@ -237,10 +238,15 @@ pub fn unquote_cookie_value(value: &str) -> Cow<'_, str> {
 /// whitespace, and the value loses its quotes. A pair that is empty is skipped.
 /// A name can occur two times. Django keeps the last value.
 pub fn cookie_pairs(header: &str) -> impl Iterator<Item = (&str, Cow<'_, str>)> {
+    raw_cookie_pairs(header).map(|(name, value)| (name, unquote_cookie_value(value)))
+}
+
+/// Split and trim pairs before decoding values needed by the caller.
+pub fn raw_cookie_pairs(header: &str) -> impl Iterator<Item = (&str, &str)> {
     header.split(';').filter_map(|pair| {
         let (name, value) = pair.split_once('=').unwrap_or(("", pair));
         let (name, value) = (name.trim(), value.trim());
-        (!name.is_empty() || !value.is_empty()).then(|| (name, unquote_cookie_value(value)))
+        (!name.is_empty() || !value.is_empty()).then_some((name, value))
     })
 }
 

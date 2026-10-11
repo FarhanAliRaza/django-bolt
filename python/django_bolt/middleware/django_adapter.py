@@ -23,7 +23,7 @@ from functools import partial
 from inspect import isawaitable
 from typing import TYPE_CHECKING, Any
 
-from .._core import RequestLane
+from .._core import RequestLane, populate_response_cookies
 from ..concurrency import drive_on_lane, in_lane_mode, run_orm_blocking
 from ..middleware_response import (
     _BODY_BYTES,
@@ -1217,35 +1217,10 @@ def _to_django_response(response: Response) -> HttpResponse:
         for key, value in remaining_headers:
             django_response[key] = value
 
-    # Transfer raw cookies onto the Django HttpResponse so they survive any
-    # downstream Django middleware (e.g. LocaleMiddleware) that returns the
-    # same response object. Without this, _to_bolt_response() harvests an
-    # empty cookie jar and handler-set cookies are silently dropped.
-    #
-    # Write directly to the SimpleCookie morsel instead of HttpResponse.set_cookie:
-    # raw tuples are already validated by Cookie.to_raw_tuple(), so we skip
-    # http_date(time.time()+max_age), int(max_age), samesite validation, and
-    # the unconditional empty-expires write that set_cookie performs.
+    # Keep ordinary Django morsels for middleware that reads or changes cookies.
     raw_cookies = getattr(response, "_raw_cookies", None)
     if raw_cookies:
-        cookies = django_response.cookies
-        for name, value, path, max_age, expires, domain, secure, httponly, samesite in raw_cookies:
-            cookies[name] = value
-            morsel = cookies[name]
-            if max_age is not None:
-                morsel["max-age"] = max_age
-            if expires:
-                morsel["expires"] = expires
-            if path:
-                morsel["path"] = path
-            if domain:
-                morsel["domain"] = domain
-            if secure:
-                morsel["secure"] = True
-            if httponly:
-                morsel["httponly"] = True
-            if samesite:
-                morsel["samesite"] = samesite
+        populate_response_cookies(django_response.cookies, raw_cookies)
 
     _store_preserved_body(django_response, preserved_body)
     return django_response

@@ -12,7 +12,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::cookies::cookie_pairs;
 use parking_lot::{Mutex, RwLock};
 use std::str::FromStr;
 
@@ -483,11 +482,11 @@ fn has_cookie_value(raw_cookie: &str, name: &str) -> bool {
 /// come from such a choice. The value borrows from the header unless it has
 /// quotes to remove.
 pub fn find_cookie_value<'a>(raw_cookie: &'a str, name: &str) -> Option<Cow<'a, str>> {
-    let mut values = cookie_pairs(raw_cookie)
+    let mut values = crate::cookies::raw_cookie_pairs(raw_cookie)
         .filter(|(cookie_name, _)| *cookie_name == name)
         .map(|(_, value)| value);
     match (values.next(), values.next()) {
-        (Some(value), None) => Some(value),
+        (Some(value), None) => Some(crate::cookies::unquote_cookie_value(value)),
         _ => None,
     }
 }

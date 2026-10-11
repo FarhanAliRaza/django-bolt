@@ -7,6 +7,8 @@ error that names the key and the route. Rust must not use a default value.
 
 from __future__ import annotations
 
+from functools import wraps
+
 import pytest
 
 from django_bolt import BoltAPI
@@ -131,3 +133,55 @@ def test_websocket_route_sends_every_flag() -> None:
         "needs_form_parsing": False,
         "default_status_code": 200,
     }
+
+
+def test_request_only_reads_only_cookies() -> None:
+    api = BoltAPI()
+
+    @api.get("/cookie")
+    def cookie(request):
+        return {"value": request.cookies.get("probe")}
+
+    meta = _route_meta(api, "/cookie")
+    assert meta["needs_cookies"] is True
+    assert meta["needs_body"] is False
+    assert meta["needs_query"] is False
+    assert meta["needs_headers"] is False
+    with TestClient(api) as client:
+        assert client.get("/cookie", headers={"cookie": "probe=value"}).json() == {"value": "value"}
+
+
+def test_request_only_escape_keeps_components() -> None:
+    api = BoltAPI()
+
+    def helper(request):
+        return {"cookie": request.cookies["probe"], "header": request.headers["x-probe"]}
+
+    @api.get("/escape")
+    def escape(request):
+        return helper(request)
+
+    with TestClient(api) as client:
+        assert client.get("/escape", headers={"cookie": "probe=c", "x-probe": "h"}).json() == {
+            "cookie": "c",
+            "header": "h",
+        }
+
+
+def test_request_decorator_keeps_components_outside_handler_body() -> None:
+    api = BoltAPI()
+
+    def add_query(handler):
+        @wraps(handler)
+        def wrapper(request):
+            return {**handler(request), "query": request.query["q"]}
+
+        return wrapper
+
+    @api.get("/decorated")
+    @add_query
+    def decorated(request):
+        return {"path": request.path}
+
+    with TestClient(api) as client:
+        assert client.get("/decorated?q=value").json() == {"path": "/decorated", "query": "value"}

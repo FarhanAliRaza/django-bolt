@@ -37,12 +37,17 @@ stack is large enough (~35-40% of GIL samples) to drown the signal.
 ## CodSpeed benchmarks
 
 `python/benchmark/http_benchmark.py` sends the requests of `just save-bench` to
-the real `runbolt` server, in the pytest process. The CodSpeed workflow runs
+the real `runbolt` server, in the pytest process. The `codspeed` job of CI runs
 them under CPU simulation in each pull request. It counts the CPU instructions
 of all threads, so the count includes the server work for each request. A count
 does not change with the load of the machine. Over three runs, each case
-stayed within 0.5%. Use it to find a regression. Use bombardier for throughput
-under concurrency, which a count does not show.
+stayed within 0.5%. A count is for a round of 100 requests.
+
+The count has limits. It does not include the time in system calls, for
+example socket I/O, or the time a thread waits. Each case sends one request at
+a time, so it shows no queueing and no contention. The ORM cases read 10 users
+from SQLite. Use the count to find a CPU regression. Use bombardier for
+throughput and latency under concurrency.
 
 ```bash
 just bench-codspeed      # runs each case one time as a check; it measures nothing

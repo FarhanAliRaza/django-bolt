@@ -2,10 +2,11 @@
 
 `runbolt` starts the Actix server in a background thread. CodSpeed simulation
 counts the CPU instructions of all threads in the measured region. Thus each
-benchmark measures the server work for one request, and the small cost of the
-raw socket client.
+benchmark measures the server work, and the small cost of the raw socket client.
+Simulation does not count the time in system calls, for example socket I/O.
 
-The server keeps global state, so one server serves the whole session.
+The server keeps global state, so one server serves the whole session. The
+database and the static root are in a temporary directory (bench_settings.py).
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import os
 import signal
 import socket
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Iterator
@@ -24,6 +26,9 @@ import pytest
 EXAMPLE_DIR = Path(__file__).resolve().parents[1] / "example"
 STARTUP_TIMEOUT = 300  # seconds; startup under valgrind is slow
 SHUTDOWN_TIMEOUT = 60
+# A blocked socket call fails after this time, so a deadlocked server cannot
+# hang the run. It is long, because a request under valgrind is slow.
+SOCKET_TIMEOUT = float(os.environ.get("BOLT_BENCH_SOCKET_TIMEOUT", "120"))
 
 
 class Connection:
@@ -35,7 +40,7 @@ class Connection:
 
     def __init__(self, port: int) -> None:
         self.port = port
-        self.sock = socket.create_connection(("127.0.0.1", port))
+        self.sock = socket.create_connection(("127.0.0.1", port), timeout=SOCKET_TIMEOUT)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.buffer = b""
 
@@ -127,37 +132,50 @@ def _wait_until_ready(port: int, thread: threading.Thread, errors: list[BaseExce
     raise RuntimeError(f"runbolt did not accept connections within {STARTUP_TIMEOUT} s")
 
 
-@pytest.fixture(scope="session")
-def bench_server() -> Iterator[Connection]:
-    """Prepare the example project like `just save-bench`, then start runbolt."""
-    sys.path.insert(0, str(EXAMPLE_DIR))
-    os.environ["DJANGO_SETTINGS_MODULE"] = "testproject.settings"
+def _stop_server(thread: threading.Thread) -> None:
+    """Stop runbolt with SIGTERM, as in production.
 
-    import django  # noqa: PLC0415
-    from django.core.management import call_command  # noqa: PLC0415
-
-    django.setup()
-    call_command("migrate", "--noinput", verbosity=0)
-    call_command("collectstatic", "--noinput", verbosity=0)
-
-    port = _free_port()
-    errors: list[BaseException] = []
-    thread = threading.Thread(target=_run_server, args=(port, errors), name="runbolt", daemon=True)
-    thread.start()
-    conn = _wait_until_ready(port, thread, errors)
-
-    # The ORM benchmarks read 10 of these users.
-    status, body = conn.send(build_request("GET", "/users/seed?count=1000"))
-    assert status == 200, body
-    yield conn
-    conn.send(build_request("POST", "/users/delete"))
-    conn.close()
-    # The server stops on SIGTERM, as in production. A running server keeps
-    # the executor threads busy, and the interpreter waits for them at exit.
+    A running server keeps the executor threads busy, and the interpreter
+    waits for them at exit.
+    """
+    if not thread.is_alive():
+        return
     os.kill(os.getpid(), signal.SIGTERM)
     thread.join(SHUTDOWN_TIMEOUT)
     if thread.is_alive():
         raise RuntimeError(f"runbolt did not stop within {SHUTDOWN_TIMEOUT} s of SIGTERM")
+
+
+@pytest.fixture(scope="session")
+def bench_server() -> Iterator[Connection]:
+    """Prepare the example project like `just save-bench`, then start runbolt."""
+    with tempfile.TemporaryDirectory(prefix="bolt_bench_") as bench_dir:
+        sys.path.insert(0, str(EXAMPLE_DIR))
+        os.environ["BOLT_BENCH_DIR"] = bench_dir
+        os.environ["DJANGO_SETTINGS_MODULE"] = "bench_settings"
+
+        import django  # noqa: PLC0415
+        from django.core.management import call_command  # noqa: PLC0415
+
+        django.setup()
+        call_command("migrate", "--noinput", verbosity=0)
+        call_command("collectstatic", "--noinput", verbosity=0)
+
+        port = _free_port()
+        errors: list[BaseException] = []
+        thread = threading.Thread(target=_run_server, args=(port, errors), name="runbolt", daemon=True)
+        thread.start()
+        try:
+            conn = _wait_until_ready(port, thread, errors)
+            try:
+                # The ORM benchmarks read 10 of these users.
+                status, body = conn.send(build_request("GET", "/users/seed?count=1000"))
+                assert status == 200, body
+                yield conn
+            finally:
+                conn.close()
+        finally:
+            _stop_server(thread)
 
 
 @pytest.fixture(scope="session")

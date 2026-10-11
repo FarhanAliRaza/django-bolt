@@ -487,18 +487,20 @@ jobs:
   codspeed:
     name: CodSpeed benchmarks (${{ matrix.mode }})
     runs-on: ${{ matrix.runner }}
-    needs: [python-versions, linux-amd64]
+    needs: [python-versions, linux-amd64, linux-arm64]
     strategy:
       fail-fast: false
       matrix:
         include:
           - mode: simulation
             runner: ubuntu-latest
-          # x86-64, so the job can install the wheel of linux-amd64. A public
-          # repository can use the runner only if the Default runner group of
-          # the organization allows public repositories.
+            wheels: wheels-linux-x86_64-*
+          # The ARM64 Graviton macro runner, so the job installs the wheel of
+          # linux-arm64. A public repository can use the runner only if the
+          # Default runner group of the organization allows public repositories.
           - mode: walltime
-            runner: codspeed-macro-x64-ryzen-9950x-ubuntu-24-04
+            runner: codspeed-macro-arm64-graviton-ubuntu-22-04
+            wheels: wheels-linux-aarch64-*
     permissions:
       contents: read
       # CodSpeed identifies the repository with an OIDC token. It needs no secret.
@@ -525,11 +527,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --no-install-project
 
-      # No Rust build: the benchmarks measure the release wheel of the linux-amd64 job.
+      # No Rust build: the benchmarks measure the release wheel of a wheel job.
       - name: Install the built wheel
         uses: ./.github/actions/install-built-wheel
         with:
-          artifacts: wheels-linux-x86_64-*
+          artifacts: ${{ matrix.wheels }}
           wheel-pattern: ${{ fromJSON(needs.python-versions.outputs.wheel-patterns-json)[needs.python-versions.outputs.newest-version] }}
 
       - name: Run the benchmarks

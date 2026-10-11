@@ -189,7 +189,8 @@ BOLT_STATIC_MAX_AGE = 31536000  # 1 year — safe for content-hashed assets
 This produces `Cache-Control: public, max-age=31536000`. Static uses **`public`** (unlike media's `private`) because assets are identical for every user, so CDNs and shared proxies can cache them aggressively.
 
 - The header is only set on `2xx` responses — a `404` is never cached with a long `max-age`.
-- A missing or unset `BOLT_STATIC_MAX_AGE` means no `Cache-Control` header — this is the default and emits no warning. Startup warnings are only emitted for present-but-invalid values (non-integer, boolean, or negative), which are ignored.
+- A missing `BOLT_STATIC_MAX_AGE`, or `None`, gives no `Cache-Control` header. This is the default.
+- A value that is not an int of 0 or more stops startup with `ImproperlyConfigured`. A str such as `"3600"` and a bool are not valid.
 - This is independent of the ETag / Last-Modified validators, which are always sent.
 
 ## Performance

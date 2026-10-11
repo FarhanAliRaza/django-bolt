@@ -273,7 +273,8 @@ class TestResponseDeleteCookie:
         async def logout():
             return Response({"ok": True}).delete_cookie(name)
 
-        attributes = TestClient(api).get("/logout").headers["set-cookie"].split("; ")
+        with TestClient(api) as client:
+            attributes = client.get("/logout").headers["set-cookie"].split("; ")
         django_response = HttpResponse()
         django_response.delete_cookie(name)
         assert ("Secure" in attributes) == bool(django_response.cookies[name]["secure"])

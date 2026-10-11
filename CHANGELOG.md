@@ -14,6 +14,7 @@ All notable changes to this project will be documented in this file.
   - `CORS_ALLOW_ALL_ORIGINS` and `CORS_ALLOW_CREDENTIALS` must be a bool.
   - `DEBUG` must be a bool or an int. Bolt reads an int as Django does: `0` is off, and another int is on. A str such as `"False"` stops startup, because Django reads it as on. Before, Bolt used `False` for `DEBUG = 1` and for `DEBUG = "True"`.
   - `BOLT_MAX_UPLOAD_SIZE`, `BOLT_MAX_HEADER_SIZE`, `BOLT_MEMORY_SPOOL_THRESHOLD`, `BOLT_WS_MAX_CONNECTIONS`, `BOLT_WS_CLIENT_TIMEOUT` and `BOLT_WS_MAX_MESSAGE_SIZE` must be an int of 0 or more. A bool is not an int.
+  - `BOLT_STATIC_MAX_AGE` and `BOLT_MEDIA_MAX_AGE` must be an int of 0 or more, or `None`. Before, a wrong value gave a warning, and static and media files had no `Cache-Control`.
   - `BOLT_MAX_SYNC_STREAMING_THREADS`, `BOLT_WS_CHANNEL_SIZE` and `BOLT_WS_HEARTBEAT_INTERVAL` must be an int of 1 or more.
   - `BOLT_ASGI_MOUNT_TIMEOUT` must be a number more than 0. Before, a value of 0 or less gave 30 seconds.
   - `CORS_ALLOWED_ORIGINS`, `CORS_ALLOWED_ORIGIN_REGEXES`, `CORS_ALLOW_METHODS`, `CORS_ALLOW_HEADERS` and `CORS_EXPOSE_HEADERS` must be a list of str. One str is not a list, and a compiled regex is not a str.

@@ -7,7 +7,7 @@ use actix_web::{
 };
 use ahash::AHashMap;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict};
+use pyo3::types::PyDict;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -115,58 +115,20 @@ impl CacheVisibility {
 ///
 /// Validation (all at startup so the request path stays a plain header clone):
 /// - Missing / None → no header
-/// - Booleans, non-integers, negatives → warn, no header
-/// - Non-negative integer → `Some(HeaderValue)`
+/// - A value that is not an int of 0 or more → `ImproperlyConfigured`
 fn read_max_age_setting(
-    py: Python<'_>,
+    settings: &DjangoSettings<'_>,
     name: &str,
     visibility: CacheVisibility,
-) -> Option<HeaderValue> {
-    let django_conf = py.import("django.conf").ok()?;
-    let settings = django_conf.getattr("settings").ok()?;
-    let value = settings.getattr(name).ok()?;
-    if value.is_none() {
-        return None;
+) -> PyResult<Option<HeaderValue>> {
+    if settings.get(name)?.is_none_or(|value| value.is_none()) {
+        return Ok(None);
     }
-    // bool is a subclass of int in Python; extract::<i64> would happily turn
-    // True/False into 1/0 and silently produce `max-age=1`.
-    if value.cast::<PyBool>().is_ok() {
-        eprintln!(
-            "[django-bolt] Warning: {} must be an integer (got bool); ignoring.",
-            name
-        );
-        return None;
-    }
-    let max_age = match value.extract::<i64>() {
-        Ok(n) if n >= 0 => n,
-        Ok(n) => {
-            eprintln!(
-                "[django-bolt] Warning: {} must be non-negative (got {}); ignoring.",
-                name, n
-            );
-            return None;
-        }
-        Err(_) => {
-            eprintln!(
-                "[django-bolt] Warning: {} must be an integer; ignoring.",
-                name
-            );
-            return None;
-        }
-    };
-    // Validate once: format always produces ASCII so from_str cannot fail in
-    // practice, but if it ever does we want a startup warning, not a silent
-    // per-request drop.
-    match HeaderValue::from_str(&format!("{}, max-age={}", visibility.directive(), max_age)) {
-        Ok(v) => Some(v),
-        Err(e) => {
-            eprintln!(
-                "[django-bolt] Warning: failed to build Cache-Control from {}: {}",
-                name, e
-            );
-            None
-        }
-    }
+    let max_age: u64 = settings.non_negative_int(name, 0)?;
+    let value = format!("{}, max-age={}", visibility.directive(), max_age);
+    Ok(Some(
+        HeaderValue::from_str(&value).expect("a directive and an int are ASCII"),
+    ))
 }
 
 /// The scope prefix for a static URL such as `"/static/"`, or None when the
@@ -459,17 +421,16 @@ fn read_cors_and_file_scopes(
     // Built once here so the per-request hot path is a plain header insert.
     // Rules:
     //   - missing / None: no Cache-Control header sent (current behavior)
-    //   - non-integer:     warn, no header
-    //   - negative:        warn, no header
+    //   - not an int of 0 or more: ImproperlyConfigured
     //   - >= 0:            "public, max-age=N"
     // Static is admin-curated and identical for every user — `public` lets
     // CDNs cache aggressively. Media is per-user content where the URL is
     // often the only access gate; `private` keeps shared caches from
     // serving one user's uploads to another.
     let static_cache_control =
-        read_max_age_setting(py, "BOLT_STATIC_MAX_AGE", CacheVisibility::Public);
+        read_max_age_setting(settings, "BOLT_STATIC_MAX_AGE", CacheVisibility::Public)?;
     let media_cache_control =
-        read_max_age_setting(py, "BOLT_MEDIA_MAX_AGE", CacheVisibility::Private);
+        read_max_age_setting(settings, "BOLT_MEDIA_MAX_AGE", CacheVisibility::Private)?;
 
     // Validate CORS configuration: wildcard + credentials is invalid per spec
     if allow_all && credentials {

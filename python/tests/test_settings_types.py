@@ -69,6 +69,9 @@ def _post_two_mb(client: TestClient):
         ("BOLT_WS_HEARTBEAT_INTERVAL", 0, "an int of 1 or more"),
         ("BOLT_WS_CLIENT_TIMEOUT", 2.5, "an int of 0 or more"),
         ("BOLT_WS_MAX_MESSAGE_SIZE", "1048576", "an int of 0 or more"),
+        ("BOLT_STATIC_MAX_AGE", "3600", "an int of 0 or more"),
+        ("BOLT_STATIC_MAX_AGE", True, "an int of 0 or more"),
+        ("BOLT_MEDIA_MAX_AGE", -1, "an int of 0 or more"),
     ],
 )
 def test_wrong_type_stops_startup(name, value, expected):

@@ -381,7 +381,7 @@ def test_article_viewset(api):
 - A request body over `BOLT_MAX_UPLOAD_SIZE` gets 413. The default limit is 1 MB.
 - `CORS_ALLOWED_ORIGINS`, `CORS_ALLOWED_ORIGIN_REGEXES` and the other CORS settings apply.
 - `STATIC_URL` and `MEDIA_URL` are served, with `BOLT_STATIC_MAX_AGE` and `BOLT_MEDIA_MAX_AGE`.
-- Each request comes from `127.0.0.1`. Thus `BOLT_TRUSTED_PROXIES` and `X-Forwarded-For` work as on a server.
+- Each request comes from `127.0.0.1`. To test `X-Forwarded-For`, put `127.0.0.1` in `BOLT_TRUSTED_PROXIES`. Then the test client is a trusted proxy, as a proxy on the same host is.
 
 Change a setting with `override_settings` before you create the client:
 

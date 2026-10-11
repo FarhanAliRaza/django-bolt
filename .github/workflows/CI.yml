@@ -475,6 +475,71 @@ jobs:
       - name: Run platform smoke tests
         run: uv run --no-sync pytest python/tests/integration -m platform_smoke -v
 
+  # The production request path, measured by CodSpeed in two modes. The
+  # benchmarks: python/benchmark/http_benchmark.py.
+  # - simulation counts CPU instructions. A count does not change with the load
+  #   of the runner, so a small CPU change shows. It does not count system calls.
+  # - walltime measures elapsed time, system calls and waits included. It runs on
+  #   a CodSpeed macro runner, a dedicated bare-metal machine with low noise. The
+  #   free plan has 600 macro runner minutes each month.
+  # The release wheel has no symbols, so Rust frames in the flame graphs have
+  # no names. To see them, run `just build-profiling` and profile locally.
+  codspeed:
+    name: CodSpeed benchmarks (${{ matrix.mode }})
+    runs-on: ${{ matrix.runner }}
+    needs: [python-versions, linux-amd64, linux-arm64]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: simulation
+            runner: ubuntu-latest
+            wheels: wheels-linux-x86_64-*
+          # The ARM64 Graviton macro runner, so the job installs the wheel of
+          # linux-arm64. A public repository can use the runner only if the
+          # Default runner group of the organization allows public repositories.
+          - mode: walltime
+            runner: codspeed-macro-arm64-graviton-ubuntu-22-04
+            wheels: wheels-linux-aarch64-*
+    permissions:
+      contents: read
+      # CodSpeed identifies the repository with an OIDC token. It needs no secret.
+      id-token: write
+    env:
+      PYTHONHASHSEED: "0"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: |
+          uv python install ${{ needs.python-versions.outputs.newest-version }}
+          uv venv --python ${{ needs.python-versions.outputs.newest-version }}
+
+      # --no-install-project: installing the project would build the Rust extension.
+      - name: Install dependencies
+        run: uv sync --all-extras --no-install-project
+
+      # No Rust build: the benchmarks measure the release wheel of a wheel job.
+      - name: Install the built wheel
+        uses: ./.github/actions/install-built-wheel
+        with:
+          artifacts: ${{ matrix.wheels }}
+          wheel-pattern: ${{ fromJSON(needs.python-versions.outputs.wheel-patterns-json)[needs.python-versions.outputs.newest-version] }}
+
+      - name: Run the benchmarks
+        uses: CodSpeedHQ/action@373d6868929f444bc08d901fd0eb0ad52a8875ea # v5.2.1
+        with:
+          run: uv run --no-sync pytest python/benchmark/http_benchmark.py -p no:django --codspeed
+          mode: ${{ matrix.mode }}
+
   # Build wheels for Linux x86_64 (covers most Linux users including Arch)
   linux-amd64:
     name: Build wheels on Linux x86_64 (${{ matrix.build.name }})

@@ -219,6 +219,11 @@ save-bench host=host port=port c=c n=n p=p workers=workers:
     echo "=== ROOT RPS ==="
     grep "Reqs/sec" python/benchmark/BENCHMARK.md | head -2
 
+# CodSpeed benchmarks of the production request path. This runs each case one
+# time as a check. The codspeed job of CI.yml measures them.
+bench-codspeed:
+    uv run pytest python/benchmark/http_benchmark.py -p no:django -s -vv
+
 # Build and run benchmark
 build-bench: build save-bench
 

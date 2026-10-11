@@ -29,8 +29,8 @@ use bolt_core::middleware;
 use bolt_core::middleware::auth::populate_auth_context;
 use bolt_core::request::PyRequest;
 use bolt_core::request_pipeline::{
-    build_validation_error_response, extract_headers, query_sequences, set_query_sequences,
-    validate_and_cache_source, validate_and_cache_typed_params, EMPTY_TYPES,
+    build_validation_error_response, extract_cookie_header, extract_headers, query_sequences,
+    set_query_sequences, validate_and_cache_source, validate_and_cache_typed_params, EMPTY_TYPES,
 };
 use bolt_core::response_builder;
 use bolt_core::response_meta::ResponseMeta;
@@ -41,7 +41,9 @@ use bolt_core::streaming::{create_python_stream, create_sse_stream, StreamConfig
 use bolt_core::type_coercion::{
     coerced_value_to_py, string_map_to_py_dict, CoercedValue, TypeHints,
 };
-use bolt_core::validation::{parse_cookies_inline, validate_auth_and_guards, AuthGuardResult};
+use bolt_core::validation::{
+    parse_cookies_inline, parse_selected_cookies, validate_auth_and_guards, AuthGuardResult,
+};
 
 use std::future::Future;
 use std::pin::Pin;
@@ -869,11 +871,8 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
     let needs_form_parsing = plan.is_some_and(|p| p.needs_form_parsing());
     let has_route_auth_or_guards = plan.is_some_and(|p| p.has_auth_or_guards());
     let has_route_rate_limit = plan.is_some_and(|p| p.has_rate_limit());
-    let must_extract_headers = needs_headers
-        || needs_cookies
-        || needs_form_parsing
-        || has_route_auth_or_guards
-        || has_route_rate_limit;
+    let must_extract_headers =
+        needs_headers || needs_form_parsing || has_route_auth_or_guards || has_route_rate_limit;
     let skip_cors = plan.is_some_and(|p| p.skip_cors());
     let skip_compression = plan.is_some_and(|p| p.skip_compression());
     let can_sync_dispatch = plan.is_some_and(|p| p.can_sync_dispatch());
@@ -984,11 +983,33 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
     // Optimization: Only parse cookies if handler needs them
     // Cookie parsing can be expensive for requests with many cookies
     let mut cookies = if needs_cookies {
-        Some(parse_cookies_inline(
+        let cookie_header = if let Some(headers) = &headers {
             headers
-                .as_ref()
-                .and_then(|h| h.get("cookie").map(|s| s.as_str())),
-        ))
+                .get("cookie")
+                .map(|value| Cow::Borrowed(value.as_str()))
+        } else {
+            match extract_cookie_header(&req, state.max_header_size) {
+                Ok(value) => value,
+                Err(response) => return response,
+            }
+        };
+        Some(
+            if let Some(meta) = route_metadata.filter(|meta| meta.prebind_only) {
+                parse_selected_cookies(
+                    cookie_header.as_deref(),
+                    |name| {
+                        meta.rust_arg_bindings.as_ref().is_some_and(|bindings| {
+                            bindings.iter().any(|binding| {
+                                binding.source == RustArgSource::Cookie && binding.key == name
+                            })
+                        })
+                    },
+                    max_param_length,
+                )
+            } else {
+                parse_cookies_inline(cookie_header.as_deref())
+            },
+        )
     } else {
         None
     };
@@ -1449,30 +1470,26 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
         }),
     };
 
-    // ACCESS_LOG: compiler eliminates this entire block when ACCESS_LOG=false (const generic).
-    // When ACCESS_LOG=true, log method/path/status/duration via Django's logger.
-    // The level follows the status, like Django's runserver: 5xx error, 4xx warning, else info.
     if ACCESS_LOG {
-        // access_log_start is always Some when ACCESS_LOG=true; unwrap is safe.
-        let dur_ms = access_log_start.unwrap().elapsed().as_secs_f64() * 1000.0;
         let status = response.status().as_u16();
-        let level = if status >= 500 {
-            "error"
+        let (bit, level) = if status >= 500 {
+            (4, "error")
         } else if status >= 400 {
-            "warning"
+            (2, "warning")
         } else {
-            "info"
+            (1, "info")
         };
-        // Format OUTSIDE the GIL — only the logger call itself needs Python.
-        let msg = format!("{} {} {} {:.1}ms", method, path, status, dur_ms);
-        // access_logger is always Some when ACCESS_LOG=true (guaranteed by server.rs startup).
-        Python::attach(|py| {
-            let _ = state
-                .access_logger
-                .as_ref()
-                .unwrap()
-                .call_method1(py, level, (msg,));
-        });
+        if state.access_log_levels & bit != 0 {
+            let dur_ms = access_log_start.unwrap().elapsed().as_secs_f64() * 1000.0;
+            let msg = format!("{} {} {} {:.1}ms", method, path, status, dur_ms);
+            Python::attach(|py| {
+                let _ = state
+                    .access_logger
+                    .as_ref()
+                    .unwrap()
+                    .call_method1(py, level, (msg,));
+            });
+        }
     }
 
     response

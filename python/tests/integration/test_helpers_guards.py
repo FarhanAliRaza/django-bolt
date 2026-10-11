@@ -155,6 +155,52 @@ def test_terminate_process_stops_a_child_that_outlives_its_parent(tmp_path):
             os.killpg(process.pid, signal.SIGKILL)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Process groups are POSIX.")
+def test_terminate_process_allows_supervised_child_to_finish_cleanup(tmp_path):
+    child = """
+import signal
+import time
+from pathlib import Path
+
+def stop(*_):
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    time.sleep(0.5)
+    Path("saved").touch()
+    raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, stop)
+Path("ready").touch()
+while True:
+    time.sleep(0.01)
+"""
+    parent = f"""
+import signal
+import subprocess
+import sys
+import time
+
+def stop(*_):
+    time.sleep(0.1)
+    child.terminate()
+
+signal.signal(signal.SIGTERM, stop)
+child = subprocess.Popen([sys.executable, "-c", {child!r}])
+raise SystemExit(child.wait())
+"""
+    process = helpers._spawn_process([sys.executable, "-c", parent], cwd=tmp_path, env=dict(os.environ))
+    try:
+        deadline = time.monotonic() + 10
+        while not (tmp_path / "ready").exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert (tmp_path / "ready").exists(), "Child did not start"
+        stdout, stderr = helpers._terminate_process(process)
+        assert process.returncode == 0, stdout + stderr
+        assert (tmp_path / "saved").exists(), "Shutdown interrupted the child's cleanup"
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+
+
 def test_parallel_workers_get_disjoint_ports_outside_the_ephemeral_range(monkeypatch):
     """Each pytest-xdist worker hands out server ports from its own block.
 

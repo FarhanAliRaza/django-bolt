@@ -14,6 +14,7 @@ except ImportError:
     django_settings = None
 
 from . import _json
+from ._core import resolve_response_file
 from .cookies import Cookie, make_delete_cookie
 
 if TYPE_CHECKING:
@@ -249,42 +250,7 @@ class FileResponse(CookieMixin):
         status_code: int = 200,
         headers: dict[str, str] | None = None,
     ):
-        # SECURITY: Validate and canonicalize path to prevent traversal
-
-        # Convert to absolute path and resolve any .. or symlinks
-        try:
-            resolved_path = Path(path).resolve()
-        except (OSError, RuntimeError) as e:
-            raise ValueError(f"Invalid file path: {e}") from e
-
-        # Check if the file exists and is a regular file (not a directory or special file)
-        if not resolved_path.exists():
-            raise FileNotFoundError(f"File not found: {path}")
-
-        if not resolved_path.is_file():
-            raise ValueError(f"Path is not a regular file: {path}")
-
-        # Check against allowed directories if configured (using cached value)
-        if _ALLOWED_FILE_PATHS_CACHE is not None:
-            # Ensure the resolved path is within one of the allowed directories
-            is_allowed = False
-            for allowed_path in _ALLOWED_FILE_PATHS_CACHE:
-                try:
-                    # Check if resolved_path is relative to allowed_path
-                    resolved_path.relative_to(allowed_path)
-                    is_allowed = True
-                    break
-                except ValueError:
-                    # Not a subpath, continue checking
-                    continue
-
-            if not is_allowed:
-                raise PermissionError(
-                    f"File path '{path}' is not within allowed directories. "
-                    f"Configure BOLT_ALLOWED_FILE_PATHS in Django settings."
-                )
-
-        self.path = str(resolved_path)
+        self.path = resolve_response_file(path, _ALLOWED_FILE_PATHS_CACHE)
         self.media_type = media_type
         self.filename = filename
         self.status_code = status_code

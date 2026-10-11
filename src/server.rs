@@ -1,9 +1,6 @@
 use actix_http::KeepAlive;
 use actix_web::{
-    self as aw,
-    http::header::HeaderValue,
-    middleware::{NormalizePath, TrailingSlash},
-    web, App, HttpRequest, HttpResponse, HttpServer,
+    self as aw, http::header::HeaderValue, web, App, HttpRequest, HttpResponse, HttpServer,
 };
 use ahash::AHashMap;
 use pyo3::prelude::*;
@@ -519,31 +516,21 @@ fn read_cors_and_file_scopes(
     Ok((global_cors_config, static_files_config, media_files_config))
 }
 
-/// Read the `django.server` logger once. The access log is on when that
-/// logger takes WARNING: it still gets the 4xx and 5xx lines, and its own
-/// level check drops the INFO lines.
-fn read_access_logger(py: Python<'_>) -> (bool, Option<Py<PyAny>>) {
-    let logging = match py.import("logging") {
-        Ok(m) => m,
-        Err(_) => return (false, None),
-    };
-    let warning_level: i32 = match logging.getattr("WARNING").and_then(|v| v.extract()) {
-        Ok(v) => v,
-        Err(_) => return (false, None),
-    };
-    let logger = match logging.call_method1("getLogger", ("django.server",)) {
-        Ok(l) => l,
-        Err(_) => return (false, None),
-    };
-    let enabled = logger
-        .call_method1("isEnabledFor", (warning_level,))
-        .and_then(|v| v.extract::<bool>())
-        .unwrap_or(false);
-    if enabled {
-        (true, Some(logger.unbind()))
-    } else {
-        (false, None)
+/// Read each access-log level once, before workers start.
+fn read_access_logger(py: Python<'_>) -> PyResult<(u8, Option<Py<PyAny>>)> {
+    let logger = py
+        .import("logging")?
+        .call_method1("getLogger", ("django.server",))?;
+    let mut levels = 0;
+    for (bit, level) in [(1, 20), (2, 30), (4, 40)] {
+        if logger
+            .call_method1("isEnabledFor", (level,))?
+            .extract::<bool>()?
+        {
+            levels |= bit;
+        }
     }
+    Ok((levels, (levels != 0).then(|| logger.unbind())))
 }
 
 /// Give each route without its own CORS config the global config, unless the
@@ -764,7 +751,8 @@ pub fn start_server(
     });
 
     let max_payload_size = config.max_payload_size;
-    let (access_log_enabled, access_logger_obj) = read_access_logger(py);
+    let (access_log_levels, access_logger_obj) = read_access_logger(py)?;
+    let access_log_enabled = access_log_levels != 0;
 
     let mut metadata = ROUTE_METADATA_TEMP.get().cloned().unwrap_or_default();
     inject_global_cors(&mut metadata, config.global_cors_config.as_ref());
@@ -805,6 +793,7 @@ pub fn start_server(
         static_files_config: config.static_files_config,
         media_files_config: config.media_files_config,
         access_logger: access_logger_obj,
+        access_log_levels,
     });
 
     py.detach(|| {
@@ -830,7 +819,7 @@ pub fn start_server(
                             .app_data(web::PayloadConfig::new(max_payload_size)) // Configure max request body size from BOLT_MAX_UPLOAD_SIZE
                             // MergeOnly: only normalize // -> / (not trailing slashes)
                             // Trailing slash redirects are handled in handler.rs on 404
-                            .wrap(NormalizePath::new(TrailingSlash::MergeOnly))
+                            .wrap(crate::normalize::MergeSlashes)
                             .wrap(CorsMiddleware::new()) // Add CORS headers to all responses
                             .wrap(CompressionMiddleware::new()); // Respects Content-Encoding: identity from skip_compression
 

@@ -51,3 +51,10 @@ def test_access_log_at_warning_keeps_only_errors(make_server_project):
     assert not any("/health" in line for line in lines)
     assert any(line.startswith("WARNING GET /gone 404") for line in lines)
     assert any(line.startswith("ERROR GET /down 503") for line in lines)
+
+
+@pytest.mark.server_integration
+def test_access_log_at_error_keeps_server_errors(make_server_project):
+    lines = _run(make_server_project, "ERROR")
+    assert any(line.startswith("ERROR GET /down 503") for line in lines)
+    assert not any("/health" in line or "/gone" in line or "/teapot" in line for line in lines)

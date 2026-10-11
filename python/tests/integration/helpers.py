@@ -306,10 +306,10 @@ def _python_list_literal(items: list[str]) -> str:
 def _terminate_process(process: subprocess.Popen[str], timeout: float = 5.0) -> tuple[str, str]:
     """Stop the process and its process group, and return their output.
 
-    On POSIX, ``_spawn_process`` makes the process a group leader, so the group
-    id is its pid. The group gets the signals also when the leader already
-    exited: a child, such as a ``runbolt --dev`` worker, can outlive it and
-    keep the output pipes open. No wait is without a limit.
+    Let a live supervisor stop its children before signalling the group.
+    A second SIGTERM can interrupt a child's coverage write during shutdown.
+    Signal the group if its leader exited or graceful shutdown times out.
+    All waits have a limit.
     """
     if platform.system() == "Windows":
         if process.poll() is None:
@@ -317,7 +317,10 @@ def _terminate_process(process: subprocess.Popen[str], timeout: float = 5.0) -> 
                 process.send_signal(signal.CTRL_BREAK_EVENT)
     else:
         with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGTERM)
+            if process.poll() is None:
+                process.terminate()
+            else:
+                os.killpg(process.pid, signal.SIGTERM)
 
     try:
         return process.communicate(timeout=timeout)
@@ -327,7 +330,12 @@ def _terminate_process(process: subprocess.Popen[str], timeout: float = 5.0) -> 
                 process.kill()
         else:
             with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
+                os.killpg(process.pid, signal.SIGTERM)
+            try:
+                return process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
     return process.communicate(timeout=timeout)
 
 

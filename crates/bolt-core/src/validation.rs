@@ -21,6 +21,27 @@ pub fn parse_cookies_inline(cookie_header: Option<&str>) -> AHashMap<String, Str
     cookies
 }
 
+/// Keep selected values and oversized values for the existing validation pass.
+/// Later duplicate values replace earlier values, including oversized ones.
+pub fn parse_selected_cookies(
+    header: Option<&str>,
+    selected: impl Fn(&str) -> bool,
+    max_length: usize,
+) -> AHashMap<String, String> {
+    let mut cookies = AHashMap::new();
+    if let Some(header) = header {
+        for (name, value) in cookie_pairs(header) {
+            if selected(name) || value.len() > max_length {
+                cookies.insert(name.to_owned(), value.into_owned());
+            } else {
+                // Remove an earlier oversized value with this unselected name.
+                cookies.remove(name);
+            }
+        }
+    }
+    cookies
+}
+
 /// Result of authentication and guard evaluation
 #[derive(Debug)]
 pub enum AuthGuardResult {
@@ -230,7 +251,28 @@ mod tests {
     use crate::permissions::{ClaimKey, Guard, Quantifier};
     use proptest::prelude::*;
 
+    #[test]
+    fn selected_cookies_keep_limits_and_last_duplicate() {
+        let cookies = parse_selected_cookies(
+            Some("a=first; other=oversized; a=last; other=ok; big=toolong"),
+            |name| name == "a",
+            5,
+        );
+        assert_eq!(cookies.get("a").map(String::as_str), Some("last"));
+        assert!(!cookies.contains_key("other"));
+        assert_eq!(cookies.get("big").map(String::as_str), Some("toolong"));
+    }
+
     proptest! {
+        #[test]
+        fn selected_cookies_preserve_last_values_and_length_checks(header in ".{0,256}") {
+            let full = parse_cookies_inline(Some(&header));
+            let selected = parse_selected_cookies(Some(&header), |name| name == "a", 8);
+            let expected: AHashMap<_, _> = full.into_iter()
+                .filter(|(name, value)| name == "a" || value.len() > 8).collect();
+            prop_assert_eq!(selected, expected);
+        }
+
         #[test]
         fn an_origin_matches_its_own_host(
             https in any::<bool>(),

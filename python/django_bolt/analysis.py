@@ -289,7 +289,7 @@ class OrmVisitor(ast.NodeVisitor):
             self.analysis.request_needs_query = True
         elif attr_name == "headers":
             self.analysis.request_needs_headers = True
-        elif attr_name == "cookies":
+        elif attr_name in {"cookies", "raw_cookies"}:
             self.analysis.request_needs_cookies = True
         elif attr_name == "META":
             self.analysis.request_needs_headers = True
@@ -299,13 +299,16 @@ class OrmVisitor(ast.NodeVisitor):
         elif attr_name == "build_absolute_uri":
             self.analysis.request_needs_headers = True
             self.analysis.request_needs_query = True
+        elif attr_name not in {"method", "path", "params", "context", "state", "user", "auser"}:
+            # Unknown methods and descriptors can read any request component.
+            self._mark_all_request_components()
 
     def _mark_all_request_components(self) -> None:
         for attr_name in ("body", "query", "headers", "cookies"):
             self._mark_request_component_attr(attr_name)
 
     def _mark_request_component_key(self, key: str) -> None:
-        if key in {"body", "query", "headers", "cookies", "META", "get_full_path", "build_absolute_uri"}:
+        if key in {"body", "query", "headers", "cookies", "raw_cookies", "META", "get_full_path", "build_absolute_uri"}:
             self._mark_request_component_attr(key)
 
     def _check_for_objects_chain(self, node: ast.AST) -> bool:
@@ -385,6 +388,14 @@ class OrmVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         """Detect function calls that might be blocking."""
+        if isinstance(node.func, ast.Attribute) and self._is_request_name(node.func.value) and node.func.attr == "get":
+            if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                self._mark_request_component_key(node.args[0].value)
+            else:
+                self._mark_all_request_components()
+            for argument in (*node.args, *node.keywords):
+                self.visit(argument)
+            return
         # Check for direct blocking function calls
         if isinstance(node.func, ast.Name):
             func_name = node.func.id
@@ -396,13 +407,6 @@ class OrmVisitor(ast.NodeVisitor):
         elif isinstance(node.func, ast.Attribute):
             if self._is_request_name(node.func.value):
                 self._mark_request_component_attr(node.func.attr)
-                if node.func.attr == "get" and node.args:
-                    key = node.args[0]
-                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
-                        self._mark_request_component_key(key.value)
-                    else:
-                        # A key known only at run time can name any part.
-                        self._mark_all_request_components()
 
             # e.g., requests.get(), time.sleep()
             if isinstance(node.func.value, ast.Name):

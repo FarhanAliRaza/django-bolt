@@ -4,7 +4,9 @@ use bolt_core::request::PyRequest;
 
 mod dev_reload;
 mod handler;
+mod normalize;
 mod response_body;
+mod response_helpers;
 mod server;
 mod testing;
 
@@ -42,6 +44,15 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 // stream, or connection.
 #[pymodule(gil_used = false)]
 fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(response_helpers::format_cookie_date, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        response_helpers::resolve_response_file,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        response_helpers::populate_response_cookies,
+        m
+    )?)?;
     use crate::dev_reload::run_dev_reloader;
     use crate::server::{
         register_asgi_mounts, register_middleware_metadata, register_routes,

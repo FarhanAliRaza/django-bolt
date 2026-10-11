@@ -309,6 +309,33 @@ pub fn extract_headers(
     Ok(headers)
 }
 
+/// Validate every header but copy only repeated Cookie lines.
+pub fn extract_cookie_header(
+    req: &HttpRequest,
+    max_header_size: usize,
+) -> Result<Option<Cow<'_, str>>, HttpResponse> {
+    let mut cookie: Option<Cow<'_, str>> = None;
+    for (index, (name, value)) in req.headers().iter().enumerate() {
+        if index >= 100 {
+            return Err(responses::error_400_too_many_headers());
+        }
+        if let Ok(value) = value.to_str() {
+            if value.len() > max_header_size {
+                return Err(responses::error_400_header_too_large(max_header_size));
+            }
+            if name == actix_web::http::header::COOKIE {
+                if let Some(joined) = cookie.as_mut() {
+                    joined.to_mut().push_str("; ");
+                    joined.to_mut().push_str(value);
+                } else {
+                    cookie = Some(Cow::Borrowed(value));
+                }
+            }
+        }
+    }
+    Ok(cookie)
+}
+
 /// Add one header line to `headers`. `name` must be lowercase.
 ///
 /// Django joins repeated `Cookie` lines with `"; "`, so each line counts.

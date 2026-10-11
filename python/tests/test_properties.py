@@ -24,11 +24,16 @@ from hypothesis import example, given
 from hypothesis import strategies as st
 
 from django_bolt import BoltAPI
-from django_bolt.param_functions import Form, Query
+from django_bolt.param_functions import Cookie, Form, Query
 from django_bolt.responses import JSON
 from django_bolt.testing import TestClient
 
 api = BoltAPI()
+
+
+@api.get("/selected-cookie")
+def selected_cookie(a: Annotated[str, Cookie()] = "missing"):
+    return {"a": a}
 
 
 @api.get("/query")
@@ -362,3 +367,11 @@ def test_a_cookie_value_above_latin1_is_not_set(client, value, other, at):
     response = client.get("/set-cookie", params={"v": value[:at] + other + value[at:]})
     assert response.status_code == 200
     assert "set-cookie" not in response.headers
+
+
+@given(parts=st.lists(st.sampled_from(["a=x", "a=y", 'a="a\\054b"', "unused=z", "a=", "bare"]), max_size=20))
+def test_selected_cookie_matches_django(client, parts):
+    header = "; ".join(parts)
+    response = client.get("/selected-cookie", headers={"cookie": header})
+    assert response.status_code == 200
+    assert response.json() == {"a": parse_cookie(header).get("a", "missing")}

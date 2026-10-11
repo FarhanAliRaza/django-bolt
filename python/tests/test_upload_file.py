@@ -190,6 +190,18 @@ class TestUploadFileClass:
 class TestUploadFileValidation:
     """Test file upload validation with File() constraints."""
 
+    @pytest.mark.parametrize("allowed_types", ["image/*", b"image/*", ["image/*", 3]], ids=["str", "bytes", "int-item"])
+    def test_allowed_types_that_is_not_a_list_of_str_fails_loudly(self, allowed_types):
+        """A str is a sequence of characters. "image/*" gave "*", and "*" allowed each type."""
+        with pytest.raises(TypeError, match="takes a list of MIME types"):
+            File(allowed_types=allowed_types)
+
+    @pytest.mark.parametrize("allowed_types", [[], ()], ids=["list", "tuple"])
+    def test_empty_allowed_types_fails_loudly(self, allowed_types):
+        """An empty list allowed each type. A list with no type must not do that."""
+        with pytest.raises(ValueError, match="allows no file type"):
+            File(allowed_types=allowed_types)
+
     def test_max_size_validation_pass(self):
         """Test that file within max size passes."""
         api = BoltAPI()

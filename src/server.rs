@@ -726,6 +726,11 @@ pub fn start_server(
         ));
     }
 
+    // Read the Django settings ONCE at startup, not per request. The test
+    // client reads them with the same function. A bad setting fails here,
+    // before the runtime and the loop thread start.
+    let config = ServerConfig::from_django_settings(py)?;
+
     // Read the environment variables of the server process before anything
     // starts. runbolt sets most of them from its options. An invalid value
     // raises ImproperlyConfigured.
@@ -792,9 +797,6 @@ pub fn start_server(
         });
     });
 
-    // Read the Django settings ONCE at startup, not per request. The test
-    // client reads them with the same function.
-    let config = ServerConfig::from_django_settings(py)?;
     let max_payload_size = config.max_payload_size;
     let (access_log_enabled, access_logger_obj) = read_access_logger(py);
 
@@ -822,6 +824,7 @@ pub fn start_server(
         cors_origin_regexes,
         global_compression_config: global_compression_config.clone(),
         trusted_proxies: config.trusted_proxies,
+        rate_limiters: Arc::default(),
         router: Arc::clone(GLOBAL_ROUTER.get().expect("checked at the start")),
         route_metadata,
         asgi_mounts: GLOBAL_ASGI_MOUNTS.get().cloned().unwrap_or_default(),

@@ -20,6 +20,7 @@ uv run pytest python/tests/test_syntax.py::test_name -s -vv
 just lint                  # ruff on everything; `just lint-lib` must always pass
 just format
 just save-bench            # benchmarks → python/benchmark/BENCHMARK.md (needs bombardier)
+just bench-codspeed        # CodSpeed cases, one run each; CI measures them per PR
 python manage.py runbolt --dev              # from python/example
 just release VERSION=0.2.2 [DRY_RUN=1]      # bump, commit, tag, push
 ```

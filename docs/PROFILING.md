@@ -6,6 +6,7 @@ different altitudes — use the right one for the change you're making:
 | Layer | Tool | Proves | Command |
 |---|---|---|---|
 | Macro HTTP | bombardier | End-to-end RPS + latency distribution | `just save-bench` |
+| CPU per request | CodSpeed | Instructions per request on the production path, in each pull request | `just bench-codspeed` |
 
 Suggested proof discipline per optimization PR: `just save-bench` shows the
 win survives end-to-end → a before/after flamegraph pair as the narrative
@@ -32,6 +33,20 @@ Attribution tools: `py-spy record --gil` (Task machinery shows up as
 `ensure_future`), `strace -f -c -p <pid>` (cross-thread wakeup writes and
 `epoll_pwait`s per request). Disable access logging first — the Python logging
 stack is large enough (~35-40% of GIL samples) to drown the signal.
+
+## CodSpeed benchmarks
+
+`python/benchmark/http_benchmark.py` sends the requests of `just save-bench` to
+the real `runbolt` server, in the pytest process. The CodSpeed workflow runs
+them under CPU simulation in each pull request. It counts the CPU instructions
+of all threads, so the count includes the server work for each request. A count
+does not change with the load of the machine. Over three runs, each case
+stayed within 0.5%. Use it to find a regression. Use bombardier for throughput
+under concurrency, which a count does not show.
+
+```bash
+just bench-codspeed      # runs each case one time as a check; it measures nothing
+```
 
 ## Macro HTTP benchmarks
 

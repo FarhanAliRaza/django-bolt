@@ -120,7 +120,7 @@ def test_mount_asgi_client_ignores_forwarding_headers_from_an_untrusted_peer():
         ]:
             response = client.get("/mounted", headers={header: value})
             assert response.status_code == 204
-            assert captured["client"][0] != "203.0.113.10", header
+            assert captured["client"][0] == "127.0.0.1", header
 
 
 def test_mount_asgi_longest_prefix_wins():

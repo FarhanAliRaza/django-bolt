@@ -143,12 +143,17 @@ def test_health_checks_replace_the_dead_connection_before_the_query(make_server_
         assert server.get("/me", headers=headers).status_code == 200
 
 
-# Django's connection pool gives a connection to a thread again after ``close()``.
-# psycopg checks a connection on checkout only with the ``check`` option.
+# The pool keeps more connections than the threads hold, so the kill also
+# ends idle connections of the pool.
+POOL = """
+DATABASES["default"]["OPTIONS"] = {"pool": {"min_size": 8, "max_size": 12}}
+"""
 POOL_WITH_CHECK = """
 from psycopg_pool import ConnectionPool
-DATABASES["default"]["OPTIONS"] = {"pool": {"min_size": 1, "max_size": 8, "check": ConnectionPool.check_connection}}
+DATABASES["default"]["OPTIONS"] = {"pool": {"min_size": 8, "max_size": 12, "check": ConnectionPool.check_connection}}
 """
+# After the second failed check in one checkout, the pool sleeps 0.9 s or more.
+RECONNECT_BUDGET = 0.5
 
 
 def query_each_orm_thread(server, count: int) -> list[str]:
@@ -158,7 +163,12 @@ def query_each_orm_thread(server, count: int) -> list[str]:
 
 
 @pytest.mark.parametrize(
-    "settings_extra", [pytest.param("", id="persistent"), pytest.param(POOL_WITH_CHECK, id="pool")]
+    "settings_extra",
+    [
+        pytest.param("", id="persistent"),
+        pytest.param(POOL, id="pool"),
+        pytest.param(POOL_WITH_CHECK, id="pool-check"),
+    ],
 )
 def test_one_dead_connection_retires_the_connections_of_every_thread(
     make_server_project, postgres_database, settings_extra
@@ -168,7 +178,8 @@ def test_one_dead_connection_retires_the_connections_of_every_thread(
     The first call that meets a dead connection fails. Every thread then
     reconnects before its next call, so no other call fails. Before, each
     thread failed one call of its own: here, three ORM threads and the thread
-    that loads ``request.user``.
+    that loads ``request.user``. With a pool, the reconnects must not meet the
+    dead connections of the pool, or the pool sleeps before each next one.
     """
     orm_threads = 4
     server, application_name = start_server(
@@ -182,7 +193,11 @@ def test_one_dead_connection_retires_the_connections_of_every_thread(
         assert killed > orm_threads, "the server did not keep a connection on each thread"
 
         assert query_each_orm_thread(server, 1) == ["OperationalError"]
+        started = time.monotonic()
+        assert query_each_orm_thread(server, 1) == ["ok"]
         assert query_each_orm_thread(server, orm_threads) == ["ok"] * orm_threads
+        took = time.monotonic() - started
+        assert took < RECONNECT_BUDGET, f"the calls after the failure took {took:.1f} s: the pool slept"
         recovered = server.get("/me", headers=headers)
         assert recovered.status_code == 200, recovered.text
         assert recovered.json() == {"username": USERNAME}

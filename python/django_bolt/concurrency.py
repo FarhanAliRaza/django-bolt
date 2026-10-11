@@ -61,12 +61,13 @@ def _drop_broken_connections() -> None:
     state is off by design, and the block restores it on exit. Django's test
     client skips ``close_old_connections`` for the same reason.
     """
-    died = False
-    for conn in connections.all(initialized_only=True):
-        if not conn.in_atomic_block and _close_if_unusable_or_obsolete(conn):
-            died = True
-    if died:
-        _advance_connection_generation()
+    dead = [
+        conn
+        for conn in connections.all(initialized_only=True)
+        if not conn.in_atomic_block and _close_if_unusable_or_obsolete(conn)
+    ]
+    if dead:
+        _connections_died(dead)
 
 
 def _close_if_unusable_or_obsolete(conn) -> bool:
@@ -112,6 +113,29 @@ def _advance_connection_generation() -> None:
         _connection_generation += 1
 
 
+def _connections_died(dead: list) -> None:
+    """Make every thread reconnect, and drop the dead idle connections of the pools of ``dead``."""
+    _advance_connection_generation()
+    for conn in dead:
+        pool = getattr(conn, "pool", None)
+        if pool is not None:
+            # The event that ended this connection usually ended the idle
+            # connections of its pool too. getconn() checks them one at a
+            # time, and it sleeps after each one that fails: 0, 1, 2, 4 s and
+            # so on. check() tests all of them in one pass and replaces the
+            # dead ones.
+            pool.check()
+
+
+def _discard(conn) -> None:
+    """Close ``conn``. A pool does not give it to a thread again."""
+    if getattr(conn, "pool", None) is not None:
+        # close() returns a pooled connection to its pool, and the pool gives
+        # it to a thread again. The pool drops a closed connection.
+        conn.connection.close()
+    conn.close()
+
+
 def _close_connections_of_older_generations() -> None:
     """Close the calling thread's connections that opened before a connection was last found dead."""
     generation = _connection_generation
@@ -126,7 +150,7 @@ def _close_connections_of_older_generations() -> None:
             closed_all = False
         # The TestClient shares one connection between threads. Its owner closes it.
         elif not getattr(conn, _SHARED_TEST_CONNECTION_ATTR, False):
-            conn.close()
+            _discard(conn)
     if closed_all:
         _checked.generation = generation
 
@@ -224,12 +248,13 @@ def close_lane_request() -> None:
     Bolt does not see a database error that user code handles, or one from a
     direct ``sync_to_async`` call. Django does this check on ``request_finished``.
     """
-    died = False
-    for conn in connections.all(initialized_only=True):
-        if conn.errors_occurred and not conn.in_atomic_block and _close_if_unusable_or_obsolete(conn):
-            died = True
-    if died:
-        _advance_connection_generation()
+    dead = [
+        conn
+        for conn in connections.all(initialized_only=True)
+        if conn.errors_occurred and not conn.in_atomic_block and _close_if_unusable_or_obsolete(conn)
+    ]
+    if dead:
+        _connections_died(dead)
 
 
 def close_lane_connections() -> None:

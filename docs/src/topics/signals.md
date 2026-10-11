@@ -47,23 +47,9 @@ DATABASES = {
 
 The check before each call costs about 2 µs per open connection. Leave both settings unset to skip it. For PostgreSQL, a connection pool is the better option. See [Database connections](../getting-started/deployment.md#database-connections) in the deployment guide.
 
-With Django's connection pool (`OPTIONS["pool"]`), `CONN_MAX_AGE` must be `0`. With `CONN_HEALTH_CHECKS` on, the check before each call then returns the connection to the pool and gets a connection again. Leave it off, and set the `check` option of the pool. When a thread closes a connection, Django returns it to the pool. The pool then gives it to a thread again. A connection that the database closed looks fine to the pool until it is used. With `check`, the pool tests each connection before it gives it to a thread, and replaces a dead one:
+With Django's connection pool (`OPTIONS["pool"]`), `CONN_MAX_AGE` must be `0`. With `CONN_HEALTH_CHECKS` on, the check before each call then returns the connection to the pool and gets a connection again. Leave it off.
 
-```python
-from psycopg_pool import ConnectionPool
-
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": "mydb",
-        "OPTIONS": {
-            "pool": {"check": ConnectionPool.check_connection},
-        },
-    }
-}
-```
-
-Without `check`, each dead connection in the pool fails one request.
+Bolt also keeps the pool clean after a database restart. Django returns a connection to the pool when a thread closes it, and the pool gives it to a thread again. Thus Bolt closes the older connections of each thread before it returns them, and the pool drops them. The restart also killed the idle connections of the pool. The pool checks idle connections one at a time, and it sleeps after each one that fails: 0, 1, 2, 4 s and so on. Thus, when Bolt finds a dead connection, it also runs `check()` of its pool. That tests all the idle connections in one pass and replaces the dead ones. The `check` option of the pool is not necessary for this.
 
 ### Third-Party Packages
 

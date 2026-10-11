@@ -273,7 +273,8 @@ def _add_file_constraints(param: Param, part_name: str, target: dict[str, dict[s
     """Record the File() constraints of one multipart part in ``target``, by the part name.
 
     Rust checks each uploaded file against the constraints of its part name.
-    A File() with no constraints adds no entry.
+    A File() with no constraints adds no entry. Two declarations of one part
+    with different constraints raise ImproperlyConfigured, so no constraint is lost.
     """
     constraints: dict[str, Any] = {}
     if param.max_size is not None:
@@ -284,8 +285,15 @@ def _add_file_constraints(param: Param, part_name: str, target: dict[str, dict[s
         constraints["allowed_types"] = list(param.allowed_types)
     if param.max_files is not None:
         constraints["max_files"] = param.max_files
-    if constraints:
-        target[part_name] = constraints
+    if not constraints:
+        return
+    existing = target.get(part_name)
+    if existing is not None and existing != constraints:
+        raise ImproperlyConfigured(
+            f"Multipart part {part_name!r} has two File() declarations with different constraints: "
+            f"{existing} and {constraints}. Declare the constraints of a part once."
+        )
+    target[part_name] = constraints
 
 
 def _collect_struct_file_constraints(field: Any, target: dict[str, dict[str, Any]]) -> None:

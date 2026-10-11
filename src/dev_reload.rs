@@ -8,6 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const WORKER_STOP_TIMEOUT_RELOAD: Duration = Duration::from_millis(100);
@@ -176,21 +177,22 @@ fn first_relevant_path(event: &Event, filter: &ReloadFilter) -> Option<PathBuf> 
     // written before that sends no event, so look in the new directory. A
     // directory moved into the tree sends one rename event and none for its
     // files, so look in it too.
-    if matches!(
+    new_directories(event, filter).find_map(|path| first_relevant_file_in(path, filter))
+}
+
+/// The directories that a create or rename event adds to the tree.
+fn new_directories<'a>(
+    event: &'a Event,
+    filter: &'a ReloadFilter,
+) -> impl Iterator<Item = &'a PathBuf> {
+    let adds = matches!(
         event.kind,
         EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
-    ) {
-        // read_dir follows a symbolic link, so look only in a real directory.
-        return event
-            .paths
-            .iter()
-            .filter(|path| {
-                !filter.is_ignored(path) && path.symlink_metadata().is_ok_and(|meta| meta.is_dir())
-            })
-            .find_map(|path| first_relevant_file_in(path, filter));
-    }
-
-    None
+    );
+    // read_dir follows a symbolic link, so look only in a real directory.
+    event.paths.iter().filter(move |path| {
+        adds && !filter.is_ignored(path) && path.symlink_metadata().is_ok_and(|meta| meta.is_dir())
+    })
 }
 
 /// The first relevant file in `dir` or its subdirectories. None when `dir` is
@@ -345,7 +347,15 @@ fn recv_change(
 ) -> Result<Option<PathBuf>, String> {
     match rx.recv_timeout(recv_timeout) {
         Ok(Ok(event)) => {
-            let Some(mut changed_path) = first_relevant_path(&event, filter) else {
+            let found = first_relevant_path(&event, filter).or_else(|| {
+                // notify adds the watch on a new directory after it sends the
+                // event. A file written after the scan and before the watch
+                // sends no event. Look again when the watch is surely there.
+                new_directories(&event, filter).next()?;
+                thread::sleep(debounce);
+                first_relevant_path(&event, filter)
+            });
+            let Some(mut changed_path) = found else {
                 return Ok(None);
             };
 
@@ -609,13 +619,19 @@ pub fn run_dev_reloader(
 
 #[cfg(test)]
 mod tests {
-    use super::{first_relevant_path, is_temporary_path, terminal_worker_exit_code, ReloadFilter};
+    use super::{
+        first_relevant_path, is_temporary_path, recv_change, terminal_worker_exit_code,
+        ReloadFilter,
+    };
     use notify::{
         event::{CreateKind, ModifyKind, RenameMode},
         Event, EventKind,
     };
     use std::path::PathBuf;
     use std::process::{Command, ExitStatus};
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
 
     fn exit_status(code: i32) -> ExitStatus {
         Command::new("sh")
@@ -747,6 +763,38 @@ mod tests {
             first_relevant_path(&create_folder_event(package.clone()), &filter),
             Some(package.join("nested").join("helpers.py"))
         );
+    }
+
+    #[test]
+    fn new_directory_with_a_file_written_after_its_scan_triggers_reload() {
+        // notify sends the event for a new directory before it adds the watch
+        // on it. A file written in that gap sends no event, and the scan on
+        // the event can come before the file.
+        let root = TempDir::new("late-file");
+        let package = root.0.join("newfeature");
+        std::fs::create_dir_all(&package).unwrap();
+        let file = package.join("helpers.py");
+        let filter = ReloadFilter::new(vec![], vec![]);
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok(create_folder_event(package.clone()))).unwrap();
+        let writer = {
+            let file = file.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(50));
+                std::fs::write(file, "VALUE = 1\n").unwrap();
+            })
+        };
+
+        let changed = recv_change(
+            &rx,
+            &filter,
+            Duration::from_millis(500),
+            Duration::from_millis(10),
+        );
+        writer.join().unwrap();
+
+        assert_eq!(changed, Ok(Some(file)));
+        drop(tx);
     }
 
     #[test]

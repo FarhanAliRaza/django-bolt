@@ -71,11 +71,17 @@ def _drop_broken_connections() -> None:
 
 
 def _close_if_unusable_or_obsolete(conn) -> bool:
-    """Run ``conn.close_if_unusable_or_obsolete()``. True when it closed a connection that failed."""
-    failed = conn.connection is not None and conn.errors_occurred
+    """Run ``conn.close_if_unusable_or_obsolete()``. True when it closed a connection that does not answer."""
+    # Django closes a connection with the wrong autocommit before it tests the
+    # connection, so errors_occurred then says nothing about the connection.
+    tested = (
+        conn.connection is not None
+        and conn.errors_occurred
+        and conn.get_autocommit() == conn.settings_dict["AUTOCOMMIT"]
+    )
     conn.close_if_unusable_or_obsolete()
     # Django clears errors_occurred when the connection still answers.
-    return failed and conn.errors_occurred
+    return tested and conn.errors_occurred
 
 
 # A database restart or failover kills every connection of the process at once,

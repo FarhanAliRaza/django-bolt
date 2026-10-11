@@ -241,9 +241,21 @@ def _query_a_missing_table() -> None:
         cursor.execute("SELECT * FROM bolt_no_such_table")
 
 
+def _query_a_missing_table_with_autocommit_off() -> None:
+    # The call ends with autocommit off, so Django closes the connection
+    # before it tests whether the connection answers.
+    connection.set_autocommit(False)
+    _query_a_missing_table()
+
+
 def _orm_threads_api() -> BoltAPI:
     api = BoltAPI()
-    queries = {"select": _select_one, "kill": _kill_silently, "missing-table": _query_a_missing_table}
+    queries = {
+        "select": _select_one,
+        "kill": _kill_silently,
+        "missing-table": _query_a_missing_table,
+        "missing-table-no-autocommit": _query_a_missing_table_with_autocommit_off,
+    }
 
     @api.get("/orm-threads/{query}")
     async def orm_threads(query: str, count: int):
@@ -284,7 +296,8 @@ def test_a_dead_connection_retires_the_connections_of_every_thread(two_orm_threa
 
 
 @pytest.mark.django_db(transaction=True)
-def test_an_error_on_a_connection_that_still_answers_retires_nothing(two_orm_threads):
+@pytest.mark.parametrize("query", ["missing-table", "missing-table-no-autocommit"])
+def test_an_error_on_a_connection_that_still_answers_retires_nothing(two_orm_threads, query):
     """A failed query is not a dead connection. The other thread keeps its connection.
 
     The thread of the error drops its own connection as obsolete: the test
@@ -299,7 +312,7 @@ def test_an_error_on_a_connection_that_still_answers_retires_nothing(two_orm_thr
         assert client.get("/orm-threads/select?count=2").json() == ["ok", "ok"]
         connection_created.connect(count)
         try:
-            assert client.get("/orm-threads/missing-table?count=1").json() == ["OperationalError"]
+            assert client.get(f"/orm-threads/{query}?count=1").json() == ["OperationalError"]
             assert client.get("/orm-threads/select?count=2").json() == ["ok", "ok"]
         finally:
             connection_created.disconnect(count)

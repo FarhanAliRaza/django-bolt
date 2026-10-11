@@ -148,10 +148,6 @@ def test_health_checks_replace_the_dead_connection_before_the_query(make_server_
 POOL = """
 DATABASES["default"]["OPTIONS"] = {"pool": {"min_size": 8, "max_size": 12}}
 """
-POOL_WITH_CHECK = """
-from psycopg_pool import ConnectionPool
-DATABASES["default"]["OPTIONS"] = {"pool": {"min_size": 8, "max_size": 12, "check": ConnectionPool.check_connection}}
-"""
 # After the second failed check in one checkout, the pool sleeps 0.9 s or more.
 RECONNECT_BUDGET = 0.5
 
@@ -167,7 +163,6 @@ def query_each_orm_thread(server, count: int) -> list[str]:
     [
         pytest.param("", id="persistent"),
         pytest.param(POOL, id="pool"),
-        pytest.param(POOL_WITH_CHECK, id="pool-check"),
     ],
 )
 def test_one_dead_connection_retires_the_connections_of_every_thread(

@@ -28,9 +28,10 @@ BOLT_EMIT_SIGNALS = True
 Django Bolt keeps database connections open across requests. Bolt does not need the request signals to manage them:
 
 - Always: a handler, a QuerySet evaluation, or the load of `request.user` on the executor pool can raise. Bolt then runs `close_if_unusable_or_obsolete()` on that thread. Bolt drops the dead connection, and the next request reconnects. The request that met the dead connection fails: the connection looks fine until it is used. Bolt skips a connection inside an open `atomic` block. The next check after the block ends drops it.
+- Always: a database restart or failover kills the connection of each thread at once. When Bolt drops a connection that does not answer, every thread closes its connections that are older before its next call, and reconnects. A request lane does this when its request starts. Thus the first request that meets a dead connection fails, and so can requests that run on other threads at that time. The requests after it serve, on every thread. A query that fails on a connection that still answers, for example on a missing table, closes nothing on the other threads.
 - With a positive `CONN_MAX_AGE` or with `CONN_HEALTH_CHECKS`: Bolt runs the same check before each executor call too. Timed recycling and health checks then work as in Django. A health check finds a dead connection before the query and replaces it, so no request fails.
 
-Neither setting is on by default. A project that sets neither gets the first tier only. After a database failover or a restart of PostgreSQL, one request on each executor thread fails. The ones after it serve. Set `CONN_HEALTH_CHECKS = True` to serve them all. With the default `CONN_MAX_AGE` of `0`, the same check closes the connection as obsolete before every call, so each call reconnects. Set a positive `CONN_MAX_AGE` as well to keep connections between calls.
+Neither setting is on by default. A project that sets neither gets the first two tiers. After a database failover or a restart of PostgreSQL, the first request that meets a dead connection fails. Set `CONN_HEALTH_CHECKS = True` to serve that one too. With the default `CONN_MAX_AGE` of `0`, the same check closes the connection as obsolete before every call, so each call reconnects. Set a positive `CONN_MAX_AGE` as well to keep connections between calls.
 
 ```python
 # settings.py
@@ -45,6 +46,24 @@ DATABASES = {
 ```
 
 The check before each call costs about 2 µs per open connection. Leave both settings unset to skip it. For PostgreSQL, a connection pool is the better option. See [Database connections](../getting-started/deployment.md#database-connections) in the deployment guide.
+
+With Django's connection pool (`OPTIONS["pool"]`), `CONN_MAX_AGE` must be `0`. With `CONN_HEALTH_CHECKS` on, the check before each call then returns the connection to the pool and gets a connection again. Leave it off, and set the `check` option of the pool. When a thread closes a connection, Django returns it to the pool. The pool then gives it to a thread again. A connection that the database closed looks fine to the pool until it is used. With `check`, the pool tests each connection before it gives it to a thread, and replaces a dead one:
+
+```python
+from psycopg_pool import ConnectionPool
+
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "mydb",
+        "OPTIONS": {
+            "pool": {"check": ConnectionPool.check_connection},
+        },
+    }
+}
+```
+
+Without `check`, each dead connection in the pool fails one request.
 
 ### Third-Party Packages
 

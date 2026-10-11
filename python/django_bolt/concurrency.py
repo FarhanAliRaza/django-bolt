@@ -25,6 +25,7 @@ from asgiref.sync import AsyncToSync, SyncToAsync, ThreadSensitiveContext, sync_
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connections
+from django.db.backends.signals import connection_created
 
 logger = logging.getLogger(__name__)
 
@@ -60,16 +61,90 @@ def _drop_broken_connections() -> None:
     state is off by design, and the block restores it on exit. Django's test
     client skips ``close_old_connections`` for the same reason.
     """
+    died = False
     for conn in connections.all(initialized_only=True):
-        if not conn.in_atomic_block:
-            conn.close_if_unusable_or_obsolete()
+        if not conn.in_atomic_block and _close_if_unusable_or_obsolete(conn):
+            died = True
+    if died:
+        _advance_connection_generation()
+
+
+def _close_if_unusable_or_obsolete(conn) -> bool:
+    """Run ``conn.close_if_unusable_or_obsolete()``. True when it closed a connection that failed."""
+    failed = conn.connection is not None and conn.errors_occurred
+    conn.close_if_unusable_or_obsolete()
+    # Django clears errors_occurred when the connection still answers.
+    return failed and conn.errors_occurred
+
+
+# A database restart or failover kills every connection of the process at once,
+# but each thread sees this only when it uses its own. The first thread that
+# finds a dead connection advances the generation. Each connection carries the
+# generation it opened in, and a thread closes its older connections before its
+# next call, so it reconnects instead of failing a request of its own. Each
+# thread records the last generation that it checked, so the check before a
+# call costs one comparison until the next connection dies. One generation
+# covers every database: a reconnect that was not needed costs less than a
+# failed request.
+_connection_generation = 0
+_connection_generation_lock = threading.Lock()
+_GENERATION_ATTR = "_django_bolt_connection_generation"
+
+
+class _CheckedGeneration(threading.local):
+    # A class default: a missing attribute of a thread-local costs an exception on each read.
+    generation = 0
+
+
+_checked = _CheckedGeneration()
+
+
+def _stamp_connection_generation(sender: object, connection: object, **kwargs: object) -> None:
+    setattr(connection, _GENERATION_ATTR, _connection_generation)
+
+
+connection_created.connect(_stamp_connection_generation, dispatch_uid="django_bolt.connection_generation")
+
+
+def _advance_connection_generation() -> None:
+    global _connection_generation
+    with _connection_generation_lock:
+        _connection_generation += 1
+
+
+def _close_connections_of_older_generations() -> None:
+    """Close the calling thread's connections that opened before a connection was last found dead."""
+    generation = _connection_generation
+    if _checked.generation == generation:
+        return
+    closed_all = True
+    for conn in connections.all(initialized_only=True):
+        if conn.connection is None or getattr(conn, _GENERATION_ATTR, -1) >= generation:
+            continue
+        if conn.in_atomic_block:
+            # The block owns the connection. The next call after the block closes it.
+            closed_all = False
+        # The TestClient shares one connection between threads. Its owner closes it.
+        elif not getattr(conn, _SHARED_TEST_CONNECTION_ATTR, False):
+            conn.close()
+    if closed_all:
+        _checked.generation = generation
+
+
+def _check_before_pool_call() -> None:
+    stale = _checked.generation != _connection_generation
+    # A lane does these checks one time, at the start of its request.
+    if (stale or _check_before_call) and not _on_lane_thread():
+        if stale:
+            _close_connections_of_older_generations()
+        if _check_before_call:
+            _drop_broken_connections()
 
 
 def _call_guarded[T](fn: Callable[..., T], *args: object, **kwargs: object) -> T:
     """Call ``fn`` on the pool thread and drop dead connections when it raises."""
-    # A lane does this check one time, at the start of its request.
-    if _check_before_call and not _on_lane_thread():
-        _drop_broken_connections()
+    if (_connection_generation and _checked.generation != _connection_generation) or _check_before_call:
+        _check_before_pool_call()
     try:
         return fn(*args, **kwargs)
     except Exception:
@@ -138,6 +213,7 @@ def drive_on_lane[T](coro: Coroutine[object, object, T]) -> T:
 
 def open_lane_request() -> None:
     """Start a request on a lane. Rust calls this before the first sync call of an async request."""
+    _close_connections_of_older_generations()
     if _check_before_call:
         _drop_broken_connections()
 
@@ -148,9 +224,12 @@ def close_lane_request() -> None:
     Bolt does not see a database error that user code handles, or one from a
     direct ``sync_to_async`` call. Django does this check on ``request_finished``.
     """
+    died = False
     for conn in connections.all(initialized_only=True):
-        if conn.errors_occurred and not conn.in_atomic_block:
-            conn.close_if_unusable_or_obsolete()
+        if conn.errors_occurred and not conn.in_atomic_block and _close_if_unusable_or_obsolete(conn):
+            died = True
+    if died:
+        _advance_connection_generation()
 
 
 def close_lane_connections() -> None:

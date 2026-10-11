@@ -167,7 +167,7 @@ BOLT_EMIT_SIGNALS = False
 
 With signals disabled, don't rely on request-signal-driven connection recycling.
 
-Bolt keeps each thread's connection open between requests. It drops the connection when a query on it raises. A connection that the database closed therefore costs one failed request per thread, not a process restart. To serve every request through a database failover, set `CONN_HEALTH_CHECKS = True`. Bolt then runs Django's connection check before each executor call. The health check replaces a dead connection before the query. Add a positive `CONN_MAX_AGE` to keep connections between calls. Neither setting is on by default. See [Database Connection Management](../topics/signals.md#database-connection-management).
+Bolt keeps each thread's connection open between requests. It drops the connection when a query on it raises. When that connection does not answer, every thread reconnects before its next call. A database restart therefore costs the request that meets the first dead connection, not a process restart. To serve every request through a database failover, set `CONN_HEALTH_CHECKS = True`. Bolt then runs Django's connection check before each executor call. The health check replaces a dead connection before the query. Add a positive `CONN_MAX_AGE` to keep connections between calls. Neither setting is on by default. See [Database Connection Management](../topics/signals.md#database-connection-management).
 
 For ASGI deployments, keep persistent connections disabled (`CONN_MAX_AGE = 0`) and use pooling. See [Persistent connections](https://docs.djangoproject.com/en/6.0/ref/databases/#persistent-connections).
 
@@ -196,6 +196,8 @@ DATABASES = {
 ```
 
 Requires `psycopg[pool]` (`pip install "psycopg[pool]"`). With psycopg2, Django raises `ImproperlyConfigured` if `OPTIONS["pool"]` is set.
+
+Add `"check": ConnectionPool.check_connection` (from `psycopg_pool`) to the `pool` options. Without it, the pool can give a thread a connection that the database closed. The request that uses it fails. See [Database Connection Management](../topics/signals.md#database-connection-management).
 
 ### Option 2: PgBouncer (external pooler)
 

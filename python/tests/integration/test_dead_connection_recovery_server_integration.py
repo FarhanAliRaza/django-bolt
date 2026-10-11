@@ -65,7 +65,14 @@ def terminate_backends(params: dict[str, Any], application_name: str, timeout: f
     raise AssertionError(f"{remaining} backend(s) of {application_name!r} still alive after {timeout}s")
 
 
-def start_server(make_server_project, params: dict[str, Any], **database_options: Any):
+def start_server(
+    make_server_project,
+    params: dict[str, Any],
+    *,
+    orm_threads: int = 1,
+    settings_extra: str = "",
+    **database_options: Any,
+):
     """Start ``runbolt`` on the given database, with a unique ``application_name``.
 
     ``PGAPPNAME`` is read by libpq, so the kill can be scoped to the
@@ -75,9 +82,9 @@ def start_server(make_server_project, params: dict[str, Any], **database_options
     application_name = f"bolt-recovery-{secrets.token_hex(4)}"
     project = make_server_project(
         api_module=app_module("dead_connection_recovery"),
-        settings_extra=postgres_settings(params, **database_options),
+        settings_extra=postgres_settings(params, **database_options) + settings_extra,
     )
-    server = project.start(env={"PGAPPNAME": application_name, "DJANGO_BOLT_ORM_THREADS": "1"})
+    server = project.start(env={"PGAPPNAME": application_name, "DJANGO_BOLT_ORM_THREADS": str(orm_threads)})
     return server, application_name
 
 
@@ -134,3 +141,48 @@ def test_health_checks_replace_the_dead_connection_before_the_query(make_server_
         assert first.status_code == 200, first.text
         assert first.json() == {"username": USERNAME}
         assert server.get("/me", headers=headers).status_code == 200
+
+
+# Django's connection pool gives a connection to a thread again after ``close()``.
+# psycopg checks a connection on checkout only with the ``check`` option.
+POOL_WITH_CHECK = """
+from psycopg_pool import ConnectionPool
+DATABASES["default"]["OPTIONS"] = {"pool": {"min_size": 1, "max_size": 8, "check": ConnectionPool.check_connection}}
+"""
+
+
+def query_each_orm_thread(server, count: int) -> list[str]:
+    response = server.get(f"/orm-threads?count={count}")
+    assert response.status_code == 200, response.text
+    return response.json()["results"]
+
+
+@pytest.mark.parametrize(
+    "settings_extra", [pytest.param("", id="persistent"), pytest.param(POOL_WITH_CHECK, id="pool")]
+)
+def test_one_dead_connection_retires_the_connections_of_every_thread(
+    make_server_project, postgres_database, settings_extra
+):
+    """A restart of PostgreSQL kills the connection of each thread at once.
+
+    The first call that meets a dead connection fails. Every thread then
+    reconnects before its next call, so no other call fails. Before, each
+    thread failed one call of its own: here, three ORM threads and the thread
+    that loads ``request.user``.
+    """
+    orm_threads = 4
+    server, application_name = start_server(
+        make_server_project, postgres_database, orm_threads=orm_threads, settings_extra=settings_extra
+    )
+    with server:
+        headers = seed_and_authenticate(server)
+        assert query_each_orm_thread(server, orm_threads) == ["ok"] * orm_threads
+
+        killed = terminate_backends(postgres_database, application_name)
+        assert killed > orm_threads, "the server did not keep a connection on each thread"
+
+        assert query_each_orm_thread(server, 1) == ["OperationalError"]
+        assert query_each_orm_thread(server, orm_threads) == ["ok"] * orm_threads
+        recovered = server.get("/me", headers=headers)
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json() == {"username": USERNAME}

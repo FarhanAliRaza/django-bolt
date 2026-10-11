@@ -375,14 +375,26 @@ class TestRegistrationFailures:
         with pytest.raises(ImproperlyConfigured, match="message"):
             Requires("role", "client", message="")
 
-    def test_base_permission_subclass_is_not_a_guard(self):
-        """Subclassing is not the way to build checks — Requires is."""
+    def test_base_permission_subclass_fails_at_class_definition(self):
+        """Subclassing is not the way to build checks — Requires is.
 
-        class HomeMade(BasePermission):
-            __slots__ = ()
-
+        The class statement itself raises, before any route exists.
+        """
         with pytest.raises(ImproperlyConfigured, match="Requires"):
-            make_api([HomeMade()])
+
+            class HomeMade(BasePermission):
+                __slots__ = ()
+
+    def test_subclass_with_allow_any_metadata_and_call_fails_at_class_definition(self):
+        """A to_metadata override cannot smuggle a dead Python check (#392)."""
+        with pytest.raises(ImproperlyConfigured, match="Requires"):
+
+            class RequireRole(BasePermission):
+                def to_metadata(self):
+                    return {"type": "allow_any"}
+
+                async def __call__(self, request):
+                    return False
 
     def test_non_guard_object_fails_loudly(self):
         with pytest.raises(ImproperlyConfigured, match="BasePermission"):

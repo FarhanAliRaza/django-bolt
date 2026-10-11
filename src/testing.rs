@@ -506,10 +506,15 @@ pub fn register_test_middleware_metadata(
         // Propagate parse failures so tests fail loudly instead of the route
         // silently losing its auth/middleware config.
         let route_meta = RouteMetadata::from_python(py_dict, py).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "Failed to parse route metadata for handler {}: {}",
-                handler_id, e
-            ))
+            // Keep the error type: a wrong value type stays a TypeError.
+            PyErr::from_type(
+                e.get_type(py),
+                format!(
+                    "Failed to parse route metadata for handler {}: {}",
+                    handler_id,
+                    e.value(py)
+                ),
+            )
         })?;
         parsed_metadata.insert(handler_id, route_meta);
     }
@@ -1126,6 +1131,19 @@ mod tests {
                 rate_limit.set_item("rps", module.getattr("Rps")?.call1((release,))?)?;
                 let meta = PyDict::new(py);
                 meta.set_item("middleware", vec![rate_limit])?;
+                // The keys that every route sends. Registration requires them.
+                for flag in [
+                    "needs_body",
+                    "needs_query",
+                    "needs_headers",
+                    "needs_cookies",
+                    "needs_path_params",
+                    "is_static_route",
+                    "needs_form_parsing",
+                ] {
+                    meta.set_item(flag, false)?;
+                }
+                meta.set_item("default_status_code", 200)?;
                 register_test_middleware_metadata(py, app_id, vec![(0, meta.into_any().unbind())])?;
                 Ok(registry().contains_key(&app_id))
             });

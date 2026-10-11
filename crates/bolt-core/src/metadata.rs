@@ -6,17 +6,20 @@ use actix_web::http::header::HeaderValue;
 use ahash::{AHashMap, AHashSet};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyList, PyString};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyList, PyString};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::form_parsing::FileFieldConstraints;
 use crate::middleware::auth::{
-    build_jwks_key_source, build_jwt_decoding_key, parse_jwt_algorithm, AuthBackend, JwtKeySource,
-    RefreshingJwks,
+    build_jwks_key_source, build_jwt_decoding_key, parse_jwt_algorithm, AuthBackend, AuthContext,
+    Claims, JwtKeySource, RefreshingJwks,
 };
-use crate::permissions::{ClaimKey, Guard, GuardDenial, GuardSet, Quantifier};
+use crate::permissions::{
+    evaluate_guards, ClaimKey, Guard, GuardDenial, GuardResult, GuardSet, Quantifier,
+};
+use crate::responses::{ERROR_BODY_401, ERROR_BODY_403};
 use crate::type_coercion::TypeHints;
 
 /// Request value source for Rust-side argument prebinding.
@@ -591,6 +594,74 @@ fn optional_size(py_meta: &Bound<'_, PyDict>, key: &str, default: usize) -> PyRe
     )))
 }
 
+/// Return "METHOD /path" of the route, for registration errors.
+fn route_label(py_meta: &Bound<'_, PyDict>) -> String {
+    let part = |key: &str| {
+        py_meta
+            .get_item(key)
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract::<String>().ok())
+            .unwrap_or_else(|| "?".to_string())
+    };
+    format!("{} {}", part("method"), part("path"))
+}
+
+/// Get a required key of the route metadata.
+/// A missing key is a ValueError that names the key and the route.
+fn required_item<'py>(py_meta: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyAny>> {
+    py_meta.get_item(key)?.ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "Route metadata for {} has no '{}' key",
+            route_label(py_meta),
+            key
+        ))
+    })
+}
+
+/// Make the TypeError for a route metadata value with the wrong type.
+fn wrong_type(
+    py_meta: &Bound<'_, PyDict>,
+    key: &str,
+    expected: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyErr {
+    let actual = value
+        .get_type()
+        .name()
+        .map(|name| name.to_string())
+        .unwrap_or_else(|_| "?".to_string());
+    PyTypeError::new_err(format!(
+        "Route metadata '{}' for {} must be {}, got {}",
+        key,
+        route_label(py_meta),
+        expected,
+        actual
+    ))
+}
+
+/// Read a required bool flag of the route metadata.
+/// A value that is not a bool is a TypeError.
+fn required_bool(py_meta: &Bound<'_, PyDict>, key: &str) -> PyResult<bool> {
+    let value = required_item(py_meta, key)?;
+    value
+        .cast::<PyBool>()
+        .map(|flag| flag.is_true())
+        .map_err(|_| wrong_type(py_meta, key, "a bool", &value))
+}
+
+/// Read a required HTTP status code of the route metadata.
+/// A value that is not an int from 0 to 65535 is a TypeError.
+fn required_status_code(py_meta: &Bound<'_, PyDict>, key: &str) -> PyResult<u16> {
+    let value = required_item(py_meta, key)?;
+    if value.is_instance_of::<PyBool>() {
+        return Err(wrong_type(py_meta, key, "an int", &value));
+    }
+    value
+        .extract::<u16>()
+        .map_err(|_| wrong_type(py_meta, key, "an int from 0 to 65535", &value))
+}
+
 impl RouteMetadata {
     /// Parse Python metadata dict into strongly-typed Rust metadata
     pub fn from_python(py_meta: &Bound<'_, PyDict>, py: Python) -> PyResult<Self> {
@@ -661,49 +732,14 @@ impl RouteMetadata {
             }
         }
 
-        // Parse optimization flags (default to true for backward compatibility)
-        // These flags indicate which request components the handler actually needs
-        let needs_body = py_meta
-            .get_item("needs_body")
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<bool>().ok())
-            .unwrap_or(true);
-
-        let needs_query = py_meta
-            .get_item("needs_query")
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<bool>().ok())
-            .unwrap_or(true);
-
-        let needs_headers = py_meta
-            .get_item("needs_headers")
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<bool>().ok())
-            .unwrap_or(true);
-
-        let needs_cookies = py_meta
-            .get_item("needs_cookies")
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<bool>().ok())
-            .unwrap_or(true);
-
-        let needs_path_params = py_meta
-            .get_item("needs_path_params")
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<bool>().ok())
-            .unwrap_or(true);
-
-        let is_static_route = py_meta
-            .get_item("is_static_route")
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<bool>().ok())
-            .unwrap_or(false);
+        // Request flags tell which request parts the handler reads.
+        // Python route registration sets each flag, so each one is required.
+        let needs_body = required_bool(py_meta, "needs_body")?;
+        let needs_query = required_bool(py_meta, "needs_query")?;
+        let needs_headers = required_bool(py_meta, "needs_headers")?;
+        let needs_cookies = required_bool(py_meta, "needs_cookies")?;
+        let needs_path_params = required_bool(py_meta, "needs_path_params")?;
+        let is_static_route = required_bool(py_meta, "is_static_route")?;
 
         // Parse param_types for Rust-side type coercion
         // Format: {"param_name": type_hint_id, ...}
@@ -715,12 +751,7 @@ impl RouteMetadata {
         let cookie_types = extract_type_hints(py_meta, "cookie_types");
 
         // Parse form-related metadata for Rust-side form parsing
-        let needs_form_parsing = py_meta
-            .get_item("needs_form_parsing")
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<bool>().ok())
-            .unwrap_or(false);
+        let needs_form_parsing = required_bool(py_meta, "needs_form_parsing")?;
 
         let skip_cors = skip.contains("cors");
         let skip_compression = skip.contains("compression");
@@ -822,14 +853,8 @@ impl RouteMetadata {
             .filter(|value| !value.is_none())
             .map(|value| Arc::new(value.unbind()));
 
-        // Default success status (guaranteed by Python registration; 200 fallback
-        // for defensive parsing of hand-built metadata in tests).
-        let default_status_code = py_meta
-            .get_item("default_status_code")
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<u16>().ok())
-            .unwrap_or(200);
+        // Default success status. Python route registration sets it.
+        let default_status_code = required_status_code(py_meta, "default_status_code")?;
 
         Ok(RouteMetadata {
             auth_backends,
@@ -1117,10 +1142,94 @@ pub fn parse_auth_backend(dict: &HashMap<String, Py<PyAny>>, py: Python) -> PyRe
                 key_permissions,
             })
         }
+        "session" => {
+            let cookie = dict
+                .get("cookie")
+                .ok_or_else(|| PyValueError::new_err("Session auth backend missing 'cookie'"))?
+                .extract::<String>(py)?;
+            let csrf = match dict.get("csrf") {
+                Some(value) => value.extract::<bool>(py)?,
+                None => true,
+            };
+            let login_redirect = match dict.get("login_redirect") {
+                Some(value) => value.extract::<bool>(py)?,
+                None => false,
+            };
+            Ok(AuthBackend::Session {
+                cookie,
+                csrf,
+                login_redirect,
+            })
+        }
         other => Err(PyValueError::new_err(format!(
             "Unknown auth backend type '{}'",
             other
         ))),
+    }
+}
+
+/// The guards of a route, checked against a user that Django loaded.
+///
+/// Rust cannot read a Django session. For a session request, Python loads
+/// the user through Django and calls `check`. The guards keep one
+/// implementation: `evaluate_guards`.
+#[pyclass(frozen, module = "django_bolt._core")]
+pub struct GuardCheck {
+    guards: GuardSet,
+}
+
+#[pymethods]
+impl GuardCheck {
+    /// Build the check once at registration from the compiled guard metadata.
+    #[new]
+    fn new(py: Python<'_>, guards: Vec<HashMap<String, Py<PyAny>>>) -> PyResult<Self> {
+        let guards = guards
+            .iter()
+            .map(|guard| parse_guard(guard, py))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(Self {
+            guards: GuardSet::from_guards(guards),
+        })
+    }
+
+    /// Check the guards against the user. `user_id` is None for an anonymous
+    /// user. Returns None when the guards allow the request, else the status
+    /// and the JSON body of the rejection.
+    fn check<'py>(
+        &self,
+        py: Python<'py>,
+        user_id: Option<String>,
+        is_staff: bool,
+        is_superuser: bool,
+        permissions: HashSet<String>,
+    ) -> Option<(u16, Bound<'py, PyBytes>)> {
+        // An anonymous user has no credential, as a request with no token.
+        let ctx = user_id.map(|sub| AuthContext {
+            user_id: Some(sub.clone()),
+            is_staff,
+            is_superuser,
+            backend: "session".to_string(),
+            backend_index: None,
+            // `Requires` reads these claims. `permissions` reads the set below.
+            claims: Some(Claims {
+                sub: Some(sub),
+                is_staff: Some(is_staff),
+                is_superuser: Some(is_superuser),
+                ..Claims::default()
+            }),
+            permissions,
+            cookie_csrf: false,
+        });
+        match evaluate_guards(&self.guards, ctx.as_ref()) {
+            GuardResult::Allow => None,
+            GuardResult::Unauthorized => Some((401, PyBytes::new(py, ERROR_BODY_401))),
+            GuardResult::Forbidden(denial) => {
+                let body = denial
+                    .as_deref()
+                    .map_or(ERROR_BODY_403, |denial| &denial.body[..]);
+                Some((403, PyBytes::new(py, body)))
+            }
+        }
     }
 }
 

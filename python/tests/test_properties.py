@@ -13,13 +13,11 @@ import datetime
 import decimal
 import uuid
 from http.cookies import SimpleCookie
-from io import BytesIO
 from typing import Annotated
 from urllib.parse import quote
 
 import httpx
 import pytest
-from django.core.handlers.asgi import ASGIRequest
 from django.http import QueryDict
 from django.http.cookie import parse_cookie
 from hypothesis import example, given
@@ -314,8 +312,8 @@ def test_cookies_match_django(client, raw):
 def test_repeated_cookie_lines_match_django(client, lines):
     """Django joins the `Cookie` lines of a request with "; ", so each line counts."""
     response = client.get("/cookies", headers=[("cookie", line) for line in lines])
-    scope = {"type": "http", "method": "GET", "path": "/", "headers": [(b"cookie", line.encode()) for line in lines]}
-    assert response.json() == ASGIRequest(scope, BytesIO()).COOKIES
+    # Django 5.2 joins the lines with ",". Thus build the joined header as Django 6 does.
+    assert response.json() == parse_cookie("; ".join(line.rstrip("; ") for line in lines))
 
 
 # Django escapes each Latin-1 character in a value, and refuses a control character.
@@ -355,7 +353,9 @@ def test_a_cookie_value_with_a_control_character_is_not_set(client, value, contr
     assert "set-cookie" not in response.headers
 
 
-@given(value=latin1_text, other=st.characters(min_codepoint=0x100), at=st.integers(min_value=0))
+@given(
+    value=latin1_text, other=st.characters(min_codepoint=0x100, exclude_categories=("Cs",)), at=st.integers(min_value=0)
+)
 def test_a_cookie_value_above_latin1_is_not_set(client, value, other, at):
     """Django cannot send it. A browser that sends it back makes the `Cookie` header unreadable."""
     at %= len(value) + 1

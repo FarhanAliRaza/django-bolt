@@ -475,15 +475,30 @@ jobs:
       - name: Run platform smoke tests
         run: uv run --no-sync pytest python/tests/integration -m platform_smoke -v
 
-  # CPU instructions per request on the production path, measured by CodSpeed.
-  # A count does not change with the load of the runner, so a small change in a
-  # pull request shows. The benchmarks: python/benchmark/http_benchmark.py.
+  # The production request path, measured by CodSpeed in two modes. The
+  # benchmarks: python/benchmark/http_benchmark.py.
+  # - simulation counts CPU instructions. A count does not change with the load
+  #   of the runner, so a small CPU change shows. It does not count system calls.
+  # - walltime measures elapsed time, system calls and waits included. It runs on
+  #   a CodSpeed macro runner, a dedicated bare-metal machine with low noise. The
+  #   free plan has 600 macro runner minutes each month.
   # The release wheel has no symbols, so Rust frames in the flame graphs have
   # no names. To see them, run `just build-profiling` and profile locally.
   codspeed:
-    name: CodSpeed benchmarks
-    runs-on: ubuntu-latest
+    name: CodSpeed benchmarks (${{ matrix.mode }})
+    runs-on: ${{ matrix.runner }}
     needs: [python-versions, linux-amd64]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: simulation
+            runner: ubuntu-latest
+          # x86-64, so the job can install the wheel of linux-amd64. A public
+          # repository can use the runner only if the Default runner group of
+          # the organization allows public repositories.
+          - mode: walltime
+            runner: codspeed-macro-x64-ryzen-9950x-ubuntu-24-04
     permissions:
       contents: read
       # CodSpeed identifies the repository with an OIDC token. It needs no secret.
@@ -521,7 +536,7 @@ jobs:
         uses: CodSpeedHQ/action@373d6868929f444bc08d901fd0eb0ad52a8875ea # v5.2.1
         with:
           run: uv run --no-sync pytest python/benchmark/http_benchmark.py -p no:django --codspeed
-          mode: simulation
+          mode: ${{ matrix.mode }}
 
   # Build wheels for Linux x86_64 (covers most Linux users including Arch)
   linux-amd64:

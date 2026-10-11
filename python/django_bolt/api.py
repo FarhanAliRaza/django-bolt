@@ -1549,11 +1549,7 @@ class BoltAPI:
             handler_analysis = analyze_handler(fn, request_param_names=analyzed_request_names)
 
             if analyzed_request_names:
-                if (
-                    handler_analysis.analysis_failed
-                    or hasattr(fn, "__wrapped__")
-                    or hasattr(fn, "__signature__")
-                ):
+                if handler_analysis.analysis_failed or hasattr(fn, "__wrapped__") or hasattr(fn, "__signature__"):
                     # Wrappers and synthetic signatures can hide reads from source analysis.
                     meta["needs_body"] = True
                     meta["needs_query"] = True

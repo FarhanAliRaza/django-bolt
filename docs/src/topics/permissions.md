@@ -128,7 +128,7 @@ The message is serialized into the response body once at registration, so a cust
 
 ### Registration is strict
 
-Anything that can't be compiled fails startup instead of silently leaving the route open: an empty claim name, non-scalar values, combining positional values with `all_of`/`none_of`, an empty or string `all_of`/`none_of`, an empty `message`, or subclassing `BasePermission` (not a thing — name a `Requires` instance instead) all raise `ImproperlyConfigured`.
+Anything that can't be compiled fails startup instead of silently leaving the route open: an empty claim name, non-scalar values, combining positional values with `all_of`/`none_of`, an empty or string `all_of`/`none_of`, an empty `message`, or a class of your own in `guards` all raise `ImproperlyConfigured`. There is no guard base class. A guard runs in Rust, so Python code in a guard class never runs. Name a `Requires` instance instead. Do a database check in a dependency that raises `HTTPException(403)`.
 
 ## Combining guards
 

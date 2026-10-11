@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **`SessionAuthentication`** - A route can use Django session auth as it uses a token backend: `auth=[SessionAuthentication()]`. Django does the session work. Bolt adds Django's `SessionMiddleware` and `AuthenticationMiddleware` to the route when its middleware has neither. When it has only one of them, startup fails. Rust rejects a request with no session cookie. For a request with the cookie, Django loads the user, and Bolt checks the guards of the route against `request.user`. A guard can read `is_staff`, `is_superuser` and `permissions` of the user. A `none_of` guard on another claim is an error at startup. `login_url` sends an anonymous user to a login page with Django's `redirect_to_login`. Each unsafe request to the route gets the CSRF origin check of a JWT cookie, also with no cookie, so a login route is protected too. `csrf=False` turns the check off. A token backend on the same route comes first. The backend works on HTTP routes only. A WebSocket route or an MCP mount with it in `auth` raises an error at startup. A session backend from `BOLT_AUTHENTICATION_CLASSES` is left out there. See [Session authentication](docs/src/topics/authentication.md#session-authentication).
+
+### Changed
+
+- **macOS wheels are per architecture** - PyPI gets a macOS arm64 wheel and a macOS x86_64 wheel in place of one universal2 wheel. pip selects the wheel for the Mac, so an install does not change. A build that needs one universal2 file (py2app or PyInstaller universal2 bundles, `pip download --platform ...universal2`) must now combine the two wheels or pick the per-architecture wheel.
+
+### Removed
+
+- **`OpenAPIConfig(django_auth=...)`** - The docs routes take `auth` and `guards`, as every route does. For docs behind a Django login, use `auth=[SessionAuthentication(login_url="/admin/login/")]` and `guards=[Requires("is_staff", True)]`. `django_auth` wrapped the docs in a Django decorator and still used the global default auth. With a JWT default, a browser got 401 for every user ([#378](https://github.com/dj-bolt/django-bolt/issues/378)). See [Protecting documentation](docs/src/topics/openapi.md#protecting-documentation).
+
+### Security
+
+- **`DjangoMiddleware` runs `process_view`** - `BoltAPI(middleware=[DjangoMiddleware(CsrfViewMiddleware)])` accepted a POST with no CSRF token. The wrapper called only the `__call__` method of the middleware. `__call__` runs `process_request` and `process_response`. Django's request handler runs `process_view`, and `CsrfViewMiddleware` checks the token in `process_view`. Thus no check occurred. Each middleware that does its work in `process_view` had the same problem. The wrapper now runs `process_view` before the handler, as `django_middleware=[...]` and `DjangoMiddlewareStack` do. A route with `@csrf_exempt` still skips the CSRF check. If you use `DjangoMiddleware(CsrfViewMiddleware)`, make sure that your clients send the CSRF token.
+- **`process_view` gets the route handler as the view** - Bolt gave `process_view` a stand-in view that had only the `csrf_exempt` flag. Thus `LoginRequiredMiddleware` sent each route to the login page, also a route with `@login_not_required`. Now the hook gets the route handler, as Django gives the view, so the flags of view decorators work. The handler also gets the request attributes that a `process_view` hook sets. This applies to `DjangoMiddleware`, `DjangoMiddlewareStack` and `django_middleware=[...]`.
+
+### Fixed
+
+- **A 204 response has no body** - `Response(status_code=204)` has the default content `{}`, and Bolt wrote it after the headers. Actix drops the `content-length` header for a 204 but writes the bytes it gets. On a keep-alive connection, the next response then started with `{}`. A browser or an HTTP client that reuses connections failed the request after a delete. Rust now drops the body of each 204, for every response type a handler can return.
+- **A return annotation validates the default status code only** - A handler with `-> Item` that returned `JSON(errors, status_code=400)` got a 500 `ResponseValidationError`, because Bolt checked the error map against `Item`. The annotation and a single `response_model` describe the body of the default status code. Bolt now validates a `JSON` or `Response` only when its status code is that default, and encodes other status codes as-is. This matches the per-status-code form, `response_model={200: Item, 400: Error}`, which never validated them.
+- **Nested serializers work on Django 5.2** - On Django 5.2, a serializer with a relation field (a foreign key, a many-to-many field or a reverse relation) raised `NotImplementedError`. A route that returned such a serializer answered 500. Bolt called the deprecated `get_cache_name()`, and Django 5.2 relations raise in it. Bolt now reads `cache_name`, which each supported Django version has. The CI jobs for Django 5.2 and 6.0 did not find this: a build step reinstalled Django 6.1 before the tests ran.
+- **`runbolt --dev` reloads for a file in a new directory** - The watcher starts to watch a new directory after it gets the event for that directory. A file written before then, for example by `git checkout` or a code generator, sent no event, so no reload occurred. A directory moved into the project had the same problem. Now, when a directory is created or moved in, the watcher looks in it for a `.py` or `.html` file.
+- **`runbolt --dev` stops its worker on SIGTERM** - `kill` on the dev supervisor stopped only the supervisor. Its worker kept serving and held the port, so the next `runbolt --dev` failed with "address in use". The supervisor now stops the worker on SIGTERM and SIGHUP, as on Ctrl-C. When the process starts with SIGHUP ignored, as under `nohup`, SIGHUP stays ignored.
+
 ## [0.12.0]
 
 ### Added

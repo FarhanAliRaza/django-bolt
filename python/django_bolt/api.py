@@ -41,6 +41,7 @@ from .admin.routes import AdminRouteRegistrar
 from .analysis import analyze_dependency_tree, analyze_handler
 from .auth import register_auth_backend
 from .auth.backends import revocation_takes_claims
+from .auth.session import auth_without_session, build_session_guard_check, session_middleware, uses_session
 from .auth.user_loader import (
     LazyUser,
     resolve_user_loader,
@@ -946,6 +947,10 @@ class BoltAPI:
 
             self._handler_meta[handler_id] = meta
 
+            # Django middleware does not run on a WebSocket, so no code could
+            # check the guards of a session request.
+            ws_auth = auth_without_session(auth, f"WebSocket route {full_path}")
+
             # Compile middleware metadata for WebSocket handler
             # Always call compile_middleware_meta to pick up:
             # 1. Handler-level decorators (@rate_limit, @cors, etc.)
@@ -957,7 +962,7 @@ class BoltAPI:
                 path=full_path,
                 global_middleware=self._middleware,
                 guards=guards,
-                auth=auth,
+                auth=ws_auth,
             )
 
             # Add optimization flags and param_types to middleware metadata
@@ -966,7 +971,7 @@ class BoltAPI:
 
             # The handshake awaits this check before the upgrade: a revoked
             # token gets 401, as on an HTTP route.
-            revocation_handlers = _revocation_handlers(route_auth_backends(auth))
+            revocation_handlers = _revocation_handlers(route_auth_backends(ws_auth))
             if revocation_handlers is not None:
                 middleware_meta = middleware_meta or {}
                 middleware_meta["websocket_revocation_check"] = functools.partial(
@@ -976,8 +981,8 @@ class BoltAPI:
             if middleware_meta:
                 self._handler_middleware[handler_id] = middleware_meta
                 # Store auth backend instances for user resolution
-                if auth is not None:
-                    middleware_meta["_auth_backend_instances"] = auth
+                if ws_auth is not None:
+                    middleware_meta["_auth_backend_instances"] = ws_auth
 
             return fn
 
@@ -1533,9 +1538,9 @@ class BoltAPI:
             meta["name_explicit"] = name is not None and _name_explicit
             meta["namespace"] = self.namespace or ""
 
-            # Detect csrf_exempt for Django CSRF middleware support
-            # Django's @csrf_exempt decorator sets handler.csrf_exempt = True
-            meta["csrf_exempt"] = getattr(fn, "csrf_exempt", False)
+            # Django middleware gets the handler as the view in process_view. It reads
+            # the flags that view decorators set, such as @csrf_exempt and @login_not_required.
+            meta["view_func"] = fn
 
             request_param_names = {
                 field.name for field in meta.get("fields", []) if getattr(field, "source", None) == "request"
@@ -1585,6 +1590,18 @@ class BoltAPI:
                 fn.__bolt_middleware__ = route_middleware
 
             router_middleware = normalize_middleware_specs(_router_middleware, context="router")
+
+            # Resolve the auth backends once (explicit > defaults), in the
+            # order Rust gets them. A session backend needs Django's session
+            # and auth middleware. Add the missing ones before the router middleware.
+            effective_auth_backends = route_auth_backends(auth)
+            if uses_session(effective_auth_backends):
+                router_middleware = [
+                    *session_middleware(
+                        [*self._middleware, *router_middleware, *route_middleware], f"{method} {full_path}"
+                    ),
+                    *router_middleware,
+                ]
 
             # Django middleware can keep request state in threading.local. A sync
             # handler must then run on the thread of its request, not inline on
@@ -1772,10 +1789,11 @@ class BoltAPI:
             # These are parsed by Rust's RouteMetadata::from_python() to skip unused parsing
             middleware_meta = add_optimization_flags_to_metadata(middleware_meta, meta)
 
-            # Resolve effective auth backends once (explicit > defaults), in
-            # the order Rust gets them. Reused below for revocation
-            # precomputation and _auth_backend_instances.
-            effective_auth_backends = route_auth_backends(auth)
+            # Python checks the guards of a request with a session cookie,
+            # after Django loads the user. See _build_route_executor.
+            meta["_session_guard_check"] = build_session_guard_check(
+                (middleware_meta or {}).get("guards"), effective_auth_backends, f"{method} {full_path}"
+            )
 
             # The user loaders of THIS route's backends, by the position that
             # Rust reports as auth_backend_index. Two JWTAuthentication
@@ -1795,6 +1813,7 @@ class BoltAPI:
                 and not self._has_django_middleware
                 and not self._emit_signals
                 and not revocation_handlers
+                and meta["_session_guard_check"] is None
             )
             middleware_meta["can_sync_dispatch"] = can_sync_dispatch
             # Lane dispatch (crates/bolt-core/src/lane.rs) requires a request
@@ -2788,8 +2807,19 @@ class BoltAPI:
         combined_specs = [*router_middleware, *route_middleware]
         normalized_specs = normalize_middleware_specs(combined_specs, context="route", allow_function_middleware=True)
 
-        async def execute_handler(req):
-            return await self._execute_handler_as_middleware_response(handler, req, meta)
+        check_session_guards = meta["_session_guard_check"]
+        if check_session_guards is None:
+
+            async def execute_handler(req):
+                return await self._execute_handler_as_middleware_response(handler, req, meta)
+
+        else:
+            # The innermost layer: Django's middleware has loaded the user.
+            async def execute_handler(req):
+                rejection = await check_session_guards(req)
+                if rejection is not None:
+                    return rejection
+                return await self._execute_handler_as_middleware_response(handler, req, meta)
 
         chain = execute_handler
         for middleware_spec in reversed(normalized_specs):
@@ -2846,8 +2876,8 @@ class BoltAPI:
 
         request_state = request.setdefault("state", {})
 
-        # Store csrf_exempt in request.state for CSRF middleware to check.
-        request_state["_csrf_exempt"] = meta.get("csrf_exempt", False)
+        # Django middleware gets this view in process_view.
+        request_state["_view_func"] = meta["view_func"]
         request_state["_bolt_route_executor"] = self._get_route_executor(api, handler, meta)
 
         try:

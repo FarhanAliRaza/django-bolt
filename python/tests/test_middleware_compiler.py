@@ -183,16 +183,29 @@ def test_rust_binds_keyword_only_and_positional_only_parameters():
 
 
 def test_a_missing_required_parameter_is_a_422_on_a_prebound_route():
+    """Rust gives up the plan for a missing required value, and the injector gives the 422.
+
+    Rust refuses a plan with a positional binding that is not required. A route
+    with only keyword-only parameters has no positional binding. Thus only the
+    required flag stops Rust from calling the handler with no value.
+    """
     api = BoltAPI()
 
     @api.get("/items/{item_id}")
     async def item(item_id: int, q: str):
         return {"item_id": item_id, "q": q}
 
+    @api.get("/keyword")
+    async def keyword_item(*, q: str):
+        return {"q": q}
+
     with TestClient(api) as client:
         response = client.get("/items/1")
+        keyword_response = client.get("/keyword")
 
     assert response.status_code == 422
+    assert keyword_response.status_code == 422, keyword_response.text
+    assert keyword_response.json()["detail"] == "Missing required query parameter: q"
 
 
 def test_rust_gets_the_exact_binding_plan():

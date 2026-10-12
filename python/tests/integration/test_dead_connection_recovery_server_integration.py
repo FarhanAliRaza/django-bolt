@@ -20,6 +20,7 @@ variable, they skip.
 
 from __future__ import annotations
 
+import contextlib
 import secrets
 import socket
 import threading
@@ -246,6 +247,9 @@ class FreezableProxy:
                 target.sendall(data)
         except OSError:
             return
+        # Pass the end of the stream on, as a direct connection does.
+        with contextlib.suppress(OSError):
+            target.shutdown(socket.SHUT_WR)
 
 
 def test_a_dead_connection_does_not_wait_for_the_idle_connections_of_its_pool(make_server_project, postgres_database):

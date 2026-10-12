@@ -620,9 +620,10 @@ async def upload(
     return {"filename": file.filename}
 ```
 
-`allowed_types` is a list of MIME types. A str such as `"image/*"` raises
-`TypeError`, and an empty list raises `ValueError`. To allow each type, do not
-give `allowed_types`.
+`allowed_types` takes a list, a tuple or another iterable of MIME type
+strings. A str such as `"image/*"` raises `TypeError`. An item that is not a
+str also raises `TypeError`. An empty iterable raises `ValueError`. To allow
+each type, do not give `allowed_types`.
 
 ### FileSize enum
 

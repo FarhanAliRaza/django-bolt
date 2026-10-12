@@ -195,7 +195,7 @@ class TestUploadFileValidation:
     )
     def test_allowed_types_that_is_not_a_list_of_str_fails_loudly(self, allowed_types):
         """A str is a sequence of characters. "image/*" gave "*", and "*" allowed each type."""
-        with pytest.raises(TypeError, match="takes a list of MIME types"):
+        with pytest.raises(TypeError, match="takes an iterable of MIME type strings"):
             File(allowed_types=allowed_types)
 
     def test_allowed_types_from_a_generator_checks_each_type(self):

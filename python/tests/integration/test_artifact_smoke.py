@@ -12,12 +12,12 @@ from .helpers import _terminate_process
 
 pytestmark = pytest.mark.artifact_smoke
 
-# The last psycopg_pool release before 3.3. It has no ConnectionPool.drain().
+# psycopg_pool 3.2.8 is the last release before 3.3. It has no ConnectionPool.drain().
 PSYCOPG_POOL_WITHOUT_DRAIN = "psycopg-pool==3.2.8"
 
-# Django's connection pool on a second database that nothing serves. Startup
-# checks the pool of each database, but it connects only to the default one,
-# for the migration check.
+# These settings add a second database that uses Django's connection pool. No
+# server serves this database. Startup checks the pool of each database, but it
+# connects only to the default one, for the migration check.
 POOLED_DATABASE = """
 DATABASES["pooled"] = {
     "ENGINE": "django.db.backends.postgresql",

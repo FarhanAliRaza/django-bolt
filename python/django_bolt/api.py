@@ -2728,8 +2728,8 @@ class BoltAPI:
 
         ``skip`` holds the names of @skip_middleware. A name selects a middleware
         class, a function middleware or a Django middleware class by its
-        ``__name__`` or its dotted path. "*" selects each Bolt middleware, but no
-        Django middleware: a ``DjangoMiddleware`` or a class of a
+        ``__name__`` or its dotted path. "*" selects each Python middleware of Bolt,
+        but no Django middleware: a ``DjangoMiddleware`` or a class of a
         ``DjangoMiddlewareStack`` runs until a name selects it. Thus "*" cannot
         remove a CSRF check. Dict specs stay, because the compiler removes them.
         """

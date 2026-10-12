@@ -146,3 +146,25 @@ def test_a_name_selects_a_django_middleware_and_a_class_of_a_stack():
         assert _headers(client.get("/one")) == {"X-Django-B"}
         assert _headers(client.get("/both")) == set()
         assert _headers(client.get("/plain")) == {"X-Django-A", "X-Django-B"}
+
+
+def test_a_name_selects_a_function_middleware_and_a_router_middleware():
+    api = BoltAPI()
+    router = Router(middleware=[RouterMiddleware])
+
+    @router.get("/skipped")
+    @skip_middleware("function_middleware", "RouterMiddleware")
+    @middleware(function_middleware)
+    async def skipped():
+        return {}
+
+    @router.get("/plain")
+    @middleware(function_middleware)
+    async def plain():
+        return {}
+
+    api.include_router(router)
+
+    with TestClient(api) as client:
+        assert _headers(client.get("/skipped")) == set()
+        assert _headers(client.get("/plain")) == {"X-Router", "X-Function"}

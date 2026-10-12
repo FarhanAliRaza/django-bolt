@@ -519,9 +519,9 @@ def skip_middleware(*middleware_names: str):
         middleware_names: Names of middleware to skip. A name is "cors",
             "rate_limit" or "compression" for a Rust middleware. For a Python
             middleware, a name is the name or the dotted path of its class or
-            function. "*" skips each Bolt middleware. "*" does not skip a Django
-            middleware. Give the name of its class to skip it, for example
-            "CsrfViewMiddleware".
+            function. "*" skips each Python middleware of Bolt. "*" does not
+            skip a Rust middleware or a Django middleware. Give the name of a
+            Django middleware class to skip it, for example "CsrfViewMiddleware".
 
     Examples:
         @api.get("/no-compression")

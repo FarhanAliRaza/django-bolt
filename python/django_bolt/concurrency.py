@@ -120,26 +120,18 @@ def _advance_connection_generation() -> None:
 
 
 def _connections_died(dead: list) -> None:
-    """Make every thread reconnect, and drop the dead idle connections of the pools of ``dead``."""
+    """Make every thread reconnect, and drop the idle connections of the pools of ``dead``."""
     _advance_connection_generation()
     for conn in dead:
         pool = getattr(conn, "pool", None)
         if pool is not None:
-            # The event that ended this connection usually ended the idle
-            # connections of its pool too. getconn() checks them one at a
-            # time, and it sleeps after each one that fails: 0, 1, 2, 4 s and
-            # so on. check() tests all of them in one pass and replaces the
-            # dead ones.
-            pool.check()
-
-
-def _discard(conn) -> None:
-    """Close ``conn``. A pool does not give it to a thread again."""
-    if getattr(conn, "pool", None) is not None:
-        # close() returns a pooled connection to its pool, and the pool gives
-        # it to a thread again. The pool drops a closed connection.
-        conn.connection.close()
-    conn.close()
+            # The event that ended this connection usually ended the other
+            # connections of its pool too. getconn() checks idle connections
+            # one at a time, and it sleeps after each one that fails: 0, 1, 2,
+            # 4 s and so on. drain() closes the idle connections with no
+            # network I/O, so a partition cannot make this thread wait. The
+            # pool also drops each older connection that a thread returns.
+            pool.drain()
 
 
 def _close_connections_of_older_generations() -> None:
@@ -156,7 +148,7 @@ def _close_connections_of_older_generations() -> None:
             closed_all = False
         # The TestClient shares one connection between threads. Its owner closes it.
         elif not getattr(conn, _SHARED_TEST_CONNECTION_ATTR, False):
-            _discard(conn)
+            conn.close()
     if closed_all:
         _checked.generation = generation
 
@@ -306,17 +298,38 @@ def _thread_count(name: str) -> int | None:
 
 def check_pool_environment() -> None:
     """
-    Check the thread counts of the pools at startup.
+    Check the thread counts of the pools and the connection pools at startup.
 
     The pools start at their first use. The server calls this function at
     startup, so an invalid value stops startup and not a later request.
 
     Raises:
         ImproperlyConfigured: DJANGO_BOLT_EXECUTOR_THREADS or
-            DJANGO_BOLT_ORM_THREADS is not an int of 1 or more.
+            DJANGO_BOLT_ORM_THREADS is not an int of 1 or more, or a
+            database uses Django's connection pool with psycopg_pool before 3.3.
     """
     _thread_count("DJANGO_BOLT_EXECUTOR_THREADS")
     _thread_count("DJANGO_BOLT_ORM_THREADS")
+    _check_connection_pools()
+
+
+def _check_connection_pools() -> None:
+    """Make sure that each connection pool has ``drain()``, which psycopg_pool adds in 3.3.
+
+    Bolt drains the pool of a connection that it finds dead.
+    """
+    if not settings.configured:
+        return
+    for alias, db in connections.settings.items():
+        if not db.get("OPTIONS", {}).get("pool"):
+            continue
+        # psycopg_pool is not a dependency of Bolt. Only a pooled database needs it.
+        from psycopg_pool import ConnectionPool  # noqa: PLC0415
+
+        if not hasattr(ConnectionPool, "drain"):
+            raise ImproperlyConfigured(
+                f"DATABASES[{alias!r}] uses Django's connection pool. Bolt needs psycopg_pool 3.3 or later for it."
+            )
 
 
 def _get_default_executor() -> concurrent.futures.ThreadPoolExecutor:

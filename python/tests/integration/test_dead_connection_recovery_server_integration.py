@@ -21,9 +21,12 @@ variable, they skip.
 from __future__ import annotations
 
 import secrets
+import socket
+import threading
 import time
 from typing import Any
 
+import httpx
 import jwt
 import psycopg
 import pytest
@@ -196,3 +199,76 @@ def test_one_dead_connection_retires_the_connections_of_every_thread(
         recovered = server.get("/me", headers=headers)
         assert recovered.status_code == 200, recovered.text
         assert recovered.json() == {"username": USERNAME}
+
+
+class FreezableProxy:
+    """A TCP proxy to PostgreSQL that can stop forwarding without closing a connection.
+
+    A frozen connection takes the bytes of a query and never answers, as a
+    connection behind a network partition does. Thaw forwards the held bytes.
+    """
+
+    def __init__(self, host: str, port: int) -> None:
+        self._target = (host, port)
+        self._frozen = threading.Event()
+        self._sockets: list[socket.socket] = []
+        self._listener = socket.create_server(("127.0.0.1", 0))
+        self.port = self._listener.getsockname()[1]
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def freeze(self) -> None:
+        self._frozen.set()
+
+    def thaw(self) -> None:
+        self._frozen.clear()
+
+    def close(self) -> None:
+        self.thaw()
+        for sock in [self._listener, *self._sockets]:
+            sock.close()
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                client, _ = self._listener.accept()
+            except OSError:
+                return
+            upstream = socket.create_connection(self._target)
+            self._sockets += [client, upstream]
+            for source, target in ((client, upstream), (upstream, client)):
+                threading.Thread(target=self._forward, args=(source, target), daemon=True).start()
+
+    def _forward(self, source: socket.socket, target: socket.socket) -> None:
+        try:
+            while data := source.recv(65536):
+                while self._frozen.is_set():
+                    time.sleep(0.02)
+                target.sendall(data)
+        except OSError:
+            return
+
+
+def test_a_dead_connection_does_not_wait_for_the_idle_connections_of_its_pool(make_server_project, postgres_database):
+    """A partition can leave the idle connections of the pool unable to answer.
+
+    The thread that finds a dead connection must not send anything on them:
+    it would wait until TCP gives up, and that thread can be an event loop.
+    """
+    proxy = FreezableProxy(postgres_database["host"], int(postgres_database["port"]))
+    params = {**postgres_database, "host": "127.0.0.1", "port": proxy.port}
+    server, _ = start_server(make_server_project, params, settings_extra=POOL)
+    try:
+        with server:
+            assert query_each_orm_thread(server, 1) == ["ok"]
+            proxy.freeze()
+            started = time.monotonic()
+            try:
+                response = server.get("/break-own-connection", timeout=10)
+            except httpx.TimeoutException:
+                pytest.fail("the request that met the dead connection waited on the frozen idle connections")
+            took = time.monotonic() - started
+            proxy.thaw()
+            assert response.status_code == 500, response.text
+            assert took < RECONNECT_BUDGET, f"the failed request took {took:.1f} s"
+    finally:
+        proxy.close()

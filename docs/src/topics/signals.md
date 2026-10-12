@@ -49,7 +49,9 @@ The check before each call costs about 2 µs per open connection. Leave both set
 
 With Django's connection pool (`OPTIONS["pool"]`), `CONN_MAX_AGE` must be `0`. With `CONN_HEALTH_CHECKS` on, the check before each call then returns the connection to the pool and gets a connection again. Leave it off.
 
-Bolt also keeps the pool clean after a database restart. Django returns a connection to the pool when a thread closes it, and the pool gives it to a thread again. Thus Bolt closes the older connections of each thread before it returns them, and the pool drops them. The restart also killed the idle connections of the pool. The pool checks idle connections one at a time, and it sleeps after each one that fails: 0, 1, 2, 4 s and so on. Thus, when Bolt finds a dead connection, it also runs `check()` of its pool. That tests all the idle connections in one pass and replaces the dead ones. The `check` option of the pool is not necessary for this.
+Bolt also keeps the pool clean after a database restart. The restart killed the idle connections of the pool too. The pool checks idle connections one at a time, and it sleeps after each one that fails: 0, 1, 2, 4 s and so on. Thus, when Bolt finds a dead connection, it runs `drain()` of its pool. The pool closes its idle connections and opens new ones. It also drops each older connection that a thread gives back. `drain()` sends nothing on the network, so a network partition cannot make the thread wait. The `check` option of the pool is not necessary for this.
+
+`drain()` is in psycopg_pool 3.3 and later. With an older psycopg_pool, a database with `OPTIONS["pool"]` stops startup with `ImproperlyConfigured`.
 
 ### Third-Party Packages
 

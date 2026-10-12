@@ -69,3 +69,21 @@ async def orm_threads(count: int):
 
     results = await asyncio.gather(*(run_in_orm_executor(select_one) for _ in range(count)), return_exceptions=True)
     return {"results": [result if isinstance(result, str) else type(result).__name__ for result in results]}
+
+
+@api.get("/break-own-connection")
+async def break_own_connection():
+    """Close the raw connection of an ORM pool thread, then query on it.
+
+    The query fails with no network I/O, so the thread finds a dead connection
+    while the network to the database stays as it is.
+    """
+
+    def close_then_query() -> None:
+        connection.ensure_connection()
+        connection.connection.close()
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+
+    await run_in_orm_executor(close_then_query)
+    return {"ok": True}

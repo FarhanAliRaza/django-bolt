@@ -197,7 +197,7 @@ DATABASES = {
 
 Requires `psycopg[pool]` (`pip install "psycopg[pool]"`). With psycopg2, Django raises `ImproperlyConfigured` if `OPTIONS["pool"]` is set.
 
-After a database restart, Bolt drops the pooled connections that opened before it, and it tests the idle connections of the pool in one pass. See [Database Connection Management](../topics/signals.md#database-connection-management).
+After a database restart, Bolt drains the pool, so the pool drops the connections that opened before the restart. Use psycopg_pool 3.3 or later. With an older version, startup stops. See [Database Connection Management](../topics/signals.md#database-connection-management).
 
 ### Option 2: PgBouncer (external pooler)
 

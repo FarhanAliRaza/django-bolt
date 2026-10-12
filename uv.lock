@@ -517,7 +517,7 @@ dev = [
     { name = "nanodjango", specifier = ">=0.16" },
     { name = "openapi-spec-validator", specifier = ">=0.8.5" },
     { name = "psycopg", specifier = ">=3.2" },
-    { name = "psycopg-pool", specifier = ">=3.2" },
+    { name = "psycopg-pool", specifier = ">=3.3" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pyjwt", specifier = ">=2.11" },
     { name = "pytest", specifier = ">=9.0" },

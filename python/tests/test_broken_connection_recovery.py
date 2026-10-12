@@ -32,13 +32,16 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import sqlite3
+import sys
 import threading
 import time
+import types
 
 import jwt
 import pytest
 from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.auth.models import User
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, connections
 from django.db.backends.signals import connection_created
 from django.db.backends.sqlite3.base import DatabaseWrapper as SQLiteWrapper
@@ -465,3 +468,21 @@ def test_check_before_call_gate_follows_the_database_settings(monkeypatch, datab
     concurrency.configure_connection_checks()
 
     assert concurrency._check_before_call is expected
+
+
+@pytest.mark.parametrize("has_drain", [True, False], ids=["psycopg_pool 3.3", "psycopg_pool 3.2"])
+def test_a_pooled_database_needs_a_pool_with_drain(monkeypatch, has_drain):
+    """Bolt drains the pool of a dead connection, so startup refuses a pool without ``drain()``.
+
+    A stand-in module plays psycopg_pool: importing the real one needs libpq.
+    """
+    pool_class = type("ConnectionPool", (), {"drain": lambda _self: None} if has_drain else {})
+    monkeypatch.setitem(sys.modules, "psycopg_pool", types.SimpleNamespace(ConnectionPool=pool_class))
+    options = {**connections.settings["default"].get("OPTIONS", {}), "pool": True}
+    monkeypatch.setitem(connections.settings["default"], "OPTIONS", options)
+
+    if has_drain:
+        concurrency.check_pool_environment()
+    else:
+        with pytest.raises(ImproperlyConfigured, match="psycopg_pool 3.3"):
+            concurrency.check_pool_environment()

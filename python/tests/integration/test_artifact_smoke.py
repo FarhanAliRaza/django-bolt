@@ -62,7 +62,7 @@ def pool_without_drain_python(tmp_path_factory, artifact_path: Path) -> Path:
     return _venv_with(
         tmp_path_factory.mktemp("pool_without_drain_venv"),
         str(artifact_path),
-        "psycopg>=3.2",
+        "psycopg>=3.3",
         PSYCOPG_POOL_WITHOUT_DRAIN,
     )
 

@@ -51,7 +51,7 @@ With Django's connection pool (`OPTIONS["pool"]`), `CONN_MAX_AGE` must be `0`. W
 
 Bolt also keeps the pool clean after a database restart. The restart killed the idle connections of the pool too. The pool checks idle connections one at a time, and it sleeps after each one that fails: 0, 1, 2, 4 s and so on. Thus, when Bolt finds a dead connection, it runs `drain()` of its pool. The pool closes its idle connections and opens new ones. It also drops each older connection that a thread gives back. `drain()` sends nothing on the network, so a network partition cannot make the thread wait. The `check` option of the pool is not necessary for this.
 
-`drain()` is in psycopg_pool 3.3 and later. With an older psycopg_pool, a database with `OPTIONS["pool"]` stops startup with `ImproperlyConfigured`.
+`drain()` is in psycopg_pool 3.3 and later. The `pool` extra installs it: `pip install "django-bolt[pool]"`. With an older psycopg_pool, a database with `OPTIONS["pool"]` stops startup with `ImproperlyConfigured`.
 
 ### Third-Party Packages
 

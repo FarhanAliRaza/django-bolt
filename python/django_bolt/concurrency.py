@@ -323,12 +323,13 @@ def _check_connection_pools() -> None:
     for alias, db in connections.settings.items():
         if not db.get("OPTIONS", {}).get("pool"):
             continue
-        # psycopg_pool is not a dependency of Bolt. Only a pooled database needs it.
+        # The `pool` extra installs psycopg_pool. Only a pooled database needs it.
         from psycopg_pool import ConnectionPool  # noqa: PLC0415
 
         if not hasattr(ConnectionPool, "drain"):
             raise ImproperlyConfigured(
-                f"DATABASES[{alias!r}] uses Django's connection pool. Bolt needs psycopg_pool 3.3 or later for it."
+                f"DATABASES[{alias!r}] uses Django's connection pool. Bolt needs psycopg_pool 3.3 or later "
+                'for it. Install "django-bolt[pool]".'
             )
 
 

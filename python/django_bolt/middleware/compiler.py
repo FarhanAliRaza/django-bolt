@@ -607,7 +607,8 @@ def get_trusted_proxies() -> list[str]:
                 f"BOLT_TRUSTED_PROXIES entry {entry!r} is not an address or CIDR block: {e}"
             ) from e
         # Rust compares addresses with no zone ID, and it rejects an entry with one.
-        if getattr(network.network_address, "scope_id", None) is not None:
+        # Look at the entry: strict=False removes the zone ID when it removes host bits.
+        if "%" in entry:
             raise ImproperlyConfigured(
                 f"BOLT_TRUSTED_PROXIES entry {entry!r} has an IPv6 zone ID. Give the address without '%<zone>'."
             )

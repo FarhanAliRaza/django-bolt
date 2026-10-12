@@ -35,8 +35,10 @@ from django_bolt.testing import AsyncTestClient, TestClient
 def test_django_hook_threadlocal_is_isolated_between_concurrent_async_requests():
     """A hook's thread-local state must stay with its async request."""
     local = threading.local()
-    arrived = 0
-    release_reads = asyncio.Event()
+    # The two requests run on two test worker threads, so they meet at a
+    # thread barrier. An asyncio.Event shared by two threads can lose its
+    # wakeup: set() can run between the check and the append of wait().
+    both_arrived = threading.Barrier(2, timeout=10)
 
     class TenantLikeMiddleware:
         def __init__(self, get_response):
@@ -49,11 +51,7 @@ def test_django_hook_threadlocal_is_isolated_between_concurrent_async_requests()
 
     @api.get("/tenant/{tenant}")
     async def tenant(tenant: str, request: Request):
-        nonlocal arrived
-        arrived += 1
-        if arrived == 2:
-            release_reads.set()
-        await release_reads.wait()
+        await sync_to_thread(both_arrived.wait)
         return {
             "expected": tenant,
             "actual": await run_in_orm_executor(lambda: local.tenant),

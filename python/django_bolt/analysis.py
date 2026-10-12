@@ -488,6 +488,9 @@ def analyze_handler(
 
     visitor = OrmVisitor(request_param_names=request_param_names)
     target = _unwrap(resolve_introspection_target(_unwrap(fn, visitor)), visitor)
+    # A call of a class runs its __init__, which can come from a base class.
+    if inspect.isclass(target):
+        target = _unwrap(target.__init__, visitor)
 
     # Try to get source code
     try:
@@ -509,9 +512,7 @@ def analyze_handler(
         analysis.failure_reason = f"Syntax error parsing source: {e}"
         return analysis
 
-    # A call of a class runs its __init__.
-    code = getattr(target, "__code__", None)
-    name = code.co_name if code is not None else "__init__"
+    name = target.__code__.co_name
     definition = _find_definition(tree, name)
     if definition is None:
         analysis.analysis_failed = True

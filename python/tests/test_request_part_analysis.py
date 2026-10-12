@@ -56,7 +56,7 @@ class TokenInInit:
 
 @dataclass
 class RequestHolder:
-    """The source of this class has no __init__."""
+    """The dataclass makes __init__ at run time, so __init__ has no source."""
 
     request: Any
 
@@ -75,6 +75,33 @@ class TokenReader:
     @reads_the_token_header_of_a_method
     def __call__(self, request):
         return {}
+
+
+def sets_the_token_from_the_header(fn):
+    """A decorator of __init__ that reads a header before __init__ runs."""
+
+    @functools.wraps(fn)
+    def wrapper(self, request):
+        self.token = request.headers.get("x-token")
+        fn(self, request)
+
+    return wrapper
+
+
+class TokenInDecoratedInit:
+    """The decorator of __init__ reads the header, not the body of __init__."""
+
+    @sets_the_token_from_the_header
+    def __init__(self, request):
+        pass
+
+
+class InheritedTokenInInit(TokenInInit):
+    """The class inherits __init__. Its source has only the __init__ of a nested class."""
+
+    class Query:
+        def __init__(self, request):
+            self.query = dict(request.query)
 
 
 def _request_parts(api: BoltAPI, path: str) -> tuple[str, ...]:
@@ -146,8 +173,34 @@ def test_a_class_dependency_gets_the_header_that_its_init_reads():
     assert response.json() == {"token": "secret"}
 
 
-def test_a_class_dependency_without_an_init_in_its_source_gets_every_part():
-    """The analysis finds no __init__ to read, so the route parses every part."""
+def test_a_class_dependency_gets_the_header_that_the_decorator_of_its_init_reads():
+    api = BoltAPI()
+
+    @api.get("/items")
+    def items(holder: Annotated[TokenInDecoratedInit, Depends(TokenInDecoratedInit)]):
+        return {"token": holder.token}
+
+    with TestClient(api) as client:
+        response = client.get("/items", headers={"x-token": "secret"})
+
+    assert response.json() == {"token": "secret"}
+
+
+def test_a_class_dependency_gets_the_header_that_its_inherited_init_reads():
+    api = BoltAPI()
+
+    @api.get("/items")
+    def items(holder: Annotated[InheritedTokenInInit, Depends(InheritedTokenInInit)]):
+        return {"token": holder.token}
+
+    with TestClient(api) as client:
+        response = client.get("/items", headers={"x-token": "secret"})
+
+    assert response.json() == {"token": "secret"}
+
+
+def test_a_class_dependency_whose_init_has_no_source_gets_every_part():
+    """The analysis cannot read the __init__, so the route parses every part."""
     api = BoltAPI()
 
     @api.get("/items")
@@ -226,6 +279,16 @@ def test_a_class_dependency_makes_its_route_parse_only_what_its_init_reads():
     assert _request_parts(api, "/items") == ("headers",)
 
 
+def test_a_class_dependency_makes_its_route_parse_only_what_its_inherited_init_reads():
+    api = BoltAPI()
+
+    @api.get("/items")
+    def items(holder: Annotated[InheritedTokenInInit, Depends(InheritedTokenInInit)]):
+        return {"token": holder.token}
+
+    assert _request_parts(api, "/items") == ("headers",)
+
+
 def test_a_line_with_two_lambdas_makes_the_route_parse_every_part():
     api = BoltAPI()
 
@@ -236,15 +299,16 @@ def test_a_line_with_two_lambdas_makes_the_route_parse_every_part():
     assert _request_parts(api, "/search") == ("body", "query", "headers", "cookies")
 
 
-@pytest.mark.parametrize(
-    ("index", "name"),
-    [(0, "<lambda>"), (1, "__init__")],
-    ids=["two lambdas", "no init"],
-)
-def test_the_failed_analysis_names_the_definition_that_it_did_not_find(index, name):
-    target = (two_lambdas_on_a_line[0], RequestHolder)[index]
-
-    analysis = analyze_handler(target, {"request"})
+def test_the_failed_analysis_names_the_lambda_that_it_did_not_find():
+    analysis = analyze_handler(two_lambdas_on_a_line[0], {"request"})
 
     assert analysis.analysis_failed is True
-    assert analysis.failure_reason == f"Could not find one definition of {name} in its source"
+    assert analysis.failure_reason == "Could not find one definition of <lambda> in its source"
+
+
+def test_the_analysis_fails_for_a_class_whose_init_has_no_source():
+    """A dataclass makes its __init__ at run time, so the __init__ has no source."""
+    analysis = analyze_handler(RequestHolder, {"request"})
+
+    assert analysis.analysis_failed is True
+    assert analysis.failure_reason.startswith("Could not get source:")

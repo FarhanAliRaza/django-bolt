@@ -6,7 +6,7 @@ Provides explicit parameter source annotations and validation metadata.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -356,11 +356,14 @@ def File(
     """
     if allowed_types is not None:
         # A str is a sequence of characters. "image/*" would give "*", and "*" allows each type.
-        if isinstance(allowed_types, (str, bytes)) or not all(isinstance(value, str) for value in allowed_types):
+        # Make the tuple before the item check, so that a generator is read only one time.
+        given = allowed_types
+        is_collection = isinstance(given, Iterable) and not isinstance(given, (str, bytes))
+        allowed_types = tuple(given) if is_collection else ()
+        if not is_collection or not all(isinstance(value, str) for value in allowed_types):
             raise TypeError(
-                f"File(allowed_types=...) takes a list of MIME types, for example ['image/*'], got {allowed_types!r}."
+                f"File(allowed_types=...) takes a list of MIME types, for example ['image/*'], got {given!r}."
             )
-        allowed_types = tuple(allowed_types)
         # A route that allows no file type can take no upload. That is a mistake, so stop here.
         if not allowed_types:
             raise ValueError("File(allowed_types=[]) allows no file type. Remove allowed_types to allow each type.")

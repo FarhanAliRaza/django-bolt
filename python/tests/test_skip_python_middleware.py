@@ -186,3 +186,21 @@ def test_skip_all_skips_the_rust_middleware_of_the_route_too():
 
     assert _headers(first) == set()
     assert second.status_code == 200
+
+
+@pytest.mark.parametrize("first", ["/one", "/both"])
+def test_routes_that_share_a_handler_keep_their_own_global_chain(first):
+    """Each route gets the chain of its own skip list, in either request order."""
+    api = BoltAPI(middleware=[GlobalMiddleware, RouterMiddleware])
+
+    async def handler():
+        return {}
+
+    # The skip list is an attribute of the function, so it can grow between two registrations.
+    api.get("/one")(skip_middleware("GlobalMiddleware")(handler))
+    api.get("/both")(skip_middleware("RouterMiddleware")(handler))
+
+    with TestClient(api) as client:
+        client.get(first)
+        assert _headers(client.get("/one")) == {"X-Router"}
+        assert _headers(client.get("/both")) == set()

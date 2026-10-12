@@ -535,8 +535,10 @@ class BoltAPI:
         self._middleware_chain = None  # Will be the outermost middleware instance
         self._middleware_chain_lock = threading.Lock()
         self._route_executor_cache: dict[Callable, Callable] = {}
-        # The global middleware chains of the routes that skip global middleware.
-        self._route_global_chain_cache: dict[Callable, Callable] = {}
+        # The global middleware chains of the routes that skip global middleware,
+        # by the id of the middleware tuple of each route. Routes that share a
+        # handler can have different skip lists.
+        self._route_global_chain_cache: dict[int, Callable] = {}
         self._route_executor_lock = threading.Lock()
 
         # Handler-to-API mapping for merged APIs (initialized here to avoid hasattr in hot path)
@@ -2843,17 +2845,22 @@ class BoltAPI:
 
         return chain
 
-    def _get_route_global_chain(self, api: BoltAPI, handler: Callable, middleware_specs: Sequence[Any]) -> Callable:
-        """Get or build the global middleware chain of a route that skips global middleware."""
-        chain = api._route_global_chain_cache.get(handler)
+    def _get_route_global_chain(self, api: BoltAPI, middleware_specs: tuple[Any, ...]) -> Callable:
+        """Get or build the global middleware chain of a route that skips global middleware.
+
+        ``middleware_specs`` is the tuple in the metadata of the route. The route
+        keeps it, so its id is stable and unique to the route.
+        """
+        key = id(middleware_specs)
+        chain = api._route_global_chain_cache.get(key)
         if chain is not None:
             return chain
 
         with api._route_executor_lock:
-            chain = api._route_global_chain_cache.get(handler)
+            chain = api._route_global_chain_cache.get(key)
             if chain is None:
                 chain = self._build_middleware_chain(middleware_specs, clone_wrapper=True)
-                api._route_global_chain_cache[handler] = chain
+                api._route_global_chain_cache[key] = chain
 
         return chain
 
@@ -2948,7 +2955,7 @@ class BoltAPI:
                         api._middleware_chain_built = True
             middleware_chain = api._middleware_chain
         else:
-            middleware_chain = self._get_route_global_chain(api, handler, global_middleware)
+            middleware_chain = self._get_route_global_chain(api, global_middleware)
 
         request_state = request.setdefault("state", {})
 

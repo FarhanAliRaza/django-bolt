@@ -758,7 +758,7 @@ class TestOrmDetectionLimits:
         def handler(totals):
             for _value in totals.values():
                 pass
-            return [value for value in totals.values()], sum(value for value in totals.values())
+            return [value * 2 for value in totals.values()], sum(value for value in totals.values())
 
         analysis = analyze_handler(handler)
 

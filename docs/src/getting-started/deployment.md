@@ -195,7 +195,7 @@ DATABASES = {
 }
 ```
 
-Install the `pool` extra: `pip install "django-bolt[pool]"`. It installs psycopg with psycopg_pool 3.3 or later. With psycopg2, Django raises `ImproperlyConfigured` if `OPTIONS["pool"]` is set.
+Install the `pool` extra: `pip install "django-bolt[pool]"`. It installs psycopg with psycopg_pool 3.3 or later. The extra does not install libpq, which psycopg needs at run time. Install libpq on the host, or install `psycopg[binary]`. On free-threaded Python, `psycopg[binary]` has no wheel, so install libpq. With psycopg2, Django raises `ImproperlyConfigured` if `OPTIONS["pool"]` is set.
 
 After a database restart, Bolt drains the pool, so the pool drops the connections that opened before the restart. This needs psycopg_pool 3.3 or later, which the `pool` extra installs. With an older version, startup stops. See [Database Connection Management](../topics/signals.md#database-connection-management).
 

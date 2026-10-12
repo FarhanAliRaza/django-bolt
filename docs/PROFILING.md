@@ -49,6 +49,17 @@ a time, so it shows no queueing and no contention. The ORM cases read 10 users
 from SQLite. Use the count to find a CPU regression. Use bombardier for
 throughput and latency under concurrency.
 
+The job also measures walltime on a CodSpeed macro runner. Walltime includes
+system calls and the time a thread waits. The job runs the process on one core
+with `taskset`. Without a pin, the scheduler places the client, server and pool
+threads differently in each run. A case with a thread pool hop then changes by
+up to 18% with no code change (#430). Pin the process the same way to measure
+walltime locally:
+
+```bash
+taskset -c 3 uv run pytest python/benchmark/http_benchmark.py -p no:django --codspeed --codspeed-mode walltime
+```
+
 ```bash
 just bench-codspeed      # runs each case one time as a check; it measures nothing
 ```

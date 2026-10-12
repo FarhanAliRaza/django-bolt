@@ -165,13 +165,12 @@ async def health():
 
 A name selects a Rust middleware: `cors`, `rate_limit` or `compression`. A name
 also selects a Python middleware by the name or the dotted path of its class or
-function. `*` skips each Python middleware of Bolt. `*` does not skip a Rust
-middleware or a Django middleware. To skip a Rust middleware, give its name. To
-skip a Django middleware, give the name of its class, for example
-`@skip_middleware("CsrfViewMiddleware")`. Thus `*` cannot remove the CSRF check
-of a route.
+function. `*` skips each Bolt middleware: the Python middleware and the Rust
+middleware. `*` does not skip a Django middleware. To skip a Django middleware,
+give the name of its class, for example `@skip_middleware("CsrfViewMiddleware")`.
+Thus `*` cannot remove the CSRF check of a route.
 
-Or skip each Python middleware of Bolt:
+Or skip each Bolt middleware:
 
 ```python
 @api.get("/internal")

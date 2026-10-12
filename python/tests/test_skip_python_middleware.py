@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from django_bolt import BoltAPI, Router
-from django_bolt.middleware import DjangoMiddleware, DjangoMiddlewareStack, middleware, skip_middleware
+from django_bolt.middleware import DjangoMiddleware, DjangoMiddlewareStack, middleware, rate_limit, skip_middleware
 from django_bolt.testing import TestClient
 
 
@@ -168,3 +168,21 @@ def test_a_name_selects_a_function_middleware_and_a_router_middleware():
     with TestClient(api) as client:
         assert _headers(client.get("/skipped")) == set()
         assert _headers(client.get("/plain")) == {"X-Router", "X-Function"}
+
+
+def test_skip_all_skips_the_rust_middleware_of_the_route_too():
+    """ "*" skips each Bolt middleware: the Python ones and the rate limit that Rust runs."""
+    api = BoltAPI(middleware=[GlobalMiddleware])
+
+    @api.get("/all")
+    @skip_middleware("*")
+    @rate_limit(rps=1, burst=1)
+    async def skip_all():
+        return {}
+
+    with TestClient(api) as client:
+        first = client.get("/all")
+        second = client.get("/all")
+
+    assert _headers(first) == set()
+    assert second.status_code == 200

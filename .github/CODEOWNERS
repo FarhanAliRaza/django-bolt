@@ -1,0 +1,10 @@
+# Code owners for django-bolt.
+# GitHub uses the last pattern that matches a path.
+# Each team must be visible and have write access to this repository.
+
+# Maintainers own all files.
+*           @dj-bolt/maintainers
+
+# Admins own the repository configuration, including this file.
+# The workflows publish releases to PyPI, so an admin reviews each change.
+/.github/   @dj-bolt/admins

@@ -36,7 +36,7 @@ import pytest
 
 from .apps import app_module
 from .apps.dead_connection_recovery import SECRET, USERNAME
-from .helpers import postgres_settings
+from .helpers import child_pids, postgres_settings
 
 pytestmark = [pytest.mark.server_integration, pytest.mark.postgres]
 
@@ -334,6 +334,55 @@ def test_forked_workers_do_not_share_the_connections_of_the_parent(make_server_p
     wrong = [result for result in results if result[1] != 200 or result[2]["token"] != result[0]]
     assert not wrong, f"{len(wrong)} of {len(tokens)} requests got no answer or another answer: {wrong[:3]}"
     assert len({body["pid"] for _, _, body in results}) == 2, "both workers must serve requests"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Multiprocess load balancing only runs on Linux.")
+def test_recycled_workers_do_not_share_the_connections_of_the_parent(make_server_project, postgres_database):
+    """A recycled worker forks from the parent long after startup. It must open its own pool too.
+
+    Each worker lives 2 s, so the parent forks new workers while the tokens
+    go out. Each token must come back to the request that sent it.
+    """
+    project = make_server_project(
+        api_module=app_module("dead_connection_recovery"),
+        settings_extra=postgres_settings(postgres_database) + FORK_POOL,
+    )
+    server = project.start(processes=2, extra_args=["--workers-lifetime", "2", "--workers-kill-timeout", "5"])
+    clients = threading.local()
+    opened: list[httpx.Client] = []
+    results: list[tuple[str, int | None, Any]] = []
+    workers: set[int] = set()
+
+    def send(token: str) -> tuple[str, int | None, Any]:
+        if not hasattr(clients, "client"):
+            clients.client = httpx.Client(timeout=10)
+            opened.append(clients.client)
+        # A recycled worker closes its idle keep-alive connections. Send the
+        # request again on a new connection. A wrong token is never sent again.
+        for _ in range(3):
+            try:
+                response = clients.client.get(server.url(f"/echo?token={token}"))
+                break
+            except httpx.TransportError as exc:
+                error = type(exc).__name__
+        else:
+            return token, None, error
+        return token, response.status_code, response.json() if response.status_code == 200 else response.text
+
+    try:
+        with server, ThreadPoolExecutor(32) as senders:
+            workers.update(child_pids(server.process.pid))
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                results += senders.map(send, [secrets.token_hex(8) for _ in range(100)])
+                workers.update(child_pids(server.process.pid))
+    finally:
+        for client in opened:
+            client.close()
+
+    assert len(workers) > 2, f"expected at least one recycled worker, saw {workers}"
+    wrong = [result for result in results if result[1] != 200 or result[2]["token"] != result[0]]
+    assert not wrong, f"{len(wrong)} of {len(results)} requests got no answer or another answer: {wrong[:3]}"
 
 
 ONE_CONNECTION_POOL = """

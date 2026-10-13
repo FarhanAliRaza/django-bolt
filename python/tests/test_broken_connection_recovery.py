@@ -360,9 +360,12 @@ def test_one_event_makes_one_reconnect_wave(monkeypatch):
     monkeypatch.setattr(SQLiteWrapper, "is_usable", _sqlite_is_usable)
     _isolate_generations(monkeypatch)
     a, b, c = _orm_pool(1), _orm_pool(1), _orm_pool(1)
+    b_in_call = threading.Event()
     b_may_query = threading.Event()
 
     def wait_then_select() -> int:
+        # The check before the call has run: B keeps its dead connection.
+        b_in_call.set()
         b_may_query.wait(5)
         return _select_one()
 
@@ -380,6 +383,7 @@ def test_one_event_makes_one_reconnect_wave(monkeypatch):
             pool.submit(_kill_silently).result()
 
         late = b.submit(concurrency._call_guarded, wait_then_select)
+        assert b_in_call.wait(5), "thread B did not start its call"
         with pytest.raises(DatabaseError):
             a.submit(concurrency._call_guarded, _select_one).result()
 

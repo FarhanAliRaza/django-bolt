@@ -201,6 +201,15 @@ With a pool, a thread of Bolt holds a connection only while it has work. A worke
 
 `runbolt --processes N` closes the connections and the pools of its parent before it starts each worker. Each worker opens its own pool.
 
+On macOS, a forked worker can stop with a segmentation fault when it opens a PostgreSQL connection. libpq tries GSSAPI encryption first, and the macOS libraries for GSSAPI are not safe after `fork()`. This occurs with and without a pool. Turn GSSAPI encryption off in `OPTIONS`:
+
+```python
+# settings.py
+DATABASES["default"]["OPTIONS"] |= {"gssencmode": "disable"}
+```
+
+You can also set the environment variable `PGGSSENCMODE=disable`. libpq reads it. Linux does not need this setting.
+
 Leave `CONN_HEALTH_CHECKS` off for a pooled database, and do not set `check` in `OPTIONS["pool"]`. The pool runs a check on each checkout, and a worker checks out a connection again after each idle time. Thus many ORM calls get one more round trip. Bolt logs a warning at startup when a pool has a check.
 
 After a database restart, Bolt drains the pool when it finds the first dead connection. The pool closes its idle connections, and it drops each older connection that a thread gives back. This needs psycopg_pool 3.3 or later, which the `pool` extra installs. With an older version, Bolt logs a warning at startup and does not drain the pool. Then each dead idle connection of the pool fails one request. See [Database Connection Management](../topics/signals.md#database-connection-management).

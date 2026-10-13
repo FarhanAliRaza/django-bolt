@@ -309,16 +309,27 @@ def test_forked_workers_do_not_share_the_connections_of_the_parent(make_server_p
     """
     server, _ = start_server(make_server_project, postgres_database, processes=2, settings_extra=FORK_POOL)
     tokens = [secrets.token_hex(8) for _ in range(400)]
+    # One client for each sender thread. httpcore does not make a client safe
+    # to share between threads, and on a free-threaded build no GIL hides that.
+    clients = threading.local()
+    opened: list[httpx.Client] = []
 
     def send(token: str) -> tuple[str, int | None, Any]:
+        if not hasattr(clients, "client"):
+            clients.client = httpx.Client(timeout=10)
+            opened.append(clients.client)
         try:
-            response = server.get(f"/echo?token={token}", timeout=10)
+            response = clients.client.get(server.url(f"/echo?token={token}"))
         except httpx.HTTPError as exc:
             return token, None, type(exc).__name__
         return token, response.status_code, response.json() if response.status_code == 200 else response.text
 
-    with server, ThreadPoolExecutor(32) as senders:
-        results = list(senders.map(send, tokens))
+    try:
+        with server, ThreadPoolExecutor(32) as senders:
+            results = list(senders.map(send, tokens))
+    finally:
+        for client in opened:
+            client.close()
 
     wrong = [result for result in results if result[1] != 200 or result[2]["token"] != result[0]]
     assert not wrong, f"{len(wrong)} of {len(tokens)} requests got no answer or another answer: {wrong[:3]}"

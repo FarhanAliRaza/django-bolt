@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import secrets
 import socket
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -296,6 +297,9 @@ DATABASES["default"]["OPTIONS"] = {"pool": {"min_size": 4, "max_size": 16}}
 """
 
 
+# macOS does not spread connections across SO_REUSEPORT sockets: one worker
+# serves each request, so the two workers never share a connection there.
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Multiprocess load balancing only runs on Linux.")
 def test_forked_workers_do_not_share_the_connections_of_the_parent(make_server_project, postgres_database):
     """The parent of ``runbolt`` opens the pool for the migration check, then forks its workers.
 

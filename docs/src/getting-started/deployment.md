@@ -15,7 +15,7 @@ Use `--processes` to scale your API. Each process runs a separate Python interpr
 python manage.py runbolt --processes 4
 ```
 
-Under the hood, Django-Bolt uses `SO_REUSEPORT` so the kernel load-balances incoming connections across all processes.
+Under the hood, Django-Bolt uses `SO_REUSEPORT` so the kernel load-balances incoming connections across all processes. Linux does this. macOS accepts `SO_REUSEPORT` but sends each connection to one process, so more processes add no throughput in local development on a Mac.
 
 **Rule of thumb:** Set `--processes` to the number of CPU cores available.
 
@@ -201,14 +201,7 @@ With a pool, a thread of Bolt holds a connection only while it has work. A worke
 
 `runbolt --processes N` closes the connections and the pools of its parent before it starts each worker. Each worker opens its own pool.
 
-On macOS, a forked worker can stop with a segmentation fault when it opens a PostgreSQL connection. libpq tries GSSAPI encryption first, and the macOS libraries for GSSAPI are not safe after `fork()`. This occurs with and without a pool. Turn GSSAPI encryption off in `OPTIONS`:
-
-```python
-# settings.py
-DATABASES["default"]["OPTIONS"] |= {"gssencmode": "disable"}
-```
-
-You can also set the environment variable `PGGSSENCMODE=disable`. libpq reads it. Linux does not need this setting.
+On macOS, a forked worker can hang or crash when it opens a PostgreSQL connection. Set `PGGSSENCMODE=disable` for local development. See [the FAQ](../faq.md#why-does-runbolt-hang-on-macos-when-it-connects-to-postgresql).
 
 Leave `CONN_HEALTH_CHECKS` off for a pooled database, and do not set `check` in `OPTIONS["pool"]`. The pool runs a check on each checkout, and a worker checks out a connection again after each idle time. Thus many ORM calls get one more round trip. Bolt logs a warning at startup when a pool has a check.
 

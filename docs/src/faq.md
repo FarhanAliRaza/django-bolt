@@ -196,7 +196,7 @@ This setting turns off GSSAPI encryption only. If the connection must be encrypt
    "name": "Why does runbolt hang on macOS when it connects to PostgreSQL?",
    "acceptedAnswer": {
     "@type": "Answer",
-    "text": "This affects local development on macOS with libpq (psycopg). A forked runbolt worker can hang, or stop with a segmentation fault, when it opens a PostgreSQL connection. This occurs with and without Django's connection pool. Workers fork with --processes 2 or more, and with a worker recycling option. When libpq is built with GSSAPI support, gssencmode is prefer by default, so libpq calls the macOS Kerberos (GSS) framework, which is not safe to use after fork(). Set PGGSSENCMODE=disable, or set \"gssencmode\": \"disable\" in DATABASES[\"default\"][\"OPTIONS\"]. This turns off GSSAPI encryption only; use TLS with sslmode if the connection must be encrypted. Linux does not need this setting."
+    "text": "This affects local development on macOS with libpq (psycopg). A forked runbolt worker can hang, or stop with a segmentation fault, when it opens a PostgreSQL connection. This occurs with and without Django's connection pool. Workers fork with --processes 2 or more, and with a worker recycling option. When libpq is built with GSSAPI support, gssencmode is prefer by default. Then libpq calls the macOS Kerberos (GSS) framework, which is not safe to use after fork(). Set PGGSSENCMODE=disable, or set \"gssencmode\": \"disable\" in DATABASES[\"default\"][\"OPTIONS\"]. This turns off GSSAPI encryption only; use TLS with sslmode if the connection must be encrypted. Linux does not need this setting."
    }
   }
  ]

@@ -25,6 +25,7 @@ import secrets
 import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import httpx
@@ -74,6 +75,7 @@ def start_server(
     params: dict[str, Any],
     *,
     orm_threads: int = 1,
+    processes: int = 1,
     settings_extra: str = "",
     **database_options: Any,
 ):
@@ -88,7 +90,9 @@ def start_server(
         api_module=app_module("dead_connection_recovery"),
         settings_extra=postgres_settings(params, **database_options) + settings_extra,
     )
-    server = project.start(env={"PGAPPNAME": application_name, "DJANGO_BOLT_ORM_THREADS": str(orm_threads)})
+    server = project.start(
+        processes=processes, env={"PGAPPNAME": application_name, "DJANGO_BOLT_ORM_THREADS": str(orm_threads)}
+    )
     return server, application_name
 
 
@@ -276,3 +280,142 @@ def test_a_dead_connection_does_not_wait_for_the_idle_connections_of_its_pool(ma
             assert took < RECONNECT_BUDGET, f"the failed request took {took:.1f} s"
     finally:
         proxy.close()
+
+
+# --- Connection pools: forks, slots, streams, and aliases -------------------
+
+
+def backend_pids(params: dict[str, Any], application_name: str) -> set[int]:
+    with psycopg.connect(**params, autocommit=True) as conn:
+        rows = conn.execute("SELECT pid FROM pg_stat_activity WHERE application_name = %s", (application_name,))
+        return {pid for (pid,) in rows.fetchall()}
+
+
+FORK_POOL = """
+DATABASES["default"]["OPTIONS"] = {"pool": {"min_size": 4, "max_size": 16}}
+"""
+
+
+def test_forked_workers_do_not_share_the_connections_of_the_parent(make_server_project, postgres_database):
+    """The parent of ``runbolt`` opens the pool for the migration check, then forks its workers.
+
+    A worker that inherits the sockets of that pool shares PostgreSQL sessions
+    with the other worker, and each reads the query results of the other. Each
+    token must come back to the request that sent it.
+    """
+    server, _ = start_server(make_server_project, postgres_database, processes=2, settings_extra=FORK_POOL)
+    tokens = [secrets.token_hex(8) for _ in range(400)]
+
+    def send(token: str) -> tuple[str, int | None, Any]:
+        try:
+            response = server.get(f"/echo?token={token}", timeout=10)
+        except httpx.HTTPError as exc:
+            return token, None, type(exc).__name__
+        return token, response.status_code, response.json() if response.status_code == 200 else response.text
+
+    with server, ThreadPoolExecutor(32) as senders:
+        results = list(senders.map(send, tokens))
+
+    wrong = [result for result in results if result[1] != 200 or result[2]["token"] != result[0]]
+    assert not wrong, f"{len(wrong)} of {len(tokens)} requests got no answer or another answer: {wrong[:3]}"
+    assert len({body["pid"] for _, _, body in results}) == 2, "both workers must serve requests"
+
+
+ONE_CONNECTION_POOL = """
+DATABASES["default"]["OPTIONS"] = {"pool": {"min_size": 1, "max_size": 1, "timeout": 5}}
+"""
+
+
+def test_a_pooled_connection_goes_back_to_its_pool_after_each_call(make_server_project, postgres_database):
+    """A thread that kept its pooled connection would hold a pool slot while it is idle.
+
+    Two ORM threads share one connection here. The call on each thread gives
+    the connection back when it ends, so the call on the other thread gets it.
+    """
+    server, _ = start_server(make_server_project, postgres_database, orm_threads=2, settings_extra=ONE_CONNECTION_POOL)
+    with server:
+        for _ in range(3):
+            assert query_each_orm_thread(server, 2) == ["ok", "ok"]
+
+
+def test_a_user_load_on_the_event_loop_gives_its_pooled_connection_back(make_server_project, postgres_database):
+    """A handler with no await runs on the worker thread, and its lazy user load blocks that thread's loop.
+
+    The load runs as one guarded call on that thread. It must give the
+    connection back when it ends, or the one connection of the pool stays
+    with the worker thread.
+    """
+    server, _ = start_server(make_server_project, postgres_database, settings_extra=ONE_CONNECTION_POOL)
+    with server:
+        headers = seed_and_authenticate(server)
+        for _ in range(3):
+            response = server.get("/me-inline", headers=headers)
+            assert response.status_code == 200, response.text
+            assert response.json() == {"username": USERNAME}
+            assert query_each_orm_thread(server, 1) == ["ok"]
+
+
+TWO_CONNECTION_POOL = """
+DATABASES["default"]["OPTIONS"] = {"pool": {"min_size": 1, "max_size": 2, "timeout": 5}}
+"""
+
+
+def test_a_streaming_body_gives_its_connection_back(make_server_project, postgres_database):
+    """A sync streaming body runs on a thread of its own, for one response.
+
+    A connection that the body opened would never go back to the pool, so
+    each such response would hold one pool slot for the life of the process.
+    """
+    server, _ = start_server(make_server_project, postgres_database, settings_extra=TWO_CONNECTION_POOL)
+    with server:
+        for _ in range(4):
+            response = server.get("/stream?rows=3", timeout=15)
+            assert response.status_code == 200, response.text
+            assert response.text == "1\n2\n3\n"
+        assert query_each_orm_thread(server, 1) == ["ok"]
+
+
+def two_databases(other_application_name: str) -> str:
+    return f"""
+DATABASES["default"]["CONN_MAX_AGE"] = 600
+DATABASES["other"] = {{
+    **DATABASES["default"],
+    "OPTIONS": {{"application_name": {other_application_name!r}}},
+}}
+"""
+
+
+def test_a_dead_connection_reconnects_the_connections_of_its_own_database_only(make_server_project, postgres_database):
+    """A failover of one database must not close the connections to another one.
+
+    Both aliases point at one PostgreSQL database here, under two
+    ``application_name`` values, so the kill can end the connections of one alias.
+    """
+    other_application_name = f"bolt-other-{secrets.token_hex(4)}"
+    server, application_name = start_server(
+        make_server_project,
+        postgres_database,
+        orm_threads=2,
+        settings_extra=two_databases(other_application_name),
+    )
+    with server:
+        assert server.get("/orm-threads-both-databases?count=2").json()["results"] == ["ok", "ok"]
+        other_before = backend_pids(postgres_database, other_application_name)
+        assert len(other_before) == 2, "each ORM thread must keep a connection to the other database"
+
+        terminate_backends(postgres_database, application_name)
+        assert server.get("/orm-threads-both-databases?count=1").json()["results"] == ["OperationalError"]
+        assert server.get("/orm-threads-both-databases?count=2").json()["results"] == ["ok", "ok"]
+
+        assert backend_pids(postgres_database, other_application_name) == other_before
+
+
+def test_a_pool_check_logs_a_warning_at_startup(make_server_project, postgres_database):
+    """Bolt gives a pooled connection back after each call, so a pool check adds a round trip to each call."""
+    server, _ = start_server(
+        make_server_project, postgres_database, settings_extra=TWO_CONNECTION_POOL, CONN_HEALTH_CHECKS=True
+    )
+    with server:
+        assert query_each_orm_thread(server, 1) == ["ok"]
+    stdout, stderr = server.stop()
+    assert "gives its connection pool a check callback through CONN_HEALTH_CHECKS" in stdout + stderr

@@ -39,7 +39,7 @@ import jwt
 import pytest
 from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.auth.models import User
-from django.db import connection, connections
+from django.db import DatabaseError, connection, connections
 from django.db.backends.signals import connection_created
 from django.db.backends.sqlite3.base import DatabaseWrapper as SQLiteWrapper
 
@@ -225,11 +225,18 @@ def test_nested_orm_handoff_inside_a_thread_sensitive_call_with_one_orm_thread(s
 # --- One dead connection retires the connections of every thread -----------
 
 
+def _isolate_generations(monkeypatch) -> None:
+    """A connection that dies in a test must not retire the connections of later tests."""
+    monkeypatch.setattr(concurrency, "_generations", dict(concurrency._generations))
+    monkeypatch.setattr(concurrency, "_generation_epoch", concurrency._generation_epoch)
+    monkeypatch.setattr(concurrency, "_pool_epochs", dict(concurrency._pool_epochs))
+
+
 @pytest.fixture
 def two_orm_threads(monkeypatch):
     monkeypatch.setattr(SQLiteWrapper, "is_usable", _sqlite_is_usable)
     # A connection that dies in a test must not retire the connections of later tests.
-    monkeypatch.setattr(concurrency, "_connection_generation", concurrency._connection_generation)
+    _isolate_generations(monkeypatch)
     pool = _orm_pool(2)
     monkeypatch.setattr(concurrency, "_orm_executor", pool)
     yield
@@ -324,7 +331,7 @@ def test_an_error_on_a_connection_that_still_answers_retires_nothing(two_orm_thr
 def test_a_lane_reconnects_when_a_request_starts_after_another_thread_met_a_dead_connection(monkeypatch):
     """A lane runs its checks in ``open_lane_request``, not before each call."""
     monkeypatch.setattr(SQLiteWrapper, "is_usable", _sqlite_is_usable)
-    monkeypatch.setattr(concurrency, "_connection_generation", concurrency._connection_generation)
+    _isolate_generations(monkeypatch)
     lane, pool = _orm_pool(1), _orm_pool(1)
     monkeypatch.setattr(concurrency, "_orm_executor", pool)
     try:
@@ -339,6 +346,58 @@ def test_a_lane_reconnects_when_a_request_starts_after_another_thread_met_a_dead
     finally:
         shutdown_closing_connections(lane)
         shutdown_closing_connections(pool)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_one_event_makes_one_reconnect_wave(monkeypatch):
+    """A thread that meets a dead connection of an event that already advanced the generation advances nothing.
+
+    Thread A finds the first dead connection, and thread C reconnects before
+    its next call. Thread B started its call before the advance, so it meets
+    its dead connection later. Without the check, B advances the generation a
+    second time, and C closes the connection that it has just opened.
+    """
+    monkeypatch.setattr(SQLiteWrapper, "is_usable", _sqlite_is_usable)
+    _isolate_generations(monkeypatch)
+    a, b, c = _orm_pool(1), _orm_pool(1), _orm_pool(1)
+    b_may_query = threading.Event()
+
+    def wait_then_select() -> int:
+        b_may_query.wait(5)
+        return _select_one()
+
+    opened_on_c: list[object] = []
+
+    def count_on_c(sender, connection, **kwargs) -> None:
+        if threading.get_ident() == c_thread:
+            opened_on_c.append(connection)
+
+    try:
+        for pool in (a, b, c):
+            assert pool.submit(concurrency._call_guarded, _select_one).result() == 1
+        c_thread = c.submit(threading.get_ident).result()
+        for pool in (a, b, c):
+            pool.submit(_kill_silently).result()
+
+        late = b.submit(concurrency._call_guarded, wait_then_select)
+        with pytest.raises(DatabaseError):
+            a.submit(concurrency._call_guarded, _select_one).result()
+
+        connection_created.connect(count_on_c)
+        try:
+            assert c.submit(concurrency._call_guarded, _select_one).result() == 1
+            b_may_query.set()
+            with pytest.raises(DatabaseError):
+                late.result(5)
+            assert c.submit(concurrency._call_guarded, _select_one).result() == 1
+        finally:
+            connection_created.disconnect(count_on_c)
+    finally:
+        b_may_query.set()
+        for pool in (a, b, c):
+            shutdown_closing_connections(pool)
+
+    assert len(opened_on_c) == 1, "thread C reconnected again after the second report of the same event"
 
 
 # --- The user-loading path and the _check_before_call gate ------------------

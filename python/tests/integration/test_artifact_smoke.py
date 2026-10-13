@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from .apps import app_source
-from .helpers import _terminate_process
 
 pytestmark = pytest.mark.artifact_smoke
 
@@ -131,8 +130,12 @@ def test_the_pool_extra_refuses_a_pool_without_drain(installed_artifact_python: 
     assert "psycopg-pool>=3.3" in result.stdout + result.stderr
 
 
-def test_runbolt_stops_on_a_pool_without_drain(make_server_project, pool_without_drain_python: Path):
-    """Without the ``pool`` extra, psycopg_pool 3.2 can stay. Startup then stops and names the extra."""
+def test_runbolt_warns_on_a_pool_without_drain(make_server_project, pool_without_drain_python: Path):
+    """Without the ``pool`` extra, psycopg_pool 3.2 can stay. The server runs, and a startup warning names the extra.
+
+    Bolt then cannot drain the pool: after a database restart, each dead idle
+    connection of the pool fails one request.
+    """
     project = make_server_project(
         python_executable=str(pool_without_drain_python),
         preserve_pythonpath=False,
@@ -140,13 +143,11 @@ def test_runbolt_stops_on_a_pool_without_drain(make_server_project, pool_without
         settings_extra=POOLED_DATABASE,
     )
 
-    process, _port = project.spawn()
-    try:
-        _stdout, stderr = process.communicate(timeout=60)
-    except subprocess.TimeoutExpired:
-        _stdout, stderr = _terminate_process(process)
-        pytest.fail(f"runbolt kept running with psycopg_pool 3.2\nstderr:\n{stderr}")
+    server = project.start()
+    with server:
+        assert server.get("/health").status_code == 200
+    stdout, stderr = server.stop()
 
-    assert process.returncode != 0, stderr
-    assert "psycopg_pool 3.3 or later" in stderr, stderr
-    assert 'Install "django-bolt[pool]"' in stderr, stderr
+    output = stdout + stderr
+    assert "psycopg_pool before 3.3" in output, output
+    assert 'Install "django-bolt[pool]"' in output, output

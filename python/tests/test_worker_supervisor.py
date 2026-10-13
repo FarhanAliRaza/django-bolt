@@ -309,3 +309,29 @@ def test_run_succeeds_after_a_requested_shutdown():
     supervisor.request_shutdown()
 
     assert supervisor.run() == 0
+
+
+def test_run_succeeds_when_a_shutdown_follows_a_worker_failure():
+    """A stop request after a worker failed is a clean stop, for example ``systemctl stop``."""
+    env = FakeWorkerEnv()
+    exit_code_1 = 1 << 8
+    supervisor: WorkerSupervisor | None = None
+
+    def spawn(slot: int) -> int:
+        pid = env.spawn(slot)
+        if slot == 0:
+            env.exit(pid, exit_code_1)
+        return pid
+
+    def kill_then_exit(pid: int, signum: int) -> None:
+        env.kill(pid, signum)
+        env.exit(pid, 0)
+
+    def log(message: str) -> None:
+        # The supervisor logs the failure of slot 0, then the stop request arrives.
+        if "exited unexpectedly" in message:
+            supervisor.request_shutdown()
+
+    supervisor = make_supervisor(env, processes=2, spawn=spawn, kill=kill_then_exit, log=log, check_interval=0.01)
+
+    assert supervisor.run() == 0

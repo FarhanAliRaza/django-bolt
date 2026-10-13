@@ -212,7 +212,7 @@ export DJANGO_BOLT_ORM_THREADS=8
 
 **Default:** `1` when every database is SQLite, otherwise `4`.
 
-Each thread holds one database connection. Increase the value when one free-threaded process runs many worker threads. See [Size the database thread pools](../getting-started/deployment.md#size-the-database-thread-pools). The value must be an int of `1` or more.
+Without a connection pool, each thread holds one database connection. With a pool, a thread holds a connection only during a call. Increase the value when one free-threaded process runs many worker threads. See [Size the database thread pools](../getting-started/deployment.md#size-the-database-thread-pools). The value must be an int of `1` or more.
 
 ### DJANGO_BOLT_LANE_IDLE_SECONDS
 

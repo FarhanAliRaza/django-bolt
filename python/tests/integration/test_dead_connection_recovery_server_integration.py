@@ -419,3 +419,23 @@ def test_a_pool_check_logs_a_warning_at_startup(make_server_project, postgres_da
         assert query_each_orm_thread(server, 1) == ["ok"]
     stdout, stderr = server.stop()
     assert "gives its connection pool a check callback through CONN_HEALTH_CHECKS" in stdout + stderr
+
+
+# A backend on top of Django's PostgreSQL backend, as PostGIS is. Its ENGINE
+# path does not contain "postgresql".
+POSTGRESQL_BASED_BACKEND = "from django.db.backends.postgresql.base import DatabaseWrapper  # noqa: F401\n"
+
+
+def test_a_pool_check_logs_a_warning_for_a_backend_based_on_postgresql(make_server_project, postgres_database):
+    """PostGIS and other backends based on PostgreSQL get the startup checks of the pool too."""
+    project = make_server_project(
+        api_module=app_module("dead_connection_recovery"),
+        settings_extra=postgres_settings(postgres_database, engine="pgbased", CONN_HEALTH_CHECKS=True)
+        + TWO_CONNECTION_POOL,
+        extra_files={"pgbased/__init__.py": "", "pgbased/base.py": POSTGRESQL_BASED_BACKEND},
+    )
+    server = project.start()
+    with server:
+        assert query_each_orm_thread(server, 1) == ["ok"]
+    stdout, stderr = server.stop()
+    assert "gives its connection pool a check callback through CONN_HEALTH_CHECKS" in stdout + stderr

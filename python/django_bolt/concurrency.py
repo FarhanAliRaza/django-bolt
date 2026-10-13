@@ -451,7 +451,8 @@ def _check_connection_pools() -> None:
         return
     for alias, db in connections.settings.items():
         pool_options = db.get("OPTIONS", {}).get("pool")
-        if not pool_options or "postgresql" not in db.get("ENGINE", ""):
+        # The vendor covers backends on top of PostgreSQL, such as PostGIS.
+        if not pool_options or connections[alias].vendor != "postgresql":
             continue
         # The `pool` extra installs psycopg_pool. Only a pooled PostgreSQL database needs it.
         from psycopg_pool import ConnectionPool  # noqa: PLC0415

@@ -41,11 +41,12 @@ __all__ = ("LaneAffinityError", "in_orm_executor_thread", "run_in_orm_executor",
 _check_before_call = False
 
 # The aliases whose DATABASES entry sets OPTIONS["pool"]. A pooled connection
-# goes back to its pool at the end of each unit of work: the outermost pool
-# hand-off, a lane request, or a sync dispatch. A thread that kept it would hold
-# a pool slot while it is idle, and idle threads and lanes can outnumber
-# max_size. The pool checks its own connections, so the check before a call
-# leaves these aliases out.
+# goes back to its pool when the thread that holds it has no more work: a
+# worker of a Bolt executor when its queue is empty, a lane at the end of its
+# request, and another thread at the end of its outermost guarded call. A
+# thread that kept it would hold a pool slot while it is idle, and idle threads
+# and lanes can outnumber max_size. The pool checks its own connections, so the
+# check before a call leaves these aliases out.
 _pooled_aliases: frozenset[str] = frozenset()
 
 
@@ -139,6 +140,10 @@ class _ThreadState(threading.local):
     # pooled connection skips the release, which reads Django's connection
     # handler through a lock.
     holds_pooled = False
+    # Set on a worker of a Bolt executor. It gives its pooled connections back
+    # when its queue is empty (see _ReleasePooledConnectionsWhenIdle), not
+    # after each call, so calls that wait in its queue use the same connection.
+    releases_when_idle = False
 
 
 _thread_state = _ThreadState()
@@ -273,9 +278,71 @@ def _call_guarded_pooled[T](fn: Callable[..., T], args: tuple[object, ...], kwar
         raise
     finally:
         state.depth -= 1
-        # A lane gives its pooled connections back at the end of its request.
-        if state.holds_pooled and not state.depth and not state.is_lane:
+        # A lane gives its pooled connections back at the end of its request,
+        # and an executor worker when its queue is empty.
+        if state.holds_pooled and not state.depth and not (state.is_lane or state.releases_when_idle):
             release_pooled_connections()
+
+
+class _ReleasePooledConnectionsWhenIdle:
+    """The idle semaphore of a Bolt executor. A worker that goes idle gives its pooled connections back.
+
+    A ``ThreadPoolExecutor`` worker calls ``release()`` on its own thread when
+    its queue is empty, just before it waits for the next item (CPython 3.12
+    to 3.14). While calls wait in the queue, the worker keeps its connection,
+    so a burst does not pay a pool checkout for each call. An idle worker
+    holds no pool slot.
+    """
+
+    __slots__ = ("_semaphore",)
+
+    def __init__(self, semaphore: threading.Semaphore) -> None:
+        self._semaphore = semaphore
+
+    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
+        return self._semaphore.acquire(blocking, timeout)
+
+    def release(self, n: int = 1) -> None:
+        if _thread_state.holds_pooled:
+            try:
+                release_pooled_connections()
+            except Exception:
+                # An exception here would end the worker thread, and the
+                # executor would not start a new one.
+                logger.exception("Could not give the pooled database connections of an idle worker back")
+        self._semaphore.release(n)
+
+
+# False when this Python's ThreadPoolExecutor has no idle semaphore. The
+# workers then give their pooled connections back after each call.
+_idle_release_available = True
+
+
+def _new_executor(
+    workers: int, thread_name_prefix: str, initializer: Callable[[], None] | None = None
+) -> concurrent.futures.ThreadPoolExecutor:
+    """Make a Bolt executor whose workers give their pooled connections back when they go idle.
+
+    ``initializer`` runs on each worker thread when it starts, as in ``ThreadPoolExecutor``.
+    """
+    global _idle_release_available
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=workers,
+        thread_name_prefix=thread_name_prefix,
+        initializer=partial(_mark_executor_thread, initializer),
+    )
+    semaphore = getattr(executor, "_idle_semaphore", None)
+    if semaphore is None:
+        _idle_release_available = False
+    else:
+        executor._idle_semaphore = _ReleasePooledConnectionsWhenIdle(semaphore)
+    return executor
+
+
+def _mark_executor_thread(initializer: Callable[[], None] | None) -> None:
+    _thread_state.releases_when_idle = _idle_release_available
+    if initializer is not None:
+        initializer()
 
 
 # Request lanes: see crates/bolt-core/src/lane.rs.
@@ -442,10 +509,10 @@ def _check_connection_pools() -> None:
     psycopg_pool 3.3 and later. Without it, the pool keeps its dead idle
     connections after a restart, and each one fails one request.
 
-    Bolt gives a pooled connection back after each unit of work, so a pool
-    ``check`` callback runs on each checkout: one more round trip for each ORM
-    call. ``CONN_HEALTH_CHECKS`` adds that callback. The drain already removes
-    the connections that a restart ends.
+    A Bolt worker gives its pooled connection back when it goes idle, so a
+    pool ``check`` callback runs on each checkout after an idle time: one more
+    round trip for many ORM calls. ``CONN_HEALTH_CHECKS`` adds that callback.
+    The drain already removes the connections that a restart ends.
     """
     if not settings.configured:
         return
@@ -468,7 +535,7 @@ def _check_connection_pools() -> None:
         if has_check or db.get("CONN_HEALTH_CHECKS"):
             logger.warning(
                 "DATABASES[%r] gives its connection pool a check callback%s. Bolt returns a pooled "
-                "connection after each ORM call, so the check adds a round trip to each call. "
+                "connection when a worker goes idle, so the check adds a round trip to many calls. "
                 "Bolt drains the pool when it finds a dead connection, so the check is not necessary.",
                 alias,
                 "" if has_check else " through CONN_HEALTH_CHECKS",
@@ -502,9 +569,7 @@ def _get_default_executor() -> concurrent.futures.ThreadPoolExecutor:
         if _default_executor is None:
             workers = _thread_count("DJANGO_BOLT_EXECUTOR_THREADS") or min(32, (os.cpu_count() or 1) + 4)
             configure_connection_checks()
-            _default_executor = concurrent.futures.ThreadPoolExecutor(
-                max_workers=workers, thread_name_prefix="bolt_default"
-            )
+            _default_executor = _new_executor(workers, "bolt_default")
         return _default_executor
 
 
@@ -575,11 +640,7 @@ def _get_orm_executor() -> concurrent.futures.ThreadPoolExecutor:
         if _orm_executor is None:
             workers = _thread_count("DJANGO_BOLT_ORM_THREADS") or _default_orm_workers()
             configure_connection_checks()
-            _orm_executor = concurrent.futures.ThreadPoolExecutor(
-                max_workers=workers,
-                thread_name_prefix="bolt_orm",
-                initializer=_mark_orm_thread,
-            )
+            _orm_executor = _new_executor(workers, "bolt_orm", _mark_orm_thread)
         return _orm_executor
 
 

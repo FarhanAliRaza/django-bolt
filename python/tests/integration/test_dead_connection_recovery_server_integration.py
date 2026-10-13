@@ -355,6 +355,34 @@ def test_a_user_load_on_the_event_loop_gives_its_pooled_connection_back(make_ser
             assert query_each_orm_thread(server, 1) == ["ok"]
 
 
+def test_an_orm_thread_keeps_its_pooled_connection_while_calls_wait_for_it(make_server_project, postgres_database):
+    """A thread with queued work keeps its connection. It gives it back when its queue is empty.
+
+    One ORM thread gets five calls at once. A checkout and a return for each
+    call would cost a round trip to the pool each time.
+    """
+    server, _ = start_server(make_server_project, postgres_database, settings_extra=POOL)
+    with server:
+        response = server.get("/queued-orm-calls?count=5")
+        assert response.status_code == 200, response.text
+        assert response.json() == {"results": ["ok"] * 5, "checkouts": 1}
+
+
+def test_the_default_executor_gives_its_pooled_connection_back(make_server_project, postgres_database):
+    """``sync_to_async(thread_sensitive=False)`` runs on the default executor of the loop.
+
+    The pool has one connection. When the executor thread kept it, the next
+    call on the ORM pool would wait for the pool timeout and fail.
+    """
+    server, _ = start_server(make_server_project, postgres_database, settings_extra=ONE_CONNECTION_POOL)
+    with server:
+        for _ in range(3):
+            response = server.get("/default-executor-query")
+            assert response.status_code == 200, response.text
+            assert response.json() == {"result": "ok"}
+            assert query_each_orm_thread(server, 1) == ["ok"]
+
+
 TWO_CONNECTION_POOL = """
 DATABASES["default"]["OPTIONS"] = {"pool": {"min_size": 1, "max_size": 2, "timeout": 5}}
 """

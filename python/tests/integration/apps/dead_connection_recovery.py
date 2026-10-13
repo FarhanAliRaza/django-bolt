@@ -26,6 +26,12 @@ iterates it.
 
 ``/orm-threads-both-databases`` is ``/orm-threads`` with one query on the
 ``other`` alias before the query on ``default``.
+
+``/queued-orm-calls`` queues ``count`` calls on the ORM pool at once and
+returns how many connections they opened or checked out of a pool.
+
+``/default-executor-query`` queries through ``sync_to_async`` with
+``thread_sensitive=False``, which runs on the default executor of the loop.
 """
 
 from __future__ import annotations
@@ -34,9 +40,11 @@ import asyncio
 import os
 import threading
 
+from asgiref.sync import sync_to_async
 from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.db import connection, connections
+from django.db.backends.signals import connection_created
 
 from django_bolt import BoltAPI
 from django_bolt.auth import IsAuthenticated, JWTAuthentication
@@ -47,6 +55,18 @@ SECRET = "dead-connection-recovery-secret-key-32-bytes"
 USERNAME = "recovered"
 
 api = BoltAPI()
+
+# Django sends connection_created for each new connection and for each checkout from a pool.
+_checkouts = [0]
+_checkouts_lock = threading.Lock()
+
+
+def _count_checkout(sender, connection, **kwargs) -> None:
+    with _checkouts_lock:
+        _checkouts[0] += 1
+
+
+connection_created.connect(_count_checkout, dispatch_uid="dead_connection_recovery.count_checkout")
 
 
 @api.get("/health")
@@ -146,3 +166,38 @@ async def orm_threads_both_databases(count: int):
 
     results = await asyncio.gather(*(run_in_orm_executor(select_on_both) for _ in range(count)), return_exceptions=True)
     return {"results": [result if isinstance(result, str) else type(result).__name__ for result in results]}
+
+
+def _select_one() -> str:
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT 1")
+    return "ok"
+
+
+@api.get("/queued-orm-calls")
+async def queued_orm_calls(count: int):
+    """Queue ``count`` calls on the ORM pool at once.
+
+    The first call waits until the other calls are in the queue, so with one
+    ORM thread every call after the first finds work queued behind it.
+    """
+    others_queued = threading.Event()
+
+    def first() -> str:
+        if not others_queued.wait(5):
+            return "the other calls were not queued in 5 s"
+        return _select_one()
+
+    before = _checkouts[0]
+    calls = [asyncio.ensure_future(run_in_orm_executor(first))]
+    calls += [asyncio.ensure_future(run_in_orm_executor(_select_one)) for _ in range(count - 1)]
+    # Each task runs to its first await, which hands its call to the pool.
+    await asyncio.sleep(0)
+    others_queued.set()
+    results = await asyncio.gather(*calls)
+    return {"results": results, "checkouts": _checkouts[0] - before}
+
+
+@api.get("/default-executor-query")
+async def default_executor_query():
+    return {"result": await sync_to_async(_select_one, thread_sensitive=False)()}

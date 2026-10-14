@@ -389,6 +389,7 @@ api = BoltAPI(error_formatter=format_error)
 | `rate_limited` | 429 | A rate limit |
 | `response_validation` | 500 | A handler return value that fails validation |
 | `internal_error` | 500 | An unhandled exception, or a failure in the Rust core, for example a file that Rust cannot read |
+| `gateway_timeout` | 504 | A native route handler that does not complete within `BOLT_NATIVE_ROUTE_TIMEOUT` |
 
 An `HTTPException` gets its kind from its status, for example `conflict` for 409. A status with no name gives `http_error`.
 

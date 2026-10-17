@@ -419,6 +419,24 @@ def test_a_user_load_on_the_event_loop_gives_its_pooled_connection_back(make_ser
             assert query_each_orm_thread(server, 1) == ["ok"]
 
 
+def test_a_lane_keeps_its_pooled_connection_until_its_request_ends(make_server_project, postgres_database):
+    """A request with Django middleware runs its ORM calls on its lane.
+
+    The middleware checks out the one connection of the pool. The three calls
+    of the handler use it, with no checkout of their own. The lane gives it
+    back when the request ends, so the next request gets it.
+    """
+    project = make_server_project(
+        api_module=app_module("request_lanes_async"),
+        settings_extra=postgres_settings(postgres_database) + ONE_CONNECTION_POOL,
+    )
+    with project.start() as server:
+        for _ in range(3):
+            response = server.get("/pool-checkouts")
+            assert response.status_code == 200, response.text
+            assert response.json() == {"checkouts": 0}
+
+
 def test_a_failed_return_to_the_pool_keeps_the_result_of_the_call(make_server_project, postgres_database):
     """A call on the event loop gives its pooled connection back when it ends. That return can fail.
 

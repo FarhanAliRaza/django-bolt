@@ -68,19 +68,25 @@ def configure_connection_checks() -> None:
     _check_before_call = check_before_call
 
 
-def _drop_broken_connections() -> None:
+def _drop_broken_connections(*, before_call: bool = False) -> None:
     """Close the calling thread's connections that Django reports as unusable or obsolete.
 
     A connection inside an open ``atomic`` block is left alone: its autocommit
     state is off by design, and the block restores it on exit. Django's test
     client skips ``close_old_connections`` for the same reason.
+
+    The check before a call (``before_call``) leaves the pooled aliases out.
+    Django gives a pooled connection a maximum age of 0, so the check would give
+    it back before each call. After an error, the check includes them, so a dead
+    pooled connection drains its pool.
     """
     dead = []
     for conn in connections.all(initialized_only=True):
-        if not conn.in_atomic_block:
-            raw = _close_if_unusable_or_obsolete(conn)
-            if raw is not None:
-                dead.append((conn, raw))
+        if conn.in_atomic_block or (before_call and conn.alias in _pooled_aliases):
+            continue
+        raw = _close_if_unusable_or_obsolete(conn)
+        if raw is not None:
+            dead.append((conn, raw))
     if dead:
         _connections_died(dead)
 
@@ -234,7 +240,7 @@ def _check_before_pool_call() -> None:
         if stale:
             _close_connections_of_older_generations()
         if _check_before_call:
-            _drop_broken_connections()
+            _drop_broken_connections(before_call=True)
 
 
 def release_pooled_connections() -> None:
@@ -403,7 +409,7 @@ def open_lane_request() -> None:
     """Start a request on a lane. Rust calls this before the first sync call of an async request."""
     _close_connections_of_older_generations()
     if _check_before_call:
-        _drop_broken_connections()
+        _drop_broken_connections(before_call=True)
 
 
 def close_lane_request() -> None:

@@ -419,13 +419,30 @@ def test_a_user_load_on_the_event_loop_gives_its_pooled_connection_back(make_ser
             assert query_each_orm_thread(server, 1) == ["ok"]
 
 
-def test_an_orm_thread_keeps_its_pooled_connection_while_calls_wait_for_it(make_server_project, postgres_database):
+# A second database with persistent connections turns on the check before each call.
+PERSISTENT_SECOND_DATABASE = """
+DATABASES["persistent"] = {**DATABASES["default"], "CONN_MAX_AGE": 60, "OPTIONS": {}}
+"""
+
+
+@pytest.mark.parametrize(
+    "settings_extra",
+    [
+        pytest.param(POOL, id="pool"),
+        # Django gives a pooled connection a maximum age of 0. The check before
+        # each call must leave it out, or the check gives it back before each call.
+        pytest.param(POOL + PERSISTENT_SECOND_DATABASE, id="pool-and-a-persistent-database"),
+    ],
+)
+def test_an_orm_thread_keeps_its_pooled_connection_while_calls_wait_for_it(
+    make_server_project, postgres_database, settings_extra
+):
     """A thread with queued work keeps its connection. It gives it back when its queue is empty.
 
     One ORM thread gets five calls at once. A checkout and a return for each
     call would cost a round trip to the pool each time.
     """
-    server, _ = start_server(make_server_project, postgres_database, settings_extra=POOL)
+    server, _ = start_server(make_server_project, postgres_database, settings_extra=settings_extra)
     with server:
         response = server.get("/queued-orm-calls?count=5")
         assert response.status_code == 200, response.text

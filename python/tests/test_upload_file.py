@@ -545,6 +545,27 @@ class TestFileConstraintsByPartName:
         assert response.status_code == 200
         assert response.json() == {"docs": 2}
 
+    def test_form_struct_max_size_does_not_limit_a_sibling_file_field(self):
+        """The max_size of avatar applies to avatar only. docs has no max_size, so it gets the global limit."""
+        api = BoltAPI()
+
+        @api.post("/upload")
+        async def upload(data: Annotated[LimitedFilesForm, Form()]):
+            return {"sizes": [doc.size for doc in data.docs]}
+
+        client = TestClient(api)
+
+        response = client.post(
+            "/upload",
+            files=[
+                ("avatar", ("ok.png", b"x", "image/png")),
+                ("docs", ("a.txt", b"a" * 1000, "text/plain")),
+                ("docs", ("b.txt", b"b" * 20, "text/plain")),
+            ],
+        )
+        assert response.status_code == 200
+        assert response.json() == {"sizes": [1000, 20]}
+
     def test_two_declarations_of_one_part_with_different_constraints_fail(self):
         api = BoltAPI()
 

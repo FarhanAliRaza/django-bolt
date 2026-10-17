@@ -356,10 +356,6 @@ def mark_lane_thread() -> None:
     configure_connection_checks()
 
 
-def _on_lane_thread() -> bool:
-    return _thread_state.is_lane
-
-
 def in_lane_mode() -> bool:
     """Whether the calling thread is a request lane that runs a complete request."""
     return _thread_state.active

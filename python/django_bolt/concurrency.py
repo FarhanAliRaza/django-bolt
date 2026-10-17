@@ -135,8 +135,8 @@ _pool_epochs: dict[str, int] = {}
 class _ThreadState(threading.local):
     # Class defaults: a missing attribute of a thread-local costs an exception on each read.
     epoch = 0
-    # The nesting depth of _call_guarded on this thread. Pooled connections go
-    # back to their pools when the outermost call ends.
+    # The nesting depth of _call_guarded on a thread without releases_later.
+    # Its pooled connections go back to their pools when the outermost call ends.
     depth = 0
     # Set on a request lane. A lane runs its checks and gives back its pooled
     # connections one time, at the start and the end of its request.
@@ -146,10 +146,12 @@ class _ThreadState(threading.local):
     # pooled connection skips the release, which reads Django's connection
     # handler through a lock.
     holds_pooled = False
-    # Set on a worker of a Bolt executor. It gives its pooled connections back
-    # when its queue is empty (see _ReleasePooledConnectionsWhenIdle), not
-    # after each call, so calls that wait in its queue use the same connection.
-    releases_when_idle = False
+    # Set on a thread that gives its pooled connections back later than the end
+    # of a call: a lane at the end of its request, and a worker of a Bolt
+    # executor when its queue is empty (see _ReleasePooledConnectionsWhenIdle).
+    # Calls that wait in the queue of a worker use the same connection. On such
+    # a thread, _call_guarded does not count the depth.
+    releases_later = False
 
 
 _thread_state = _ThreadState()
@@ -277,7 +279,9 @@ def _call_guarded[T](fn: Callable[..., T], *args: object, **kwargs: object) -> T
     if (_generation_epoch and _thread_state.epoch != _generation_epoch) or _check_before_call:
         _check_before_pool_call()
     if _pooled_aliases:
-        return _call_guarded_pooled(fn, args, kwargs)
+        state = _thread_state
+        if not state.releases_later:
+            return _call_guarded_pooled(state, fn, args, kwargs)
     try:
         return fn(*args, **kwargs)
     except Exception:
@@ -285,20 +289,23 @@ def _call_guarded[T](fn: Callable[..., T], *args: object, **kwargs: object) -> T
         raise
 
 
-def _call_guarded_pooled[T](fn: Callable[..., T], args: tuple[object, ...], kwargs: dict[str, object]) -> T:
-    """``_call_guarded`` when a database uses a pool: the outermost call also gives back its pooled connections."""
-    state = _thread_state
-    state.depth += 1
+def _call_guarded_pooled[T](
+    state: _ThreadState, fn: Callable[..., T], args: tuple[object, ...], kwargs: dict[str, object]
+) -> T:
+    """``_call_guarded`` on a thread without ``releases_later`` when a database uses a pool.
+
+    The outermost call also gives back the pooled connections of the thread.
+    """
+    depth = state.depth
+    state.depth = depth + 1
     try:
         return fn(*args, **kwargs)
     except Exception:
         _drop_broken_connections_after_error()
         raise
     finally:
-        state.depth -= 1
-        # A lane gives its pooled connections back at the end of its request,
-        # and an executor worker when its queue is empty.
-        if state.holds_pooled and not state.depth and not (state.is_lane or state.releases_when_idle):
+        state.depth = depth
+        if not depth and state.holds_pooled:
             try:
                 release_pooled_connections()
             except Exception:
@@ -362,7 +369,7 @@ def _new_executor(
 
 
 def _mark_executor_thread(initializer: Callable[[], None] | None) -> None:
-    _thread_state.releases_when_idle = _idle_release_available
+    _thread_state.releases_later = _idle_release_available
     if initializer is not None:
         initializer()
 
@@ -374,6 +381,7 @@ _SHARED_TEST_CONNECTION_ATTR = "_django_bolt_shared_test_connection"
 def mark_lane_thread() -> None:
     """Mark the calling thread as a lane. Rust calls this when a lane starts."""
     _thread_state.is_lane = True
+    _thread_state.releases_later = True
     # A lane checks its own connections, so it must not depend on the start of a pool.
     configure_connection_checks()
 

@@ -358,10 +358,14 @@ def File(
     if allowed_types is not None:
         # A str is a sequence of characters. "image/*" would give "*", and "*" allows each type.
         # Make the tuple before the item check, so that a generator is read only one time.
+        # iter() also reads a class with only __getitem__, which isinstance(..., Iterable) rejects.
         given = allowed_types
-        is_collection = isinstance(given, Iterable) and not isinstance(given, (str, bytes))
-        allowed_types = tuple(given) if is_collection else ()
-        if not is_collection or not all(isinstance(value, str) for value in allowed_types):
+        try:
+            values = None if isinstance(given, (str, bytes)) else iter(given)
+        except TypeError:
+            values = None
+        allowed_types = () if values is None else tuple(values)
+        if values is None or not all(isinstance(value, str) for value in allowed_types):
             raise TypeError(
                 f"File(allowed_types=...) takes an iterable of MIME type strings, for example ['image/*'], got {given!r}."
             )

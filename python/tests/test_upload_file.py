@@ -57,6 +57,13 @@ class DocumentFormAnnotated(msgspec.Struct):
     documents: Annotated[list[UploadFile], File(max_files=5)]
 
 
+class PdfTypesByIndex:
+    """Iterable through __getitem__ only, with no __iter__."""
+
+    def __getitem__(self, index):
+        return ["application/pdf"][index]
+
+
 class TestUploadFileClass:
     """Test basic UploadFile class functionality."""
 
@@ -204,6 +211,24 @@ class TestUploadFileValidation:
 
         @api.post("/upload")
         async def upload(file: Annotated[UploadFile, File(allowed_types=(t for t in ["application/pdf"]))]):
+            return {"content_type": file.content_type}
+
+        client = TestClient(api)
+
+        response = client.post("/upload", files={"file": ("page.html", b"<html></html>", "text/html")})
+        assert response.status_code == 422
+        assert response.json()["detail"][0]["type"] == "file_invalid_content_type"
+
+        response = client.post("/upload", files={"file": ("doc.pdf", b"%PDF-1.7", "application/pdf")})
+        assert response.status_code == 200
+        assert response.json() == {"content_type": "application/pdf"}
+
+    def test_allowed_types_with_only_getitem_checks_each_type(self):
+        """iter() reads a class that has only __getitem__. isinstance(..., Iterable) rejects that class."""
+        api = BoltAPI()
+
+        @api.post("/upload")
+        async def upload(file: Annotated[UploadFile, File(allowed_types=PdfTypesByIndex())]):
             return {"content_type": file.content_type}
 
         client = TestClient(api)

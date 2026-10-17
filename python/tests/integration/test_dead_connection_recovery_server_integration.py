@@ -419,6 +419,23 @@ def test_a_user_load_on_the_event_loop_gives_its_pooled_connection_back(make_ser
             assert query_each_orm_thread(server, 1) == ["ok"]
 
 
+def test_a_failed_return_to_the_pool_keeps_the_result_of_the_call(make_server_project, postgres_database):
+    """A call on the event loop gives its pooled connection back when it ends. That return can fail.
+
+    The failure must not replace the result or the error of the call. Bolt
+    logs it. After an error, the drop of the connection gives it back, so
+    that is the return that fails.
+    """
+    server, _ = start_server(make_server_project, postgres_database, settings_extra=POOL)
+    with server:
+        assert server.get("/lose-the-pool").json() == {"result": "ok"}
+        assert server.get("/lose-the-pool?fail=true").json() == {"result": "ValueError"}
+        assert query_each_orm_thread(server, 1) == ["ok"]
+    stdout, stderr = server.stop()
+    assert "Could not give the pooled database connections of a thread back after a call" in stdout + stderr
+    assert "Could not close the unusable database connections of a thread after a call failed" in stdout + stderr
+
+
 # A second database with persistent connections turns on the check before each call.
 PERSISTENT_SECOND_DATABASE = """
 DATABASES["persistent"] = {**DATABASES["default"], "CONN_MAX_AGE": 60, "OPTIONS": {}}

@@ -260,6 +260,18 @@ def release_pooled_connections() -> None:
     _thread_state.holds_pooled = kept
 
 
+def _drop_broken_connections_after_error() -> None:
+    """``_drop_broken_connections`` after a call raised. A raise here would replace the error of the call.
+
+    A close can raise. For example, ``putconn`` can fail when a pooled
+    connection goes back to its pool.
+    """
+    try:
+        _drop_broken_connections()
+    except Exception:
+        logger.exception("Could not close the unusable database connections of a thread after a call failed")
+
+
 def _call_guarded[T](fn: Callable[..., T], *args: object, **kwargs: object) -> T:
     """Call ``fn`` on the pool thread and drop dead connections when it raises."""
     if (_generation_epoch and _thread_state.epoch != _generation_epoch) or _check_before_call:
@@ -269,7 +281,7 @@ def _call_guarded[T](fn: Callable[..., T], *args: object, **kwargs: object) -> T
     try:
         return fn(*args, **kwargs)
     except Exception:
-        _drop_broken_connections()
+        _drop_broken_connections_after_error()
         raise
 
 
@@ -280,14 +292,18 @@ def _call_guarded_pooled[T](fn: Callable[..., T], args: tuple[object, ...], kwar
     try:
         return fn(*args, **kwargs)
     except Exception:
-        _drop_broken_connections()
+        _drop_broken_connections_after_error()
         raise
     finally:
         state.depth -= 1
         # A lane gives its pooled connections back at the end of its request,
         # and an executor worker when its queue is empty.
         if state.holds_pooled and not state.depth and not (state.is_lane or state.releases_when_idle):
-            release_pooled_connections()
+            try:
+                release_pooled_connections()
+            except Exception:
+                # A raise here would replace the result or the error of the call.
+                logger.exception("Could not give the pooled database connections of a thread back after a call")
 
 
 class _ReleasePooledConnectionsWhenIdle:

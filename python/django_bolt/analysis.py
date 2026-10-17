@@ -32,13 +32,15 @@ def resolve_introspection_target(fn: Any) -> Any:
 
     Class-callable instances (``Depends(Backend(...))``) are routed to their
     ``__call__`` method so downstream introspection works.
+
+    Every other object gets the ``__call__`` of its type. For a callable in C,
+    such as ``functools.partial``, that is a slot wrapper. ``inspect.getsource``
+    raises for a slot wrapper, and ``get_type_hints`` gives ``{}``.
     """
     if inspect.isfunction(fn) or inspect.ismethod(fn) or inspect.isclass(fn) or inspect.ismodule(fn):
         return fn
-    call = inspect.getattr_static(type(fn), "__call__", None)
-    if call is None or call is object.__call__:
-        return fn
-    return call
+    # The metaclass has a __call__, so the lookup always finds one.
+    return inspect.getattr_static(type(fn), "__call__")
 
 
 @dataclass
@@ -195,7 +197,7 @@ BLOCKING_IO_FUNCTIONS = frozenset(
 BLOCKING_IO_MODULES = frozenset(
     {
         "requests",
-        "urllib",
+        "urllib.request",
         "urllib3",
         "httpx",  # sync client
         "socket",
@@ -260,23 +262,34 @@ class HandlerAnalysis:
 DB_CONNECTION_NAMES = frozenset(("connection", "connections"))
 
 
+def _dotted_name(node: ast.AST) -> str | None:
+    """Return ``a.b.c`` for a chain of attributes on a name, or None for other nodes."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
 class OrmVisitor(ast.NodeVisitor):
     """
-    AST visitor that detects Django ORM usage patterns.
+    AST visitor that detects Django ORM usage, blocking I/O and the request
+    parts that a function reads.
 
-    Looks for:
-    - Model.objects.method() calls
-    - QuerySet method chains
-    - Model instance save/delete calls
-
-    To reduce false positives, we only flag ORM methods when:
-    1. We've seen .objects manager access in the function, OR
-    2. The method is called directly on .objects (e.g., User.objects.get())
+    ORM usage:
+    - a manager attribute (``.objects``) or a raw cursor of ``connection``
+    - a QuerySet method (``filter``, ``aget``) on a chain through a manager,
+      such as ``User.objects.filter(...).first()``. A chain that does not go
+      through a manager (``dict.get()``) is not ORM work.
+    - a model instance method (``save``, ``adelete``)
+    - a loop or a comprehension over a QuerySet method (``qs.filter()``)
     """
 
     def __init__(self, request_param_names: set[str] | None = None) -> None:
         self.analysis = HandlerAnalysis()
-        self._in_objects_chain = False
         self.request_param_names = request_param_names or set()
 
     def _is_request_name(self, node: ast.AST) -> bool:
@@ -308,36 +321,34 @@ class OrmVisitor(ast.NodeVisitor):
             self._mark_request_component_attr(attr_name)
 
     def _mark_request_component_key(self, key: str) -> None:
-        if key in {"body", "query", "headers", "cookies", "raw_cookies", "META", "get_full_path", "build_absolute_uri"}:
+        # Of the request parts, request.get(key) and request[key] serve only
+        # these. Another key, such as "META", gives the default or a KeyError.
+        if key in ("body", "query", "headers", "cookies"):
             self._mark_request_component_attr(key)
 
     def _check_for_objects_chain(self, node: ast.AST) -> bool:
-        """
-        Check if node is part of an .objects chain.
+        """Return whether ``node`` reaches a manager through attributes and calls.
 
-        Returns True if the attribute chain contains .objects
-        (e.g., User.objects.filter() or queryset.filter())
+        For example ``User.objects.filter`` and ``User.objects.filter(...).first``.
         """
         current = node
-        while isinstance(current, ast.Attribute):
-            if current.attr in ORM_MANAGER_ATTRS:
-                return True
-            current = current.value
-
-        # Also check for Call nodes in the chain (e.g., User.objects.filter().first())
-        while isinstance(current, ast.Call):
-            if isinstance(current.func, ast.Attribute):
-                if current.func.attr in ORM_MANAGER_ATTRS:
+        while True:
+            if isinstance(current, ast.Attribute):
+                if current.attr in ORM_MANAGER_ATTRS:
                     return True
-                # Check if the call is on a queryset method
-                if current.func.attr in SYNC_ORM_METHODS or current.func.attr in ASYNC_ORM_METHODS:
-                    # Recurse to check if the chain includes .objects
-                    return self._check_for_objects_chain(current.func.value)
-                current = current.func.value
+                current = current.value
+            elif isinstance(current, ast.Call):
+                current = current.func
             else:
-                break
+                return False
 
-        return False
+    def _check_queryset_iteration(self, iterable: ast.AST, kind: str) -> None:
+        """Mark a loop or a comprehension over a QuerySet method, such as ``qs.filter()``."""
+        if isinstance(iterable, ast.Call) and isinstance(iterable.func, ast.Attribute):
+            method_name = iterable.func.attr
+            if method_name in SYNC_ORM_METHODS or method_name in ASYNC_ORM_METHODS:
+                self.analysis.uses_orm = True
+                self.analysis.orm_operations.add(f"{kind}_{method_name}")
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         """Detect attribute access patterns like Model.objects.filter()."""
@@ -359,12 +370,10 @@ class OrmVisitor(ast.NodeVisitor):
                 self.analysis.uses_orm = True
                 self.analysis.orm_operations.add("cursor")
 
-        # Check for ORM method calls - ONLY if in an .objects chain
-        # This reduces false positives like dict.get(), response.get(), etc.
-        is_in_objects_chain = self._check_for_objects_chain(node)
-
-        if is_in_objects_chain and (attr_name in SYNC_ORM_METHODS or attr_name in ASYNC_ORM_METHODS):
-            self.analysis.uses_orm = True
+        # A QuerySet method counts only on a chain through a manager. This
+        # reduces false positives like dict.get(). The manager attribute of
+        # the chain sets uses_orm when the visitor gets to it.
+        if (attr_name in SYNC_ORM_METHODS or attr_name in ASYNC_ORM_METHODS) and self._check_for_objects_chain(node):
             self.analysis.orm_operations.add(attr_name)
 
         # Check for model instance methods (save, delete, etc.)
@@ -405,17 +414,13 @@ class OrmVisitor(ast.NodeVisitor):
 
         # Check for method calls on blocking modules
         elif isinstance(node.func, ast.Attribute):
-            if self._is_request_name(node.func.value):
-                self._mark_request_component_attr(node.func.attr)
+            # visit_Attribute marks a request method, such as get_full_path().
 
-            # e.g., requests.get(), time.sleep()
-            if isinstance(node.func.value, ast.Name):
-                module_name = node.func.value.id
-                method_name = node.func.attr
-
-                if module_name in BLOCKING_IO_MODULES:
-                    self.analysis.has_blocking_io = True
-                    self.analysis.blocking_operations.add(f"{module_name}.{method_name}")
+            # e.g., requests.get(), time.sleep(), urllib.request.urlopen()
+            module_name = _dotted_name(node.func.value)
+            if module_name in BLOCKING_IO_MODULES:
+                self.analysis.has_blocking_io = True
+                self.analysis.blocking_operations.add(f"{module_name}.{node.func.attr}")
 
         self.generic_visit(node)
 
@@ -433,28 +438,16 @@ class OrmVisitor(ast.NodeVisitor):
 
         self.generic_visit(node)
 
-    def visit_For(self, node: ast.For) -> None:
-        """Detect iteration over QuerySets (blocking)."""
-        # Check if iterating over something that looks like a QuerySet
-        # e.g., for user in User.objects.all():
-        if isinstance(node.iter, ast.Call) and isinstance(node.iter.func, ast.Attribute):
-            method_name = node.iter.func.attr
-            if method_name in SYNC_ORM_METHODS or method_name in ASYNC_ORM_METHODS:
-                self.analysis.uses_orm = True
-                self.analysis.orm_operations.add(f"iterate_{method_name}")
-
+    def visit_For(self, node: ast.For | ast.AsyncFor) -> None:
+        """Detect iteration over QuerySets (blocking): for user in qs.filter(...)."""
+        self._check_queryset_iteration(node.iter, "iterate")
         self.generic_visit(node)
 
-    def visit_ListComp(self, node: ast.ListComp) -> None:
-        """Detect list comprehension over QuerySets."""
-        # [user.name for user in User.objects.all()]
-        for generator in node.generators:
-            if isinstance(generator.iter, ast.Call) and isinstance(generator.iter.func, ast.Attribute):
-                method_name = generator.iter.func.attr
-                if method_name in SYNC_ORM_METHODS or method_name in ASYNC_ORM_METHODS:
-                    self.analysis.uses_orm = True
-                    self.analysis.orm_operations.add(f"comprehension_{method_name}")
+    visit_AsyncFor = visit_For
 
+    def visit_comprehension(self, node: ast.comprehension) -> None:
+        """Detect a list, set, dict or generator comprehension over a QuerySet."""
+        self._check_queryset_iteration(node.iter, "comprehension")
         self.generic_visit(node)
 
 
@@ -470,17 +463,22 @@ def analyze_handler(
 
     Args:
         fn: The handler function to analyze
+        request_param_names: The parameters of ``fn`` that get the request
 
     Returns:
         HandlerAnalysis with detected patterns
     """
     analysis = HandlerAnalysis()
 
-    unwraped_source = inspect.unwrap(resolve_introspection_target(inspect.unwrap(fn)))
+    visitor = OrmVisitor(request_param_names=request_param_names)
+    target = _unwrap(resolve_introspection_target(_unwrap(fn, visitor)), visitor)
+    # A call of a class runs its __init__, which can come from a base class.
+    if inspect.isclass(target):
+        target = _unwrap(target.__init__, visitor)
 
     # Try to get source code
     try:
-        source = inspect.getsource(unwraped_source)
+        source = inspect.getsource(target)
     except (OSError, TypeError) as e:
         # Can't get source (e.g., built-in, C extension, or lambda)
         analysis.analysis_failed = True
@@ -498,18 +496,53 @@ def analyze_handler(
         analysis.failure_reason = f"Syntax error parsing source: {e}"
         return analysis
 
-    # Find the function definition and analyze only its body (not decorators)
-    # This prevents false positives from decorator names like @api.delete("/m")
-    visitor = OrmVisitor(request_param_names=request_param_names)
+    name = target.__code__.co_name
+    definition = _find_definition(tree, name)
+    if definition is None:
+        analysis.analysis_failed = True
+        analysis.failure_reason = f"Could not find one definition of {name} in its source"
+        return analysis
 
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            # Only analyze the function body, not decorators
-            for stmt in node.body:
-                visitor.visit(stmt)
-            break  # Only analyze the first function found
+    # Analyze only the body, not the decorators. A decorator name such as
+    # @api.delete("/m") is not an ORM call.
+    if isinstance(definition, ast.Lambda):
+        visitor.visit(definition.body)
+    else:
+        for stmt in definition.body:
+            visitor.visit(stmt)
 
     return visitor.analysis
+
+
+def _unwrap(fn: Any, visitor: OrmVisitor) -> Any:
+    """Return the function under the wrappers of ``fn``.
+
+    A wrapper (a function with ``__wrapped__``) gets the request before the
+    function that it wraps. It can read any part, so mark every part.
+    """
+    target = inspect.unwrap(fn)
+    if target is not fn:
+        visitor._mark_all_request_components()
+    return target
+
+
+def _find_definition(tree: ast.AST, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda | None:
+    """Return the definition named ``name`` in ``tree``.
+
+    The source of a lambda is its whole line, so it must hold one lambda only.
+    Otherwise this cannot tell which lambda the handler is, and returns None.
+    """
+    if name == "<lambda>":
+        lambdas = [node for node in ast.walk(tree) if isinstance(node, ast.Lambda)]
+        return lambdas[0] if len(lambdas) == 1 else None
+    return next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+        ),
+        None,
+    )
 
 
 _REQUEST_PARAM_NAMES = frozenset({"request", "req"})
@@ -517,13 +550,10 @@ _REQUEST_PARAM_NAMES = frozenset({"request", "req"})
 
 def _dep_request_param_names(dep_meta: dict[str, Any]) -> set[str]:
     """Return the set of parameter names that receive the raw request object."""
-    if dep_meta.get("mode") == "request_only":
-        sig = dep_meta.get("sig")
-        if sig is None:
-            return set()
-        return {p.name for p in sig.parameters.values() if p.name in _REQUEST_PARAM_NAMES}
-    fields = dep_meta.get("fields", [])
-    return {f.name for f in fields if f.source == "request"}
+    # compile_binder always sets mode, sig and fields.
+    if dep_meta["mode"] == "request_only":
+        return {p.name for p in dep_meta["sig"].parameters.values() if p.name in _REQUEST_PARAM_NAMES}
+    return {f.name for f in dep_meta["fields"] if f.source == "request"}
 
 
 def analyze_dependency_tree(
@@ -561,16 +591,13 @@ def _walk_dep_tree(
     acc: DependencyNeeds,
     visited: set[int],
 ) -> None:
-    for dep_field in meta.get("fields", []):
+    for dep_field in meta["fields"]:
         if acc.saturated:
             return
         if dep_field.source != "dependency":
             continue
-        marker = dep_field.dependency
-        dep_fn = marker.dependency if marker is not None else None
-        if dep_fn is None:
-            continue
-
+        # A bare Depends() has no callable. compile_dep_fn raises for it below.
+        dep_fn = dep_field.dependency.dependency
         dep_id = id(dep_fn)
         if dep_id in visited:
             continue
@@ -583,10 +610,11 @@ def _walk_dep_tree(
             acc.set_all()
             return
 
-        acc.needs_body |= bool(dep_meta.get("needs_body", False))
-        acc.needs_query |= bool(dep_meta.get("needs_query", False))
-        acc.needs_headers |= bool(dep_meta.get("needs_headers", False))
-        acc.needs_cookies |= bool(dep_meta.get("needs_cookies", False))
+        # A request_only dependency has no needs_* flags.
+        acc.needs_body |= bool(dep_meta.get("needs_body"))
+        acc.needs_query |= bool(dep_meta.get("needs_query"))
+        acc.needs_headers |= bool(dep_meta.get("needs_headers"))
+        acc.needs_cookies |= bool(dep_meta.get("needs_cookies"))
 
         dep_request_names = _dep_request_param_names(dep_meta)
         if dep_request_names:

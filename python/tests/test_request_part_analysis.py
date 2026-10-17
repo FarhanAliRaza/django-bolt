@@ -306,6 +306,21 @@ def test_the_failed_analysis_names_the_lambda_that_it_did_not_find():
     assert analysis.failure_reason == "Could not find one definition of <lambda> in its source"
 
 
+def _renamed(request):
+    return request.headers
+
+
+# The source of the function holds "def _renamed", but its code names another function.
+_renamed.__code__ = _renamed.__code__.replace(co_name="other_name")
+
+
+def test_the_failed_analysis_names_a_function_whose_source_has_no_def_of_its_name():
+    analysis = analyze_handler(_renamed, {"request"})
+
+    assert analysis.analysis_failed is True
+    assert analysis.failure_reason == "Could not find one definition of other_name in its source"
+
+
 def test_the_analysis_fails_for_a_class_whose_init_has_no_source():
     """A dataclass makes its __init__ at run time, so the __init__ has no source."""
     analysis = analyze_handler(RequestHolder, {"request"})

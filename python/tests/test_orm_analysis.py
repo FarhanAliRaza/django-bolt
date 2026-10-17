@@ -676,22 +676,20 @@ def test_a_sync_handler_that_iterates_a_queryset_in_a_comprehension_runs_in_the_
     assert response.json()["thread"].startswith("bolt_default")
 
 
-TOTALS = {"a": 1, "b": 2}
-
-
-def test_a_sync_handler_that_sums_dict_values_runs_on_the_server_thread():
-    """A loop over dict.values() is not ORM work, so the handler does not need the thread pool."""
+@pytest.mark.django_db(transaction=True)
+def test_a_sync_handler_that_iterates_queryset_values_runs_in_the_thread_pool():
+    """values() with no arguments runs a query. The handler must not block the server worker thread."""
     api = BoltAPI()
 
-    @api.get("/sum")
-    def total():
-        return {"total": sum(value for value in TOTALS.values()), "thread": threading.current_thread().name}
+    @api.get("/values")
+    def rows():
+        return {"rows": [row["id"] for row in active_users.values()], "thread": threading.current_thread().name}
 
     with TestClient(api) as client:
-        response = client.get("/sum")
+        response = client.get("/values")
 
-    assert response.json()["total"] == 3
-    assert not response.json()["thread"].startswith("bolt_default")
+    assert response.json()["rows"] == []
+    assert response.json()["thread"].startswith("bolt_default")
 
 
 EVERY_PART = ("body", "query", "headers", "cookies")
@@ -754,22 +752,16 @@ class TestOrmDetectionLimits:
 
         assert analyze_handler(handler).orm_operations == {"comprehension_filter"}
 
-    def test_iteration_over_dict_values_is_not_orm_work(self):
-        def handler(totals):
-            for _value in totals.values():
-                pass
-            return [value * 2 for value in totals.values()], sum(value for value in totals.values())
+    def test_iteration_over_values_with_no_arguments_is_orm_work(self):
+        """A related manager calls values() with no arguments too. The analysis cannot tell it from dict.values()."""
+
+        def handler(user):
+            return [row["name"] for row in user.groups.values()]
 
         analysis = analyze_handler(handler)
 
-        assert analysis.uses_orm is False
-        assert analysis.orm_operations == set()
-
-    def test_iteration_over_queryset_values_with_fields_is_orm_work(self):
-        def handler(users):
-            return sum(row["pk"] for row in users.values("pk"))
-
-        assert analyze_handler(handler).orm_operations == {"comprehension_values"}
+        assert analysis.uses_orm is True
+        assert analysis.orm_operations == {"comprehension_values"}
 
     @pytest.mark.parametrize("kind", ["for", "async for", "set", "dict", "generator"])
     def test_every_kind_of_iteration_over_a_queryset_is_orm_work(self, kind):

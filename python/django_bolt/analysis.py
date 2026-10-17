@@ -334,9 +334,6 @@ class OrmVisitor(ast.NodeVisitor):
         """Mark a loop or a comprehension over a QuerySet method, such as ``qs.filter()``."""
         if isinstance(iterable, ast.Call) and isinstance(iterable.func, ast.Attribute):
             method_name = iterable.func.attr
-            # values() with no arguments is usually dict.values(), not QuerySet.values().
-            if method_name == "values" and not iterable.args and not iterable.keywords:
-                return
             if method_name in SYNC_ORM_METHODS or method_name in ASYNC_ORM_METHODS:
                 self.analysis.uses_orm = True
                 self.analysis.orm_operations.add(f"{kind}_{method_name}")

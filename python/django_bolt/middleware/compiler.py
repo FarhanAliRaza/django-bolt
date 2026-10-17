@@ -20,7 +20,7 @@ try:
 except ImportError:  # Django 5.2 has no django.utils.csp
     build_policy = None
 
-from ..auth.backends import get_default_authentication_classes
+from ..auth.backends import BaseAuthentication, get_default_authentication_classes
 from ..auth.guards import GUARD_TYPES, get_default_permission_classes
 from ..params import Param
 from ..typing import is_msgspec_struct, resolve_type_alias, unwrap_optional
@@ -53,22 +53,12 @@ def get_type_hint_id(annotation: Any) -> int:
     # Unwrap Optional[T] or T | None, and a NewType or a type alias
     unwrapped = unwrap_optional(resolve_type_alias(annotation))
 
-    # Get base type if it's a generic
-    origin = get_origin(unwrapped)
-
     # Handle Annotated[T, ...] - extract the base type T
-    if origin is Annotated:
-        args = get_args(unwrapped)
-        if args:
-            # First arg is the actual type, rest are metadata
-            unwrapped = unwrap_optional(resolve_type_alias(args[0]))
-            origin = get_origin(unwrapped)
+    if get_origin(unwrapped) is Annotated:
+        unwrapped = unwrap_optional(resolve_type_alias(get_args(unwrapped)[0]))
 
-    if origin is not None:
-        # For generic types like list[int], we can't coerce in Rust
-        return TYPE_STRING
-
-    # Direct type mapping
+    # Direct type mapping. A generic type such as list[int] is none of these
+    # types, so it gets TYPE_STRING: Rust cannot convert it.
     if unwrapped is int:
         return TYPE_INT
     elif unwrapped is float:
@@ -133,7 +123,14 @@ def route_auth_backends(auth: list[Any] | None) -> list[Any]:
     scheme name, so Python must not find a backend by its scheme name.
     """
     backends = auth if auth is not None else get_default_authentication_classes()
-    return [backend for backend in backends if hasattr(backend, "to_metadata")]
+    # A dropped entry would leave the route with no backend while it looks authenticated.
+    for backend in backends:
+        if not isinstance(backend, BaseAuthentication):
+            raise ImproperlyConfigured(
+                f"Auth entry {backend!r} is not an authentication backend. Give an instance, "
+                f"for example auth=[JWTAuthentication()] or BOLT_AUTHENTICATION_CLASSES = [JWTAuthentication()]."
+            )
+    return list(backends)
 
 
 def compile_middleware_meta(
@@ -259,12 +256,10 @@ def _collect_seq_field_names(field: Any, target: set[str]) -> None:
     """
     unwrapped = unwrap_optional(field.annotation)
     if is_msgspec_struct(unwrapped):
+        # The struct extractor reads each field by its msgspec encoded name.
         for struct_field in msgspec.structs.fields(unwrapped):
             if _is_sequence_annotation(struct_field.type):
-                target.add(struct_field.name)
-                encoded_name = getattr(struct_field, "encode_name", struct_field.name)
-                if encoded_name != struct_field.name:
-                    target.add(encoded_name)
+                target.add(struct_field.encode_name)
     elif _is_sequence_annotation(field.annotation):
         target.add(field.alias or field.name)
 
@@ -326,12 +321,9 @@ def _compile_rust_arg_bindings(handler_meta: dict[str, Any]) -> list[dict[str, A
     default). When any optional param exists, ALL params are bound as keywords —
     mixing a skipped keyword with positional args would shift positions.
     """
-    fields = handler_meta.get("fields", [])
+    # A request_only handler has no fields.
+    fields = handler_meta["fields"]
     if not fields:
-        return None
-
-    mode = handler_meta.get("mode")
-    if mode == "request_only":
         return None
 
     signature_params = handler_meta["sig"].parameters
@@ -391,7 +383,7 @@ def _compile_rust_arg_bindings(handler_meta: dict[str, Any]) -> list[dict[str, A
             }
         )
 
-    return bindings if bindings else None
+    return bindings
 
 
 def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_meta: dict[str, Any]) -> dict[str, Any]:
@@ -450,7 +442,7 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
     # The fields of the dependencies count too. Each field goes into the claim
     # map of its source, so two fields that read one wire key with different
     # types fail here, whatever their Python names.
-    for field in (*handler_meta.get("fields", []), *handler_meta.get("dependency_fields", ())):
+    for field in (*handler_meta["fields"], *handler_meta["dependency_fields"]):
         if field.source in ("path", "query"):
             _extract_type_hints_from_field(field, param_claims)
             if field.source == "query":
@@ -640,6 +632,12 @@ def get_trusted_proxies() -> list[str]:
             raise ImproperlyConfigured(
                 f"BOLT_TRUSTED_PROXIES entry {entry!r} is not an address or CIDR block: {e}"
             ) from e
+        # Rust compares addresses with no zone ID, and it rejects an entry with one.
+        # Look at the entry: strict=False removes the zone ID when it removes host bits.
+        if "%" in entry:
+            raise ImproperlyConfigured(
+                f"BOLT_TRUSTED_PROXIES entry {entry!r} has an IPv6 zone ID. Give the address without '%<zone>'."
+            )
         normalized.append(str(network))
     return normalized
 

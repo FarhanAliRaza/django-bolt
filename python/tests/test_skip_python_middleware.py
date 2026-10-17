@@ -204,3 +204,44 @@ def test_routes_that_share_a_handler_keep_their_own_global_chain(first):
         client.get(first)
         assert _headers(client.get("/one")) == {"X-Router"}
         assert _headers(client.get("/both")) == set()
+
+
+@pytest.mark.parametrize("first", ["/kept", "/skipped"])
+def test_routes_that_share_a_handler_keep_their_own_route_chain(first):
+    """Each route gets the route middleware of its own skip list, in either request order."""
+    api = BoltAPI()
+
+    async def handler():
+        return {}
+
+    handler = middleware(function_middleware)(middleware(RouterMiddleware)(handler))
+    # The skip list is an attribute of the function, so it can grow between two registrations.
+    api.get("/kept")(handler)
+    api.get("/skipped")(skip_middleware("function_middleware")(handler))
+
+    with TestClient(api) as client:
+        client.get(first)
+        assert _headers(client.get("/kept")) == {"X-Router", "X-Function"}
+        assert _headers(client.get("/skipped")) == {"X-Router"}
+
+
+@pytest.mark.parametrize("first", ["/a/x", "/b/x"])
+def test_routers_that_share_a_handler_keep_their_own_middleware(first):
+    """A handler on two routers gets the middleware of each router, in either request order."""
+    api = BoltAPI()
+    # The test needs two different middleware classes. The names do not matter here.
+    router_a = Router(prefix="/a", middleware=[RouterMiddleware])
+    router_b = Router(prefix="/b", middleware=[GlobalMiddleware])
+
+    async def handler():
+        return {}
+
+    router_a.get("/x")(handler)
+    router_b.get("/x")(handler)
+    api.include_router(router_a)
+    api.include_router(router_b)
+
+    with TestClient(api) as client:
+        client.get(first)
+        assert _headers(client.get("/a/x")) == {"X-Router"}
+        assert _headers(client.get("/b/x")) == {"X-Global"}

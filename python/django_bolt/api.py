@@ -534,7 +534,10 @@ class BoltAPI:
         self._middleware_chain_built = False
         self._middleware_chain = None  # Will be the outermost middleware instance
         self._middleware_chain_lock = threading.Lock()
-        self._route_executor_cache: dict[Callable, Callable] = {}
+        # The router and route middleware chain of each route, by the id of the
+        # metadata of the route. Routes that share a handler can have different
+        # router middleware and different skip lists.
+        self._route_executor_cache: dict[int, Callable] = {}
         # The global middleware chains of the routes that skip global middleware,
         # by the id of the middleware tuple of each route. Routes that share a
         # handler can have different skip lists.
@@ -2879,7 +2882,7 @@ class BoltAPI:
         handler: Callable,
         meta: dict[str, Any],
     ) -> Callable[[Any], Any]:
-        """Build per-handler route executor (router+route middleware + handler)."""
+        """Build the route executor of one route (router+route middleware + handler)."""
         router_middleware = meta.get("_router_middleware", [])
         route_middleware = meta.get("_route_middleware", getattr(handler, "__bolt_middleware__", []))
         combined_specs = [*router_middleware, *route_middleware]
@@ -2903,7 +2906,7 @@ class BoltAPI:
         for middleware_spec in reversed(normalized_specs):
             if not self._is_python_middleware_spec(middleware_spec):
                 continue
-            # Route executors are cached per handler, so wrapper instances must be cloned.
+            # Route executors are cached per route, so wrapper instances must be cloned.
             chain = self._wrap_middleware_spec(middleware_spec, chain, clone_wrapper=True)
 
         return chain
@@ -2914,16 +2917,21 @@ class BoltAPI:
         handler: Callable,
         meta: dict[str, Any],
     ) -> Callable[[Any], Any]:
-        """Get or lazily build the cached route executor for a handler."""
-        cached_executor = api._route_executor_cache.get(handler)
+        """Get or lazily build the cached route executor of a route.
+
+        The key is the metadata of the route, not the handler. The route keeps
+        its metadata, so its id is stable and unique to the route.
+        """
+        key = id(meta)
+        cached_executor = api._route_executor_cache.get(key)
         if cached_executor is not None:
             return cached_executor
 
         with api._route_executor_lock:
-            cached_executor = api._route_executor_cache.get(handler)
+            cached_executor = api._route_executor_cache.get(key)
             if cached_executor is None:
                 cached_executor = self._build_route_executor(handler, meta)
-                api._route_executor_cache[handler] = cached_executor
+                api._route_executor_cache[key] = cached_executor
 
         return cached_executor
 

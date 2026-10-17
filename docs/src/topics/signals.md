@@ -55,7 +55,7 @@ Bolt also keeps the pool clean after a database restart. The restart killed the 
 
 `drain()` is in psycopg_pool 3.3 and later. The `pool` extra installs it: `pip install "django-bolt[pool]"`. With an older psycopg_pool, Bolt logs a warning at startup and does not drain the pool. After a restart, each dead idle connection of the pool then fails one request.
 
-A forked process inherits the open connections of its parent. Two processes that use one connection read the results of each other's queries. `runbolt --processes N` closes the connections and the pools of its parent before it starts each worker.
+A forked process inherits the open connections of its parent. Two processes that use one connection read the results of each other's queries. `runbolt --processes N` closes the connections and the pools of its parent before it starts each worker. When a close fails, `runbolt` stops with the error and starts no worker.
 
 ### Third-Party Packages
 

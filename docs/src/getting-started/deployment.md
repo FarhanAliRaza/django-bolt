@@ -199,7 +199,7 @@ Install the `pool` extra: `pip install "django-bolt[pool]"`. It installs psycopg
 
 With a pool, a thread of Bolt holds a connection only while it has work. A worker of the ORM or executor thread pool gives the connection back when its queue is empty. Calls that wait in its queue use the same connection. A request lane gives it back at the end of its request. A thread that your code starts keeps its connection until it closes the connection. Thus `max_size` limits the queries in flight in one process, not the threads. Set `max_size` to the number of calls that can query at the same time in one process. Count the ORM threads, the executor threads, and the concurrent requests on routes with Django middleware. A request that waits for a connection longer than the pool `timeout` (30 s by default) fails.
 
-`runbolt --processes N` closes the connections and the pools of its parent before it starts each worker. Each worker opens its own pool.
+`runbolt --processes N` closes the connections and the pools of its parent before it starts each worker. Each worker opens its own pool. When a close fails, `runbolt` stops with the error and starts no worker.
 
 On macOS, a forked worker can hang or crash when it opens a PostgreSQL connection. Set `PGGSSENCMODE=disable` for local development. See [the FAQ](../faq.md#why-does-runbolt-hang-on-macos-when-it-connects-to-postgresql).
 

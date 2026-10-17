@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import secrets
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -36,7 +37,7 @@ import pytest
 
 from .apps import app_module
 from .apps.dead_connection_recovery import SECRET, USERNAME
-from .helpers import child_pids, postgres_settings
+from .helpers import _terminate_process, child_pids, postgres_settings
 
 pytestmark = [pytest.mark.server_integration, pytest.mark.postgres]
 
@@ -383,6 +384,41 @@ def test_recycled_workers_do_not_share_the_connections_of_the_parent(make_server
     assert len(workers) > 2, f"expected at least one recycled worker, saw {workers}"
     wrong = [result for result in results if result[1] != 200 or result[2]["token"] != result[0]]
     assert not wrong, f"{len(wrong)} of {len(results)} requests got no answer or another answer: {wrong[:3]}"
+
+
+# A backend on top of Django's PostgreSQL backend whose pool does not close.
+UNCLOSABLE_POOL_BACKEND = """
+from django.db.backends.postgresql.base import DatabaseWrapper as PostgreSQLWrapper
+
+
+class DatabaseWrapper(PostgreSQLWrapper):
+    def close_pool(self):
+        raise RuntimeError("this pool does not close")
+"""
+
+
+def test_runbolt_forks_no_worker_when_a_pool_of_the_parent_does_not_close(make_server_project, postgres_database):
+    """A worker that forks while a pool of the parent is open shares the connections of that pool.
+
+    CPython reports an exception of a before-fork hook and forks anyway. The
+    parent must stop with the error and fork no worker.
+    """
+    project = make_server_project(
+        api_module=app_module("dead_connection_recovery"),
+        settings_extra=postgres_settings(postgres_database, engine="unclosable") + FORK_POOL,
+        extra_files={"unclosable/__init__.py": "", "unclosable/base.py": UNCLOSABLE_POOL_BACKEND},
+    )
+    process, port = project.spawn(processes=2)
+    try:
+        stdout, stderr = process.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        stdout, stderr = _terminate_process(process)
+        pytest.fail(f"runbolt forked its workers with a pool that did not close\nstderr:\n{stderr}")
+
+    assert process.returncode != 0, f"stdout:\n{stdout}\nstderr:\n{stderr}"
+    assert "RuntimeError: this pool does not close" in stderr, stderr
+    with pytest.raises(httpx.ConnectError):
+        httpx.get(f"http://127.0.0.1:{port}/health", timeout=2)
 
 
 ONE_CONNECTION_POOL = """

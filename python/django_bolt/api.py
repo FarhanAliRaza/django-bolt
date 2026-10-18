@@ -2131,7 +2131,13 @@ class BoltAPI:
                         return _dispatch_multi_sync(handler(*args, **kwargs))
 
                     return await sync_to_thread(_run_blocking_multi)
-                return _dispatch_multi_sync(handler(*args, **kwargs))
+                result = handler(*args, **kwargs)
+                # A QuerySet from a helper loads on the ORM pool, not on the event loop.
+                if isinstance(result, QuerySet) or (
+                    isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], QuerySet)
+                ):
+                    return await run_in_orm_executor(_dispatch_multi_sync, result)
+                return _dispatch_multi_sync(result)
 
             return execute_multi
 

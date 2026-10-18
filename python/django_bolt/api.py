@@ -155,21 +155,31 @@ def _never_suspends(fn: Callable | None) -> bool:
         return False
 
 
-def _request_only_sync_executor(is_async: bool, meta: dict[str, Any], defer: Callable) -> Callable:
-    """Build the sync executor of a handler whose only parameter is the request.
+def _sync_finisher(meta: dict[str, Any], defer: Callable) -> Callable[[Any], ResponseWireV1 | Callable]:
+    """Serialize the result of a sync executor, or defer a QuerySet.
 
-    The handler must not block, and an async handler must not suspend.
-    A dict result skips the serializer when the route validates no response.
-    A QuerySet result must load on the ORM pool, and a sync executor cannot
-    await. Thus the executor returns ``defer`` with the result bound, and Rust
-    runs that call on the worker loop.
+    A QuerySet must load on the ORM pool, and a sync executor cannot await.
+    Thus the finisher returns ``defer`` with the result bound, and Rust runs
+    that call on the worker loop.
     """
-    encode = _json._ENCODER.encode
 
     def finish(result: Any) -> ResponseWireV1 | Callable:
         if isinstance(result, QuerySet):
             return functools.partial(defer, result, meta)
         return serialize_response_sync(result, meta)
+
+    return finish
+
+
+def _request_only_sync_executor(is_async: bool, meta: dict[str, Any], defer: Callable) -> Callable:
+    """Build the sync executor of a handler whose only parameter is the request.
+
+    The handler must not block, and an async handler must not suspend.
+    A dict result skips the serializer when the route validates no response.
+    A QuerySet result loads on the ORM pool, through ``_sync_finisher``.
+    """
+    encode = _json._ENCODER.encode
+    finish = _sync_finisher(meta, defer)
 
     if meta["_has_response_validation"]:
         if is_async:
@@ -2135,6 +2145,10 @@ class BoltAPI:
         ):
             meta["_sync_executor"] = _request_only_sync_executor(is_async, meta, self._serialize_on_orm_pool)
 
+        # The sync executors below finish a result that their fast checks do not
+        # take. A QuerySet from a helper must still load on the ORM pool.
+        _finish = _sync_finisher(meta, self._serialize_on_orm_pool)
+
         # Fast path: async handler (most common pattern). Rust-prebound args are
         # consumed via _get_args; routes without bindings skip the state checks.
         if mode != "request_only" and is_async and not is_blocking and not injector_is_async:
@@ -2179,10 +2193,17 @@ class BoltAPI:
                                 try:
                                     coro.send(None)
                                 except StopIteration as _e:
-                                    return _encode(_e.value)
+                                    result = _e.value
                                 else:
                                     coro.close()
                                     raise RuntimeError("Handler awaited unexpectedly in sync dispatch")
+                                try:
+                                    return _encode(result)
+                                except TypeError:
+                                    # msgspec raises TypeError for a QuerySet from a helper. It loads on the ORM pool.
+                                    if isinstance(result, QuerySet):
+                                        return _finish(result)
+                                    raise
                         else:
 
                             def execute_trivial_async_sync(
@@ -2201,7 +2222,7 @@ class BoltAPI:
                                 if isinstance(result, list):
                                     result = _convert_serializers(result)
                                     return _encode(result)
-                                return serialize_response_sync(result, meta)
+                                return _finish(result)
                     else:
                         if _skip_convert:
 
@@ -2213,10 +2234,17 @@ class BoltAPI:
                                 try:
                                     coro.send(None)
                                 except StopIteration as _e:
-                                    return _encode(_e.value)
+                                    result = _e.value
                                 else:
                                     coro.close()
                                     raise RuntimeError("Handler awaited unexpectedly in sync dispatch")
+                                try:
+                                    return _encode(result)
+                                except TypeError:
+                                    # msgspec raises TypeError for a QuerySet from a helper. It loads on the ORM pool.
+                                    if isinstance(result, QuerySet):
+                                        return _finish(result)
+                                    raise
                         else:
 
                             def execute_trivial_async_sync(
@@ -2236,7 +2264,7 @@ class BoltAPI:
                                 if isinstance(result, list):
                                     result = _convert_serializers(result)
                                     return _encode(result)
-                                return serialize_response_sync(result, meta)
+                                return _finish(result)
 
                     meta["_sync_executor"] = execute_trivial_async_sync
 
@@ -2244,7 +2272,14 @@ class BoltAPI:
                     if _skip_convert:
 
                         async def execute_async_dict_fast(handler: Callable, request: dict[str, Any]) -> ResponseWireV1:
-                            return (default_status, _meta_json, _BODY_BYTES, _encode(await handler()))
+                            result = await handler()
+                            try:
+                                return (default_status, _meta_json, _BODY_BYTES, _encode(result))
+                            except TypeError:
+                                # msgspec raises TypeError for a QuerySet from a helper. It loads on the ORM pool.
+                                if isinstance(result, QuerySet):
+                                    return await serialize_response(result, meta)
+                                raise
                     else:
 
                         async def execute_async_dict_fast(handler: Callable, request: dict[str, Any]) -> ResponseWireV1:
@@ -2260,7 +2295,14 @@ class BoltAPI:
 
                         async def execute_async_dict_fast(handler: Callable, request: dict[str, Any]) -> ResponseWireV1:
                             args, kwargs = _get_args(request)
-                            return (default_status, _meta_json, _BODY_BYTES, _encode(await handler(*args, **kwargs)))
+                            result = await handler(*args, **kwargs)
+                            try:
+                                return (default_status, _meta_json, _BODY_BYTES, _encode(result))
+                            except TypeError:
+                                # msgspec raises TypeError for a QuerySet from a helper. It loads on the ORM pool.
+                                if isinstance(result, QuerySet):
+                                    return await serialize_response(result, meta)
+                                raise
                     else:
 
                         async def execute_async_dict_fast(handler: Callable, request: dict[str, Any]) -> ResponseWireV1:
@@ -2314,7 +2356,7 @@ class BoltAPI:
                                     raise RuntimeError("Handler awaited unexpectedly in sync dispatch")
                                 if isinstance(result, _match_types):
                                     return _encode(result)
-                                return serialize_response_sync(result, meta)
+                                return _finish(result)
                         else:
 
                             def execute_trivial_async_sync_validated(
@@ -2331,7 +2373,7 @@ class BoltAPI:
                                     raise RuntimeError("Handler awaited unexpectedly in sync dispatch")
                                 if isinstance(result, _match_types):
                                     return _encode(result)
-                                return serialize_response_sync(result, meta)
+                                return _finish(result)
 
                         meta["_sync_executor"] = execute_trivial_async_sync_validated
 
@@ -2389,7 +2431,7 @@ class BoltAPI:
                                 except msgspec.ValidationError as exc:
                                     _raise_response_validation_error(exc)
                                 return _encode(validated)
-                            return serialize_response_sync(result, meta)
+                            return _finish(result)
                     else:
 
                         def execute_trivial_async_sync_validated(
@@ -2415,7 +2457,7 @@ class BoltAPI:
                                 except msgspec.ValidationError as exc:
                                     _raise_response_validation_error(exc)
                                 return _encode(validated)
-                            return serialize_response_sync(result, meta)
+                            return _finish(result)
 
                     meta["_sync_executor"] = execute_trivial_async_sync_validated
 
@@ -2493,7 +2535,14 @@ class BoltAPI:
                     if _skip_convert:
 
                         def execute_sync_dict_fast_plain(handler: Callable, request: dict[str, Any]) -> ResponseWireV1:
-                            return _encode(handler())
+                            result = handler()
+                            try:
+                                return _encode(result)
+                            except TypeError:
+                                # msgspec raises TypeError for a QuerySet from a helper. It loads on the ORM pool.
+                                if isinstance(result, QuerySet):
+                                    return _finish(result)
+                                raise
                     else:
 
                         def execute_sync_dict_fast_plain(handler: Callable, request: dict[str, Any]) -> ResponseWireV1:
@@ -2503,13 +2552,20 @@ class BoltAPI:
                             if isinstance(result, list):
                                 result = _convert_serializers(result)
                                 return _encode(result)
-                            return serialize_response_sync(result, meta)
+                            return _finish(result)
                 else:
                     if _skip_convert:
 
                         def execute_sync_dict_fast_plain(handler: Callable, request: dict[str, Any]) -> ResponseWireV1:
                             args, kwargs = _get_args(request)
-                            return _encode(handler(*args, **kwargs))
+                            result = handler(*args, **kwargs)
+                            try:
+                                return _encode(result)
+                            except TypeError:
+                                # msgspec raises TypeError for a QuerySet from a helper. It loads on the ORM pool.
+                                if isinstance(result, QuerySet):
+                                    return _finish(result)
+                                raise
                     else:
 
                         def execute_sync_dict_fast_plain(handler: Callable, request: dict[str, Any]) -> ResponseWireV1:
@@ -2520,7 +2576,7 @@ class BoltAPI:
                             if isinstance(result, list):
                                 result = _convert_serializers(result)
                                 return _encode(result)
-                            return serialize_response_sync(result, meta)
+                            return _finish(result)
 
                 meta["_sync_executor"] = execute_sync_dict_fast_plain
 
@@ -2528,7 +2584,14 @@ class BoltAPI:
                     if _skip_convert:
 
                         async def execute_sync_dict_fast(handler: Callable, request: dict[str, Any]) -> ResponseWireV1:
-                            return (default_status, _meta_json, _BODY_BYTES, _encode(handler()))
+                            result = handler()
+                            try:
+                                return (default_status, _meta_json, _BODY_BYTES, _encode(result))
+                            except TypeError:
+                                # msgspec raises TypeError for a QuerySet from a helper. It loads on the ORM pool.
+                                if isinstance(result, QuerySet):
+                                    return await run_in_orm_executor(serialize_response_sync, result, meta)
+                                raise
                     else:
 
                         async def execute_sync_dict_fast(handler: Callable, request: dict[str, Any]) -> ResponseWireV1:
@@ -2538,13 +2601,22 @@ class BoltAPI:
                             if isinstance(result, list):
                                 result = _convert_serializers(result)
                                 return (default_status, _meta_json, _BODY_BYTES, _encode(result))
+                            if isinstance(result, QuerySet):
+                                return await run_in_orm_executor(serialize_response_sync, result, meta)
                             return serialize_response_sync(result, meta)
                 else:
                     if _skip_convert:
 
                         async def execute_sync_dict_fast(handler: Callable, request: dict[str, Any]) -> ResponseWireV1:
                             args, kwargs = _get_args(request)
-                            return (default_status, _meta_json, _BODY_BYTES, _encode(handler(*args, **kwargs)))
+                            result = handler(*args, **kwargs)
+                            try:
+                                return (default_status, _meta_json, _BODY_BYTES, _encode(result))
+                            except TypeError:
+                                # msgspec raises TypeError for a QuerySet from a helper. It loads on the ORM pool.
+                                if isinstance(result, QuerySet):
+                                    return await run_in_orm_executor(serialize_response_sync, result, meta)
+                                raise
                     else:
 
                         async def execute_sync_dict_fast(handler: Callable, request: dict[str, Any]) -> ResponseWireV1:
@@ -2555,6 +2627,8 @@ class BoltAPI:
                             if isinstance(result, list):
                                 result = _convert_serializers(result)
                                 return (default_status, _meta_json, _BODY_BYTES, _encode(result))
+                            if isinstance(result, QuerySet):
+                                return await run_in_orm_executor(serialize_response_sync, result, meta)
                             return serialize_response_sync(result, meta)
 
                 return execute_sync_dict_fast
@@ -2578,7 +2652,7 @@ class BoltAPI:
                             result = handler()
                             if isinstance(result, _match_types):
                                 return _encode(result)
-                            return serialize_response_sync(result, meta)
+                            return _finish(result)
                     else:
 
                         def execute_sync_inline_validated_plain(
@@ -2588,7 +2662,7 @@ class BoltAPI:
                             result = handler(*args, **kwargs)
                             if isinstance(result, _match_types):
                                 return _encode(result)
-                            return serialize_response_sync(result, meta)
+                            return _finish(result)
 
                     meta["_sync_executor"] = execute_sync_inline_validated_plain
 
@@ -2600,6 +2674,8 @@ class BoltAPI:
                             result = handler()
                             if isinstance(result, _match_types):
                                 return (default_status, _meta_json, _BODY_BYTES, _encode(result))
+                            if isinstance(result, QuerySet):
+                                return await run_in_orm_executor(serialize_response_sync, result, meta)
                             return serialize_response_sync(result, meta)
                     else:
 
@@ -2610,6 +2686,8 @@ class BoltAPI:
                             result = handler(*args, **kwargs)
                             if isinstance(result, _match_types):
                                 return (default_status, _meta_json, _BODY_BYTES, _encode(result))
+                            if isinstance(result, QuerySet):
+                                return await run_in_orm_executor(serialize_response_sync, result, meta)
                             return serialize_response_sync(result, meta)
 
                     return execute_sync_inline_validated
@@ -2634,7 +2712,7 @@ class BoltAPI:
                             except msgspec.ValidationError as exc:
                                 _raise_response_validation_error(exc)
                             return _encode(validated)
-                        return serialize_response_sync(result, meta)
+                        return _finish(result)
                 else:
 
                     def execute_sync_inline_validated_plain(
@@ -2653,7 +2731,7 @@ class BoltAPI:
                             except msgspec.ValidationError as exc:
                                 _raise_response_validation_error(exc)
                             return _encode(validated)
-                        return serialize_response_sync(result, meta)
+                        return _finish(result)
 
                 meta["_sync_executor"] = execute_sync_inline_validated_plain
 
@@ -2674,6 +2752,8 @@ class BoltAPI:
                             except msgspec.ValidationError as exc:
                                 _raise_response_validation_error(exc)
                             return (default_status, _meta_json, _BODY_BYTES, _encode(validated))
+                        if isinstance(result, QuerySet):
+                            return await run_in_orm_executor(serialize_response_sync, result, meta)
                         return serialize_response_sync(result, meta)
                 else:
 
@@ -2693,6 +2773,8 @@ class BoltAPI:
                             except msgspec.ValidationError as exc:
                                 _raise_response_validation_error(exc)
                             return (default_status, _meta_json, _BODY_BYTES, _encode(validated))
+                        if isinstance(result, QuerySet):
+                            return await run_in_orm_executor(serialize_response_sync, result, meta)
                         return serialize_response_sync(result, meta)
 
                 return execute_sync_inline_validated

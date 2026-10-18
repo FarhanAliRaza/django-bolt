@@ -23,6 +23,10 @@ pub const DEFAULT_MEMORY_LIMIT: usize = 1024 * 1024;
 /// Maximum number of multipart parts allowed
 pub const DEFAULT_MAX_PARTS: usize = 100;
 
+/// Maximum number of fields in a URL-encoded form body. Django has the same
+/// default for `DATA_UPLOAD_MAX_NUMBER_FIELDS`.
+pub const DEFAULT_MAX_FIELDS: usize = 1000;
+
 /// `ValidationError::error_type` value used when the aggregate payload exceeds
 /// the configured limit. Callers (handler/test dispatch) match on this to map
 /// the error to HTTP 413 instead of the default 422. Defined once here so the
@@ -272,7 +276,8 @@ pub struct FormParseResult {
 /// `Vec` for the single-occurrence case.
 ///
 /// Errors:
-/// - Returns a `ValidationError` with `error_type = "parse_error"` if the body cannot be parsed.
+/// - Returns a `ValidationError` with `error_type = "too_many_fields"` when the body has more
+///   than `max_fields` fields. The parser stops at that field, so the rest is not decoded.
 /// - Returns a `ValidationError` produced by `ValidationError::type_coercion_error` if coercion
 ///   of any field value fails.
 ///
@@ -280,7 +285,7 @@ pub struct FormParseResult {
 ///
 /// ```ignore
 /// use std::collections::HashMap;
-/// let result = parse_urlencoded(b"name=alice&age=30", &HashMap::new(), 8192).unwrap();
+/// let result = parse_urlencoded(b"name=alice&age=30", &HashMap::new(), 8192, 1000).unwrap();
 /// assert!(matches!(result.get("name").unwrap(), FormValue::Single(_)));
 /// assert!(matches!(result.get("age").unwrap(), FormValue::Single(_)));
 /// ```
@@ -288,24 +293,25 @@ pub fn parse_urlencoded(
     body: &[u8],
     type_hints: &HashMap<String, u8>,
     max_param_length: usize,
+    max_fields: usize,
 ) -> Result<HashMap<String, FormValue>, ValidationError> {
     let mut result: HashMap<String, FormValue> = HashMap::new();
 
-    let parsed: Vec<(String, String)> =
-        serde_urlencoded::from_bytes(body).map_err(|e| ValidationError {
-            error_type: "parse_error".to_string(),
-            loc: vec!["body".to_string()],
-            msg: format!("Failed to parse form data: {}", e),
-            ctx: HashMap::new(),
-        })?;
-
-    for (key, value) in parsed {
-        let type_hint = type_hints.get(&key).copied().unwrap_or(TYPE_STRING);
+    for (index, (key, value)) in form_urlencoded::parse(body).enumerate() {
+        if index >= max_fields {
+            return Err(ValidationError {
+                error_type: "too_many_fields".to_string(),
+                loc: vec!["body".to_string()],
+                msg: format!("Too many form fields (max {})", max_fields),
+                ctx: HashMap::new(),
+            });
+        }
+        let type_hint = type_hints.get(key.as_ref()).copied().unwrap_or(TYPE_STRING);
         let coerced = coerce_param(&value, type_hint, max_param_length).map_err(|e| {
             ValidationError::type_coercion_error(&key, type_hint_name(type_hint), &e.to_string())
         })?;
 
-        match result.entry(key) {
+        match result.entry(key.into_owned()) {
             std::collections::hash_map::Entry::Vacant(e) => {
                 e.insert(FormValue::Single(coerced));
             }
@@ -712,6 +718,29 @@ mod tests {
     }
 
     #[test]
+    fn a_urlencoded_body_accepts_max_fields_and_rejects_one_more() {
+        let type_hints = HashMap::new();
+        let parse = |body: &[u8]| parse_urlencoded(body, &type_hints, 8, 2);
+
+        assert_eq!(parse(b"a=1&a=2").unwrap().len(), 1);
+        // A repeated key counts once for each field. Empty segments are not fields.
+        assert!(parse(b"a=1&&b=2&").is_ok());
+        let error = match parse(b"a=1&a=2&a=3") {
+            Ok(_) => panic!("a third field must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.error_type, "too_many_fields");
+        assert_eq!(error.msg, "Too many form fields (max 2)");
+        // The parser stops at the extra field, before it checks its value.
+        assert_eq!(
+            parse(b"a=1&b=2&c=too-long-value")
+                .err()
+                .map(|e| e.error_type),
+            Some("too_many_fields".to_string())
+        );
+    }
+
+    #[test]
     fn test_parse_urlencoded() {
         let body = Bytes::from("name=John&age=30&active=true");
         let mut type_hints = HashMap::new();
@@ -723,6 +752,7 @@ mod tests {
             &body,
             &type_hints,
             crate::type_coercion::DEFAULT_MAX_PARAM_LENGTH,
+            DEFAULT_MAX_FIELDS,
         )
         .unwrap();
 
@@ -749,7 +779,7 @@ mod tests {
     /// let body = Bytes::from("tag=a&tag=b&tag=c&name=John");
     /// let type_hints = HashMap::new();
     ///
-    /// let result = parse_urlencoded(&body, &type_hints, 8192).unwrap();
+    /// let result = parse_urlencoded(&body, &type_hints, 8192, 1000).unwrap();
     ///
     /// match result.get("tag") {
     ///     Some(FormValue::Multi(v)) => {
@@ -777,6 +807,7 @@ mod tests {
             &body,
             &type_hints,
             crate::type_coercion::DEFAULT_MAX_PARAM_LENGTH,
+            DEFAULT_MAX_FIELDS,
         )
         .unwrap();
 
@@ -1194,7 +1225,7 @@ mod tests {
         ] {
             // The value is over max_param_length, so every type rejects it.
             let type_hints = HashMap::from([("f".to_string(), type_hint)]);
-            let error = match parse_urlencoded(b"f=xy", &type_hints, 1) {
+            let error = match parse_urlencoded(b"f=xy", &type_hints, 1, DEFAULT_MAX_FIELDS) {
                 Ok(_) => panic!("a value over max_param_length must be rejected"),
                 Err(error) => error,
             };

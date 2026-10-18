@@ -52,6 +52,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # Form parsing dependencies
 actix-multipart = "0.7"
 serde_urlencoded = "0.7"
+form_urlencoded = "1"  # URL-encoded form bodies, parsed lazily so the field limit applies first
 tempfile = "3"
 log = "0.4"
 notify = "8"

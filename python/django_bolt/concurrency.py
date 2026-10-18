@@ -448,12 +448,7 @@ def _drive_in_lane_mode[T](coro_fn: Callable[..., Coroutine[object, object, T]],
         return drive_on_lane(coro_fn(*args))
     finally:
         _thread_state.active = False
-        # A raise here would replace the result of the request. For example,
-        # ``putconn`` can fail when a pooled connection goes back to its pool.
-        try:
-            close_lane_request()
-        except Exception:
-            logger.exception("Could not close the database connections of a lane after its request")
+        close_lane_request()
 
 
 def drive_on_lane[T](coro: Coroutine[object, object, T]) -> T:
@@ -480,17 +475,28 @@ def close_lane_request() -> None:
 
     Bolt does not see a database error that user code handles, or one from a
     direct ``sync_to_async`` call. Django does this check on ``request_finished``.
+
+    A raise here would replace the result of a sync request on the lane, so
+    each step logs its error. For example, ``putconn`` can fail when a pooled
+    connection goes back to its pool.
     """
-    dead = []
-    for conn in connections.all(initialized_only=True):
-        if conn.errors_occurred and not conn.in_atomic_block:
-            raw = _close_if_unusable_or_obsolete(conn)
-            if raw is not None:
-                dead.append((conn, raw))
-    if dead:
-        _connections_died(dead)
+    try:
+        dead = []
+        for conn in connections.all(initialized_only=True):
+            if conn.errors_occurred and not conn.in_atomic_block:
+                raw = _close_if_unusable_or_obsolete(conn)
+                if raw is not None:
+                    dead.append((conn, raw))
+        if dead:
+            _connections_died(dead)
+    except Exception:
+        logger.exception("Could not close the unusable database connections of a lane after its request")
+    # A failed close above must not keep the other pooled connections on the lane.
     if _thread_state.holds_pooled:
-        release_pooled_connections()
+        try:
+            release_pooled_connections()
+        except Exception:
+            logger.exception("Could not give the pooled database connections of a lane back after its request")
 
 
 def _close_thread_connections() -> None:

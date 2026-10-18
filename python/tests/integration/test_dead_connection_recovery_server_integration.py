@@ -510,7 +510,8 @@ def test_an_error_of_user_code_on_a_lane_keeps_its_pooled_connection(make_server
 def test_a_failed_return_to_the_pool_keeps_the_response_of_a_sync_lane(make_server_project, postgres_database):
     """A sync request behind Django middleware gives its pooled connection back when it ends. That return can fail.
 
-    The failure must not replace the response of the request. Bolt logs it.
+    The failure must not replace the response of the request. Bolt logs it,
+    and the lane serves its next request with a new connection.
     """
     project = make_server_project(
         api_module=app_module("request_lanes_async"),
@@ -518,11 +519,45 @@ def test_a_failed_return_to_the_pool_keeps_the_response_of_a_sync_lane(make_serv
     )
     server = project.start()
     with server:
-        response = server.get("/lose-the-pool-on-a-sync-lane")
+        for _ in range(3):
+            response = server.get("/lose-the-pool-on-a-sync-lane")
+            assert response.status_code == 200, response.text
+            assert response.json() == {"result": "ok"}
+            response = server.get("/query-on-a-sync-lane")
+            assert response.status_code == 200, response.text
+            assert response.json() == {"result": 1}
+    stdout, stderr = server.stop()
+    assert "Could not give the pooled database connections of a lane back after its request" in stdout + stderr
+
+
+# A pool that a checkout empties opens one more connection in the background,
+# and pool_size counts it before it is available. The pool of ``second`` is at
+# its max_size, so its statistics show only the checked-out connection.
+TWO_POOLS = """
+DATABASES["default"]["OPTIONS"] = {"pool": {"min_size": 1, "max_size": 2, "timeout": 5}}
+DATABASES["second"] = {**DATABASES["default"], "OPTIONS": {"pool": {"min_size": 1, "max_size": 1, "timeout": 5}}}
+"""
+
+
+def test_a_failed_close_on_a_lane_still_gives_back_its_other_pooled_connections(make_server_project, postgres_database):
+    """A lane closes its connections that had an error, then gives back its pooled connections. The close can fail.
+
+    That failure must not keep the connection of another pooled database on the
+    lane. An idle lane would hold that pool slot until it stops.
+    """
+    project = make_server_project(
+        api_module=app_module("request_lanes_async"),
+        settings_extra=postgres_settings(postgres_database) + TWO_POOLS,
+    )
+    server = project.start()
+    with server:
+        response = server.get("/lose-the-pool-after-an-error-on-a-sync-lane")
         assert response.status_code == 200, response.text
         assert response.json() == {"result": "ok"}
+        stats = server.get("/pool-stats?alias=second").json()
+        assert stats["pool_size"] - stats["pool_available"] == 0, stats
     stdout, stderr = server.stop()
-    assert "Could not close the database connections of a lane after its request" in stdout + stderr
+    assert "Could not close the unusable database connections of a lane after its request" in stdout + stderr
 
 
 def test_a_failed_return_to_the_pool_keeps_the_result_of_the_call(make_server_project, postgres_database):

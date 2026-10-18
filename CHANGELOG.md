@@ -67,6 +67,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **A QuerySet that a handler gets from a helper loads on the ORM pool** - The analysis of a handler finds the ORM calls in the handler, not in a helper that it calls. Thus a handler that returns `services.list_items()` took a fast path, and the fast path serialized the QuerySet where it was. An `async def` handler, and a sync handler behind a Python middleware, got 500 with `SynchronousOnlyOperation`. Other sync handlers loaded the rows on the server worker thread. Now each fast path sends a QuerySet result to the ORM pool, as the other paths do.
 - **A `File(max_size=...)` limits only its own file** - Rust read each file of a route only up to the largest `max_size` of the route. Thus a second `File()` with no `max_size`, or a file in a `Form()` struct, got 422 `file_too_large` above that size, although `BOLT_MAX_UPLOAD_SIZE` allowed it. Now such a file gets the limit of `BOLT_MAX_UPLOAD_SIZE`.
 - **A dependency gets the request parts that it reads** - Bolt parses only the request parts that a route needs. It finds them in the source of the handler and of its dependencies. It did not find the reads of these dependencies, so they got an empty value:
   - A lambda dependency. The analysis looked only for a `def`.

@@ -3,6 +3,7 @@
 //! This module contains validation and processing logic that is common
 //! between the production handler (handler.rs) and test handler (testing.rs).
 
+use actix_web::http::header::HeaderValue;
 use actix_web::{HttpRequest, HttpResponse};
 use ahash::{AHashMap, AHashSet};
 use std::borrow::{Borrow, Cow};
@@ -280,6 +281,23 @@ fn set_coerced_item(
     }
 }
 
+/// Return the text of a header value, or None. It accepts the same values as
+/// `HeaderValue::to_str`: visible ASCII and tab. actix-web uses http 0.2.
+/// Its `to_str` stops at the first bad byte, so the loop does not vectorize.
+/// This loop has no early exit, as in http 1.
+#[inline]
+pub fn header_str(value: &HeaderValue) -> Option<&str> {
+    let bytes = value.as_bytes();
+    let mut invalid = false;
+    for &byte in bytes {
+        invalid |= !((32..127).contains(&byte) || byte == b'\t');
+    }
+    if invalid {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok()
+}
+
 /// Extract headers from request with validation
 /// OPTIMIZATION: HeaderName::as_str() already returns lowercase (http crate canonical form)
 /// so we skip the redundant to_ascii_lowercase() call (~50ns saved per header)
@@ -298,7 +316,7 @@ pub fn extract_headers(
         if header_count > MAX_HEADERS {
             return Err(responses::error_400_too_many_headers());
         }
-        if let Ok(v) = value.to_str() {
+        if let Some(v) = header_str(value) {
             if v.len() > max_header_size {
                 return Err(responses::error_400_header_too_large(max_header_size));
             }
@@ -319,7 +337,7 @@ pub fn extract_cookie_header(
         if index >= 100 {
             return Err(responses::error_400_too_many_headers());
         }
-        if let Ok(value) = value.to_str() {
+        if let Some(value) = header_str(value) {
             if value.len() > max_header_size {
                 return Err(responses::error_400_header_too_large(max_header_size));
             }
@@ -375,6 +393,20 @@ mod tests {
     use super::*;
     use crate::type_coercion::{TYPE_BOOL, TYPE_INT};
     use actix_web::body::MessageBody;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn header_str_accepts_what_to_str_accepts(
+            bytes in prop::collection::vec(
+                prop_oneof![8 => 0x20u8..0x7f, 1 => Just(b'\t'), 1 => 0x80u8..=0xff],
+                0..300,
+            ),
+        ) {
+            let value = HeaderValue::from_bytes(&bytes).unwrap();
+            prop_assert_eq!(header_str(&value), value.to_str().ok());
+        }
+    }
 
     #[test]
     fn query_sequences_checks_the_length_of_each_value() {

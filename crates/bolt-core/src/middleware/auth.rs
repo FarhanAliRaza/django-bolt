@@ -1524,4 +1524,98 @@ mod tests {
             None
         );
     }
+
+    /// A JWKS that refreshes from a Python function. The function records
+    /// each call in `calls` and returns no new document.
+    fn refreshing_jwks<'py>(
+        py: Python<'py>,
+        kids: &[&str],
+        refresh_interval: Duration,
+    ) -> (RefreshingJwks, Bound<'py, PyAny>) {
+        let module = PyModule::from_code(
+            py,
+            c"calls = []\ndef refresh():\n    calls.append(1)\n",
+            c"refreshing_jwks.py",
+            c"refreshing_jwks",
+        )
+        .unwrap();
+        let keys = kids
+            .iter()
+            .map(|kid| (kid.to_string(), DecodingKey::from_secret(SECRET.as_bytes())))
+            .collect();
+        let refresh = module.getattr("refresh").unwrap().unbind();
+        let jwks = RefreshingJwks::new(keys, refresh, refresh_interval);
+        (jwks, module.getattr("calls").unwrap())
+    }
+
+    #[test]
+    fn a_refreshing_jwks_with_one_key_selects_it_for_a_token_with_no_kid() {
+        Python::initialize();
+        Python::attach(|py| {
+            let hour = Duration::from_secs(3600);
+            let (one, _) = refreshing_jwks(py, &["a"], hour);
+            assert!(one.select(None).is_some());
+            // With two keys, a token with no kid cannot choose one.
+            let (two, _) = refreshing_jwks(py, &["a", "b"], hour);
+            assert!(two.select(None).is_none());
+        });
+    }
+
+    #[test]
+    fn a_refreshing_jwks_fetches_again_only_when_the_interval_ends() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (fresh, calls) = refreshing_jwks(py, &["a"], Duration::from_secs(3600));
+            assert!(fresh.select(Some("a")).is_some());
+            assert!(fresh.select(Some("a")).is_some());
+            assert_eq!(calls.len().unwrap(), 0);
+
+            let (due, calls) = refreshing_jwks(py, &["a"], Duration::ZERO);
+            // The fetch gives no new document, so the known key stays.
+            assert!(due.select(Some("a")).is_some());
+            assert_eq!(calls.len().unwrap(), 1);
+        });
+    }
+
+    #[test]
+    fn extra_claims_keep_their_json_types() {
+        Python::initialize();
+        let claims: Claims = serde_json::from_value(serde_json::json!({
+            "sub": "1",
+            "org": 7,
+            "ratio": 0.5,
+            "beta": true,
+            "team": "core",
+            "tags": ["x"],
+        }))
+        .unwrap();
+        Python::attach(|py| {
+            let dict = claims_to_dict(py, &claims);
+            let item = |key: &str| dict.get_item(key).unwrap().unwrap();
+            assert_eq!(item("org").extract::<i64>().unwrap(), 7);
+            assert_eq!(item("ratio").extract::<f64>().unwrap(), 0.5);
+            assert!(item("beta").extract::<bool>().unwrap());
+            assert_eq!(item("team").extract::<String>().unwrap(), "core");
+            // A list or an object is not converted.
+            assert!(item("tags").is_none());
+        });
+    }
+
+    #[test]
+    fn the_context_has_permissions_only_when_there_are_some() {
+        Python::initialize();
+        let key_permissions = HashMap::from([("k".to_string(), vec!["read".to_string()])]);
+        Python::attach(|py| {
+            for (key, expected) in [("k", Some(vec!["read".to_string()])), ("other", None)] {
+                let context = PyDict::new(py).unbind();
+                let auth_ctx = AuthContext::from_api_key(key, &key_permissions);
+                populate_auth_context(&context, &auth_ctx, py);
+                let permissions = context.bind(py).get_item("permissions").unwrap();
+                assert_eq!(
+                    permissions.map(|value| value.extract::<Vec<String>>().unwrap()),
+                    expected
+                );
+            }
+        });
+    }
 }

@@ -21,16 +21,6 @@ impl<'a> RouteMatch<'a> {
         }
     }
 
-    /// Get owned path params when present (None for static routes)
-    #[inline]
-    #[allow(dead_code)]
-    pub fn path_params(self) -> Option<AHashMap<String, String>> {
-        match self {
-            RouteMatch::Static(_) => None,
-            RouteMatch::Dynamic(_, params) => Some(params),
-        }
-    }
-
     /// Decompose into the route reference (with the router's lifetime — 'static
     /// for the global router) and owned path params. Lets the request handler
     /// defer the handler `clone_ref` into the main GIL block instead of paying
@@ -41,13 +31,6 @@ impl<'a> RouteMatch<'a> {
             RouteMatch::Static(r) => (r, None),
             RouteMatch::Dynamic(r, params) => (r, Some(params)),
         }
-    }
-
-    /// Check if this is a static route (no path params)
-    #[inline]
-    #[allow(dead_code)]
-    pub fn is_static(&self) -> bool {
-        matches!(self, RouteMatch::Static(_))
     }
 
     /// Get handler_id
@@ -479,6 +462,15 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn convert_path_makes_a_path_param_a_catch_all() {
+        assert_eq!(convert_path("/files/{rest:path}"), "/files/{*rest}");
+        assert_eq!(convert_path("/admin/{path:path}"), "/admin/{*path}");
+        // Another type keeps only the name.
+        assert_eq!(convert_path("/items/{id:int}"), "/items/{id}");
+        assert_eq!(convert_path("/items/{id}/tags"), "/items/{id}/tags");
     }
 
     #[test]

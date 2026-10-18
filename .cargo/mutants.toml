@@ -3,7 +3,8 @@
 
 # The request parsers and the security checks. Rust unit tests cover these
 # files. Most other Rust code is tested through the Python suite, which
-# cargo-mutants does not run, so its results there would mean little.
+# cargo-mutants does not run, so its results there would mean little. The
+# Python suite also catches some mutants that this run lists as missed.
 examine_globs = [
     "crates/bolt-core/src/cookies.rs",
     "crates/bolt-core/src/form_parsing.rs",
@@ -19,3 +20,30 @@ examine_globs = [
 
 # A mutant in bolt-core is caught by the tests of bolt-core.
 test_workspace = false
+
+# Mutants that do not change what the code does. No Rust or Python test can
+# catch them, so they stay out of the missed list.
+exclude_re = [
+    # A max_age of 0 takes the warning path and stays 0.
+    'cookies\.rs:\d+:\d+: replace < with <= in format_cookie',
+    # The fallback spool limit of a route with no metadata. It selects memory
+    # or disk for a file, and the handler gets the same bytes.
+    'form_parsing\.rs:15:\d+: replace \* with [+/]',
+    # The type count only selects which map to walk. Both loops check the
+    # same values.
+    'replace < with (==|>|<=) in validate_and_cache_source',
+    # With no keys or no query, the full path also gives an empty result.
+    'replace match guard !keys\.is_empty\(\) && !query\.is_empty\(\) with true in query_sequences',
+    'replace && with \|\| in query_sequences',
+    # The high and low hex digits have no common bits, so | and ^ agree.
+    'replace \| with \^ in decode_escaped_query_component',
+    # The pair count is a map capacity hint.
+    'router\.rs:\d+:\d+: replace (\+ with \*|== with !=) in parse_query_string',
+    # The default arm also returns a string.
+    'delete match arm TYPE_STRING in coerce_typed',
+    # These short-circuit work that has the same result on an empty set.
+    'replace GuardSet::is_empty -> bool with false',
+    'replace TrustedProxies::is_empty -> bool with false',
+    # The Debug text of a JWKS.
+    'Debug for RefreshingJwks',
+]

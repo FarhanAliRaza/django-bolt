@@ -378,4 +378,39 @@ mod tests {
             KeySource::Identity("a").bucket()
         );
     }
+
+    #[test]
+    fn a_full_map_drops_a_fifth_of_its_limiters() {
+        let limiters = RateLimiters::default();
+        let config = RateLimitConfig {
+            rps: 100,
+            burst: 100,
+            key: RateLimitKey::Ip,
+        };
+        // Fill the map. The entries share one limiter, so the fill stays fast.
+        let quota = Quota::per_second(std::num::NonZeroU32::new(100).unwrap());
+        let shared = Arc::new(RateLimiter::direct(quota));
+        for n in 0..MAX_LIMITERS as u64 {
+            limiters
+                .limiters
+                .insert((1, 100, 100, LimiterKey(n)), Arc::clone(&shared));
+        }
+        limiters.count.store(MAX_LIMITERS, Ordering::Relaxed);
+
+        let address = ip("203.0.113.7");
+        let response = check_before_auth(
+            &limiters,
+            0,
+            &AHashMap::new(),
+            Some(&address),
+            &config,
+            "GET",
+            "/",
+        );
+        assert!(response.is_none());
+        // The new key found the map full. The cleanup dropped 20 000 limiters first.
+        let expected = MAX_LIMITERS - MAX_LIMITERS / 5 + 1;
+        assert_eq!(limiters.limiters.len(), expected);
+        assert_eq!(limiters.count.load(Ordering::Relaxed), expected);
+    }
 }

@@ -879,4 +879,272 @@ mod tests {
             "parser drained {consumed_chunks} of {total_chunks} chunks — it buffered the whole field instead of aborting early"
         );
     }
+
+    /// The limits of one `parse_multipart` call. The default limits are not reached.
+    struct Limits {
+        max_upload_size: usize,
+        max_parts: usize,
+        max_param_length: usize,
+        max_total_size: usize,
+    }
+
+    impl Default for Limits {
+        fn default() -> Self {
+            Limits {
+                max_upload_size: 1024,
+                max_parts: DEFAULT_MAX_PARTS,
+                max_param_length: 1024,
+                max_total_size: usize::MAX,
+            }
+        }
+    }
+
+    const BOUNDARY: &str = "LIMITBOUNDARY";
+
+    fn text_part(name: &str, value: &[u8]) -> Vec<u8> {
+        let mut part =
+            format!("--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n")
+                .into_bytes();
+        part.extend_from_slice(value);
+        part.extend_from_slice(b"\r\n");
+        part
+    }
+
+    fn file_part(name: &str, content_type: &str, data: &[u8]) -> Vec<u8> {
+        let mut part = format!(
+            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"f.bin\"\r\nContent-Type: {content_type}\r\n\r\n"
+        )
+        .into_bytes();
+        part.extend_from_slice(data);
+        part.extend_from_slice(b"\r\n");
+        part
+    }
+
+    /// Parse `parts` as one multipart body that arrives in one chunk.
+    fn parse_parts(
+        parts: &[Vec<u8>],
+        file_constraints: &HashMap<String, FileFieldConstraints>,
+        limits: &Limits,
+    ) -> Result<FormParseResult, ValidationError> {
+        use actix_web::http::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+
+        let mut body = parts.concat();
+        body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+        let stream = futures_util::stream::iter(vec![Ok::<_, actix_web::error::PayloadError>(
+            Bytes::from(body),
+        )]);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_str(&format!("multipart/form-data; boundary={BOUNDARY}")).unwrap(),
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(parse_multipart(
+            Multipart::new(&headers, stream),
+            &HashMap::new(),
+            file_constraints,
+            limits.max_upload_size,
+            DEFAULT_MEMORY_LIMIT,
+            limits.max_parts,
+            limits.max_param_length,
+            limits.max_total_size,
+        ))
+    }
+
+    fn error_type(result: Result<FormParseResult, ValidationError>) -> String {
+        match result {
+            Ok(_) => panic!("the body must be rejected"),
+            Err(error) => error.error_type,
+        }
+    }
+
+    #[test]
+    fn multipart_accepts_max_parts_and_rejects_one_more() {
+        let limits = Limits {
+            max_parts: 2,
+            ..Limits::default()
+        };
+        let two = [text_part("a", b"1"), text_part("b", b"2")];
+        let three = [
+            text_part("a", b"1"),
+            text_part("b", b"2"),
+            text_part("c", b"3"),
+        ];
+
+        assert_eq!(
+            parse_parts(&two, &HashMap::new(), &limits)
+                .unwrap()
+                .form_map
+                .len(),
+            2
+        );
+        assert_eq!(
+            error_type(parse_parts(&three, &HashMap::new(), &limits)),
+            "too_many_parts"
+        );
+    }
+
+    #[test]
+    fn multipart_text_field_of_max_param_length_is_accepted_and_one_more_byte_is_rejected() {
+        let limits = Limits {
+            max_param_length: 4,
+            ..Limits::default()
+        };
+
+        let accepted = parse_parts(&[text_part("value", b"abcd")], &HashMap::new(), &limits);
+        assert!(matches!(
+            accepted.unwrap().form_map.get("value"),
+            Some(FormValue::Single(CoercedValue::String(s))) if s == "abcd"
+        ));
+
+        let error = match parse_parts(&[text_part("value", b"abcde")], &HashMap::new(), &limits) {
+            Ok(_) => panic!("a value over max_param_length must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.error_type, "type_error");
+        assert_eq!(
+            error.ctx["error"],
+            serde_json::json!(CoerceError::TooLong { len: 5, max: 4 }.to_string())
+        );
+    }
+
+    #[test]
+    fn multipart_text_field_stops_at_the_first_chunk_over_max_param_length() {
+        use actix_web::http::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+        use std::collections::VecDeque;
+
+        // One byte for each chunk, so the field grows by one byte at a time.
+        let mut chunks: VecDeque<Bytes> = VecDeque::new();
+        chunks.push_back(Bytes::from(format!(
+            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"value\"\r\n\r\n"
+        )));
+        for byte in b"abcdef" {
+            chunks.push_back(Bytes::copy_from_slice(&[*byte]));
+        }
+        chunks.push_back(Bytes::from(format!("\r\n--{BOUNDARY}--\r\n")));
+        let stream = CountingStream {
+            chunks,
+            consumed: Default::default(),
+            yield_pending: false,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_str(&format!("multipart/form-data; boundary={BOUNDARY}")).unwrap(),
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = runtime.block_on(parse_multipart(
+            Multipart::new(&headers, stream),
+            &HashMap::new(),
+            &HashMap::new(),
+            1024,
+            DEFAULT_MEMORY_LIMIT,
+            DEFAULT_MAX_PARTS,
+            3,
+            usize::MAX,
+        ));
+
+        let error = match result {
+            Ok(_) => panic!("a value over max_param_length must be rejected"),
+            Err(error) => error,
+        };
+        // The fourth byte is the first one over the limit.
+        assert_eq!(
+            error.ctx["error"],
+            serde_json::json!(CoerceError::TooLong { len: 4, max: 3 }.to_string())
+        );
+    }
+
+    #[test]
+    fn multipart_text_fields_count_toward_the_total_size() {
+        let limits = Limits {
+            max_total_size: 5,
+            ..Limits::default()
+        };
+        let parts = [text_part("a", b"abc"), text_part("b", b"abc")];
+
+        assert_eq!(
+            error_type(parse_parts(&parts, &HashMap::new(), &limits)),
+            ERROR_TYPE_PAYLOAD_TOO_LARGE
+        );
+    }
+
+    #[test]
+    fn multipart_file_of_max_upload_size_is_accepted_and_one_more_byte_is_rejected() {
+        let limits = Limits {
+            max_upload_size: 4,
+            ..Limits::default()
+        };
+
+        let accepted = parse_parts(
+            &[file_part("doc", "text/plain", b"abcd")],
+            &HashMap::new(),
+            &limits,
+        );
+        assert_eq!(accepted.unwrap().files_map["doc"][0].size, 4);
+
+        let rejected = parse_parts(
+            &[file_part("doc", "text/plain", b"abcde")],
+            &HashMap::new(),
+            &limits,
+        );
+        assert_eq!(error_type(rejected), "file_too_large");
+    }
+
+    #[test]
+    fn multipart_file_of_its_max_size_is_accepted_and_one_more_byte_is_rejected() {
+        let constraints = HashMap::from([(
+            "doc".to_string(),
+            FileFieldConstraints {
+                max_size: Some(4),
+                ..FileFieldConstraints::default()
+            },
+        )]);
+
+        let accepted = parse_parts(
+            &[file_part("doc", "text/plain", b"abcd")],
+            &constraints,
+            &Limits::default(),
+        );
+        assert_eq!(accepted.unwrap().files_map["doc"][0].size, 4);
+
+        let rejected = parse_parts(
+            &[file_part("doc", "text/plain", b"abcde")],
+            &constraints,
+            &Limits::default(),
+        );
+        assert_eq!(error_type(rejected), "file_too_large");
+    }
+
+    #[test]
+    fn a_coercion_error_names_the_expected_type() {
+        use crate::type_coercion::*;
+
+        for (type_hint, name) in [
+            (TYPE_INT, "int"),
+            (TYPE_FLOAT, "float"),
+            (TYPE_BOOL, "bool"),
+            (TYPE_STRING, "str"),
+            (TYPE_UUID, "UUID"),
+            (TYPE_DATETIME, "datetime"),
+            (TYPE_DECIMAL, "Decimal"),
+            (TYPE_DATE, "date"),
+            (TYPE_TIME, "time"),
+            (0, "unknown"),
+        ] {
+            // The value is over max_param_length, so every type rejects it.
+            let type_hints = HashMap::from([("f".to_string(), type_hint)]);
+            let error = match parse_urlencoded(b"f=xy", &type_hints, 1) {
+                Ok(_) => panic!("a value over max_param_length must be rejected"),
+                Err(error) => error,
+            };
+            assert_eq!(error.ctx["expected_type"], serde_json::json!(name));
+        }
+    }
 }

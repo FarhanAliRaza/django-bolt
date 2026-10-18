@@ -547,4 +547,79 @@ mod tests {
             validate_and_cache_typed_params(None, Some(&bad_query), &hints, 64).unwrap_err();
         assert!(detail(response).contains("Query parameter 'id'"));
     }
+
+    #[test]
+    fn source_accepts_a_value_of_max_length_in_both_loop_orders() {
+        let max = "a".repeat(64);
+        // More values than types.
+        let cookies = values(&[("a", "1"), ("session", &max)]);
+        assert!(
+            validate_and_cache_source(&cookies, &types(&[("a", TYPE_INT)]), 64, "Cookie").is_ok()
+        );
+        // No more values than types.
+        let single = values(&[("session", &max)]);
+        assert!(
+            validate_and_cache_source(&single, &types(&[("a", TYPE_INT)]), 64, "Cookie").is_ok()
+        );
+    }
+
+    #[test]
+    fn param_value_accepts_an_untyped_value_of_max_length() {
+        let value = "a".repeat(64);
+        assert!(
+            coerce_param_value("q", &value, &types(&[]), 64, "Path parameter")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    fn request_with_headers(count: usize) -> HttpRequest {
+        (0..count)
+            .fold(actix_web::test::TestRequest::default(), |request, i| {
+                request.append_header((format!("x-h{i}"), "v"))
+            })
+            .to_http_request()
+    }
+
+    #[test]
+    fn a_request_can_have_100_headers_and_not_101() {
+        let request = request_with_headers(100);
+        assert_eq!(extract_headers(&request, 1024).unwrap().len(), 100);
+        assert!(extract_cookie_header(&request, 1024).is_ok());
+
+        let request = request_with_headers(101);
+        for response in [
+            extract_headers(&request, 1024).unwrap_err(),
+            extract_cookie_header(&request, 1024).unwrap_err(),
+        ] {
+            assert_eq!(response.status(), 400);
+            let body = response.into_body().try_into_bytes().unwrap();
+            assert_eq!(&body[..], responses::ERROR_BODY_400_HEADERS);
+        }
+    }
+
+    #[test]
+    fn a_header_value_can_have_max_header_size_bytes_and_not_one_more() {
+        let max = format!("a={}", "b".repeat(14));
+        let request = actix_web::test::TestRequest::default()
+            .append_header(("cookie", max.as_str()))
+            .append_header(("x-tag", "c".repeat(16)))
+            .to_http_request();
+        assert_eq!(extract_headers(&request, 16).unwrap()["cookie"], max);
+        assert_eq!(
+            extract_cookie_header(&request, 16).unwrap().as_deref(),
+            Some(max.as_str())
+        );
+
+        for over in [("cookie", format!("{max}c")), ("x-tag", "c".repeat(17))] {
+            let request = actix_web::test::TestRequest::default()
+                .append_header(over)
+                .to_http_request();
+            assert_eq!(extract_headers(&request, 16).unwrap_err().status(), 400);
+            assert_eq!(
+                extract_cookie_header(&request, 16).unwrap_err().status(),
+                400
+            );
+        }
+    }
 }

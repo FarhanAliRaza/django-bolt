@@ -1,4 +1,5 @@
 use ahash::AHashMap;
+use aws_lc_rs::hmac;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use jsonwebtoken::{crypto, get_current_timestamp, Algorithm, AlgorithmFamily, DecodingKey};
@@ -142,13 +143,60 @@ impl AuthContext {
 #[derive(Debug, Clone)]
 pub enum JwtKeySource {
     /// A single key from an HMAC secret or PEM public key.
-    Static(DecodingKey),
+    Static(StaticKey),
     /// A JWKS: keys indexed by `kid`, selected per request from the token's
     /// `kid` header (RS/ES providers like Clerk, Auth0, Okta).
     Jwks(HashMap<String, DecodingKey>),
     /// Remotely sourced JWKS. The last known-good keys remain available while
     /// one worker refreshes them periodically or after an unknown `kid`.
     RefreshingJwks(Arc<RefreshingJwks>),
+}
+
+/// A static verification key. For an HMAC secret it also holds an HMAC key
+/// for each HMAC algorithm, built once. `crypto::verify` builds one for each
+/// token.
+#[derive(Clone)]
+pub struct StaticKey {
+    key: DecodingKey,
+    hmac: Option<Arc<HmacKeys>>,
+}
+
+struct HmacKeys {
+    hs256: hmac::Key,
+    hs384: hmac::Key,
+    hs512: hmac::Key,
+}
+
+impl StaticKey {
+    pub fn new(key: DecodingKey) -> Self {
+        let hmac = key.try_get_hmac_secret().ok().map(|secret| {
+            Arc::new(HmacKeys {
+                hs256: hmac::Key::new(hmac::HMAC_SHA256, secret),
+                hs384: hmac::Key::new(hmac::HMAC_SHA384, secret),
+                hs512: hmac::Key::new(hmac::HMAC_SHA512, secret),
+            })
+        });
+        Self { key, hmac }
+    }
+
+    /// The prebuilt key for `alg`. None for an asymmetric key or algorithm.
+    fn hmac_key(&self, alg: Algorithm) -> Option<&hmac::Key> {
+        let keys = self.hmac.as_deref()?;
+        match alg {
+            Algorithm::HS256 => Some(&keys.hs256),
+            Algorithm::HS384 => Some(&keys.hs384),
+            Algorithm::HS512 => Some(&keys.hs512),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Debug for StaticKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaticKey")
+            .field("family", &self.key.family())
+            .finish_non_exhaustive()
+    }
 }
 
 pub struct RefreshingJwks {
@@ -173,7 +221,7 @@ impl JwtKeySource {
     /// For a JWKS with exactly one key the `kid` may be omitted.
     fn select(&self, kid: Option<&str>) -> Option<DecodingKey> {
         match self {
-            JwtKeySource::Static(key) => Some(key.clone()),
+            JwtKeySource::Static(key) => Some(key.key.clone()),
             JwtKeySource::Jwks(keys) => match kid {
                 Some(kid) => keys.get(kid).cloned(),
                 None if keys.len() == 1 => keys.values().next().cloned(),
@@ -564,17 +612,29 @@ fn decode_and_validate(
         return None;
     }
 
-    // Select the verification key: the single static key, or the JWKS key
-    // matching the token's `kid`.
-    let key = match keys.select(header.kid.as_deref()) {
-        Some(key) => key,
+    // A static HMAC secret verifies with its prebuilt key, as crypto::verify
+    // does: decode the signature, then compare its HMAC in constant time.
+    // Other keys come from the static key or from the JWKS key of the
+    // token's `kid`.
+    let prebuilt = match keys {
+        JwtKeySource::Static(key) => key.hmac_key(alg),
+        _ => None,
+    };
+    let verified = match prebuilt {
+        Some(hmac_key) => URL_SAFE_NO_PAD
+            .decode(signature)
+            .map(|signature| hmac::verify(hmac_key, message.as_bytes(), &signature).is_ok())
+            .map_err(|e| e.to_string()),
         None => {
-            log::debug!("JWT rejected: no key matches the token's kid");
-            return None;
+            let Some(key) = keys.select(header.kid.as_deref()) else {
+                log::debug!("JWT rejected: no key matches the token's kid");
+                return None;
+            };
+            crypto::verify(signature, message.as_bytes(), &key, alg).map_err(|e| e.to_string())
         }
     };
 
-    match crypto::verify(signature, message.as_bytes(), &key, alg) {
+    match verified {
         Ok(true) => {}
         Ok(false) => {
             log::debug!("JWT rejected: invalid signature");
@@ -835,7 +895,7 @@ mod tests {
     const SECRET: &str = "test-secret";
 
     fn hs256_key() -> JwtKeySource {
-        JwtKeySource::Static(DecodingKey::from_secret(SECRET.as_bytes()))
+        JwtKeySource::Static(StaticKey::new(DecodingKey::from_secret(SECRET.as_bytes())))
     }
 
     /// Build a token from raw JSON parts so tests can emit headers that
@@ -932,6 +992,49 @@ mod tests {
             None
         )
         .is_none());
+    }
+
+    #[test]
+    fn an_hmac_secret_has_a_prebuilt_key_for_each_hmac_algorithm() {
+        let JwtKeySource::Static(secret) = hs256_key() else {
+            unreachable!()
+        };
+        for alg in [Algorithm::HS256, Algorithm::HS384, Algorithm::HS512] {
+            assert!(secret.hmac_key(alg).is_some(), "{alg:?}");
+        }
+        assert!(secret.hmac_key(Algorithm::RS256).is_none());
+
+        let rsa = StaticKey::new(DecodingKey::from_rsa_components("AQAB", "AQAB").unwrap());
+        assert!(rsa.hmac_key(Algorithm::RS256).is_none());
+        assert!(rsa.hmac_key(Algorithm::HS256).is_none());
+    }
+
+    #[test]
+    fn the_prebuilt_hmac_keys_accept_only_a_token_of_the_same_secret() {
+        let claims_json = format!(r#"{{"sub":"42","exp":{}}}"#, future_exp());
+        let allowed = [Algorithm::HS256, Algorithm::HS384, Algorithm::HS512];
+        let other = JwtKeySource::Static(StaticKey::new(DecodingKey::from_secret(b"other")));
+        let validate = |token: &str, keys: &JwtKeySource| {
+            decode_and_validate(token, keys, &allowed, None, None, 60, None)
+        };
+
+        for (alg, name) in [
+            (Algorithm::HS256, "HS256"),
+            (Algorithm::HS384, "HS384"),
+            (Algorithm::HS512, "HS512"),
+        ] {
+            let token = sign_token(&format!(r#"{{"alg":"{name}"}}"#), &claims_json, alg);
+            let (message, signature) = token.rsplit_once('.').unwrap();
+            let mut bytes = URL_SAFE_NO_PAD.decode(signature).unwrap();
+            bytes[0] ^= 1;
+            let tampered = format!("{message}.{}", URL_SAFE_NO_PAD.encode(bytes));
+            let not_base64 = format!("{message}.not*base64");
+
+            assert!(validate(&token, &hs256_key()).is_some(), "{name}");
+            assert!(validate(&token, &other).is_none(), "{name}");
+            assert!(validate(&tampered, &hs256_key()).is_none(), "{name}");
+            assert!(validate(&not_base64, &hs256_key()).is_none(), "{name}");
+        }
     }
 
     #[test]
@@ -1442,7 +1545,7 @@ mod tests {
 
     fn hs256_backend(secret: &str) -> AuthBackend {
         AuthBackend::JWT {
-            keys: JwtKeySource::Static(DecodingKey::from_secret(secret.as_bytes())),
+            keys: JwtKeySource::Static(StaticKey::new(DecodingKey::from_secret(secret.as_bytes()))),
             algorithms: vec![Algorithm::HS256],
             header: "authorization".to_string(),
             cookie: None,

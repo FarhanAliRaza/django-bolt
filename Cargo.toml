@@ -28,6 +28,7 @@ matchit = "0.9"
 # Middleware dependencies
 governor = "0.10"  # Rate limiting
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }  # JWT authentication
+aws-lc-rs = "1"  # HMAC keys built once per JWT secret; jsonwebtoken uses the same crate
 base64 = "0.22"  # base64url token-segment decoding for the JWT validation loop
 dashmap = "6"  # Fast concurrent hashmap for rate limiting
 parking_lot = "0.12"  # Fast RwLock for shared state

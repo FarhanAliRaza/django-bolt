@@ -156,8 +156,15 @@ pub struct RefreshingJwks {
     refresh: Py<PyAny>,
     refresh_interval: Duration,
     last_refresh: Mutex<Instant>,
+    /// The last fetch that a token with an unknown kid started.
+    last_unknown_kid_fetch: Mutex<Option<Instant>>,
     refreshing: Mutex<()>,
 }
+
+/// After a fetch for an unknown kid, other unknown kids wait this long.
+/// A token with a made-up kid needs no valid signature to get here, so
+/// without a wait each such request fetched the JWKS from the provider.
+const UNKNOWN_KID_FETCH_COOLDOWN: Duration = Duration::from_secs(30);
 
 impl std::fmt::Debug for RefreshingJwks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -195,6 +202,7 @@ impl RefreshingJwks {
             refresh,
             refresh_interval,
             last_refresh: Mutex::new(Instant::now()),
+            last_unknown_kid_fetch: Mutex::new(None),
             refreshing: Mutex::new(()),
         }
     }
@@ -213,6 +221,15 @@ impl RefreshingJwks {
         let due = self.last_refresh.lock().elapsed() >= self.refresh_interval;
         if cached.is_some() && !due {
             return cached;
+        }
+        if cached.is_none() && !due {
+            // The first unknown kid fetches at once, for a key rotation.
+            // Later unknown kids fetch again only after the cooldown.
+            let mut last_fetch = self.last_unknown_kid_fetch.lock();
+            if last_fetch.is_some_and(|at| at.elapsed() < UNKNOWN_KID_FETCH_COOLDOWN) {
+                return None;
+            }
+            *last_fetch = Some(Instant::now());
         }
 
         // try_lock provides single-flight refresh: other workers immediately
@@ -1574,6 +1591,25 @@ mod tests {
             // The fetch gives no new document, so the known key stays.
             assert!(due.select(Some("a")).is_some());
             assert_eq!(calls.len().unwrap(), 1);
+        });
+    }
+
+    #[test]
+    fn an_unknown_kid_fetches_at_once_and_then_waits_for_the_cooldown() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (jwks, calls) = refreshing_jwks(py, &["a"], Duration::from_secs(3600));
+            // A key rotation: the first token with a new kid fetches the JWKS at once.
+            assert!(jwks.select(Some("new")).is_none());
+            assert_eq!(calls.len().unwrap(), 1);
+            // A flood of made-up kids does not fetch again within the cooldown.
+            for kid in ["x", "y", "new"] {
+                assert!(jwks.select(Some(kid)).is_none());
+            }
+            assert!(jwks.select(None).is_some());
+            assert_eq!(calls.len().unwrap(), 1);
+            // A known kid still verifies.
+            assert!(jwks.select(Some("a")).is_some());
         });
     }
 

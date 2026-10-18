@@ -671,6 +671,15 @@ class TestContentSecurityPolicy:
         assert response.status_code == 200
         assert "content-security-policy" not in response.headers
 
+    def test_no_csp_header_when_secure_csp_is_missing(self, settings):
+        """Django 6.0 and later give SECURE_CSP a default, so "unset" above still has one. This test deletes it."""
+        del settings.SECURE_CSP
+
+        response = self._get_css()
+
+        assert response.status_code == 200
+        assert "content-security-policy" not in response.headers
+
     @pytest.mark.parametrize(
         ("value", "message"),
         [

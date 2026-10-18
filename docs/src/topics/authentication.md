@@ -267,9 +267,14 @@ JWTAuthentication(
 provider and API instead of accepting another application's token merely
 because the provider signed it. The key set is fetched when the server
 starts and parsed into per-`kid` verification keys. It is refreshed every
-`jwks_refresh_interval` seconds and immediately when a token names an unknown
-`kid`. Refreshes are single-flight within a process, and a provider outage
-leaves the last known-good keys active.
+`jwks_refresh_interval` seconds, on a background thread. A request with a
+cached key uses it while the refresh runs, so it does not wait for the
+provider. A token that names an unknown `kid` starts a refresh at once, and the
+request waits for the new keys. If a fetch already runs, the request does not
+wait, and Bolt rejects the token. After that, an unknown `kid` starts the next
+refresh after 30 seconds or more. Thus tokens with made-up `kid` values cannot make Bolt
+fetch the key set for each request. Refreshes are single-flight within a
+process, and a provider outage leaves the last known-good keys active.
 
 OIDC discovery can supply the issuer, JWKS endpoint, and signing algorithms:
 

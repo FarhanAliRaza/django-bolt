@@ -105,11 +105,11 @@ def _register_clash(first, second):
     ("first", "second", "key"),
     [
         (Annotated[str, Query()], Annotated[int, Query(alias="a")], "'a'"),
-        (Annotated[int, Path(alias="id")], Annotated[str, Query(alias="id")], "'id'"),
+        (Annotated[int, Path(alias="id")], Annotated[str, Path(alias="id")], "'id'"),
         (Annotated[int, Header(alias="X-N")], Annotated[str, Header(alias="x_n")], "'x-n'"),
         (Annotated[int, Cookie(alias="n")], Annotated[bool, Cookie(alias="n")], "'n'"),
     ],
-    ids=["query-name-vs-alias", "path-vs-query", "header-case-and-underscore", "cookie"],
+    ids=["query-name-vs-alias", "path", "header-case-and-underscore", "cookie"],
 )
 def test_two_types_for_one_wire_key_fail_at_registration(first, second, key):
     """Rust converts one wire value once, so two types for one key cannot both apply."""
@@ -122,9 +122,17 @@ def test_two_types_for_one_wire_key_fail_at_registration(first, second, key):
     assert "'b'" in message
 
 
-def test_one_name_in_different_sources_is_not_a_clash():
-    """Headers, cookies and path/query have separate maps, so each keeps its own type."""
-    _register_clash(Annotated[int, Query(alias="n")], Annotated[str, Cookie(alias="n")])
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        (Annotated[int, Query(alias="n")], Annotated[str, Cookie(alias="n")]),
+        (Annotated[int, Path(alias="id")], Annotated[str, Query(alias="id")]),
+    ],
+    ids=["query-vs-cookie", "path-vs-query"],
+)
+def test_one_name_in_different_sources_is_not_a_clash(first, second):
+    """Path, query, headers and cookies have separate maps, so each keeps its own type."""
+    _register_clash(first, second)
 
 
 def test_same_type_for_one_wire_key_is_allowed():

@@ -539,9 +539,11 @@ pub struct RouteMetadata {
     #[allow(dead_code)] // Reserved for future optimization
     pub is_static_route: bool,
 
-    // Type hints for path/query parameters (enables Rust-side type coercion)
-    // Maps parameter name to type hint constant (see type_coercion.rs)
-    pub param_types: TypeHints,
+    // Type hints for path and for query parameters (enables Rust-side type coercion).
+    // Each maps a wire key to a type hint constant (see type_coercion.rs).
+    // A key of one source does not apply to the other.
+    pub path_types: TypeHints,
+    pub query_types: TypeHints,
     // Type hints for header and cookie parameters, keyed by wire name.
     // A header key is lowercase with hyphens. A cookie key is the cookie name.
     // Only non-string types are present.
@@ -741,10 +743,11 @@ impl RouteMetadata {
         let needs_path_params = required_bool(py_meta, "needs_path_params")?;
         let is_static_route = required_bool(py_meta, "is_static_route")?;
 
-        // Parse param_types for Rust-side type coercion
-        // Format: {"param_name": type_hint_id, ...}
+        // Parse the path and query type hints for Rust-side type coercion
+        // Format: {"wire_key": type_hint_id, ...}
         // Type hint IDs match type_coercion.rs constants (TYPE_INT=1, TYPE_FLOAT=2, etc.)
-        let param_types = extract_type_hints(py_meta, "param_types");
+        let path_types = extract_type_hints(py_meta, "path_types");
+        let query_types = extract_type_hints(py_meta, "query_types");
 
         // Header and cookie type hints use the same format, keyed by wire name.
         let header_types = extract_type_hints(py_meta, "header_types");
@@ -805,7 +808,7 @@ impl RouteMetadata {
             can_lane_dispatch,
         );
 
-        // Form field type hints (same format as param_types)
+        // Form field type hints (same format as path_types)
         let form_type_hints: HashMap<String, u8> = py_meta
             .get_item("form_type_hints")
             .ok()
@@ -864,7 +867,8 @@ impl RouteMetadata {
             rate_limit_config,
             needs_path_params,
             is_static_route,
-            param_types,
+            path_types,
+            query_types,
             header_types,
             cookie_types,
             form_type_hints,

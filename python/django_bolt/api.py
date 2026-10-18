@@ -1061,7 +1061,7 @@ class BoltAPI:
                 auth=ws_auth,
             )
 
-            # Add optimization flags and param_types to middleware metadata
+            # Add optimization flags and the type hints of each source to middleware metadata
             # These enable Rust-side type coercion for path/query params
             middleware_meta = add_optimization_flags_to_metadata(middleware_meta, meta)
 

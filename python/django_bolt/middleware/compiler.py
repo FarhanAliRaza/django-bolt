@@ -408,7 +408,7 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
         handler_meta: Handler metadata containing the optimization flags
 
     Returns:
-        Updated metadata dict with optimization flags and param_types
+        Updated metadata dict with optimization flags and the type hints of each source
     """
     if metadata is None:
         # Rust names the route in its registration errors.
@@ -436,9 +436,10 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
     # Extract type hints for all parameter sources
     # This enables Rust-side type coercion, eliminating Python overhead
     # Format: {"wire_key": type_hint_id, ...}
-    # Each source has its own map, so a header and a query parameter with
-    # the same name do not clash. Path and query share one map in Rust.
-    param_claims: dict[str, tuple[str, int]] = {}
+    # Each source has its own map, so a path, a query and a header parameter
+    # with the same name do not clash.
+    path_claims: dict[str, tuple[str, int]] = {}
+    query_claims: dict[str, tuple[str, int]] = {}
     header_claims: dict[str, tuple[str, int]] = {}
     cookie_claims: dict[str, tuple[str, int]] = {}
     form_claims: dict[str, tuple[str, int]] = {}
@@ -450,10 +451,12 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
     # map of its source, so two fields that read one wire key with different
     # types fail here, whatever their Python names.
     for field in (*handler_meta["fields"], *handler_meta["dependency_fields"]):
-        if field.source in ("path", "query"):
-            _extract_type_hints_from_field(field, param_claims)
-            if field.source == "query":
-                _collect_seq_field_names(field, query_seq_fields)
+        if field.source == "path":
+            _extract_type_hints_from_field(field, path_claims)
+
+        elif field.source == "query":
+            _extract_type_hints_from_field(field, query_claims)
+            _collect_seq_field_names(field, query_seq_fields)
 
         elif field.source == "header":
             _extract_type_hints_from_field(field, header_claims)
@@ -474,7 +477,8 @@ def add_optimization_flags_to_metadata(metadata: dict[str, Any] | None, handler_
 
     # Rust keeps string values as they are, so leave string keys out of these maps.
     for metadata_key, claims in (
-        ("param_types", param_claims),
+        ("path_types", path_claims),
+        ("query_types", query_claims),
         ("header_types", header_claims),
         ("cookie_types", cookie_claims),
     ):

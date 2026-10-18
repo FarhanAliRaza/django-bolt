@@ -104,6 +104,35 @@ class InheritedTokenInInit(TokenInInit):
             self.query = dict(request.query)
 
 
+class AcceptsAnything:
+    """A base class whose __init__ reads no request part."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+
+class TokenInNew(AcceptsAnything):
+    """A call of the class runs __new__ first. Here __new__ reads the header."""
+
+    def __new__(cls, request):
+        self = super().__new__(cls)
+        self.token = request.headers.get("x-token")
+        return self
+
+
+class TokenFromMetaclass(type):
+    """A metaclass __call__ runs before __new__ and __init__. Here it reads the header."""
+
+    def __call__(cls, request):
+        instance = super().__call__()
+        instance.token = request.headers.get("x-token")
+        return instance
+
+
+class TokenInMetaclassCall(AcceptsAnything, metaclass=TokenFromMetaclass):
+    """Its __init__ comes from a base class and reads no request part."""
+
+
 def _request_parts(api: BoltAPI, path: str) -> tuple[str, ...]:
     """Return the request parts that Rust parses for the route."""
     meta = next(api._handler_middleware[hid] for _method, route, hid, _fn in api._routes if route == path)
@@ -368,3 +397,31 @@ def test_a_form_handler_that_reads_a_header_gets_it():
         response = client.post("/form", data={"name": "bolt"}, headers={"x-id": "7"})
 
     assert response.json() == {"name": "bolt", "id": "7"}
+
+
+def test_a_class_dependency_whose_new_reads_the_header_gets_it():
+    """A call of the class runs __new__ before __init__, so the analysis of __init__ is not enough."""
+    api = BoltAPI()
+
+    @api.get("/items")
+    def items(holder: Annotated[TokenInNew, Depends(TokenInNew)]):
+        return {"token": holder.token}
+
+    with TestClient(api) as client:
+        response = client.get("/items", headers={"x-token": "secret"})
+
+    assert response.json() == {"token": "secret"}
+
+
+def test_a_class_dependency_whose_metaclass_call_reads_the_header_gets_it():
+    """A metaclass __call__ runs before __new__ and __init__."""
+    api = BoltAPI()
+
+    @api.get("/items")
+    def items(holder: Annotated[TokenInMetaclassCall, Depends(TokenInMetaclassCall)]):
+        return {"token": holder.token}
+
+    with TestClient(api) as client:
+        response = client.get("/items", headers={"x-token": "secret"})
+
+    assert response.json() == {"token": "secret"}

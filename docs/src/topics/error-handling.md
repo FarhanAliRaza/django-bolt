@@ -305,6 +305,99 @@ For validation errors:
 }
 ```
 
+## Error formatter
+
+An error formatter changes the body of each error response that the framework makes. One function formats the errors from all layers:
+
+- The Rust core: 401 and 403 from guards, 404 for no route, 413, 400 for bad headers, 422 from path, query, header, cookie and form values, and 429 from rate limits.
+- Python: request and response validation, `HTTPException`, and unhandled exceptions.
+
+Without a formatter, the errors keep the `{"detail": ...}` body.
+
+### RFC 9457 Problem Details
+
+Use the built-in `problem_details` formatter:
+
+```python
+from django_bolt import BoltAPI
+from django_bolt.error_handlers import problem_details
+
+api = BoltAPI(error_formatter=problem_details)
+```
+
+A request with no token to a route with `IsAuthenticated()` then gets this response:
+
+```http
+HTTP/1.1 401 Unauthorized
+content-type: application/problem+json
+www-authenticate: Bearer
+
+{"type": "about:blank", "title": "Unauthorized", "status": 401,
+ "detail": "Authentication required", "instance": "/private"}
+```
+
+An error with field errors also has `"errors"`, a list of `{"loc", "msg", "type"}` objects.
+
+### Your own formatter
+
+A formatter gets a `BoltError` and the request. It returns a `Response`, `JSON`, `PlainText` or `HTML`:
+
+```python
+from django_bolt import BoltAPI
+from django_bolt.error_handlers import BoltError
+from django_bolt.responses import Response
+
+
+def format_error(error: BoltError, request) -> Response:
+    body = {"code": error.kind, "message": error.detail}
+    if error.errors:
+        body["fields"] = error.errors
+    return Response(body, status_code=error.status, media_type="application/vnd.error+json")
+
+
+api = BoltAPI(error_formatter=format_error)
+```
+
+`BoltError` has these attributes:
+
+| Attribute | Description |
+|-----------|-------------|
+| `status` | The HTTP status code. |
+| `kind` | A stable name for the error. See the table below. |
+| `detail` | A message for a human. It does not show internal data. |
+| `errors` | The field errors. Each one has `loc`, `msg` and `type`. |
+| `headers` | The headers that the error needs, for example `WWW-Authenticate` or `Retry-After`. |
+| `extra` | The `extra` of an `HTTPException`, or `{"retry_after": n}` for a rate limit. |
+| `exception` | The Python exception. It is `None` for an error of the Rust core. |
+
+| Kind | Status | Source |
+|------|--------|--------|
+| `bad_request` | 400 | Too many headers, a header that is too large, or a body that Bolt cannot read |
+| `not_authenticated` | 401 | A guard, or an `HTTPException(401)` |
+| `forbidden` | 403 | A guard, the CSRF check, `PermissionDenied` or an `HTTPException(403)` |
+| `not_found` | 404 | No route, `FileNotFoundError` or an `HTTPException(404)` |
+| `payload_too_large` | 413 | A body over `BOLT_MAX_UPLOAD_SIZE` |
+| `validation` | 422 | A value that fails validation, in Rust or in Python |
+| `rate_limited` | 429 | A rate limit |
+| `response_validation` | 500 | A handler return value that fails validation |
+| `internal_error` | 500 | An unhandled exception |
+
+An `HTTPException` gets its kind from its status, for example `conflict` for 409. A status with no name gives `http_error`.
+
+Bolt adds `error.headers` to the response of the formatter. A header that the response sets wins. Thus a 401 keeps `WWW-Authenticate`, and a 429 keeps `Retry-After`.
+
+On the request of an error from the Rust core, `method`, `path`, `query_string` and `headers` are set. The other request data is empty, because Bolt rejects the request before it reads it.
+
+The formatter runs only for an error. Rust calls it only when the app has a formatter, so a request that succeeds costs nothing more. When the formatter raises an exception or returns another type, Bolt logs the error and sends the default response. Bolt still logs a 500 error before it calls the formatter.
+
+With more than one API in a project, `runbolt` uses one formatter for all of them. Set the same formatter on each API, or set it on one API. Two different formatters stop startup.
+
+The formatter runs on the thread of the request, also for an async handler. Keep it fast. Do not use the database or the network in it.
+
+With a formatter, Bolt does not send the Django debug page for a 500 error when `DEBUG=True`. Use `error.exception` to show the details.
+
+The formatter does not change a response that a handler or a middleware returns. It does not change the responses of a WebSocket handshake, an ASGI mount, or a static file.
+
 ## Example: Custom error handling
 
 ```python

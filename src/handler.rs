@@ -697,6 +697,24 @@ pub(crate) fn content_length_exceeds_limit(
 
 pub async fn handle_request<const ACCESS_LOG: bool>(
     req: HttpRequest,
+    payload: web::Payload,
+    state: web::Data<Arc<AppState>>,
+) -> HttpResponse {
+    // Without an error formatter, this is the whole cost: one Option check.
+    if state.error_renderer.is_none() {
+        return route_request::<ACCESS_LOG>(req, payload, state).await;
+    }
+    let error_req = req.clone();
+    let error_state = state.clone();
+    let response = route_request::<ACCESS_LOG>(req, payload, state).await;
+    if response.status().as_u16() < 400 {
+        return response;
+    }
+    crate::error_formatter::format_error_response(response, &error_req, &error_state)
+}
+
+async fn route_request<const ACCESS_LOG: bool>(
+    req: HttpRequest,
     mut payload: web::Payload,
     state: web::Data<Arc<AppState>>,
 ) -> HttpResponse {
@@ -846,7 +864,7 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
             max_param_length,
         ) {
             Ok(sequences) => sequences,
-            Err(detail) => return responses::error_422_validation(&detail),
+            Err(error) => return error.into_response(),
         },
         _ => Vec::new(),
     };
@@ -1150,12 +1168,16 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
                         body_vec.extend_from_slice(&data);
                     }
                     Err(e) => {
-                        return HttpResponse::BadRequest()
+                        let response = HttpResponse::BadRequest()
                             .content_type("application/json")
                             .body(format!(
                                 "{{\"error\": \"Failed to read request body: {}\"}}",
                                 e
                             ));
+                        return error::with_error_info(
+                            response,
+                            error::ErrorInfo::core("bad_request", "Failed to read request body"),
+                        );
                     }
                 }
             }
@@ -1449,13 +1471,17 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
                 {
                     Ok(response) => response,
                     Err(e) => Python::attach(|py| {
-                        error::build_error_response(
+                        let response = error::build_error_response(
                             py,
                             500,
                             format!("Handler returned unsupported response wire format: {}", e),
                             vec![],
                             None,
                             state.debug,
+                        );
+                        error::with_error_info(
+                            response,
+                            error::ErrorInfo::core("internal_error", "Internal Server Error"),
                         )
                     }),
                 }

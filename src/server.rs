@@ -666,12 +666,14 @@ pub fn register_middleware_metadata(
 }
 
 #[pyfunction]
+#[pyo3(signature = (dispatch, host, port, compression_config=None, error_renderer=None))]
 pub fn start_server(
     py: Python<'_>,
     dispatch: Py<PyAny>,
     host: String,
     port: u16,
     compression_config: Option<Py<PyAny>>,
+    error_renderer: Option<Py<PyAny>>,
 ) -> PyResult<()> {
     if GLOBAL_ROUTER.get().is_none() {
         return Err(pyo3::exceptions::PyRuntimeError::new_err(
@@ -802,6 +804,7 @@ pub fn start_server(
         media_files_config: config.media_files_config,
         access_logger: access_logger_obj,
         access_log_levels,
+        error_renderer,
     });
 
     py.detach(|| {

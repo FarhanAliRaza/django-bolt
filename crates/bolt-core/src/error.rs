@@ -1,8 +1,48 @@
 use actix_web::{http::StatusCode, HttpResponse};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use std::borrow::Cow;
 
 use crate::settings::DjangoSettings;
+
+/// What a framework error response is, for the error formatter of the app.
+///
+/// The builders of the error responses put it in the response extensions.
+/// The handler gives it to the formatter, if the app has one. Without a
+/// formatter, the default body of the response goes to the client.
+pub enum ErrorInfo {
+    /// An error that the Rust core finds, for example a failed guard.
+    Core {
+        /// A stable name, for example "not_authenticated" or "rate_limited".
+        kind: &'static str,
+        /// A message for a human.
+        detail: Cow<'static, str>,
+        /// The field errors, as a JSON list of objects with "loc", "msg" and "type".
+        errors: Option<serde_json::Value>,
+        /// More data, for example `{"retry_after": 3}` for a rate limit.
+        extra: Option<serde_json::Value>,
+    },
+    /// A Python exception that reached Rust. Python describes it.
+    Exception(Py<PyAny>),
+}
+
+impl ErrorInfo {
+    pub fn core(kind: &'static str, detail: impl Into<Cow<'static, str>>) -> Self {
+        Self::Core {
+            kind,
+            detail: detail.into(),
+            errors: None,
+            extra: None,
+        }
+    }
+}
+
+/// Put `info` in the extensions of an error response. This runs on error paths only.
+#[cold]
+pub fn with_error_info(mut response: HttpResponse, info: ErrorInfo) -> HttpResponse {
+    response.extensions_mut().insert(info);
+    response
+}
 
 /// Extract error information from a Python HTTPException
 #[expect(
@@ -125,6 +165,17 @@ pub fn build_error_response(
 
 /// Handle Python exception and convert to HTTP response
 pub fn handle_python_exception(
+    py: Python,
+    exc: &Bound<PyAny>,
+    path: &str,
+    method: &str,
+    debug: bool,
+) -> HttpResponse {
+    let response = default_exception_response(py, exc, path, method, debug);
+    with_error_info(response, ErrorInfo::Exception(exc.clone().unbind()))
+}
+
+fn default_exception_response(
     py: Python,
     exc: &Bound<PyAny>,
     path: &str,
@@ -275,13 +326,17 @@ pub fn handle_python_error(
         let exc_value = exc.value(py);
         handle_python_exception(py, exc_value, path, method, debug)
     } else {
-        build_error_response(
+        let response = build_error_response(
             py,
             500,
             "Handler execution error".to_string(),
             vec![],
             None,
             debug,
+        );
+        with_error_info(
+            response,
+            ErrorInfo::core("internal_error", "Internal Server Error"),
         )
     }
 }

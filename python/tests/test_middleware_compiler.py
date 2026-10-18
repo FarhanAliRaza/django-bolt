@@ -19,7 +19,7 @@ from django_bolt import BoltAPI, UploadFile
 from django_bolt.auth import JWTAuthentication, Requires
 from django_bolt.middleware import no_compress
 from django_bolt.middleware.compiler import _build_policy_without_nonce
-from django_bolt.param_functions import File, Header, Query
+from django_bolt.param_functions import File, Form, Header, Query
 from django_bolt.testing import TestClient
 
 try:
@@ -343,6 +343,47 @@ def test_a_file_with_constraints_and_no_max_size_gets_the_global_limit():
 
     assert response.status_code == 200, response.text
     assert response.json() == {"size": 1536 * 1024}
+
+
+# Rust stops to read a file part at max_upload_size. A part over its own max_size
+# gets the same 422 at each limit, so these tests read the metadata of the route.
+
+
+def test_the_largest_max_size_is_the_read_limit_when_each_file_has_one():
+    api = BoltAPI()
+
+    @api.post("/upload")
+    async def upload(
+        small: Annotated[UploadFile, File(max_size=100)],
+        large: Annotated[UploadFile, File(max_size=300)],
+    ):
+        return {}
+
+    assert api._handler_middleware[0]["max_upload_size"] == 300
+
+
+def test_a_form_field_that_is_not_a_struct_keeps_the_max_size_read_limit():
+    """Only a form struct can hold a file with no max_size, so only a struct gets the global limit."""
+    api = BoltAPI()
+
+    @api.post("/upload")
+    async def upload(
+        file: Annotated[UploadFile, File(max_size=100)],
+        name: Annotated[str, Form()],
+    ):
+        return {}
+
+    assert api._handler_middleware[0]["max_upload_size"] == 100
+
+
+def test_the_read_limit_with_no_bolt_max_upload_size_is_1_mb():
+    api = BoltAPI()
+
+    @api.post("/upload")
+    async def upload(file: Annotated[UploadFile, File()]):
+        return {}
+
+    assert api._handler_middleware[0]["max_upload_size"] == 1024 * 1024
 
 
 def test_a_route_with_no_guard_and_no_auth_is_named_in_a_metadata_error():

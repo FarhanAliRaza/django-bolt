@@ -35,7 +35,8 @@ returns how many connections they opened or checked out of a pool.
 
 ``/lose-the-pool`` queries on the worker thread, as ``/me-inline`` does. Then
 it makes the return of the connection to its pool fail. With ``fail``, the
-call raises too. The response names the result or the error of the call.
+call raises too. With ``kill``, the call ends its own database session, so the
+connection is unusable. The response names the result or the error of the call.
 """
 
 from __future__ import annotations
@@ -207,22 +208,25 @@ async def default_executor_query():
     return {"result": await sync_to_async(_select_one, thread_sensitive=False)()}
 
 
-def _select_then_lose_the_pool(fail: bool) -> str:
+def _select_then_lose_the_pool(fail: bool, kill: bool) -> str:
     _select_one()
     # psycopg_pool clears this reference when it closes a connection. Django
     # then cannot give the connection back, and its close() raises.
     connection.connection._pool = None
+    if kill:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_terminate_backend(pg_backend_pid())")
     if fail:
         raise ValueError("the call failed")
     return "ok"
 
 
 @api.get("/lose-the-pool")
-async def lose_the_pool(fail: bool = False):
+async def lose_the_pool(fail: bool = False, kill: bool = False):
     # No await: the query runs as one guarded call on the worker thread. That
     # call gives the pooled connection back when it ends.
     try:
-        result = run_orm_blocking(_select_then_lose_the_pool, fail)
+        result = run_orm_blocking(_select_then_lose_the_pool, fail, kill)
     except Exception as exc:
         result = type(exc).__name__
     return {"result": result}

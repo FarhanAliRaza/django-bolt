@@ -5,10 +5,17 @@ of a lane must work with the async flow alone.
 
 ``/pool-checkouts`` runs three ORM calls on the lane of its request. It
 returns the number of connections that they opened or checked out of a pool.
+
+``/pool-checkouts-after-an-error`` does the same, but its second call raises an
+error that is not a database error, and the handler catches it.
+
+``/lose-the-pool-on-a-sync-lane`` is a sync handler, so its whole request runs
+on the lane. It makes the return of its pooled connection fail.
 """
 
 from __future__ import annotations
 
+import contextlib
 import threading
 
 from django.db import connection
@@ -80,3 +87,27 @@ async def pool_checkouts():
     for _ in range(3):
         await sync_to_thread(_select_one)
     return {"checkouts": _checkouts[0] - before}
+
+
+def _select_one_then_fail() -> None:
+    _select_one()
+    raise LookupError("an error of user code, not of the database")
+
+
+@api.get("/pool-checkouts-after-an-error")
+async def pool_checkouts_after_an_error():
+    before = _checkouts[0]
+    await sync_to_thread(_select_one)
+    with contextlib.suppress(LookupError):
+        await sync_to_thread(_select_one_then_fail)
+    await sync_to_thread(_select_one)
+    return {"checkouts": _checkouts[0] - before}
+
+
+@api.get("/lose-the-pool-on-a-sync-lane")
+def lose_the_pool_on_a_sync_lane():
+    _select_one()
+    # psycopg_pool clears this reference when it closes a connection. Django
+    # then cannot give the connection back, and its close() raises.
+    connection.connection._pool = None
+    return {"result": "ok"}

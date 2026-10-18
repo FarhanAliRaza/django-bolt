@@ -489,17 +489,54 @@ def test_a_lane_keeps_its_pooled_connection_until_its_request_ends(make_server_p
             assert response.json() == {"checkouts": 0}
 
 
+def test_an_error_of_user_code_on_a_lane_keeps_its_pooled_connection(make_server_project, postgres_database):
+    """A call that raises an error that is not a database error leaves a healthy connection.
+
+    The lane keeps that connection until its request ends, as it does after a
+    call that succeeds. Django gives a pooled connection a maximum age of 0,
+    so a check of its age would give it back after each error.
+    """
+    project = make_server_project(
+        api_module=app_module("request_lanes_async"),
+        settings_extra=postgres_settings(postgres_database) + ONE_CONNECTION_POOL,
+    )
+    with project.start() as server:
+        for _ in range(3):
+            response = server.get("/pool-checkouts-after-an-error")
+            assert response.status_code == 200, response.text
+            assert response.json() == {"checkouts": 0}
+
+
+def test_a_failed_return_to_the_pool_keeps_the_response_of_a_sync_lane(make_server_project, postgres_database):
+    """A sync request behind Django middleware gives its pooled connection back when it ends. That return can fail.
+
+    The failure must not replace the response of the request. Bolt logs it.
+    """
+    project = make_server_project(
+        api_module=app_module("request_lanes_async"),
+        settings_extra=postgres_settings(postgres_database) + POOL,
+    )
+    server = project.start()
+    with server:
+        response = server.get("/lose-the-pool-on-a-sync-lane")
+        assert response.status_code == 200, response.text
+        assert response.json() == {"result": "ok"}
+    stdout, stderr = server.stop()
+    assert "Could not close the database connections of a lane after its request" in stdout + stderr
+
+
 def test_a_failed_return_to_the_pool_keeps_the_result_of_the_call(make_server_project, postgres_database):
     """A call on the event loop gives its pooled connection back when it ends. That return can fail.
 
     The failure must not replace the result or the error of the call. Bolt
-    logs it. After an error, the drop of the connection gives it back, so
-    that is the return that fails.
+    logs it. After an error that leaves the connection unusable, the drop of
+    the connection gives it back, so that is the return that fails.
     """
     server, _ = start_server(make_server_project, postgres_database, settings_extra=POOL)
     with server:
         assert server.get("/lose-the-pool").json() == {"result": "ok"}
         assert server.get("/lose-the-pool?fail=true").json() == {"result": "ValueError"}
+        assert server.get("/lose-the-pool?kill=true").json() == {"result": "OperationalError"}
         assert query_each_orm_thread(server, 1) == ["ok"]
     stdout, stderr = server.stop()
     assert "Could not give the pooled database connections of a thread back after a call" in stdout + stderr

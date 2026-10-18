@@ -77,14 +77,20 @@ def _drop_broken_connections(*, before_call: bool = False) -> None:
 
     The check before a call (``before_call``) leaves the pooled aliases out.
     Django gives a pooled connection a maximum age of 0, so the check would give
-    it back before each call. After an error, the check includes them, so a dead
-    pooled connection drains its pool.
+    it back before each call. After an error, the check closes a pooled
+    connection only when it is unusable, so a dead pooled connection drains its
+    pool and a healthy one stays with its thread.
     """
     dead = []
     for conn in connections.all(initialized_only=True):
-        if conn.in_atomic_block or (before_call and conn.alias in _pooled_aliases):
+        if conn.in_atomic_block:
             continue
-        raw = _close_if_unusable_or_obsolete(conn)
+        if conn.alias in _pooled_aliases:
+            if before_call:
+                continue
+            raw = _close_if_unusable(conn)
+        else:
+            raw = _close_if_unusable_or_obsolete(conn)
         if raw is not None:
             dead.append((conn, raw))
     if dead:
@@ -104,6 +110,34 @@ def _close_if_unusable_or_obsolete(conn) -> object | None:
     conn.close_if_unusable_or_obsolete()
     # Django clears errors_occurred when the connection still answers.
     return raw if tested and conn.errors_occurred else None
+
+
+def _close_if_unusable(conn) -> object | None:
+    """``close_if_unusable_or_obsolete`` for a pooled connection, without its age check.
+
+    Django gives a pooled connection a maximum age of 0, so the age check gives
+    back each connection that it sees. After an error that is not a database
+    error, for example ``DoesNotExist`` in user code, the connection is healthy.
+    A lane keeps it until its request ends, with any session state on it.
+
+    Returns:
+        The driver connection that it closed because it does not answer, or None.
+    """
+    raw = conn.connection
+    if raw is None:
+        return None
+    conn.health_check_done = False
+    if conn.get_autocommit() != conn.settings_dict["AUTOCOMMIT"]:
+        conn.close()
+        return None
+    if not conn.errors_occurred:
+        return None
+    if conn.is_usable():
+        conn.errors_occurred = False
+        conn.health_check_done = True
+        return None
+    conn.close()
+    return raw
 
 
 # A database restart or failover kills every connection to that database at
@@ -414,7 +448,12 @@ def _drive_in_lane_mode[T](coro_fn: Callable[..., Coroutine[object, object, T]],
         return drive_on_lane(coro_fn(*args))
     finally:
         _thread_state.active = False
-        close_lane_request()
+        # A raise here would replace the result of the request. For example,
+        # ``putconn`` can fail when a pooled connection goes back to its pool.
+        try:
+            close_lane_request()
+        except Exception:
+            logger.exception("Could not close the database connections of a lane after its request")
 
 
 def drive_on_lane[T](coro: Coroutine[object, object, T]) -> T:

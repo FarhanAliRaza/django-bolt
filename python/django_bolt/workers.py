@@ -150,15 +150,27 @@ class WorkerSupervisor:
             else 0. A process manager then sees the failure, for example
             ``Restart=on-failure`` in systemd.
         """
-        self.start()
-        while self._workers or self._draining:
-            self._wakeup.wait(self.check_interval)
-            self._wakeup.clear()
-            self.tick()
+        try:
+            self.start()
+            self._supervise()
+        except Exception:
+            # A spawn can fail, for example when a pool of the parent does not
+            # close before the fork. The workers that run must not stay on the
+            # port with no supervisor, so they stop before the error goes up.
+            self._log("The supervisor failed; stopping its workers")
+            self._shutdown_requested = True
+            self._supervise()
+            raise
         if self._unreplaced_failure and not self._shutdown_requested:
             self._log("Every worker has exited and at least one failed; stopping with exit status 1")
             return 1
         return 0
+
+    def _supervise(self) -> None:
+        while self._workers or self._draining:
+            self._wakeup.wait(self.check_interval)
+            self._wakeup.clear()
+            self.tick()
 
     def tick(self) -> None:
         """One supervision pass: reap, then recycle/terminate as needed."""
@@ -251,10 +263,12 @@ class WorkerSupervisor:
 
     def _recycle(self, worker: _Worker, reason: str) -> None:
         self._log(f"Recycling worker {worker.pid} (slot {worker.slot}): {reason}")
-        del self._workers[worker.pid]
         # Spawn the replacement BEFORE stopping the old worker so the port
         # always has an accepting process (SO_REUSEPORT allows the overlap).
+        # The old worker stays in _workers until the spawn returns, so a failed
+        # spawn still stops it.
         self._spawn_slot(worker.slot)
+        del self._workers[worker.pid]
         self._terminate(worker.pid)
 
     def _terminate(self, pid: int) -> None:

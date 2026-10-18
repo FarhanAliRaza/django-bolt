@@ -98,7 +98,7 @@ from .serialization import (
 )
 from .status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
 from .typing import HandlerMetadata, HandlerPattern
-from .views import APIView, ViewSet, _layer
+from .views import APIView, ViewSet, _copy_route_middleware, _layer
 from .websocket import mark_websocket_handler
 
 logger = logging.getLogger(__name__)
@@ -1542,6 +1542,7 @@ class BoltAPI:
                     custom_action_handler.__module__ = unbound_fn.__module__
                     # The analysis reads the action method, not this wrapper.
                     custom_action_handler.__wrapped__ = unbound_fn
+                    _copy_route_middleware(unbound_fn, custom_action_handler)
 
                     # Merge class-level auth/guards with action-specific auth/guards
                     # Action-specific takes precedence if explicitly set
@@ -2131,7 +2132,13 @@ class BoltAPI:
                         return _dispatch_multi_sync(handler(*args, **kwargs))
 
                     return await sync_to_thread(_run_blocking_multi)
-                return _dispatch_multi_sync(handler(*args, **kwargs))
+                result = handler(*args, **kwargs)
+                # A QuerySet from a helper loads on the ORM pool, not on the event loop.
+                if isinstance(result, QuerySet) or (
+                    isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], QuerySet)
+                ):
+                    return await run_in_orm_executor(_dispatch_multi_sync, result)
+                return _dispatch_multi_sync(result)
 
             return execute_multi
 
@@ -3007,22 +3014,24 @@ class BoltAPI:
 
         return chain
 
-    def _get_route_global_chain(self, api: BoltAPI, middleware_specs: tuple[Any, ...]) -> Callable:
+    def _get_route_global_chain(self, middleware_specs: tuple[Any, ...]) -> Callable:
         """Get or build the global middleware chain of a route that skips global middleware.
 
         ``middleware_specs`` is the tuple in the metadata of the route. The route
-        keeps it, so its id is stable and unique to the route.
+        keeps it, so its id is stable and unique to the route. The cache is on
+        the API that serves the request, so a mounted API keeps no reference to
+        the APIs that mount it.
         """
         key = id(middleware_specs)
-        chain = api._route_global_chain_cache.get(key)
+        chain = self._route_global_chain_cache.get(key)
         if chain is not None:
             return chain
 
-        with api._route_executor_lock:
-            chain = api._route_global_chain_cache.get(key)
+        with self._route_executor_lock:
+            chain = self._route_global_chain_cache.get(key)
             if chain is None:
                 chain = self._build_middleware_chain(middleware_specs, clone_wrapper=True)
-                api._route_global_chain_cache[key] = chain
+                self._route_global_chain_cache[key] = chain
 
         return chain
 
@@ -3072,25 +3081,26 @@ class BoltAPI:
 
     def _get_route_executor(
         self,
-        api: BoltAPI,
         handler: Callable,
         meta: dict[str, Any],
     ) -> Callable[[Any], Any]:
         """Get or lazily build the cached route executor of a route.
 
         The key is the metadata of the route, not the handler. The route keeps
-        its metadata, so its id is stable and unique to the route.
+        its metadata, so its id is stable and unique to the route. The cache is
+        on the API that serves the request: its metadata is its own copy, so a
+        mounted API keeps no reference to the APIs that mount it.
         """
         key = id(meta)
-        cached_executor = api._route_executor_cache.get(key)
+        cached_executor = self._route_executor_cache.get(key)
         if cached_executor is not None:
             return cached_executor
 
-        with api._route_executor_lock:
-            cached_executor = api._route_executor_cache.get(key)
+        with self._route_executor_lock:
+            cached_executor = self._route_executor_cache.get(key)
             if cached_executor is None:
                 cached_executor = self._build_route_executor(handler, meta)
-                api._route_executor_cache[key] = cached_executor
+                self._route_executor_cache[key] = cached_executor
 
         return cached_executor
 
@@ -3122,13 +3132,13 @@ class BoltAPI:
                         api._middleware_chain_built = True
             middleware_chain = api._middleware_chain
         else:
-            middleware_chain = self._get_route_global_chain(api, global_middleware)
+            middleware_chain = self._get_route_global_chain(global_middleware)
 
         request_state = request.setdefault("state", {})
 
         # Django middleware gets this view in process_view.
         request_state["_view_func"] = meta["view_func"]
-        request_state["_bolt_route_executor"] = self._get_route_executor(api, handler, meta)
+        request_state["_bolt_route_executor"] = self._get_route_executor(handler, meta)
 
         try:
             middleware_response = await middleware_chain(request)
@@ -3471,9 +3481,9 @@ class BoltAPI:
                 middleware_meta["path"] = new_path
                 self._handler_middleware[new_handler_id] = middleware_meta
 
-            # Track which API owns this handler (for logging, etc.)
-            # _handler_api_map is always initialized in __init__
-            self._handler_api_map[new_handler_id] = app
+            # Track which API owns this handler (for logging, global middleware, etc.).
+            # A route that ``app`` mounted from another API keeps that API.
+            self._handler_api_map[new_handler_id] = app._handler_api_map.get(handler_id, app)
 
         # Copy WebSocket routes
         for ws_path, handler_id, handler in app._websocket_routes:
@@ -3499,9 +3509,9 @@ class BoltAPI:
                 middleware_meta["path"] = new_path
                 self._handler_middleware[new_handler_id] = middleware_meta
 
-            # Track which API owns this handler (for logging, etc.)
-            # _handler_api_map is always initialized in __init__
-            self._handler_api_map[new_handler_id] = app
+            # Track which API owns this handler (for logging, global middleware, etc.).
+            # A route that ``app`` mounted from another API keeps that API.
+            self._handler_api_map[new_handler_id] = app._handler_api_map.get(handler_id, app)
 
         for asgi_prefix, asgi_app in app._asgi_mounts:
             if mount_path:

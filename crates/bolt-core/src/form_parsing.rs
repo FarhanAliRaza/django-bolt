@@ -1012,6 +1012,56 @@ mod tests {
     }
 
     #[test]
+    fn multipart_text_field_stops_at_the_first_chunk_over_max_param_length() {
+        use actix_web::http::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+        use std::collections::VecDeque;
+
+        // One byte for each chunk, so the field grows by one byte at a time.
+        let mut chunks: VecDeque<Bytes> = VecDeque::new();
+        chunks.push_back(Bytes::from(format!(
+            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"value\"\r\n\r\n"
+        )));
+        for byte in b"abcdef" {
+            chunks.push_back(Bytes::copy_from_slice(&[*byte]));
+        }
+        chunks.push_back(Bytes::from(format!("\r\n--{BOUNDARY}--\r\n")));
+        let stream = CountingStream {
+            chunks,
+            consumed: Default::default(),
+            yield_pending: false,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_str(&format!("multipart/form-data; boundary={BOUNDARY}")).unwrap(),
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = runtime.block_on(parse_multipart(
+            Multipart::new(&headers, stream),
+            &HashMap::new(),
+            &HashMap::new(),
+            1024,
+            DEFAULT_MEMORY_LIMIT,
+            DEFAULT_MAX_PARTS,
+            3,
+            usize::MAX,
+        ));
+
+        let error = match result {
+            Ok(_) => panic!("a value over max_param_length must be rejected"),
+            Err(error) => error,
+        };
+        // The fourth byte is the first one over the limit.
+        assert_eq!(
+            error.ctx["error"],
+            serde_json::json!(CoerceError::TooLong { len: 4, max: 3 }.to_string())
+        );
+    }
+
+    #[test]
     fn multipart_text_fields_count_toward_the_total_size() {
         let limits = Limits {
             max_total_size: 5,

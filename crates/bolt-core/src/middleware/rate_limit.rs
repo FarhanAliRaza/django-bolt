@@ -387,15 +387,28 @@ mod tests {
             burst: 100,
             key: RateLimitKey::Ip,
         };
-        let headers = AHashMap::new();
-        // Each address gets its own limiter.
-        for n in 0..=MAX_LIMITERS as u32 {
-            let address = IpAddr::from(std::net::Ipv4Addr::from(n));
-            let response =
-                check_before_auth(&limiters, 0, &headers, Some(&address), &config, "GET", "/");
-            assert!(response.is_none());
+        // Fill the map. The entries share one limiter, so the fill stays fast.
+        let quota = Quota::per_second(std::num::NonZeroU32::new(100).unwrap());
+        let shared = Arc::new(RateLimiter::direct(quota));
+        for n in 0..MAX_LIMITERS as u64 {
+            limiters
+                .limiters
+                .insert((1, 100, 100, LimiterKey(n)), Arc::clone(&shared));
         }
-        // The last limiter found the map full. The cleanup dropped 20 000 limiters first.
+        limiters.count.store(MAX_LIMITERS, Ordering::Relaxed);
+
+        let address = ip("203.0.113.7");
+        let response = check_before_auth(
+            &limiters,
+            0,
+            &AHashMap::new(),
+            Some(&address),
+            &config,
+            "GET",
+            "/",
+        );
+        assert!(response.is_none());
+        // The new key found the map full. The cleanup dropped 20 000 limiters first.
         let expected = MAX_LIMITERS - MAX_LIMITERS / 5 + 1;
         assert_eq!(limiters.limiters.len(), expected);
         assert_eq!(limiters.count.load(Ordering::Relaxed), expected);

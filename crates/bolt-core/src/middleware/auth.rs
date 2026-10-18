@@ -222,9 +222,10 @@ impl RefreshingJwks {
         if cached.is_some() && !due {
             return cached;
         }
-        if cached.is_none() && !due {
+        if cached.is_none() {
             // The first unknown kid fetches at once, for a key rotation.
-            // Later unknown kids fetch again only after the cooldown.
+            // Later unknown kids fetch again only after the cooldown, also
+            // when the interval ends. A known kid starts the periodic refresh.
             let mut last_fetch = self.last_unknown_kid_fetch.lock();
             if last_fetch.is_some_and(|at| at.elapsed() < UNKNOWN_KID_FETCH_COOLDOWN) {
                 return None;
@@ -1610,6 +1611,24 @@ mod tests {
             assert_eq!(calls.len().unwrap(), 1);
             // A known kid still verifies.
             assert!(jwks.select(Some("a")).is_some());
+        });
+    }
+
+    #[test]
+    fn an_unknown_kid_waits_for_the_cooldown_also_when_the_interval_ends() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (jwks, calls) = refreshing_jwks(py, &["a"], Duration::ZERO);
+            assert!(jwks.select(Some("new")).is_none());
+            assert_eq!(calls.len().unwrap(), 1);
+            // The interval ends at each request, but made-up kids still wait.
+            for kid in ["x", "y", "new"] {
+                assert!(jwks.select(Some(kid)).is_none());
+            }
+            assert_eq!(calls.len().unwrap(), 1);
+            // A known kid starts the periodic refresh.
+            assert!(jwks.select(Some("a")).is_some());
+            assert_eq!(calls.len().unwrap(), 2);
         });
     }
 

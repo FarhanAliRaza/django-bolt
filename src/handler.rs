@@ -856,7 +856,8 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
         match validate_and_cache_typed_params(
             path_params.as_ref(),
             query_params.as_ref(),
-            &route_meta.param_types,
+            &route_meta.path_types,
+            &route_meta.query_types,
             max_param_length,
         ) {
             Ok(cached) => cached,

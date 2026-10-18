@@ -66,6 +66,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **A query key with the name of a typed path parameter keeps its string** - Path and query parameters shared one map of types in Rust. Thus on `/items/{item_id}` with `item_id: int` and one query parameter, `?item_id=abc` gave 422, although the route declares no query parameter `item_id`. A WebSocket upgrade with such a query key failed in the same way. Now path and query parameters each have their own map. A path parameter and a query parameter can now also read one key with different types. Registration raised `TypeError` for them before.
 - **A `File(max_size=...)` limits only its own file** - Rust read each file of a route only up to the largest `max_size` of the route. Thus a second `File()` with no `max_size`, or a file in a `Form()` struct, got 422 `file_too_large` above that size, although `BOLT_MAX_UPLOAD_SIZE` allowed it. Now such a file gets the limit of `BOLT_MAX_UPLOAD_SIZE`.
 - **A dependency gets the request parts that it reads** - Bolt parses only the request parts that a route needs. It finds them in the source of the handler and of its dependencies. It did not find the reads of these dependencies, so they got an empty value:
   - A lambda dependency. The analysis looked only for a `def`.

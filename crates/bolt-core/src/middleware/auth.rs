@@ -9,6 +9,7 @@ use pyo3::IntoPyObjectExt;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -158,7 +159,17 @@ pub struct RefreshingJwks {
     last_refresh: Mutex<Instant>,
     /// The last fetch that a token with an unknown kid started.
     last_unknown_kid_fetch: Mutex<Option<Instant>>,
-    refreshing: Mutex<()>,
+    /// True while a fetch runs. Only one fetch runs at a time.
+    refreshing: AtomicBool,
+}
+
+/// Clears the fetch flag when the fetch ends, also on a panic.
+struct FetchFlag<'a>(&'a AtomicBool);
+
+impl Drop for FetchFlag<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 /// After a fetch for an unknown kid, other unknown kids wait this long.
@@ -203,7 +214,7 @@ impl RefreshingJwks {
             refresh_interval,
             last_refresh: Mutex::new(Instant::now()),
             last_unknown_kid_fetch: Mutex::new(None),
-            refreshing: Mutex::new(()),
+            refreshing: AtomicBool::new(false),
         }
     }
 
@@ -216,29 +227,66 @@ impl RefreshingJwks {
         }
     }
 
-    fn select(&self, kid: Option<&str>) -> Option<DecodingKey> {
+    fn select(self: &Arc<Self>, kid: Option<&str>) -> Option<DecodingKey> {
         let cached = self.cached(kid);
-        let due = self.last_refresh.lock().elapsed() >= self.refresh_interval;
-        if cached.is_some() && !due {
+        if cached.is_some() {
+            // The periodic refresh runs on its own thread. The request keeps
+            // the cached key, so no request waits for the provider.
+            if self.last_refresh.lock().elapsed() >= self.refresh_interval {
+                self.fetch_in_background();
+            }
             return cached;
         }
-        // try_lock provides single-flight refresh: other workers immediately
-        // continue with cached keys instead of piling onto the provider.
-        let Some(_guard) = self.refreshing.try_lock() else {
-            return cached;
-        };
-        if cached.is_none() {
-            // The first unknown kid fetches at once, for a key rotation.
-            // Later unknown kids fetch again only after the cooldown, also
-            // when the interval ends. A known kid starts the periodic refresh.
-            // The cooldown starts only when this request fetches.
+
+        // While another fetch runs, the request does not wait for it, and
+        // the cooldown does not start.
+        if self
+            .refreshing
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            return None;
+        }
+        let _flag = FetchFlag(&self.refreshing);
+        // The first unknown kid fetches at once, for a key rotation, and the
+        // request waits for the new keys. Later unknown kids fetch again only
+        // after the cooldown, also when the interval ends.
+        {
             let mut last_fetch = self.last_unknown_kid_fetch.lock();
             if last_fetch.is_some_and(|at| at.elapsed() < UNKNOWN_KID_FETCH_COOLDOWN) {
                 return None;
             }
             *last_fetch = Some(Instant::now());
         }
+        self.fetch();
+        self.cached(kid)
+    }
 
+    /// Start a fetch on a new thread, unless a fetch runs.
+    fn fetch_in_background(self: &Arc<Self>) {
+        if self
+            .refreshing
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+        let jwks = Arc::clone(self);
+        let spawned = std::thread::Builder::new()
+            .name("bolt-jwks-refresh".to_string())
+            .spawn(move || {
+                let _flag = FetchFlag(&jwks.refreshing);
+                jwks.fetch();
+            });
+        if let Err(error) = spawned {
+            self.refreshing.store(false, Ordering::Release);
+            log::warn!("JWKS refresh thread did not start: {error}");
+        }
+    }
+
+    /// Get the JWKS from the Python callback and replace the keys. A failed
+    /// fetch keeps the last known-good keys.
+    fn fetch(&self) {
         let result = Python::attach(|py| {
             self.refresh
                 .call0(py)
@@ -252,7 +300,6 @@ impl RefreshingJwks {
                 *self.keys.write() = keys;
             }
         }
-        self.cached(kid).or(cached)
     }
 }
 
@@ -1551,17 +1598,30 @@ mod tests {
         py: Python<'py>,
         kids: &[&str],
         refresh_interval: Duration,
-    ) -> (RefreshingJwks, Bound<'py, PyAny>) {
+    ) -> (Arc<RefreshingJwks>, Bound<'py, PyAny>) {
+        slow_refreshing_jwks(py, kids, refresh_interval, 0.0)
+    }
+
+    /// A `RefreshingJwks` whose fetch takes `delay` seconds.
+    fn slow_refreshing_jwks<'py>(
+        py: Python<'py>,
+        kids: &[&str],
+        refresh_interval: Duration,
+        delay: f64,
+    ) -> (Arc<RefreshingJwks>, Bound<'py, PyAny>) {
         // from_code reuses a module of the same name, and tests run on
         // parallel threads. Each call gets its own module, so its own calls.
         static MODULES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let name = format!(
             "refreshing_jwks_{}",
-            MODULES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            MODULES.fetch_add(1, Ordering::Relaxed)
+        );
+        let code = format!(
+            "import time\ncalls = []\ndef refresh():\n    time.sleep({delay})\n    calls.append(1)\n"
         );
         let module = PyModule::from_code(
             py,
-            c"calls = []\ndef refresh():\n    calls.append(1)\n",
+            &std::ffi::CString::new(code).unwrap(),
             &std::ffi::CString::new(format!("{name}.py")).unwrap(),
             &std::ffi::CString::new(name).unwrap(),
         )
@@ -1571,8 +1631,22 @@ mod tests {
             .map(|kid| (kid.to_string(), DecodingKey::from_secret(SECRET.as_bytes())))
             .collect();
         let refresh = module.getattr("refresh").unwrap().unbind();
-        let jwks = RefreshingJwks::new(keys, refresh, refresh_interval);
+        let jwks = Arc::new(RefreshingJwks::new(keys, refresh, refresh_interval));
         (jwks, module.getattr("calls").unwrap())
+    }
+
+    /// Wait, with the GIL released, until the background refresh ends.
+    fn wait_for_refresh(py: Python<'_>, jwks: &RefreshingJwks) {
+        py.detach(|| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while jwks.refreshing.load(Ordering::Acquire) {
+                assert!(
+                    Instant::now() < deadline,
+                    "the background refresh did not end"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
     }
 
     #[test]
@@ -1600,6 +1674,25 @@ mod tests {
             let (due, calls) = refreshing_jwks(py, &["a"], Duration::ZERO);
             // The fetch gives no new document, so the known key stays.
             assert!(due.select(Some("a")).is_some());
+            wait_for_refresh(py, &due);
+            assert_eq!(calls.len().unwrap(), 1);
+        });
+    }
+
+    #[test]
+    fn a_due_refresh_runs_in_the_background_and_keeps_the_cached_key() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (jwks, calls) = slow_refreshing_jwks(py, &["a"], Duration::ZERO, 0.5);
+            // The request thread holds the GIL, so a fetch on this thread
+            // would finish before select returns. The fetch waits instead.
+            let started = Instant::now();
+            assert!(jwks.select(Some("a")).is_some());
+            // A second request while the fetch runs starts no other fetch.
+            assert!(jwks.select(Some("a")).is_some());
+            assert!(started.elapsed() < Duration::from_millis(400));
+            assert_eq!(calls.len().unwrap(), 0);
+            wait_for_refresh(py, &jwks);
             assert_eq!(calls.len().unwrap(), 1);
         });
     }
@@ -1629,9 +1722,9 @@ mod tests {
         Python::attach(|py| {
             let (jwks, calls) = refreshing_jwks(py, &["a"], Duration::from_secs(3600));
             // Another worker fetches. This request does not wait for it.
-            let running = jwks.refreshing.lock();
+            jwks.refreshing.store(true, Ordering::Release);
             assert!(jwks.select(Some("new")).is_none());
-            drop(running);
+            jwks.refreshing.store(false, Ordering::Release);
             assert_eq!(calls.len().unwrap(), 0);
             // The next unknown kid fetches at once.
             assert!(jwks.select(Some("new")).is_none());
@@ -1653,6 +1746,7 @@ mod tests {
             assert_eq!(calls.len().unwrap(), 1);
             // A known kid starts the periodic refresh.
             assert!(jwks.select(Some("a")).is_some());
+            wait_for_refresh(py, &jwks);
             assert_eq!(calls.len().unwrap(), 2);
         });
     }

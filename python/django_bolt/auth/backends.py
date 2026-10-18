@@ -188,9 +188,12 @@ class JWTAuthentication(BaseAuthentication):
             signing algorithm allowlist. Requires ``audience``.
         jwks_refresh_interval: Seconds between runtime refresh attempts for a
             remote JWKS (default: 300). The refresh runs on a background
-            thread, and requests use the cached keys. An unknown ``kid``
-            refreshes at once, then at most one time in 30 seconds. Failed
-            refreshes retain the last known-good keys.
+            thread, and a request with a cached key uses it at once. An
+            unknown ``kid`` refreshes at once, and the request waits for the
+            new keys. Later unknown ``kid`` values refresh at most one time
+            in 30 seconds. While a fetch runs or during that cooldown, Bolt
+            rejects the token. Failed refreshes retain the last known-good
+            keys.
     """
 
     # Class-level cached User model - resolved once on first use

@@ -21,7 +21,7 @@ use bolt_asgi::asgi_http;
 use bolt_core::error::{self, handle_python_error};
 use bolt_core::form_parsing::{
     parse_multipart, parse_urlencoded, FileContent, FileFieldConstraints, FileInfo,
-    FormParseResult, FormValue, DEFAULT_MAX_PARTS, DEFAULT_MEMORY_LIMIT,
+    FormParseResult, FormValue, DEFAULT_MAX_FIELDS, DEFAULT_MAX_PARTS, DEFAULT_MEMORY_LIMIT,
     ERROR_TYPE_PAYLOAD_TOO_LARGE,
 };
 use bolt_core::metadata::{RustArgBinding, RustArgSource};
@@ -1167,7 +1167,12 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
                     .map(|m| &m.form_type_hints)
                     .unwrap_or(&empty_form_type_hints);
 
-                match parse_urlencoded(&body_vec, form_type_hints, max_param_length) {
+                match parse_urlencoded(
+                    &body_vec,
+                    form_type_hints,
+                    max_param_length,
+                    DEFAULT_MAX_FIELDS,
+                ) {
                     Ok(form_map) => {
                         let result = FormParseResult {
                             form_map,

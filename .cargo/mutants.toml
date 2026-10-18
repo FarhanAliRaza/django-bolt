@@ -44,6 +44,6 @@ exclude_re = [
     # These short-circuit work that has the same result on an empty set.
     'replace GuardSet::is_empty -> bool with false',
     'replace TrustedProxies::is_empty -> bool with false',
-    # The Debug text of a JWKS.
-    'Debug for RefreshingJwks',
+    # The Debug text of a JWKS or a static key.
+    'Debug for (RefreshingJwks|StaticKey)',
 ]

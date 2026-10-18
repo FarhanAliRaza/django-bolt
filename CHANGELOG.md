@@ -109,6 +109,11 @@ All notable changes to this project will be documented in this file.
 
 ### Performance
 
+- **A static JWT secret verifies with HMAC keys built once** - jsonwebtoken builds a new HMAC key for each token. Now Bolt builds one key for each of HS256, HS384 and HS512 at startup. A JWKS and a public key verify as before. In a release-build probe, `authenticate` with an HS256 token went from 2238 ns to 1588 ns.
+- **Header extraction checks header values faster** - actix-web uses http 0.2. Its `HeaderValue::to_str` checks one byte at a time and stops at the first bad byte, so the loop does not vectorize. Bolt now checks each value with the loop of http 1, which has no early exit. Bolt accepts and skips the same values as before. With 12 typical request headers, header extraction went from 1295 ns to 851 ns in a release-build probe.
+- **A form route builds no Python headers dict** - A route with `Form()` or `File()` parameters got a dict of each request header, also when no code read it. Rust reads the Content-Type from its own header map. Now the route gets the dict only when the handler or a dependency reads a header.
+- **The rate limiter reads a known key with a read lock** - Each request write-locked a shard of the limiter map, also for a key it already had. Now only a new key takes the write lock. The lock ends before the log line of a 429. Four threads on one key went from 637-679 ns to 525-612 ns for each check in a release-build probe.
+- **The cookie CSRF check reads connection info only for unsafe methods** - A safe method passes the check, so it needs no scheme.
 - **A client's next async request reuses its lane** - An async request on a route with Django middleware gave its lane back only after the response left. Thus the next request of the same client often started a new lane, with a new thread and a new database connection. The lane now goes back to the idle list before the response leaves. The lane still closes the previous request before it runs the next one.
 
 

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use crate::form_parsing::FileFieldConstraints;
 use crate::middleware::auth::{
     build_jwks_key_source, build_jwt_decoding_key, parse_jwt_algorithm, AuthBackend, AuthContext,
-    Claims, JwtKeySource, RefreshingJwks,
+    Claims, JwtKeySource, RefreshingJwks, StaticKey,
 };
 use crate::permissions::{
     evaluate_guards, ClaimKey, Guard, GuardDenial, GuardResult, GuardSet, Quantifier,
@@ -1064,9 +1064,9 @@ pub fn parse_auth_backend(dict: &HashMap<String, Py<PyAny>>, py: Python) -> PyRe
                     .get("secret")
                     .ok_or_else(|| PyValueError::new_err("JWT auth backend missing 'secret'"))?
                     .extract::<String>(py)?;
-                JwtKeySource::Static(
+                JwtKeySource::Static(StaticKey::new(
                     build_jwt_decoding_key(&secret, &algorithms).map_err(PyValueError::new_err)?,
-                )
+                ))
             };
             let header = match dict.get("header") {
                 Some(h) => h

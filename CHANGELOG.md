@@ -78,6 +78,7 @@ All notable changes to this project will be documented in this file.
   - A lambda dependency. The analysis looked only for a `def`.
   - A dependency with a `functools.wraps` decorator. Now its route parses every part.
   - A class dependency. The analysis read the first method in the source of the class. Now it reads the `__init__` that the call runs. This `__init__` can come from a base class or have a decorator.
+  - A class dependency with a `__new__` or a metaclass `__call__`. These run before `__init__`, and the analysis reads `__init__` only. Now the route of such a dependency parses every request part.
 
   When the analysis cannot find the code, the route now parses every part. An example is a line with two lambdas.
 - **A sync ViewSet `@action` that uses the ORM runs in the thread pool** - The analysis read the generic action wrapper, not the action method. Thus the ORM work of a sync action ran on the server worker thread and blocked other requests. A call of `urllib.request.urlopen()` now counts as blocking I/O too.

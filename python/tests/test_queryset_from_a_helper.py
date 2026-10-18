@@ -129,6 +129,47 @@ def sync_no_params_unvalidated_with_middleware(api: BoltAPI) -> None:
         return articles()
 
 
+# A route with one response model for each status code has its own executor.
+
+
+class Missing(msgspec.Struct):
+    detail: str
+
+
+PER_STATUS = {200: list[Row], 404: Missing}
+
+
+def sync_per_status(api: BoltAPI) -> None:
+    @api.get("/articles", response_model=PER_STATUS)
+    def listing(n: int = 0):
+        return articles()
+
+
+def sync_per_status_tuple(api: BoltAPI) -> None:
+    @api.get("/articles", response_model=PER_STATUS)
+    def listing(n: int = 0):
+        return 200, articles()
+
+
+def sync_per_status_unvalidated_tuple(api: BoltAPI) -> None:
+    @api.get("/articles", response_model=PER_STATUS, validate_response=False)
+    def listing(n: int = 0):
+        return 200, articles()
+
+
+def async_per_status(api: BoltAPI) -> None:
+    @api.get("/articles", response_model=PER_STATUS)
+    async def listing(n: int = 0):
+        return articles()
+
+
+def async_per_status_tuple(api: BoltAPI) -> None:
+    @api.get("/articles", response_model=PER_STATUS)
+    async def listing(n: int = 0):
+        await asyncio.sleep(0)
+        return 200, articles()
+
+
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "register",
@@ -148,6 +189,11 @@ def sync_no_params_unvalidated_with_middleware(api: BoltAPI) -> None:
         async_awaits_no_params_unvalidated,
         sync_typed_unvalidated_with_middleware,
         sync_no_params_unvalidated_with_middleware,
+        sync_per_status,
+        sync_per_status_tuple,
+        sync_per_status_unvalidated_tuple,
+        async_per_status,
+        async_per_status_tuple,
     ],
 )
 def test_a_queryset_from_a_helper_loads_on_the_orm_pool(register):

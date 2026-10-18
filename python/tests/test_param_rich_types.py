@@ -702,3 +702,49 @@ async def test_an_oversized_earlier_value_of_a_websocket_sequence_key_rejects_th
     with pytest.raises(ValueError, match="Parameter too long"):
         async with WebSocketTestClient(ws_api, "/ws/names", query_string="name=" + "a" * 9000 + "&name=b"):
             pass
+
+
+# --- Path and query keys with the same name -----------------------------------------
+
+
+def test_a_query_key_with_the_name_of_a_typed_path_parameter_does_not_get_its_type():
+    """The route declares no query parameter ``item_id``, so its value is not checked."""
+    api = BoltAPI()
+
+    @api.get("/items/{item_id}")
+    async def item(item_id: int, q: str = ""):
+        return {"item_id": item_id, "q": q}
+
+    with TestClient(api) as client:
+        response = client.get("/items/5?q=x&item_id=abc")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"item_id": 5, "q": "x"}
+
+
+def test_a_path_and_a_query_parameter_can_read_one_key_with_different_types():
+    api = BoltAPI()
+
+    @api.get("/items/{item_id}")
+    async def item(item_id: int, raw: Annotated[str, Query(alias="item_id")] = ""):
+        return {"item_id": item_id, "raw": raw}
+
+    with TestClient(api) as client:
+        response = client.get("/items/5?item_id=abc")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"item_id": 5, "raw": "abc"}
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_query_key_with_the_name_of_a_typed_path_parameter_does_not_get_its_type():
+    api = BoltAPI()
+
+    @api.websocket("/ws/rooms/{room}")
+    async def room(websocket: WebSocket, room: int):
+        await websocket.accept()
+        await websocket.send_json({"room": room})
+
+    async with WebSocketTestClient(api, "/ws/rooms/5", query_string="room=abc") as ws:
+        response = await ws.receive_json()
+    assert response == {"room": 5}

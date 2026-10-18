@@ -23,23 +23,25 @@ pub static EMPTY_TYPES: std::sync::LazyLock<TypeHints> = std::sync::LazyLock::ne
 
 /// Validate and pre-coerce path/query parameters against type hints.
 ///
-/// Returns the pre-coerced non-string values of each source. String
-/// parameters are validated for length but left as-is.
+/// Each source uses its own type hints, so a query key with the name of a
+/// typed path parameter keeps its string. Returns the pre-coerced non-string
+/// values of each source. String parameters are validated for length but left as-is.
 pub fn validate_and_cache_typed_params<'t>(
     path_params: Option<&AHashMap<String, String>>,
     query_params: Option<&QueryParams<'_>>,
-    param_types: &'t TypeHints,
+    path_types: &'t TypeHints,
+    query_types: &'t TypeHints,
     max_length: usize,
 ) -> Result<(CoercedValues<'t>, CoercedValues<'t>), HttpResponse> {
     let path_coerced = match path_params {
         Some(params) => {
-            validate_and_cache_source(params, param_types, max_length, "Path parameter")?
+            validate_and_cache_source(params, path_types, max_length, "Path parameter")?
         }
         None => Vec::new(),
     };
     let query_coerced = match query_params {
         Some(params) => {
-            validate_and_cache_source(params, param_types, max_length, "Query parameter")?
+            validate_and_cache_source(params, query_types, max_length, "Query parameter")?
         }
         None => Vec::new(),
     };
@@ -539,13 +541,33 @@ mod tests {
     #[test]
     fn path_and_query_keep_their_labels() {
         let hints = types(&[("id", TYPE_INT)]);
+        let none = types(&[]);
         let bad = values(&[("id", "x")]);
-        let response = validate_and_cache_typed_params(Some(&bad), None, &hints, 64).unwrap_err();
+        let response =
+            validate_and_cache_typed_params(Some(&bad), None, &hints, &none, 64).unwrap_err();
         assert!(detail(response).contains("Path parameter 'id'"));
         let bad_query = crate::router::parse_query_string("id=x");
         let response =
-            validate_and_cache_typed_params(None, Some(&bad_query), &hints, 64).unwrap_err();
+            validate_and_cache_typed_params(None, Some(&bad_query), &none, &hints, 64).unwrap_err();
         assert!(detail(response).contains("Query parameter 'id'"));
+    }
+
+    #[test]
+    fn a_query_key_with_the_name_of_a_typed_path_parameter_keeps_its_string() {
+        let path_hints = types(&[("id", TYPE_INT)]);
+        let query_hints = types(&[]);
+        let path = values(&[("id", "5")]);
+        let query = crate::router::parse_query_string("id=x");
+        let (path_coerced, query_coerced) = validate_and_cache_typed_params(
+            Some(&path),
+            Some(&query),
+            &path_hints,
+            &query_hints,
+            64,
+        )
+        .unwrap();
+        assert!(matches!(path_coerced[..], [("id", CoercedValue::Int(5))]));
+        assert!(query_coerced.is_empty());
     }
 
     #[test]

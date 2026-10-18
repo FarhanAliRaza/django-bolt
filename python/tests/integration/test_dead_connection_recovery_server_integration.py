@@ -88,9 +88,13 @@ def start_server(
     between requests, so the shape of the failure is deterministic.
     """
     application_name = f"bolt-recovery-{secrets.token_hex(4)}"
+    module = app_module("dead_connection_recovery")
+    # runbolt loads one API for each BOLT_API entry. The lane routes are on a second API.
+    base = module.split(":", 1)[0]
+    both_apis = f"\nBOLT_API = [{module!r}, {base + ':lane_api'!r}]\n"
     project = make_server_project(
-        api_module=app_module("dead_connection_recovery"),
-        settings_extra=postgres_settings(params, **database_options) + settings_extra,
+        api_module=module,
+        settings_extra=postgres_settings(params, **database_options) + both_apis + settings_extra,
     )
     server = project.start(
         processes=processes, env={"PGAPPNAME": application_name, "DJANGO_BOLT_ORM_THREADS": str(orm_threads)}
@@ -619,3 +623,173 @@ def test_a_pool_check_logs_a_warning_for_a_backend_based_on_postgresql(make_serv
         assert query_each_orm_thread(server, 1) == ["ok"]
     stdout, stderr = server.stop()
     assert "gives its connection pool a check callback through CONN_HEALTH_CHECKS" in stdout + stderr
+
+
+def kill_backends(params: dict[str, Any], application_name: str) -> int:
+    """Kill every backend of the server with this ``application_name`` and return at once.
+
+    ``terminate_backends`` waits until no backend is left. Under load, the
+    pool opens new connections at once, so that wait does not end.
+    """
+    with psycopg.connect(**params, autocommit=True) as conn:
+        killed = conn.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
+            " WHERE application_name = %s AND pid <> pg_backend_pid()",
+            (application_name,),
+        ).fetchall()
+    return len(killed)
+
+
+def pool_stats(server) -> dict[str, int]:
+    response = server.get("/pool-stats")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_a_failed_return_on_an_idle_orm_worker_keeps_the_worker(make_server_project, postgres_database):
+    """An ORM worker gives its pooled connection back when its queue is empty. That return can fail.
+
+    The failure must not end the worker thread: the executor would not start
+    a new one, and its slot in the pool of threads would be gone. Bolt logs it
+    and the next call on the worker checks out a new connection.
+    """
+    server, _ = start_server(make_server_project, postgres_database, settings_extra=POOL)
+    with server:
+        for _ in range(3):
+            response = server.get("/lose-the-pool-on-an-orm-thread")
+            assert response.status_code == 200, response.text
+            assert response.json() == {"result": "ok"}
+            assert query_each_orm_thread(server, 1) == ["ok"]
+    stdout, stderr = server.stop()
+    assert "Could not give the pooled database connections of an idle worker back" in stdout + stderr
+
+
+def test_a_failed_return_at_the_end_of_a_streaming_body_keeps_the_response(make_server_project, postgres_database):
+    """The thread of a sync streaming body closes its connections when the body ends. That close can fail.
+
+    The client has the complete body by then. The failure is logged and the
+    next stream and the next query work.
+    """
+    server, _ = start_server(make_server_project, postgres_database, settings_extra=POOL)
+    with server:
+        for _ in range(3):
+            response = server.get("/stream-and-lose-the-pool?rows=3", timeout=15)
+            assert response.status_code == 200, response.text
+            assert response.text == "1\n2\n3\n"
+        assert server.get("/stream?rows=2", timeout=15).text == "1\n2\n"
+        assert query_each_orm_thread(server, 1) == ["ok"]
+    stdout, stderr = server.stop()
+    assert "Error closing the database connections of a sync streaming thread" in stdout + stderr
+
+
+SMALL_POOL = """
+DATABASES["default"]["OPTIONS"] = {"pool": {"min_size": 1, "max_size": 4, "timeout": 5}}
+"""
+
+
+def test_the_pool_has_no_leaked_slot_after_backends_die_under_concurrent_load(make_server_project, postgres_database):
+    """Backends die five times while 24 clients hit every connection path at once.
+
+    The pool has four connections for four ORM threads, the event loop, the
+    default executor and the streaming threads. Each path gives its connection
+    back on its own error path. After the load, no connection stays checked
+    out, every route answers, and the server logged no failed return.
+    """
+    server, application_name = start_server(
+        make_server_project, postgres_database, orm_threads=4, settings_extra=SMALL_POOL
+    )
+    with server:
+        headers = seed_and_authenticate(server)
+        paths = [
+            "/orm-threads?count=4",
+            "/me",
+            "/me-inline",
+            "/default-executor-query",
+            "/echo?token=abc",
+            "/stream?rows=3",
+            "/queued-orm-calls?count=3",
+            "/lane/query",
+        ]
+        stop = threading.Event()
+        counts = {"ok": 0, "error": 0}
+        counts_lock = threading.Lock()
+        clients = threading.local()
+        opened: list[httpx.Client] = []
+
+        def hammer(index: int) -> None:
+            clients.client = httpx.Client(timeout=10)
+            opened.append(clients.client)
+            while not stop.is_set():
+                path = paths[index % len(paths)]
+                index += 1
+                try:
+                    response = clients.client.get(server.url(path), headers=headers)
+                    ok = response.status_code == 200
+                except httpx.HTTPError:
+                    ok = False
+                with counts_lock:
+                    counts["ok" if ok else "error"] += 1
+
+        killed = []
+        try:
+            with ThreadPoolExecutor(24) as senders:
+                futures = [senders.submit(hammer, index) for index in range(24)]
+                try:
+                    time.sleep(1.0)
+                    for _ in range(5):
+                        killed.append(kill_backends(postgres_database, application_name))
+                        time.sleep(0.4)
+                    time.sleep(1.0)
+                finally:
+                    # The senders stop on each exit of this block, or the executor never ends.
+                    stop.set()
+                for future in futures:
+                    future.result()
+        finally:
+            for client in opened:
+                client.close()
+        assert all(killed), killed
+
+        # A kill ends at most max_size connections. Each one fails the request
+        # on it, and a dead idle connection can fail one more before the drain.
+        assert counts["error"] <= 5 * 4 * 2, counts
+        assert counts["ok"] > 100 * counts["error"], counts
+        # The load has ended. Every path gave its connection back.
+        for _ in range(3):
+            assert query_each_orm_thread(server, 4) == ["ok"] * 4
+            for path in paths:
+                response = server.get(path, headers=headers, timeout=15)
+                assert response.status_code == 200, (path, response.text)
+        deadline = time.monotonic() + 5
+        while True:
+            stats = pool_stats(server)
+            checked_out = stats["pool_size"] - stats["pool_available"]
+            if checked_out == 0 or time.monotonic() > deadline:
+                break
+            time.sleep(0.1)
+        assert checked_out == 0, stats
+        assert stats["requests_waiting"] == 0, stats
+    stdout, stderr = server.stop()
+    assert "Could not give the pooled database connections" not in stdout + stderr
+    assert "Could not close the unusable database connections" not in stdout + stderr
+
+
+def test_a_failed_return_at_the_end_of_a_lane_request_keeps_the_lane(make_server_project, postgres_database):
+    """A lane gives its pooled connection back at the end of its request. That return can fail.
+
+    The failure must not replace the response of the request, which the
+    handler has produced. Bolt logs it, and the lane serves its next request
+    with a new connection.
+    """
+    server, _ = start_server(make_server_project, postgres_database, settings_extra=POOL)
+    with server:
+        for _ in range(3):
+            response = server.get("/lane/lose-the-pool")
+            assert response.status_code == 200, response.text
+            assert response.json() == {"result": "ok"}
+            response = server.get("/lane/query")
+            assert response.status_code == 200, response.text
+            assert response.json()["result"] == "ok"
+        assert query_each_orm_thread(server, 1) == ["ok"]
+    stdout, stderr = server.stop()
+    assert "Could not give the database connections of a lane back after its request" in stdout + stderr

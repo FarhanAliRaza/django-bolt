@@ -49,10 +49,12 @@ from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.db import connection, connections
 from django.db.backends.signals import connection_created
+from django.utils.deprecation import MiddlewareMixin
 
 from django_bolt import BoltAPI
 from django_bolt.auth import IsAuthenticated, JWTAuthentication
 from django_bolt.concurrency import run_in_orm_executor, run_orm_blocking
+from django_bolt.middleware import DjangoMiddlewareStack
 from django_bolt.responses import StreamingResponse
 
 SECRET = "dead-connection-recovery-secret-key-32-bytes"
@@ -226,3 +228,60 @@ async def lose_the_pool(fail: bool = False):
     except Exception as exc:
         result = type(exc).__name__
     return {"result": result}
+
+
+@api.get("/pool-stats")
+async def pool_stats():
+    """The statistics of the connection pool of ``default``: ``pool_size``, ``pool_available`` and so on."""
+    return connection.pool.get_stats()
+
+
+def _lose_the_pool_on_this_thread() -> str:
+    _select_one()
+    # See _select_then_lose_the_pool: the return of this connection to its pool fails.
+    connection.connection._pool = None
+    return "ok"
+
+
+@api.get("/lose-the-pool-on-an-orm-thread")
+async def lose_the_pool_on_an_orm_thread():
+    # The worker gives its connection back when its queue is empty, so the
+    # failed return happens on the idle path of the worker, not in this call.
+    return {"result": await run_in_orm_executor(_lose_the_pool_on_this_thread)}
+
+
+@api.get("/stream-and-lose-the-pool")
+def stream_and_lose_the_pool(rows: int):
+    def body():
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT generate_series(1, %s)", [rows])
+            for (value,) in cursor.fetchall():
+                yield f"{value}\n"
+        connection.connection._pool = None
+
+    return StreamingResponse(body(), media_type="text/plain")
+
+
+class _QueryMiddleware(MiddlewareMixin):
+    def process_request(self, request):
+        _select_one()
+
+
+# A sync route behind Django middleware runs complete on a request lane. The
+# lane gives its pooled connection back at the end of its request.
+lane_api = BoltAPI(prefix="/lane", middleware=[DjangoMiddlewareStack([_QueryMiddleware])])
+
+
+@lane_api.get("/health")
+async def lane_health():
+    return {"status": "ok"}
+
+
+@lane_api.get("/query")
+def lane_query():
+    return {"result": _select_one(), "thread": threading.current_thread().name}
+
+
+@lane_api.get("/lose-the-pool")
+def lane_lose_the_pool():
+    return {"result": _lose_the_pool_on_this_thread()}

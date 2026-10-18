@@ -442,16 +442,22 @@ def close_lane_request() -> None:
     Bolt does not see a database error that user code handles, or one from a
     direct ``sync_to_async`` call. Django does this check on ``request_finished``.
     """
-    dead = []
-    for conn in connections.all(initialized_only=True):
-        if conn.errors_occurred and not conn.in_atomic_block:
-            raw = _close_if_unusable_or_obsolete(conn)
-            if raw is not None:
-                dead.append((conn, raw))
-    if dead:
-        _connections_died(dead)
-    if _thread_state.holds_pooled:
-        release_pooled_connections()
+    # A sync lane request calls this from the dispatch path, so a raise here
+    # would replace the response of the request. A close can raise: for
+    # example, putconn fails when a pooled connection goes back to its pool.
+    try:
+        dead = []
+        for conn in connections.all(initialized_only=True):
+            if conn.errors_occurred and not conn.in_atomic_block:
+                raw = _close_if_unusable_or_obsolete(conn)
+                if raw is not None:
+                    dead.append((conn, raw))
+        if dead:
+            _connections_died(dead)
+        if _thread_state.holds_pooled:
+            release_pooled_connections()
+    except Exception:
+        logger.exception("Could not give the database connections of a lane back after its request")
 
 
 def _close_thread_connections() -> None:

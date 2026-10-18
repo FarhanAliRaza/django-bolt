@@ -89,6 +89,33 @@ def test_chunked_multipart_over_aggregate_limit_rejected_with_413(make_server_pr
     )
 
 
+def _endless_part_header(total: int, chunk: int = 1000):
+    """Yield a multipart part header that never ends with an empty line."""
+    yield f'--{_BOUNDARY}\r\nContent-Disposition: form-data; name="avatar"\r\nX-Pad: '.encode()
+    sent = 0
+    while sent < total:
+        sent += chunk
+        yield b"a" * chunk
+
+
+def test_chunked_multipart_with_an_endless_part_header_is_rejected_with_413(make_server_project):
+    """The multipart parser buffers a part header until it ends, so the byte count must cover the whole stream.
+
+    The field bytes stay at 0, so the aggregate check of parse_multipart never runs.
+    """
+    project = make_server_project(api_module=app_module("payload_sink"), settings_extra=SETTINGS_EXTRA)
+    with project.start() as server:
+        response = server.request(
+            "POST",
+            "/upload",
+            content=_endless_part_header(50_000),
+            headers={"content-type": f"multipart/form-data; boundary={_BOUNDARY}"},
+        )
+    assert response.status_code == 413, (
+        f"an endless part header over the limit must 413, got {response.status_code}: {response.text[:200]}"
+    )
+
+
 def test_chunked_multipart_under_aggregate_limit_succeeds(make_server_project):
     """A small chunked multipart body must not be size-rejected (control)."""
     project = make_server_project(api_module=app_module("payload_sink"), settings_extra=SETTINGS_EXTRA)

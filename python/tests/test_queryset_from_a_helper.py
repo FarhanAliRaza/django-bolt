@@ -9,6 +9,8 @@ raises ``SynchronousOnlyOperation``.
 
 from __future__ import annotations
 
+import asyncio
+
 import msgspec
 import pytest
 
@@ -71,6 +73,62 @@ def sync_typed_with_middleware(api: BoltAPI) -> None:
         return articles()
 
 
+# With ``validate_response=False``, a ``list[...]`` annotation sends the result
+# straight to the encoder. The encoder does not know a QuerySet.
+
+
+def sync_typed_unvalidated(api: BoltAPI) -> None:
+    @api.get("/articles", validate_response=False)
+    def listing(n: int = 0) -> list[Row]:
+        return articles()
+
+
+def sync_no_params_unvalidated(api: BoltAPI) -> None:
+    @api.get("/articles", validate_response=False)
+    def listing() -> list[Row]:
+        return articles()
+
+
+def async_typed_unvalidated(api: BoltAPI) -> None:
+    @api.get("/articles", validate_response=False)
+    async def listing(n: int = 0) -> list[Row]:
+        return articles()
+
+
+def async_no_params_unvalidated(api: BoltAPI) -> None:
+    @api.get("/articles", validate_response=False)
+    async def listing() -> list[Row]:
+        return articles()
+
+
+def async_awaits_unvalidated(api: BoltAPI) -> None:
+    @api.get("/articles", validate_response=False)
+    async def listing(n: int = 0) -> list[Row]:
+        await asyncio.sleep(0)
+        return articles()
+
+
+def async_awaits_no_params_unvalidated(api: BoltAPI) -> None:
+    @api.get("/articles", validate_response=False)
+    async def listing() -> list[Row]:
+        await asyncio.sleep(0)
+        return articles()
+
+
+def sync_typed_unvalidated_with_middleware(api: BoltAPI) -> None:
+    @api.get("/articles", validate_response=False)
+    @middleware(passthrough)
+    def listing(n: int = 0) -> list[Row]:
+        return articles()
+
+
+def sync_no_params_unvalidated_with_middleware(api: BoltAPI) -> None:
+    @api.get("/articles", validate_response=False)
+    @middleware(passthrough)
+    def listing() -> list[Row]:
+        return articles()
+
+
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "register",
@@ -82,6 +140,14 @@ def sync_typed_with_middleware(api: BoltAPI) -> None:
         sync_typed_validated,
         async_typed_validated,
         sync_typed_with_middleware,
+        sync_typed_unvalidated,
+        sync_no_params_unvalidated,
+        async_typed_unvalidated,
+        async_no_params_unvalidated,
+        async_awaits_unvalidated,
+        async_awaits_no_params_unvalidated,
+        sync_typed_unvalidated_with_middleware,
+        sync_no_params_unvalidated_with_middleware,
     ],
 )
 def test_a_queryset_from_a_helper_loads_on_the_orm_pool(register):

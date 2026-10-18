@@ -1344,7 +1344,7 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
             let result_obj = if is_async_handler {
                 bolt_loop::dispatch_sync(py, &route.dispatch_sync, request_obj.as_any())?
             } else {
-                route.dispatch_sync.call1(py, (request_obj,))?
+                route.dispatch_sync.call1(py, (request_obj.bind(py),))?
             };
 
             // Bare-bytes fast path: sync executors return just the encoded JSON
@@ -1369,6 +1369,15 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
                 );
                 mark_skip_cors(&mut resp, skip_cors);
                 return Ok(DispatchOutcome::Ready(resp));
+            }
+
+            // A sync executor returns a callable when its result needs the event
+            // loop, for example a QuerySet that must load on the ORM pool. A wire
+            // is bytes or a tuple, so it is never callable. Run the call on the
+            // worker loop, as the async path runs the dispatch.
+            if result_obj.bind(py).is_callable() {
+                let fut = bolt_loop::dispatch(result_obj, request_obj.into_any());
+                return Ok(DispatchOutcome::Pending(Box::pin(fut)));
             }
 
             let parsed = parse_response_wire(py, &result_obj)?;

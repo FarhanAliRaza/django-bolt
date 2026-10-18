@@ -142,6 +142,80 @@ Response = ResponseWireV1
 _ASYNC_SUSPEND_OPNAMES = frozenset({"GET_AWAITABLE", "GET_AITER", "GET_ANEXT", "END_ASYNC_FOR"})
 
 
+def _never_suspends(fn: Callable | None) -> bool:
+    """Return whether the code of ``fn`` has no opcode that can suspend.
+
+    One ``send(None)`` then runs a coroutine of ``fn`` to its end.
+    """
+    if fn is None:
+        return False
+    try:
+        return not any(i.opname in _ASYNC_SUSPEND_OPNAMES for i in dis.get_instructions(fn.__code__))
+    except (AttributeError, TypeError):
+        return False
+
+
+def _request_only_sync_executor(is_async: bool, meta: dict[str, Any], defer: Callable) -> Callable:
+    """Build the sync executor of a handler whose only parameter is the request.
+
+    The handler must not block, and an async handler must not suspend.
+    A dict result skips the serializer when the route validates no response.
+    A QuerySet result must load on the ORM pool, and a sync executor cannot
+    await. Thus the executor returns ``defer`` with the result bound, and Rust
+    runs that call on the worker loop.
+    """
+    encode = _json._ENCODER.encode
+
+    def finish(result: Any) -> ResponseWireV1 | Callable:
+        if isinstance(result, QuerySet):
+            return functools.partial(defer, result, meta)
+        return serialize_response_sync(result, meta)
+
+    if meta["_has_response_validation"]:
+        if is_async:
+
+            def execute(handler: Callable, request: dict[str, Any]) -> ResponseWireV1 | Callable:
+                coro = handler(request)
+                try:
+                    coro.send(None)
+                except StopIteration as stop:
+                    return finish(stop.value)
+                coro.close()
+                raise RuntimeError("Handler awaited unexpectedly in sync dispatch")
+
+            return execute
+
+        def execute(handler: Callable, request: dict[str, Any]) -> ResponseWireV1 | Callable:
+            return finish(handler(request))
+
+        return execute
+
+    if is_async:
+
+        def execute(handler: Callable, request: dict[str, Any]) -> ResponseWireV1 | Callable:
+            coro = handler(request)
+            try:
+                coro.send(None)
+            except StopIteration as stop:
+                result = stop.value
+            else:
+                coro.close()
+                raise RuntimeError("Handler awaited unexpectedly in sync dispatch")
+            if isinstance(result, dict):
+                return encode(result)
+            return finish(result)
+
+        return execute
+
+    def execute(handler: Callable, request: dict[str, Any]) -> ResponseWireV1 | Callable:
+        result = handler(request)
+        if isinstance(result, dict):
+            return encode(result)
+        return finish(result)
+
+    return execute
+
+
 def _normalize_path(path: str, trailing_slash: str = "strip") -> str:
     """Normalize a path based on trailing slash mode.
 
@@ -2052,6 +2126,16 @@ class BoltAPI:
 
             return execute_multi
 
+        # A handler with only the request parameter takes the sync dispatch when it
+        # cannot suspend: a sync handler that does not block, or an async one with no await.
+        # Its async executor below stays for a route that the sync dispatch cannot serve.
+        if (
+            mode == "request_only"
+            and not is_blocking
+            and (not is_async or _never_suspends(meta.get("_original_fn") or meta.get("handler")))
+        ):
+            meta["_sync_executor"] = _request_only_sync_executor(is_async, meta, self._serialize_on_orm_pool)
+
         # Fast path: async handler (most common pattern). Rust-prebound args are
         # consumed via _get_args; routes without bindings skip the state checks.
         if mode != "request_only" and is_async and not is_blocking and not injector_is_async:
@@ -2061,15 +2145,7 @@ class BoltAPI:
             # Detect trivially-async handlers: async def with no suspension points.
             # These can be dispatched synchronously by driving the coroutine inline
             # via coro.send(None) → StopIteration, avoiding the entire async bridge.
-            # Detection: check bytecode for any opcode in _ASYNC_SUSPEND_OPNAMES.
-            _original_fn = meta.get("_original_fn") or meta.get("handler")
-            _trivially_async = False
-            if _original_fn is not None:
-                try:
-                    _code = _original_fn.__code__
-                    _trivially_async = not any(i.opname in _ASYNC_SUSPEND_OPNAMES for i in dis.get_instructions(_code))
-                except (AttributeError, TypeError):
-                    pass
+            _trivially_async = _never_suspends(meta.get("_original_fn") or meta.get("handler"))
 
             # Super-fast path: no compiled response validation → inline dict/list serialization
             # directly into the executor. Eliminates 2 async function call overheads
@@ -3175,6 +3251,21 @@ class BoltAPI:
                 for upload in upload_files:
                     with suppress(Exception):
                         upload.close_sync()
+
+    async def _serialize_on_orm_pool(self, result: QuerySet, meta: dict[str, Any], request: dict[str, Any]) -> Response:
+        """Load the rows of a QuerySet from a sync executor on the ORM pool, then serialize them.
+
+        Rust calls this on the worker loop when a sync executor returns it. Errors
+        become responses, as in ``_dispatch``.
+        """
+        try:
+            return await run_in_orm_executor(serialize_response_sync, result, meta)
+        except HTTPException as he:
+            return self._handle_http_exception(he)
+        except Exception as e:
+            if self._logging_middleware:
+                self._logging_middleware.log_exception(request, e, exc_info=True)
+            return self._handle_generic_exception(e, request=request)
 
     def _register_openapi_routes(self, *, middleware: list[Any] | None = None) -> None:
         """Register OpenAPI documentation routes.

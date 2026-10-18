@@ -260,8 +260,9 @@ def compile_binder(fn: Callable, http_method: str, path: str) -> HandlerMetadata
     # AST-detected request.body/query/headers/cookies usage when needed.
     meta["needs_body"] = any(f.source in ("body", "form", "file") for f in field_definitions)
     meta["needs_query"] = any(f.source == "query" for f in field_definitions)
-    # Note: Form/File parsing depends on Content-Type header, so needs_headers must include form handlers
-    meta["needs_headers"] = any(f.source == "header" for f in field_definitions) or needs_form_parsing
+    # Rust reads the Content-Type of a form request from its own header map, so a
+    # form route needs no Python headers dict for it.
+    meta["needs_headers"] = any(f.source == "header" for f in field_definitions)
     meta["needs_cookies"] = any(f.source == "cookie" for f in field_definitions)
     meta["needs_path_params"] = any(f.source == "path" for f in field_definitions)
 

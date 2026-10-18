@@ -16,9 +16,9 @@ from typing import Annotated, Any
 
 import pytest
 
-from django_bolt import BoltAPI, ViewSet, action
+from django_bolt import BoltAPI, Request, ViewSet, action
 from django_bolt.analysis import analyze_handler
-from django_bolt.params import Depends
+from django_bolt.params import Depends, Form
 from django_bolt.testing import TestClient
 
 from .test_models import Article
@@ -327,3 +327,44 @@ def test_the_analysis_fails_for_a_class_whose_init_has_no_source():
 
     assert analysis.analysis_failed is True
     assert analysis.failure_reason.startswith("Could not get source:")
+
+
+def test_a_form_route_parses_no_headers_for_python():
+    """Rust reads the Content-Type of a form from its own map, so Python needs no headers dict."""
+    api = BoltAPI()
+
+    @api.post("/form")
+    def form(name: Annotated[str, Form()]):
+        return {"name": name}
+
+    assert _request_parts(api, "/form") == ("body",)
+
+
+def form_name(name: Annotated[str, Form()]) -> str:
+    return name
+
+
+def test_a_form_dependency_parses_no_headers_for_python():
+    api = BoltAPI()
+
+    @api.post("/form")
+    def form(name: Annotated[str, Depends(form_name)]):
+        return {"name": name}
+
+    assert _request_parts(api, "/form") == ("body",)
+
+
+def test_a_form_handler_that_reads_a_header_gets_it():
+    api = BoltAPI()
+
+    def request_id(request):
+        return request.headers.get("x-id")
+
+    @api.post("/form")
+    def form(request: Request, name: Annotated[str, Form()]):
+        return {"name": name, "id": request_id(request)}
+
+    with TestClient(api) as client:
+        response = client.post("/form", data={"name": "bolt"}, headers={"x-id": "7"})
+
+    assert response.json() == {"name": "bolt", "id": "7"}

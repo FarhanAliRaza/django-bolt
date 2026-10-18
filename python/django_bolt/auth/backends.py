@@ -187,9 +187,10 @@ class JWTAuthentication(BaseAuthentication):
             discovery document supplies ``issuer``, ``jwks_uri``, and the
             signing algorithm allowlist. Requires ``audience``.
         jwks_refresh_interval: Seconds between runtime refresh attempts for a
-            remote JWKS (default: 300). An unknown ``kid`` refreshes at once,
-            then at most one time in 30 seconds. Failed refreshes retain
-            the last known-good keys.
+            remote JWKS (default: 300). The refresh runs on a background
+            thread, and requests use the cached keys. An unknown ``kid``
+            refreshes at once, then at most one time in 30 seconds. Failed
+            refreshes retain the last known-good keys.
     """
 
     # Class-level cached User model - resolved once on first use

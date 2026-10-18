@@ -156,8 +156,15 @@ pub struct RefreshingJwks {
     refresh: Py<PyAny>,
     refresh_interval: Duration,
     last_refresh: Mutex<Instant>,
+    /// The last fetch that a token with an unknown kid started.
+    last_unknown_kid_fetch: Mutex<Option<Instant>>,
     refreshing: Mutex<()>,
 }
+
+/// After a fetch for an unknown kid, other unknown kids wait this long.
+/// A token with a made-up kid needs no valid signature to get here, so
+/// without a wait each such request fetched the JWKS from the provider.
+const UNKNOWN_KID_FETCH_COOLDOWN: Duration = Duration::from_secs(30);
 
 impl std::fmt::Debug for RefreshingJwks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -195,6 +202,7 @@ impl RefreshingJwks {
             refresh,
             refresh_interval,
             last_refresh: Mutex::new(Instant::now()),
+            last_unknown_kid_fetch: Mutex::new(None),
             refreshing: Mutex::new(()),
         }
     }
@@ -214,22 +222,34 @@ impl RefreshingJwks {
         if cached.is_some() && !due {
             return cached;
         }
-
         // try_lock provides single-flight refresh: other workers immediately
         // continue with cached keys instead of piling onto the provider.
-        if let Some(_guard) = self.refreshing.try_lock() {
-            let result = Python::attach(|py| {
-                self.refresh
-                    .call0(py)
-                    .ok()
-                    .and_then(|value| value.extract::<Option<String>>(py).ok())
-                    .flatten()
-            });
-            *self.last_refresh.lock() = Instant::now();
-            if let Some(document) = result {
-                if let Ok(JwtKeySource::Jwks(keys)) = build_jwks_key_source(&document) {
-                    *self.keys.write() = keys;
-                }
+        let Some(_guard) = self.refreshing.try_lock() else {
+            return cached;
+        };
+        if cached.is_none() {
+            // The first unknown kid fetches at once, for a key rotation.
+            // Later unknown kids fetch again only after the cooldown, also
+            // when the interval ends. A known kid starts the periodic refresh.
+            // The cooldown starts only when this request fetches.
+            let mut last_fetch = self.last_unknown_kid_fetch.lock();
+            if last_fetch.is_some_and(|at| at.elapsed() < UNKNOWN_KID_FETCH_COOLDOWN) {
+                return None;
+            }
+            *last_fetch = Some(Instant::now());
+        }
+
+        let result = Python::attach(|py| {
+            self.refresh
+                .call0(py)
+                .ok()
+                .and_then(|value| value.extract::<Option<String>>(py).ok())
+                .flatten()
+        });
+        *self.last_refresh.lock() = Instant::now();
+        if let Some(document) = result {
+            if let Ok(JwtKeySource::Jwks(keys)) = build_jwks_key_source(&document) {
+                *self.keys.write() = keys;
             }
         }
         self.cached(kid).or(cached)
@@ -1532,11 +1552,18 @@ mod tests {
         kids: &[&str],
         refresh_interval: Duration,
     ) -> (RefreshingJwks, Bound<'py, PyAny>) {
+        // from_code reuses a module of the same name, and tests run on
+        // parallel threads. Each call gets its own module, so its own calls.
+        static MODULES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let name = format!(
+            "refreshing_jwks_{}",
+            MODULES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
         let module = PyModule::from_code(
             py,
             c"calls = []\ndef refresh():\n    calls.append(1)\n",
-            c"refreshing_jwks.py",
-            c"refreshing_jwks",
+            &std::ffi::CString::new(format!("{name}.py")).unwrap(),
+            &std::ffi::CString::new(name).unwrap(),
         )
         .unwrap();
         let keys = kids
@@ -1574,6 +1601,59 @@ mod tests {
             // The fetch gives no new document, so the known key stays.
             assert!(due.select(Some("a")).is_some());
             assert_eq!(calls.len().unwrap(), 1);
+        });
+    }
+
+    #[test]
+    fn an_unknown_kid_fetches_at_once_and_then_waits_for_the_cooldown() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (jwks, calls) = refreshing_jwks(py, &["a"], Duration::from_secs(3600));
+            // A key rotation: the first token with a new kid fetches the JWKS at once.
+            assert!(jwks.select(Some("new")).is_none());
+            assert_eq!(calls.len().unwrap(), 1);
+            // A flood of made-up kids does not fetch again within the cooldown.
+            for kid in ["x", "y", "new"] {
+                assert!(jwks.select(Some(kid)).is_none());
+            }
+            assert!(jwks.select(None).is_some());
+            assert_eq!(calls.len().unwrap(), 1);
+            // A known kid still verifies.
+            assert!(jwks.select(Some("a")).is_some());
+        });
+    }
+
+    #[test]
+    fn an_unknown_kid_that_meets_a_running_fetch_does_not_start_the_cooldown() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (jwks, calls) = refreshing_jwks(py, &["a"], Duration::from_secs(3600));
+            // Another worker fetches. This request does not wait for it.
+            let running = jwks.refreshing.lock();
+            assert!(jwks.select(Some("new")).is_none());
+            drop(running);
+            assert_eq!(calls.len().unwrap(), 0);
+            // The next unknown kid fetches at once.
+            assert!(jwks.select(Some("new")).is_none());
+            assert_eq!(calls.len().unwrap(), 1);
+        });
+    }
+
+    #[test]
+    fn an_unknown_kid_waits_for_the_cooldown_also_when_the_interval_ends() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (jwks, calls) = refreshing_jwks(py, &["a"], Duration::ZERO);
+            assert!(jwks.select(Some("new")).is_none());
+            assert_eq!(calls.len().unwrap(), 1);
+            // The interval ends at each request, but made-up kids still wait.
+            for kid in ["x", "y", "new"] {
+                assert!(jwks.select(Some(kid)).is_none());
+            }
+            assert_eq!(calls.len().unwrap(), 1);
+            // A known kid starts the periodic refresh.
+            assert!(jwks.select(Some("a")).is_some());
+            assert_eq!(calls.len().unwrap(), 2);
         });
     }
 

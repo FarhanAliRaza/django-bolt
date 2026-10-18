@@ -947,10 +947,17 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
                     return responses::error_403_denial(denial.as_deref());
                 }
             };
-            let requires_csrf = ctx.as_ref().is_some_and(|auth| auth.cookie_csrf);
+            // A safe method passes the check, so it needs no connection info.
+            let requires_csrf = ctx.as_ref().is_some_and(|auth| auth.cookie_csrf)
+                && !bolt_core::validation::is_safe_method(method);
             if requires_csrf {
-                let scheme = req.connection_info().scheme().to_owned();
-                if bolt_core::validation::cookie_csrf_blocks(method, headers_map, true, &scheme) {
+                let info = req.connection_info();
+                if bolt_core::validation::cookie_csrf_blocks(
+                    method,
+                    headers_map,
+                    true,
+                    info.scheme(),
+                ) {
                     return responses::error_403();
                 }
             }

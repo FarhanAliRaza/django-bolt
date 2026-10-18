@@ -62,7 +62,7 @@ pub enum AuthGuardResult {
 /// Whether an HTTP method is "safe" (RFC 9110 §9.2.1) — read-only and thus
 /// exempt from CSRF checks.
 #[inline(always)]
-fn is_safe_method(method: &str) -> bool {
+pub fn is_safe_method(method: &str) -> bool {
     matches!(method, "GET" | "HEAD" | "OPTIONS" | "TRACE")
 }
 

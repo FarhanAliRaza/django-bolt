@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use bolt_core::form_parsing::parse_urlencoded;
+use bolt_core::form_parsing::{parse_urlencoded, DEFAULT_MAX_FIELDS};
 use bolt_core::type_coercion::DEFAULT_MAX_PARAM_LENGTH;
 use libfuzzer_sys::fuzz_target;
 
@@ -13,5 +13,10 @@ fuzz_target!(|body: &[u8]| {
         .zip(1u8..)
         .map(|(name, type_hint)| (name.to_string(), type_hint))
         .collect();
-    let _ = parse_urlencoded(body, &type_hints, DEFAULT_MAX_PARAM_LENGTH);
+    let _ = parse_urlencoded(
+        body,
+        &type_hints,
+        DEFAULT_MAX_PARAM_LENGTH,
+        DEFAULT_MAX_FIELDS,
+    );
 });

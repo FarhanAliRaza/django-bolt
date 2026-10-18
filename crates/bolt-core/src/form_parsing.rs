@@ -4,9 +4,15 @@
 //! eliminating Python GIL overhead for form-heavy endpoints.
 
 use actix_multipart::Multipart;
-use futures_util::StreamExt;
+use actix_web::error::PayloadError;
+use actix_web::web::Bytes;
+use futures_util::{Stream, StreamExt};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::Write;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::task::{Context, Poll};
 use tempfile::NamedTempFile;
 
 use crate::type_coercion::{coerce_param, CoerceError, CoercedValue, TYPE_STRING};
@@ -16,6 +22,10 @@ pub const DEFAULT_MEMORY_LIMIT: usize = 1024 * 1024;
 
 /// Maximum number of multipart parts allowed
 pub const DEFAULT_MAX_PARTS: usize = 100;
+
+/// Maximum number of fields in a URL-encoded form body. Django has the same
+/// default for `DATA_UPLOAD_MAX_NUMBER_FIELDS`.
+pub const DEFAULT_MAX_FIELDS: usize = 1000;
 
 /// `ValidationError::error_type` value used when the aggregate payload exceeds
 /// the configured limit. Callers (handler/test dispatch) match on this to map
@@ -30,6 +40,54 @@ fn payload_too_large_error(max_total_size: usize) -> ValidationError {
         loc: vec!["body".to_string()],
         msg: format!("Payload exceeds maximum size of {} bytes", max_total_size),
         ctx: HashMap::new(),
+    }
+}
+
+/// A request body stream that fails when its bytes pass a limit.
+///
+/// actix-multipart buffers a part header, and the text before the first
+/// boundary, until they end. It has no limit for them. Thus a chunked body
+/// with no Content-Length and a header that never ends filled the memory.
+/// The aggregate check of `parse_multipart` counts field bytes only, so it
+/// did not stop such a body. This stream counts each byte of the body.
+pub struct LimitedPayload<S> {
+    inner: S,
+    remaining: usize,
+    exceeded: Rc<Cell<bool>>,
+}
+
+impl<S> LimitedPayload<S> {
+    /// Wrap `inner`. The returned flag is true after the body passes `limit`.
+    pub fn new(inner: S, limit: usize) -> (Self, Rc<Cell<bool>>) {
+        let exceeded = Rc::new(Cell::new(false));
+        let stream = Self {
+            inner,
+            remaining: limit,
+            exceeded: Rc::clone(&exceeded),
+        };
+        (stream, exceeded)
+    }
+}
+
+impl<S> Stream for LimitedPayload<S>
+where
+    S: Stream<Item = Result<Bytes, PayloadError>> + Unpin,
+{
+    type Item = Result<Bytes, PayloadError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(chunk))) => {
+                if chunk.len() > this.remaining {
+                    this.exceeded.set(true);
+                    return Poll::Ready(Some(Err(PayloadError::Overflow)));
+                }
+                this.remaining -= chunk.len();
+                Poll::Ready(Some(Ok(chunk)))
+            }
+            other => other,
+        }
     }
 }
 
@@ -218,7 +276,8 @@ pub struct FormParseResult {
 /// `Vec` for the single-occurrence case.
 ///
 /// Errors:
-/// - Returns a `ValidationError` with `error_type = "parse_error"` if the body cannot be parsed.
+/// - Returns a `ValidationError` with `error_type = "too_many_fields"` when the body has more
+///   than `max_fields` fields. The parser stops at that field, so the rest is not decoded.
 /// - Returns a `ValidationError` produced by `ValidationError::type_coercion_error` if coercion
 ///   of any field value fails.
 ///
@@ -226,7 +285,7 @@ pub struct FormParseResult {
 ///
 /// ```ignore
 /// use std::collections::HashMap;
-/// let result = parse_urlencoded(b"name=alice&age=30", &HashMap::new(), 8192).unwrap();
+/// let result = parse_urlencoded(b"name=alice&age=30", &HashMap::new(), 8192, 1000).unwrap();
 /// assert!(matches!(result.get("name").unwrap(), FormValue::Single(_)));
 /// assert!(matches!(result.get("age").unwrap(), FormValue::Single(_)));
 /// ```
@@ -234,24 +293,25 @@ pub fn parse_urlencoded(
     body: &[u8],
     type_hints: &HashMap<String, u8>,
     max_param_length: usize,
+    max_fields: usize,
 ) -> Result<HashMap<String, FormValue>, ValidationError> {
     let mut result: HashMap<String, FormValue> = HashMap::new();
 
-    let parsed: Vec<(String, String)> =
-        serde_urlencoded::from_bytes(body).map_err(|e| ValidationError {
-            error_type: "parse_error".to_string(),
-            loc: vec!["body".to_string()],
-            msg: format!("Failed to parse form data: {}", e),
-            ctx: HashMap::new(),
-        })?;
-
-    for (key, value) in parsed {
-        let type_hint = type_hints.get(&key).copied().unwrap_or(TYPE_STRING);
+    for (index, (key, value)) in form_urlencoded::parse(body).enumerate() {
+        if index >= max_fields {
+            return Err(ValidationError {
+                error_type: "too_many_fields".to_string(),
+                loc: vec!["body".to_string()],
+                msg: format!("Too many form fields (max {})", max_fields),
+                ctx: HashMap::new(),
+            });
+        }
+        let type_hint = type_hints.get(key.as_ref()).copied().unwrap_or(TYPE_STRING);
         let coerced = coerce_param(&value, type_hint, max_param_length).map_err(|e| {
             ValidationError::type_coercion_error(&key, type_hint_name(type_hint), &e.to_string())
         })?;
 
-        match result.entry(key) {
+        match result.entry(key.into_owned()) {
             std::collections::hash_map::Entry::Vacant(e) => {
                 e.insert(FormValue::Single(coerced));
             }
@@ -658,6 +718,29 @@ mod tests {
     }
 
     #[test]
+    fn a_urlencoded_body_accepts_max_fields_and_rejects_one_more() {
+        let type_hints = HashMap::new();
+        let parse = |body: &[u8]| parse_urlencoded(body, &type_hints, 8, 2);
+
+        assert_eq!(parse(b"a=1&a=2").unwrap().len(), 1);
+        // A repeated key counts once for each field. Empty segments are not fields.
+        assert!(parse(b"a=1&&b=2&").is_ok());
+        let error = match parse(b"a=1&a=2&a=3") {
+            Ok(_) => panic!("a third field must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.error_type, "too_many_fields");
+        assert_eq!(error.msg, "Too many form fields (max 2)");
+        // The parser stops at the extra field, before it checks its value.
+        assert_eq!(
+            parse(b"a=1&b=2&c=too-long-value")
+                .err()
+                .map(|e| e.error_type),
+            Some("too_many_fields".to_string())
+        );
+    }
+
+    #[test]
     fn test_parse_urlencoded() {
         let body = Bytes::from("name=John&age=30&active=true");
         let mut type_hints = HashMap::new();
@@ -669,6 +752,7 @@ mod tests {
             &body,
             &type_hints,
             crate::type_coercion::DEFAULT_MAX_PARAM_LENGTH,
+            DEFAULT_MAX_FIELDS,
         )
         .unwrap();
 
@@ -695,7 +779,7 @@ mod tests {
     /// let body = Bytes::from("tag=a&tag=b&tag=c&name=John");
     /// let type_hints = HashMap::new();
     ///
-    /// let result = parse_urlencoded(&body, &type_hints, 8192).unwrap();
+    /// let result = parse_urlencoded(&body, &type_hints, 8192, 1000).unwrap();
     ///
     /// match result.get("tag") {
     ///     Some(FormValue::Multi(v)) => {
@@ -723,6 +807,7 @@ mod tests {
             &body,
             &type_hints,
             crate::type_coercion::DEFAULT_MAX_PARAM_LENGTH,
+            DEFAULT_MAX_FIELDS,
         )
         .unwrap();
 
@@ -1140,11 +1225,76 @@ mod tests {
         ] {
             // The value is over max_param_length, so every type rejects it.
             let type_hints = HashMap::from([("f".to_string(), type_hint)]);
-            let error = match parse_urlencoded(b"f=xy", &type_hints, 1) {
+            let error = match parse_urlencoded(b"f=xy", &type_hints, 1, DEFAULT_MAX_FIELDS) {
                 Ok(_) => panic!("a value over max_param_length must be rejected"),
                 Err(error) => error,
             };
             assert_eq!(error.ctx["expected_type"], serde_json::json!(name));
         }
+    }
+
+    #[test]
+    fn a_limited_payload_stops_a_part_header_that_never_ends() {
+        use actix_web::http::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+        use std::collections::VecDeque;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let mut chunks: VecDeque<Bytes> = VecDeque::new();
+        chunks.push_back(Bytes::from(format!(
+            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"value\"\r\nX-Pad: "
+        )));
+        for _ in 0..200 {
+            chunks.push_back(Bytes::from(vec![b'a'; 1000]));
+        }
+        let total_chunks = chunks.len();
+        let consumed = Arc::new(AtomicUsize::new(0));
+        let stream = CountingStream {
+            chunks,
+            consumed: Arc::clone(&consumed),
+            yield_pending: false,
+        };
+        let (limited, exceeded) = LimitedPayload::new(stream, 4096);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_str(&format!("multipart/form-data; boundary={BOUNDARY}")).unwrap(),
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = runtime.block_on(parse_multipart(
+            Multipart::new(&headers, limited),
+            &HashMap::new(),
+            &HashMap::new(),
+            1024,
+            DEFAULT_MEMORY_LIMIT,
+            DEFAULT_MAX_PARTS,
+            1024,
+            usize::MAX,
+        ));
+
+        assert!(result.is_err());
+        assert!(exceeded.get());
+        // The header and five chunks of 1000 bytes pass 4096 bytes.
+        let consumed = consumed.load(Ordering::SeqCst);
+        assert!(consumed <= 6, "read {consumed} of {total_chunks} chunks");
+    }
+
+    #[test]
+    fn a_limited_payload_passes_a_body_of_the_limit() {
+        let chunks = vec![
+            Ok::<_, PayloadError>(Bytes::from_static(b"abc")),
+            Ok(Bytes::from_static(b"de")),
+        ];
+        let (limited, exceeded) = LimitedPayload::new(futures_util::stream::iter(chunks), 5);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let items: Vec<_> = runtime.block_on(limited.collect());
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(Result::is_ok));
+        assert!(!exceeded.get());
     }
 }

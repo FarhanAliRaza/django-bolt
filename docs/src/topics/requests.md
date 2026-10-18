@@ -410,6 +410,8 @@ async def login(
     return {"username": username}
 ```
 
+A URL-encoded body can have 1000 fields or fewer. Django has the same default limit, `DATA_UPLOAD_MAX_NUMBER_FIELDS`. A repeated key counts once for each field. A body with more fields gets 422 with the error type `too_many_fields`. A multipart body can have 100 parts or fewer.
+
 ### Multipart forms
 
 ```python

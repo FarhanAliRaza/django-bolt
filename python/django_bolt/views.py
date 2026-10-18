@@ -35,6 +35,19 @@ def _layer(value: bool | None, outer: bool | None) -> bool | None:
     return outer if value is None else value
 
 
+def _copy_route_middleware(source: Callable, target: Callable) -> None:
+    """Copy the route middleware marks of a view method to the handler that wraps it.
+
+    ``@rate_limit``, ``@middleware`` and ``@skip_middleware`` mark the method.
+    Bolt registers the wrapper, so the wrapper needs the same marks. The copies
+    are new objects, because registration writes the normalized list back.
+    """
+    if hasattr(source, "__bolt_middleware__"):
+        target.__bolt_middleware__ = list(source.__bolt_middleware__)
+    if hasattr(source, "__bolt_skip_middleware__"):
+        target.__bolt_skip_middleware__ = set(source.__bolt_skip_middleware__)
+
+
 class APIView:
     """
     Base class for class-based views in Django-Bolt.
@@ -188,6 +201,8 @@ class APIView:
 
         if getattr(method_handler, "validate_response", None) is not None:
             view_handler.validate_response = method_handler.validate_response
+
+        _copy_route_middleware(method_handler, view_handler)
 
         # Copy pagination attributes from method handler (for @paginate decorator)
         if hasattr(method_handler, "__paginated__"):

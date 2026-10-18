@@ -1988,7 +1988,6 @@ class BoltAPI:
             meta["needs_path_params"] = True
         if any(f.source in ("form", "file") for f in dep_fields):
             meta["needs_form_parsing"] = True
-            meta["needs_headers"] = True
         if any(f.source == "file" or field_has_upload_file(f) for f in dep_fields):
             meta["has_file_uploads"] = True
         for needs_key in ("needs_body", "needs_query", "needs_headers", "needs_cookies"):

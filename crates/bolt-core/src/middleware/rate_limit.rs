@@ -177,30 +177,37 @@ pub fn check_rate_limit(
     }
     .unwrap_or(KeySource::Unknown);
 
-    // SECURITY: Check if we've exceeded max limiters (prevent memory exhaustion)
-    let current_count = limiters.count.load(Ordering::Relaxed);
-    if current_count >= MAX_LIMITERS {
-        // Trigger cleanup of old limiters (simple LRU-style)
-        limiters.cleanup_old_limiters();
-    }
+    // A known key takes a shard read lock, so requests of one client on many
+    // workers do not wait for each other. The shard lock ends before the log
+    // line of a rejection.
+    let key = (handler_id, rps, burst, source.bucket());
+    let outcome = match limiters.limiters.get(&key) {
+        Some(limiter) => limiter.check(),
+        None => {
+            // SECURITY: Check if we've exceeded max limiters (prevent memory exhaustion)
+            if limiters.count.load(Ordering::Relaxed) >= MAX_LIMITERS {
+                // Trigger cleanup of old limiters (simple LRU-style)
+                limiters.cleanup_old_limiters();
+            }
+            limiters
+                .limiters
+                .entry(key)
+                .or_insert_with(|| {
+                    // Increment counter
+                    limiters.count.fetch_add(1, Ordering::Relaxed);
 
-    // Get or create rate limiter for this handler + key combination
-    let limiter = limiters
-        .limiters
-        .entry((handler_id, rps, burst, source.bucket()))
-        .or_insert_with(|| {
-            // Increment counter
-            limiters.count.fetch_add(1, Ordering::Relaxed);
-
-            // Use NonZero constructors properly
-            let rps_nonzero = std::num::NonZeroU32::new(rps.max(1)).unwrap();
-            let burst_nonzero = std::num::NonZeroU32::new(burst.max(1)).unwrap();
-            let quota = Quota::per_second(rps_nonzero).allow_burst(burst_nonzero);
-            Arc::new(RateLimiter::direct(quota))
-        });
+                    // Use NonZero constructors properly
+                    let rps_nonzero = std::num::NonZeroU32::new(rps.max(1)).unwrap();
+                    let burst_nonzero = std::num::NonZeroU32::new(burst.max(1)).unwrap();
+                    let quota = Quota::per_second(rps_nonzero).allow_burst(burst_nonzero);
+                    Arc::new(RateLimiter::direct(quota))
+                })
+                .check()
+        }
+    };
 
     // Check rate limit
-    match limiter.check() {
+    match outcome {
         Ok(_) => None, // Request allowed
         Err(not_until) => {
             // Calculate retry after in seconds

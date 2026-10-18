@@ -283,17 +283,28 @@ def release_pooled_connections() -> None:
     """Give the calling thread's pooled connections back to their pools.
 
     A connection inside an open ``atomic`` block stays: the block owns it.
+    A failed return does not keep the connections of the other databases. The
+    first error goes up after the loop, and Bolt logs each later one.
     """
     kept = False
+    failed = None
     for alias in _pooled_aliases:
         conn = connections[alias]
         if conn.connection is None or getattr(conn, _SHARED_TEST_CONNECTION_ATTR, False):
             continue
         if conn.in_atomic_block:
             kept = True
-        else:
+            continue
+        try:
             conn.close()
+        except Exception as exc:
+            if failed is None:
+                failed = exc
+            else:
+                logger.exception("Could not give the pooled connection of the database %r back", alias)
     _thread_state.holds_pooled = kept
+    if failed is not None:
+        raise failed
 
 
 def _drop_broken_connections_after_error() -> None:

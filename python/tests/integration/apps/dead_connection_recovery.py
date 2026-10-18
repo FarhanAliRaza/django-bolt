@@ -37,11 +37,29 @@ returns how many connections they opened or checked out of a pool.
 it makes the return of the connection to its pool fail. With ``fail``, the
 call raises too. With ``kill``, the call ends its own database session, so the
 connection is unusable. The response names the result or the error of the call.
+
+``/pool-stats`` returns the statistics of the connection pool of ``default``.
+
+``/lose-the-pool-on-an-orm-thread`` queries on an ORM pool thread and makes the
+return of its connection fail. The worker gives the connection back when its
+queue is empty, so the return fails on the idle path of the worker.
+
+``/stream-and-lose-the-pool`` is ``/stream``, but the return of the connection
+of the streaming thread fails when the body ends.
+
+``/autocommit-off-then-fail`` runs a call on the ORM pool that turns autocommit
+off, creates a temporary table and raises. Then it returns the state of the
+connection that the next call gets.
+
+``lane_api`` is a second API, under ``/lane``, with a Django middleware stack.
+Its sync route ``/lane/query`` runs complete on a request lane. A test project
+lists both APIs in ``BOLT_API``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import threading
 
@@ -50,10 +68,12 @@ from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.db import connection, connections
 from django.db.backends.signals import connection_created
+from django.utils.deprecation import MiddlewareMixin
 
 from django_bolt import BoltAPI
 from django_bolt.auth import IsAuthenticated, JWTAuthentication
 from django_bolt.concurrency import run_in_orm_executor, run_orm_blocking
+from django_bolt.middleware import DjangoMiddlewareStack
 from django_bolt.responses import StreamingResponse
 
 SECRET = "dead-connection-recovery-secret-key-32-bytes"
@@ -230,3 +250,85 @@ async def lose_the_pool(fail: bool = False, kill: bool = False):
     except Exception as exc:
         result = type(exc).__name__
     return {"result": result}
+
+
+@api.get("/pool-stats")
+async def pool_stats():
+    """The statistics of the connection pool of ``default``: ``pool_size``, ``pool_available`` and so on."""
+    return connection.pool.get_stats()
+
+
+def _lose_the_pool_on_this_thread() -> str:
+    _select_one()
+    # See _select_then_lose_the_pool: the return of this connection to its pool fails.
+    connection.connection._pool = None
+    return "ok"
+
+
+@api.get("/lose-the-pool-on-an-orm-thread")
+async def lose_the_pool_on_an_orm_thread():
+    # The worker gives its connection back when its queue is empty, so the
+    # failed return happens on the idle path of the worker, not in this call.
+    return {"result": await run_in_orm_executor(_lose_the_pool_on_this_thread)}
+
+
+@api.get("/stream-and-lose-the-pool")
+def stream_and_lose_the_pool(rows: int):
+    def body():
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT generate_series(1, %s)", [rows])
+            for (value,) in cursor.fetchall():
+                yield f"{value}\n"
+        connection.connection._pool = None
+
+    return StreamingResponse(body(), media_type="text/plain")
+
+
+_backend_pids: list[int] = []
+
+
+def _autocommit_off_then_fail() -> None:
+    connection.set_autocommit(False)
+    with connection.cursor() as cursor:
+        cursor.execute("CREATE TEMP TABLE left_open (x int)")
+    _backend_pids.append(connection.connection.info.backend_pid)
+    raise ValueError("the call failed with autocommit off")
+
+
+def _connection_state() -> dict[str, object]:
+    state = {
+        "autocommit": connection.get_autocommit(),
+        "transaction_status": connection.connection.info.transaction_status.name,
+        "same_backend": connection.connection.info.backend_pid == _backend_pids[-1],
+    }
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT to_regclass('pg_temp.left_open') IS NULL")
+        state["rolled_back"] = cursor.fetchone()[0]
+    return state
+
+
+@api.get("/autocommit-off-then-fail")
+async def autocommit_off_then_fail():
+    with contextlib.suppress(ValueError):
+        await run_in_orm_executor(_autocommit_off_then_fail)
+    return await run_in_orm_executor(_connection_state)
+
+
+class _QueryMiddleware(MiddlewareMixin):
+    def process_request(self, request):
+        _select_one()
+
+
+# A sync route behind Django middleware runs complete on a request lane. The
+# lane gives its pooled connection back at the end of its request.
+lane_api = BoltAPI(prefix="/lane", middleware=[DjangoMiddlewareStack([_QueryMiddleware])])
+
+
+@lane_api.get("/health")
+async def lane_health():
+    return {"status": "ok"}
+
+
+@lane_api.get("/query")
+def lane_query():
+    return {"result": _select_one(), "thread": threading.current_thread().name}

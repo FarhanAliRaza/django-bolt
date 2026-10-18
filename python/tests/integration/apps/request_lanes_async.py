@@ -18,6 +18,10 @@ on the lane. It makes the return of its pooled connection fail.
 ``second``. A query on ``default`` fails, and the handler catches the error.
 Then the close of the ``default`` connection fails at the end of the request.
 ``/pool-stats`` returns the statistics of the pool of ``alias``.
+
+``/lose-the-pool-of-one-database-on-a-sync-lane`` needs two more pooled
+databases, ``a`` and ``b``. It queries both on the lane, then makes the return
+of the connection of ``alias`` fail.
 """
 
 from __future__ import annotations
@@ -141,3 +145,12 @@ def lose_the_pool_after_an_error_on_a_sync_lane():
 @api.get("/pool-stats")
 async def pool_stats(alias: str):
     return connections[alias].pool.get_stats()
+
+
+@api.get("/lose-the-pool-of-one-database-on-a-sync-lane")
+def lose_the_pool_of_one_database_on_a_sync_lane(alias: str):
+    for name in ("a", "b"):
+        with connections[name].cursor() as cursor:
+            cursor.execute("SELECT 1")
+    connections[alias].connection._pool = None
+    return {"result": "ok"}

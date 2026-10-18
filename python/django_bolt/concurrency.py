@@ -77,14 +77,20 @@ def _drop_broken_connections(*, before_call: bool = False) -> None:
 
     The check before a call (``before_call``) leaves the pooled aliases out.
     Django gives a pooled connection a maximum age of 0, so the check would give
-    it back before each call. After an error, the check includes them, so a dead
-    pooled connection drains its pool.
+    it back before each call. After an error, the check closes a pooled
+    connection only when it is unusable, so a dead pooled connection drains its
+    pool and a healthy one stays with its thread.
     """
     dead = []
     for conn in connections.all(initialized_only=True):
-        if conn.in_atomic_block or (before_call and conn.alias in _pooled_aliases):
+        if conn.in_atomic_block:
             continue
-        raw = _close_if_unusable_or_obsolete(conn)
+        if conn.alias in _pooled_aliases:
+            if before_call:
+                continue
+            raw = _close_if_unusable(conn)
+        else:
+            raw = _close_if_unusable_or_obsolete(conn)
         if raw is not None:
             dead.append((conn, raw))
     if dead:
@@ -104,6 +110,34 @@ def _close_if_unusable_or_obsolete(conn) -> object | None:
     conn.close_if_unusable_or_obsolete()
     # Django clears errors_occurred when the connection still answers.
     return raw if tested and conn.errors_occurred else None
+
+
+def _close_if_unusable(conn) -> object | None:
+    """``close_if_unusable_or_obsolete`` for a pooled connection, without its age check.
+
+    Django gives a pooled connection a maximum age of 0, so the age check gives
+    back each connection that it sees. After an error that is not a database
+    error, for example ``DoesNotExist`` in user code, the connection is healthy.
+    A lane keeps it until its request ends, with any session state on it.
+
+    Returns:
+        The driver connection that it closed because it does not answer, or None.
+    """
+    raw = conn.connection
+    if raw is None:
+        return None
+    conn.health_check_done = False
+    if conn.get_autocommit() != conn.settings_dict["AUTOCOMMIT"]:
+        conn.close()
+        return None
+    if not conn.errors_occurred:
+        return None
+    if conn.is_usable():
+        conn.errors_occurred = False
+        conn.health_check_done = True
+        return None
+    conn.close()
+    return raw
 
 
 # A database restart or failover kills every connection to that database at
@@ -249,17 +283,28 @@ def release_pooled_connections() -> None:
     """Give the calling thread's pooled connections back to their pools.
 
     A connection inside an open ``atomic`` block stays: the block owns it.
+    A failed return does not keep the connections of the other databases. The
+    first error goes up after the loop, and Bolt logs each later one.
     """
     kept = False
+    failed = None
     for alias in _pooled_aliases:
         conn = connections[alias]
         if conn.connection is None or getattr(conn, _SHARED_TEST_CONNECTION_ATTR, False):
             continue
         if conn.in_atomic_block:
             kept = True
-        else:
+            continue
+        try:
             conn.close()
+        except Exception as exc:
+            if failed is None:
+                failed = exc
+            else:
+                logger.exception("Could not give the pooled connection of the database %r back", alias)
     _thread_state.holds_pooled = kept
+    if failed is not None:
+        raise failed
 
 
 def _drop_broken_connections_after_error() -> None:
@@ -441,17 +486,28 @@ def close_lane_request() -> None:
 
     Bolt does not see a database error that user code handles, or one from a
     direct ``sync_to_async`` call. Django does this check on ``request_finished``.
+
+    A raise here would replace the result of a sync request on the lane, so
+    each step logs its error. For example, ``putconn`` can fail when a pooled
+    connection goes back to its pool.
     """
-    dead = []
-    for conn in connections.all(initialized_only=True):
-        if conn.errors_occurred and not conn.in_atomic_block:
-            raw = _close_if_unusable_or_obsolete(conn)
-            if raw is not None:
-                dead.append((conn, raw))
-    if dead:
-        _connections_died(dead)
+    try:
+        dead = []
+        for conn in connections.all(initialized_only=True):
+            if conn.errors_occurred and not conn.in_atomic_block:
+                raw = _close_if_unusable_or_obsolete(conn)
+                if raw is not None:
+                    dead.append((conn, raw))
+        if dead:
+            _connections_died(dead)
+    except Exception:
+        logger.exception("Could not close the unusable database connections of a lane after its request")
+    # A failed close above must not keep the other pooled connections on the lane.
     if _thread_state.holds_pooled:
-        release_pooled_connections()
+        try:
+            release_pooled_connections()
+        except Exception:
+            logger.exception("Could not give the pooled database connections of a lane back after its request")
 
 
 def _close_thread_connections() -> None:

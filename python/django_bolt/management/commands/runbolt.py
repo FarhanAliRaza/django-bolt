@@ -945,13 +945,10 @@ class Command(BaseCommand):
         # single-arg vectorcall instead of a 3-tuple of conversions.
         rust_routes = []
         for method, path, handler_id, handler in merged_api._routes:
-            # Ensure matchit path syntax
-            convert = getattr(merged_api, "_convert_path", None)
-            norm_path = convert(path) if callable(convert) else path
             rust_routes.append(
                 (
                     method,
-                    norm_path,
+                    path,
                     handler_id,
                     handler,
                     make_bound_dispatch(merged_api._dispatch, handler, handler_id),
@@ -972,12 +969,10 @@ class Command(BaseCommand):
         # Register WebSocket routes with Rust (including pre-compiled injectors)
         ws_routes = []
         for path, handler_id, handler in merged_api._websocket_routes:
-            convert = getattr(merged_api, "_convert_path", None)
-            norm_path = convert(path) if callable(convert) else path
             # Get pre-compiled injector from handler metadata (handler_id is already in the tuple)
             meta = merged_api._handler_meta.get(handler_id, {})
             injector = meta.get("injector")
-            ws_routes.append((norm_path, handler_id, handler, injector))
+            ws_routes.append((path, handler_id, handler, injector))
 
         if ws_routes:
             _core.register_websocket_routes(ws_routes)

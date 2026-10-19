@@ -41,6 +41,7 @@ async def echo_app(scope, receive, send):
             "type": "websocket.send",
             "text": json.dumps(
                 {
+                    "scheme": scope["scheme"],
                     "path": scope["path"],
                     "raw_path": scope["raw_path"].decode(),
                     "root_path": scope["root_path"],

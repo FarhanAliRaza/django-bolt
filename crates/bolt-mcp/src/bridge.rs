@@ -14,6 +14,7 @@ use pyo3::types::PyDict;
 
 use crate::{McpAuthExt, McpMount};
 use bolt_core::middleware::auth::AuthContext;
+use bolt_core::middleware::client_ip::resolve_scheme;
 use bolt_core::request_pipeline::extract_headers;
 use bolt_core::responses;
 use bolt_core::state::AppState;
@@ -96,8 +97,14 @@ pub async fn handle_mcp_request(
         match validate_auth_and_guards(&headers, &mount.auth_backends, &mount.guards) {
             AuthGuardResult::Allow(ctx) => {
                 if ctx.as_ref().is_some_and(|auth| auth.cookie_csrf) {
-                    let scheme = req.connection_info().scheme().to_owned();
-                    if cookie_csrf_blocks(&method, &headers, true, &scheme) {
+                    // Only a trusted proxy sets the scheme with `X-Forwarded-Proto`.
+                    let scheme = resolve_scheme(
+                        req.headers(),
+                        req.peer_addr().map(|address| address.ip()),
+                        req.app_config().secure(),
+                        &state.trusted_proxies,
+                    );
+                    if cookie_csrf_blocks(&method, &headers, true, scheme) {
                         return responses::error_403();
                     }
                 }

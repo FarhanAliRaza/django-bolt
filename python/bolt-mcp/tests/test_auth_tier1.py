@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from _helpers import initialize, mint_jwt, parse_rpc, post_rpc
+from _helpers import INITIALIZE_PARAMS, initialize, mcp_headers, mint_jwt, parse_rpc, post_rpc, rpc_body
 from bolt_mcp import MCP, mount_mcp
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
@@ -119,3 +119,35 @@ def test_a_session_default_is_dropped_on_a_mount():
             assert initialize(client)[0].status_code == 401
             bearer = f"Bearer {mint_jwt(SECRET, sub='7')}"
             assert initialize(client, authorization=bearer)[0].status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("trusted_proxies", "origin", "status"),
+    [
+        # A client that is not a declared proxy cannot choose the scheme.
+        # The connection is HTTP, so only an HTTP origin matches.
+        ([], "https://testserver", 403),
+        ([], "http://testserver", 200),
+        # A declared proxy can. The test client connects from 127.0.0.1.
+        (["127.0.0.1"], "https://testserver", 200),
+        (["127.0.0.1"], "http://testserver", 403),
+    ],
+)
+def test_cookie_csrf_takes_the_scheme_from_a_trusted_proxy_only(trusted_proxies, origin, status):
+    api = BoltAPI()
+    mount_mcp(
+        api,
+        MCP("cookie-server"),
+        auth=[JWTAuthentication(secret=SECRET, cookie="access_token")],
+        allowed_hosts=["testserver"],
+    )
+    headers = {
+        **mcp_headers(),
+        "Cookie": f"access_token={mint_jwt(SECRET)}",
+        "Host": "testserver",
+        "Origin": origin,
+        "X-Forwarded-Proto": "https",
+    }
+    with override_settings(BOLT_TRUSTED_PROXIES=trusted_proxies), TestClient(api) as client:
+        response = client.post("/mcp", content=rpc_body("initialize", INITIALIZE_PARAMS), headers=headers)
+    assert response.status_code == status

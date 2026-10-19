@@ -343,8 +343,11 @@ Rust after selecting the accepted credential. The browser-set
 `Sec-Fetch-Site` header
 is used when present; otherwise the origin of the `Origin` (or
 `Referer`) header — scheme and host — is compared against the request's
-effective scheme (honoring `X-Forwarded-Proto` behind a proxy) and
-`Host`. HTTP and HTTPS are different origins, so an
+effective scheme and `Host`. Bolt reads the scheme from `X-Forwarded-Proto`
+only when the peer is in
+[BOLT_TRUSTED_PROXIES](../ref/settings.md#bolt_trusted_proxies). Behind a
+proxy that ends TLS, add the proxy to that setting. HTTP and HTTPS are
+different origins, so an
 `Origin: http://example.com` never authorizes an HTTPS request to
 `example.com`. Requests that fail the check receive a `403 Forbidden`
 response.

@@ -373,7 +373,15 @@ fn build_scope(
     scope.set_item("method", req.method().as_str())?;
 
     let conn_info = req.connection_info();
-    scope.set_item("scheme", conn_info.scheme())?;
+    // Actix's `connection_info().scheme()` believes `X-Forwarded-Proto` from
+    // any peer. Django reads this value for `request.is_secure()`.
+    let scheme = client_ip::resolve_scheme(
+        req.headers(),
+        req.peer_addr().map(|address| address.ip()),
+        req.app_config().secure(),
+        trusted_proxies,
+    );
+    scope.set_item("scheme", scheme)?;
 
     let request_path = req.path();
     let subpath = mounted_subpath(request_path, &mount.prefix);
@@ -406,7 +414,7 @@ fn build_scope(
 
     scope.set_item("headers", headers)?;
 
-    let (server_host, server_port) = parse_host_port(conn_info.host(), conn_info.scheme());
+    let (server_host, server_port) = parse_host_port(conn_info.host(), scheme);
     scope.set_item("server", (server_host, server_port))?;
 
     // Same rule as `REMOTE_ADDR` on Bolt routes: forwarding headers name the

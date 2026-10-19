@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from django.http import QueryDict
+from django.test import override_settings
 
 from django_bolt import BoltAPI
 from django_bolt.testing import TestClient
@@ -61,6 +62,11 @@ def api():
         meta1 = request.META
         meta2 = request.META
         return {"cached": meta1 is meta2}
+
+    @api.get("/meta/scheme")
+    async def get_meta_scheme(request):
+        """Return the values that the request scheme sets."""
+        return {"server_port": request.META["SERVER_PORT"], "absolute_uri": request.build_absolute_uri()}
 
     @api.post("/meta/post")
     async def post_meta(request):
@@ -207,21 +213,32 @@ class TestRequestMETA:
         assert meta["SERVER_NAME"] == "example.com"
         assert meta["SERVER_PORT"] == "80"  # Default port when not specified
 
-    def test_meta_server_info_default_port_https(self, api):
-        """META defaults SERVER_PORT to 443 when scheme is HTTPS."""
-        with TestClient(api) as secure_client:
-            response = secure_client.get(
-                "/meta",
-                headers={
-                    "Host": "example.com",
-                    "X-Forwarded-Proto": "https",
-                },
+    @pytest.mark.parametrize(
+        ("trusted_proxies", "forwarded_proto", "scheme", "port"),
+        [
+            # A client that is not a declared proxy cannot choose the scheme.
+            ([], "https", "http", "80"),
+            # A declared proxy can. The test client connects from 127.0.0.1.
+            (["127.0.0.1"], "https", "https", "443"),
+            # The proxy closest to Bolt adds the rightmost value.
+            (["127.0.0.1"], "https, http", "http", "80"),
+            (["127.0.0.1"], "ftp", "http", "80"),
+        ],
+    )
+    def test_x_forwarded_proto_sets_the_scheme_only_from_a_trusted_proxy(
+        self, api, trusted_proxies, forwarded_proto, scheme, port
+    ):
+        """SERVER_PORT and build_absolute_uri() follow X-Forwarded-Proto only from BOLT_TRUSTED_PROXIES."""
+        with override_settings(BOLT_TRUSTED_PROXIES=trusted_proxies), TestClient(api) as client:
+            response = client.get(
+                "/meta/scheme",
+                headers={"Host": "example.com", "X-Forwarded-Proto": forwarded_proto},
             )
         assert response.status_code == 200
-        meta = response.json()
-
-        assert meta["SERVER_NAME"] == "example.com"
-        assert meta["SERVER_PORT"] == "443"
+        assert response.json() == {
+            "server_port": port,
+            "absolute_uri": f"{scheme}://example.com/meta/scheme",
+        }
 
     def test_meta_remote_addr(self, client):
         """META contains REMOTE_ADDR and REMOTE_HOST."""

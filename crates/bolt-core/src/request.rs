@@ -77,8 +77,10 @@ pub struct PyRequest {
     /// Connection info from Actix's connection_info() - handles proxies correctly
     /// Host (may include port): "example.com:8080" or "[::1]:8080"
     pub conn_host: String,
-    /// Scheme: "http" or "https" (from X-Forwarded-Proto or request)
-    pub conn_scheme: String,
+    /// Scheme: "http" or "https", from `client_ip::resolve_scheme`. Only a
+    /// trusted proxy sets it with `X-Forwarded-Proto`. Empty when headers were
+    /// not extracted.
+    pub conn_scheme: &'static str,
     /// Resolved client address. Formatted only when `META` is read.
     pub conn_remote_addr: Option<IpAddr>,
 }
@@ -314,7 +316,7 @@ impl PyRequest {
 
         // Server info from Actix's connection_info() - handles IPv6 and proxies correctly
         // conn_host may include port: "example.com:8080" or "[::1]:8080"
-        let (server_name, server_port) = parse_host_port(&self.conn_host, &self.conn_scheme);
+        let (server_name, server_port) = parse_host_port(&self.conn_host, self.conn_scheme);
         meta.set_item("SERVER_NAME", server_name)?;
         meta.set_item("SERVER_PORT", server_port.to_string())?;
         meta.set_item("SERVER_PROTOCOL", "HTTP/1.1")?;
@@ -427,27 +429,25 @@ impl PyRequest {
     ///     http://example.com/users?page=2
     ///
     /// This matches Django's HttpRequest.build_absolute_uri() method.
-    /// Uses Host header to determine the scheme and host.
+    /// Uses the Host header for the host and the resolved scheme for the scheme.
     #[pyo3(signature = (location=None))]
     fn build_absolute_uri(&self, py: Python<'_>, location: Option<&str>) -> String {
-        let (host, scheme) = match &self.headers {
-            Some(headers_py) => {
-                let headers_dict = headers_py.bind(py);
-                let h = headers_dict
+        let host = self
+            .headers
+            .as_ref()
+            .and_then(|headers_py| {
+                headers_py
+                    .bind(py)
                     .get_item("host")
                     .ok()
                     .flatten()
                     .and_then(|v| v.extract::<String>().ok())
-                    .unwrap_or_else(|| "localhost".to_string());
-                let s = headers_dict
-                    .get_item("x-forwarded-proto")
-                    .ok()
-                    .flatten()
-                    .and_then(|v| v.extract::<String>().ok())
-                    .unwrap_or_else(|| "http".to_string());
-                (h, s)
-            }
-            None => ("localhost".to_string(), "http".to_string()),
+            })
+            .unwrap_or_else(|| "localhost".to_string());
+        let scheme = if self.conn_scheme.is_empty() {
+            "http"
+        } else {
+            self.conn_scheme
         };
 
         match location {

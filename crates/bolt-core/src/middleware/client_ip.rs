@@ -1,9 +1,9 @@
-//! Client address resolution for rate limiting.
+//! Client address and scheme resolution behind proxies.
 //!
-//! A client sends `X-Forwarded-For` itself. Each proxy appends to it. The
-//! leftmost entry is therefore the value the client chose, not a fact about the
-//! connection. Bolt trusts a forwarding header only when a declared proxy sent
-//! it.
+//! A client sends `X-Forwarded-For` and `X-Forwarded-Proto` itself. Each proxy
+//! appends to `X-Forwarded-For`. The leftmost entry is therefore the value the
+//! client chose, not a fact about the connection. Bolt trusts a forwarding
+//! header only when a declared proxy sent it.
 //!
 //! `settings.BOLT_TRUSTED_PROXIES` declares those proxies as a CIDR list. The
 //! list is empty by default. With an empty list Bolt ignores every forwarding
@@ -249,6 +249,48 @@ pub fn resolve_from_headers(
         peer_addr,
         trusted_proxies,
     )
+}
+
+/// Resolve the request scheme, `"http"` or `"https"`.
+///
+/// The rules follow `resolve`:
+///
+/// 1. A peer outside `trusted_proxies` gets the scheme of the connection.
+///    `X-Forwarded-Proto` is client input, so ignore it.
+/// 2. A trusted peer sets the scheme with `X-Forwarded-Proto`. Bolt reads the
+///    rightmost value, because the proxy closest to Bolt adds that value.
+/// 3. A value that is not `http` or `https` gives the connection scheme.
+///
+/// `secure` is true for a TLS connection. A mounted Django app reads the
+/// result as the ASGI `scheme`, as from a WSGI or ASGI server. Django's
+/// `SECURE_PROXY_SSL_HEADER` still applies on top of it.
+#[inline]
+pub fn resolve_scheme(
+    headers: &HeaderMap,
+    peer_addr: Option<IpAddr>,
+    secure: bool,
+    trusted_proxies: &TrustedProxies,
+) -> &'static str {
+    let connection = if secure { "https" } else { "http" };
+    if trusted_proxies.is_empty() {
+        return connection;
+    }
+    match peer_addr {
+        Some(address) if trusted_proxies.contains(&normalize(address)) => {}
+        _ => return connection,
+    }
+
+    let forwarded = headers
+        .get_all("x-forwarded-proto")
+        .next_back()
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.rsplit(',').next())
+        .map(str::trim);
+    match forwarded {
+        Some(proto) if proto.eq_ignore_ascii_case("https") => "https",
+        Some(proto) if proto.eq_ignore_ascii_case("http") => "http",
+        _ => connection,
+    }
 }
 
 /// Find the client across the `X-Forwarded-For` values.
@@ -551,5 +593,115 @@ mod tests {
             resolve(&headers(&[]), None, &TrustedProxies::default()),
             None
         );
+    }
+
+    fn scheme(pairs: &[(&str, &str)], peer_addr: Option<&str>, trusted: &[&str]) -> &'static str {
+        resolve_scheme(
+            &headers(pairs),
+            peer_addr.and_then(parse_ip),
+            false,
+            &proxies(trusted),
+        )
+    }
+
+    #[test]
+    fn scheme_ignores_forwarded_proto_without_trusted_proxies() {
+        let forwarded = [("x-forwarded-proto", "https")];
+        assert_eq!(scheme(&forwarded, Some("203.0.113.9"), &[]), "http");
+    }
+
+    #[test]
+    fn scheme_ignores_forwarded_proto_from_an_untrusted_peer() {
+        let forwarded = [("x-forwarded-proto", "https")];
+        assert_eq!(
+            scheme(&forwarded, Some("203.0.113.9"), &["10.0.0.0/8"]),
+            "http"
+        );
+        assert_eq!(scheme(&forwarded, None, &["10.0.0.0/8"]), "http");
+    }
+
+    #[test]
+    fn scheme_follows_forwarded_proto_from_a_trusted_peer() {
+        let trusted = ["10.0.0.0/8"];
+        let https = [("x-forwarded-proto", "https")];
+        assert_eq!(scheme(&https, Some("10.0.0.1"), &trusted), "https");
+        assert_eq!(scheme(&https, Some("::ffff:10.0.0.1"), &trusted), "https");
+        assert_eq!(
+            scheme(
+                &[("x-forwarded-proto", " HTTPS ")],
+                Some("10.0.0.1"),
+                &trusted
+            ),
+            "https"
+        );
+    }
+
+    #[test]
+    fn scheme_reads_the_rightmost_forwarded_proto() {
+        let trusted = ["10.0.0.0/8"];
+        // A client sent `https`, and the proxy appended the real scheme.
+        assert_eq!(
+            scheme(
+                &[("x-forwarded-proto", "https, http")],
+                Some("10.0.0.1"),
+                &trusted
+            ),
+            "http"
+        );
+        assert_eq!(
+            scheme(
+                &[
+                    ("x-forwarded-proto", "https"),
+                    ("x-forwarded-proto", "http")
+                ],
+                Some("10.0.0.1"),
+                &trusted
+            ),
+            "http"
+        );
+    }
+
+    #[test]
+    fn scheme_falls_back_to_the_connection_for_an_unknown_value() {
+        let trusted = ["10.0.0.0/8"];
+        for value in ["", "ftp", "https;", "https http"] {
+            assert_eq!(
+                scheme(&[("x-forwarded-proto", value)], Some("10.0.0.1"), &trusted),
+                "http",
+                "{value:?}"
+            );
+            assert_eq!(
+                resolve_scheme(
+                    &headers(&[("x-forwarded-proto", value)]),
+                    parse_ip("10.0.0.1"),
+                    true,
+                    &proxies(&trusted),
+                ),
+                "https",
+                "{value:?}"
+            );
+        }
+        assert_eq!(scheme(&[], Some("10.0.0.1"), &trusted), "http");
+    }
+
+    proptest! {
+        /// A peer that is not a trusted proxy never changes the scheme.
+        #[test]
+        fn scheme_from_an_untrusted_peer_is_the_connection_scheme(value in "[ -~]{0,40}", secure in any::<bool>(), octet in 0u8..=255) {
+            let headers = headers(&[("x-forwarded-proto", value.as_str())]);
+            let peer = Some(IpAddr::from([203, 0, 113, octet]));
+            let resolved = resolve_scheme(&headers, peer, secure, &proxies(&["10.0.0.0/8"]));
+            prop_assert_eq!(resolved, if secure { "https" } else { "http" });
+        }
+
+        /// A trusted peer gets `https` only for a rightmost value of `https`.
+        #[test]
+        fn scheme_from_a_trusted_peer_is_https_only_for_https(value in "[ -~]{0,40}") {
+            let headers = headers(&[("x-forwarded-proto", value.as_str())]);
+            let peer = Some(IpAddr::from([10, 0, 0, 1]));
+            let resolved = resolve_scheme(&headers, peer, false, &proxies(&["10.0.0.0/8"]));
+            let rightmost = value.rsplit(',').next().unwrap_or("").trim();
+            prop_assert_eq!(resolved == "https", rightmost.eq_ignore_ascii_case("https"));
+        }
     }
 }

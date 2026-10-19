@@ -14,6 +14,7 @@ import time
 
 import jwt
 import pytest
+from django.test import override_settings
 
 from django_bolt import BoltAPI
 from django_bolt.auth import IsAuthenticated, JWTAuthentication, TokenPair, set_token_cookies
@@ -28,8 +29,7 @@ def make_token() -> str:
     return jwt.encode({"sub": "u", "iat": now, "exp": now + 3600}, SECRET, algorithm="HS256")
 
 
-@pytest.fixture(scope="module")
-def client():
+def _api() -> BoltAPI:
     api = BoltAPI()
 
     @api.post(
@@ -75,7 +75,12 @@ def client():
     async def mixed_write(request: dict):
         return {"ok": True}
 
-    with TestClient(api) as c:
+    return api
+
+
+@pytest.fixture(scope="module")
+def client():
+    with TestClient(_api()) as c:
         yield c
 
 
@@ -115,6 +120,27 @@ class TestCookieCsrf:
             headers=cookie_hdr({"Origin": "http://evil.example", "Host": "testserver"}),
         )
         assert r.status_code == 403
+
+    @pytest.mark.parametrize(
+        ("trusted_proxies", "origin", "status"),
+        [
+            # A client that is not a declared proxy cannot choose the scheme.
+            # The connection is HTTP, so only an HTTP origin matches.
+            ([], "https://testserver", 403),
+            ([], "http://testserver", 200),
+            # A declared proxy can. The test client connects from 127.0.0.1.
+            (["127.0.0.1"], "https://testserver", 200),
+            (["127.0.0.1"], "http://testserver", 403),
+        ],
+    )
+    def test_origin_fallback_takes_the_scheme_from_a_trusted_proxy_only(self, trusted_proxies, origin, status):
+        with override_settings(BOLT_TRUSTED_PROXIES=trusted_proxies), TestClient(_api()) as client:
+            r = client.request(
+                "POST",
+                "/cookie-write",
+                headers=cookie_hdr({"Origin": origin, "Host": "testserver", "X-Forwarded-Proto": "https"}),
+            )
+        assert r.status_code == status
 
     def test_unsafe_request_without_origin_signal_rejected(self, client):
         r = client.request("POST", "/cookie-write", headers=cookie_hdr())

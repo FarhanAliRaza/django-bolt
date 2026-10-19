@@ -97,10 +97,11 @@ pub fn cookie_csrf_blocks(
 /// `Origin`/`Referer` origin comparison (scheme + authority) against the
 /// request's effective scheme and `Host` for older clients.
 ///
-/// `scheme` is the request's effective scheme (`http`/`https`, honoring
-/// `X-Forwarded-Proto` behind a proxy) — HTTP and HTTPS are different
-/// origins, so `Origin: http://example.com` must not authorize a
-/// state-changing HTTPS request to `example.com`.
+/// `scheme` is the request's effective scheme (`http`/`https`) from
+/// `client_ip::resolve_scheme`. Only a peer in `BOLT_TRUSTED_PROXIES` can set
+/// it with `X-Forwarded-Proto`. HTTP and HTTPS are different origins, so
+/// `Origin: http://example.com` must not authorize a state-changing HTTPS
+/// request to `example.com`.
 ///
 /// Returns `true` when the request is allowed to proceed.
 #[inline]

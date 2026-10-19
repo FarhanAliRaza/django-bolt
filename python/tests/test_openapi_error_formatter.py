@@ -12,6 +12,7 @@ from openapi_spec_validator import validate
 
 from django_bolt import BoltAPI
 from django_bolt.error_handlers import BoltError, ProblemDetails, error_schema, problem_details
+from django_bolt.exceptions import HTTPException
 from django_bolt.openapi import OpenAPIConfig
 from django_bolt.openapi.schema_generator import OpenAPIStrictError, SchemaGenerator
 from django_bolt.responses import PlainText, Response
@@ -56,6 +57,8 @@ def _api(formatter=None, *, strict: bool = False) -> BoltAPI:
 
     @api.post("/items", response_model={200: Item, 409: Conflict})
     async def create_item(data: ItemIn):
+        if data.name == "taken":
+            raise HTTPException(409, body=Conflict(reason="taken"))
         return Item(id=1, name=data.name)
 
     api._register_openapi_routes()
@@ -130,17 +133,21 @@ def test_problem_details_documents_the_422_that_the_client_gets():
     assert problem["required"] == ["type", "title", "status", "detail", "instance"]
     assert problem["properties"]["errors"]["items"] == {"$ref": "#/components/schemas/ProblemFieldError"}
     assert spec["components"]["schemas"]["ProblemFieldError"]["required"] == ["loc", "msg", "type"]
-    # The formatter does not change an error model that the route declares.
+    # An error model that the route declares keeps its entry: its typed body skips the formatter.
     assert responses["409"]["content"] == {"application/json": {"schema": {"$ref": "#/components/schemas/Conflict"}}}
 
     with TestClient(api) as client:
         invalid = client.post("/items", json={"name": 1})
+        taken = client.post("/items", json={"name": "taken"})
 
     assert invalid.status_code == 422
     assert invalid.headers["content-type"] == "application/problem+json"
     body = msgspec.convert(invalid.json(), ProblemDetails)
     assert body.status == 422
     assert [error.loc for error in body.errors] == [["body", "name"]]
+    assert taken.status_code == 409
+    assert taken.headers["content-type"] == "application/json"
+    assert taken.json() == {"reason": "taken"}
 
 
 def test_declared_error_schema_documents_the_422():

@@ -464,7 +464,8 @@ class ProblemFieldError(msgspec.Struct, kw_only=True):
 class ProblemDetails(msgspec.Struct, kw_only=True):
     """An error body in the RFC 9457 Problem Details format.
 
-    The body has "errors" when the error has field errors.
+    The body has "errors" when the error has field errors. The keys of the
+    "extra" of the error are more members of the body.
     """
 
     type: str

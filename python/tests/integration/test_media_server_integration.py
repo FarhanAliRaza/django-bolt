@@ -166,6 +166,57 @@ def test_media_range_request_returns_partial_content(make_server_project):
     assert response.headers.get("content-range", "").startswith("bytes 0-15/")
 
 
+def test_media_range_to_the_end_returns_partial_content(make_server_project):
+    """`bytes=0-` asks for the whole file as a range. It gets 206, not 200 with Content-Range."""
+    body = b"abcdefghijklmnopqrstuvwxyz" * 64
+    project = make_server_project(
+        settings_extra="""
+        MEDIA_URL = "/media/"
+        MEDIA_ROOT = str(BASE_DIR / "mediafiles")
+        """,
+        extra_files={
+            "mediafiles/clip.bin": body,
+        },
+    )
+
+    with project.start() as server:
+        response = server.get("/media/clip.bin", headers={"Range": "bytes=0-"})
+
+    assert response.status_code == 206
+    assert response.content == body
+    assert response.headers["content-range"] == f"bytes 0-{len(body) - 1}/{len(body)}"
+    # Content-Range counts the bytes of the file. A compressed body would not match it.
+    assert "content-encoding" not in response.headers
+
+
+def test_media_range_with_a_stale_if_range_returns_the_whole_file(make_server_project):
+    """RFC 9110 section 13.1.5: an If-Range that does not match gives the whole file.
+
+    Else a client that resumes a download joins bytes of two versions of the file.
+    """
+    body = b"abcdefghijklmnopqrstuvwxyz" * 64
+    project = make_server_project(
+        settings_extra="""
+        MEDIA_URL = "/media/"
+        MEDIA_ROOT = str(BASE_DIR / "mediafiles")
+        """,
+        extra_files={
+            "mediafiles/clip.bin": body,
+        },
+    )
+
+    with project.start() as server:
+        etag = server.get("/media/clip.bin").headers["etag"]
+        current = server.get("/media/clip.bin", headers={"Range": "bytes=0-15", "If-Range": etag})
+        stale = server.get("/media/clip.bin", headers={"Range": "bytes=0-15", "If-Range": '"stale"'})
+
+    assert current.status_code == 206
+    assert current.content == body[:16]
+    assert stale.status_code == 200
+    assert stale.content == body
+    assert "content-range" not in stale.headers
+
+
 @pytest.mark.parametrize(
     "attack_path",
     [

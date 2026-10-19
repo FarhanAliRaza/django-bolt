@@ -976,6 +976,7 @@ dependencies = [
  "pyo3-async-runtimes",
  "pyo3-build-config",
  "regex",
+ "serde_json",
  "socket2 0.6.2",
  "tikv-jemallocator",
  "tokio",

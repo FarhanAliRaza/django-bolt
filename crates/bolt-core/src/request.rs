@@ -93,6 +93,17 @@ impl PyRequest {
             None => PyDict::new(py).unbind(),
         }
     }
+
+    /// The host from Django's `HttpRequest.get_host()` on this `META`.
+    ///
+    /// Django checks the host against `ALLOWED_HOSTS` and raises
+    /// `DisallowedHost` for another host. It reads `X-Forwarded-Host` only
+    /// with `USE_X_FORWARDED_HOST`.
+    fn django_host(&self, py: Python<'_>) -> PyResult<String> {
+        let django_request = py.import("django.http")?.getattr("HttpRequest")?.call0()?;
+        django_request.setattr("META", self.META(py)?)?;
+        django_request.call_method0("get_host")?.extract()
+    }
 }
 
 #[pymethods]
@@ -429,31 +440,21 @@ impl PyRequest {
     ///     http://example.com/users?page=2
     ///
     /// This matches Django's HttpRequest.build_absolute_uri() method.
-    /// Uses the Host header for the host and the resolved scheme for the scheme.
+    /// Django's `get_host()` gives the host, so a host outside `ALLOWED_HOSTS`
+    /// raises `DisallowedHost`. The resolved scheme gives the scheme.
     #[pyo3(signature = (location=None))]
-    fn build_absolute_uri(&self, py: Python<'_>, location: Option<&str>) -> String {
-        let host = self
-            .headers
-            .as_ref()
-            .and_then(|headers_py| {
-                headers_py
-                    .bind(py)
-                    .get_item("host")
-                    .ok()
-                    .flatten()
-                    .and_then(|v| v.extract::<String>().ok())
-            })
-            .unwrap_or_else(|| "localhost".to_string());
+    fn build_absolute_uri(&self, py: Python<'_>, location: Option<&str>) -> PyResult<String> {
+        let host = self.django_host(py)?;
         let scheme = if self.conn_scheme.is_empty() {
             "http"
         } else {
             self.conn_scheme
         };
 
-        match location {
+        Ok(match location {
             Some(location) => format!("{}://{}{}", scheme, host, location),
             None => format!("{}://{}{}", scheme, host, self.get_full_path()),
-        }
+        })
     }
 
     #[pyo3(signature = (key, /, default=None))]

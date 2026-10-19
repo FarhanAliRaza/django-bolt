@@ -112,7 +112,7 @@ Bolt uses this list to find the canonical client address for
 Bolt uses the same list for the request scheme. Only a peer in the list can set the scheme with `X-Forwarded-Proto`. Bolt reads the rightmost value, because the proxy closest to Bolt adds it. A value other than `http` or `https` is ignored. From any other peer, the scheme is the scheme of the connection. Bolt does not end TLS, so that scheme is `http`. The scheme sets these values:
 
 - `request.build_absolute_uri()` and the default `request.META["SERVER_PORT"]` on Bolt routes.
-- The `scheme` and `server` keys of the ASGI scope of `mount_asgi()` and `mount_django()`. Django reads `scope["scheme"]` for `request.is_secure()`.
+- The `scheme` key, and the port of the `server` key, of the ASGI scope of `mount_asgi()` and `mount_django()`. Django reads `scope["scheme"]` for `request.is_secure()`.
 - The origin check of cookie authentication. See [Cross-site request forgery protection](../topics/authentication.md#cross-site-request-forgery-protection).
 
 Django's `SECURE_PROXY_SSL_HEADER` still applies on top of this scheme, in Django code only. Django middleware on a Bolt route reads the scheme only from `SECURE_PROXY_SSL_HEADER`, as before. That setting trusts the header from every peer, so set it only when the proxy removes the header from client requests.

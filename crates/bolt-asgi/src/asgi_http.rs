@@ -1,4 +1,4 @@
-use actix_web::http::header::{HeaderName, HeaderValue};
+use actix_web::http::header::{self, HeaderName, HeaderValue};
 use actix_web::http::{Method, StatusCode, Version};
 use actix_web::{web, HttpRequest, HttpResponse};
 use bytes::Bytes;
@@ -346,6 +346,19 @@ fn mounted_subpath(request_path: &str, mount_prefix: &str) -> String {
     }
 }
 
+/// The request host from `Host`, else from the request URI.
+///
+/// Actix's `connection_info().host()` reads `Forwarded` and `X-Forwarded-Host`
+/// first, from any peer. Django reads `X-Forwarded-Host` from the scope headers
+/// itself, and only with `USE_X_FORWARDED_HOST`.
+fn request_host(req: &HttpRequest) -> &str {
+    req.headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .or_else(|| req.uri().authority().map(|authority| authority.as_str()))
+        .unwrap_or_else(|| req.app_config().host())
+}
+
 fn build_scope(
     py: Python<'_>,
     req: &HttpRequest,
@@ -372,7 +385,6 @@ fn build_scope(
     )?;
     scope.set_item("method", req.method().as_str())?;
 
-    let conn_info = req.connection_info();
     // Actix's `connection_info().scheme()` believes `X-Forwarded-Proto` from
     // any peer. Django reads this value for `request.is_secure()`.
     let scheme = client_ip::resolve_scheme(
@@ -408,13 +420,13 @@ fn build_scope(
     if !req.headers().contains_key("host") {
         headers.append((
             PyBytes::new(py, b"host"),
-            PyBytes::new(py, conn_info.host().as_bytes()),
+            PyBytes::new(py, request_host(req).as_bytes()),
         ))?;
     }
 
     scope.set_item("headers", headers)?;
 
-    let (server_host, server_port) = parse_host_port(conn_info.host(), scheme);
+    let (server_host, server_port) = parse_host_port(request_host(req), scheme);
     scope.set_item("server", (server_host, server_port))?;
 
     // Same rule as `REMOTE_ADDR` on Bolt routes: forwarding headers name the
@@ -639,4 +651,35 @@ pub async fn handle_asgi_mount_request(
             .map(|chunk| (Ok::<Bytes, std::io::Error>(chunk), (rx, guard)))
     });
     builder.streaming(body_stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::test::TestRequest;
+
+    #[test]
+    fn request_host_ignores_forwarding_headers() {
+        let req = TestRequest::default()
+            .insert_header(("host", "example.com"))
+            .insert_header(("x-forwarded-host", "evil.example"))
+            .insert_header(("forwarded", "host=evil.example"))
+            .to_http_request();
+        assert_eq!(request_host(&req), "example.com");
+    }
+
+    #[test]
+    fn request_host_without_a_host_header_ignores_forwarding_headers() {
+        let from_uri = TestRequest::with_uri("http://example.com/path")
+            .insert_header(("x-forwarded-host", "evil.example"))
+            .to_http_request();
+        assert_eq!(request_host(&from_uri), "example.com");
+
+        let from_config = TestRequest::with_uri("/path")
+            .insert_header(("x-forwarded-host", "evil.example"))
+            .insert_header(("forwarded", "host=evil.example"))
+            .to_http_request();
+        assert_eq!(request_host(&from_config), from_config.app_config().host());
+        assert_ne!(request_host(&from_config), "evil.example");
+    }
 }

@@ -119,6 +119,30 @@ def test_mount_asgi_scope_scheme_follows_x_forwarded_proto_only_from_a_trusted_p
     assert captured == {"scheme": scheme, "server": ("example.com", port), "is_secure": is_secure}
 
 
+@pytest.mark.parametrize(
+    "forwarded_host",
+    [{"X-Forwarded-Host": "evil.example"}, {"Forwarded": "host=evil.example"}],
+)
+def test_mount_asgi_scope_server_comes_from_the_host_header(forwarded_host):
+    """A client cannot set scope["server"]. Django reads X-Forwarded-Host from the headers itself."""
+    api = BoltAPI()
+    captured = {}
+
+    async def asgi_app(scope, receive, send):
+        captured["server"] = scope["server"]
+        await receive()
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    api.mount_asgi("/mounted", asgi_app)
+
+    with TestClient(api) as client:
+        response = client.get("/mounted", headers={"Host": "example.com", **forwarded_host})
+
+    assert response.status_code == 204
+    assert captured["server"] == ("example.com", 80)
+
+
 def test_mount_asgi_client_ignores_forwarding_headers_from_an_untrusted_peer():
     """Without BOLT_TRUSTED_PROXIES, a client cannot choose its own address."""
     api = BoltAPI()

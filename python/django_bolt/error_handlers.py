@@ -28,11 +28,13 @@ _DEFAULT_JSON_HEADERS: list[tuple[str, str]] = [("content-type", "application/js
 try:
     from django.conf import settings as django_settings
     from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
+    from django.core.exceptions import SuspiciousOperation as DjangoSuspiciousOperation
     from django.http import HttpResponse as DjangoHttpResponse
     from django.views.debug import ExceptionReporter
 except ImportError:
     django_settings = None
     DjangoPermissionDenied = None
+    DjangoSuspiciousOperation = None
     DjangoHttpResponse = None
     ExceptionReporter = None
 
@@ -354,6 +356,16 @@ def handle_exception(
         return format_error_response(
             status_code=403,
             detail=str(exc) or "Permission denied",
+        )
+    elif DjangoSuspiciousOperation is not None and isinstance(exc, DjangoSuspiciousOperation):
+        # Django answers 400 and logs to django.security.<class name>, for
+        # example for DisallowedHost from request.build_absolute_uri().
+        logging.getLogger(f"django.security.{exc.__class__.__name__}").error(
+            str(exc), exc_info=exc, extra={"status_code": 400}
+        )
+        return format_error_response(
+            status_code=400,
+            detail=str(exc) if debug else "Bad Request",
         )
     elif DjangoPermissionDenied is not None and isinstance(exc, DjangoPermissionDenied):
         # Django's PermissionDenied exception - return 403

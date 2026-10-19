@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from django.http import QueryDict
 from django.test import override_settings
@@ -67,6 +69,11 @@ def api():
     async def get_meta_scheme(request):
         """Return the values that the request scheme sets."""
         return {"server_port": request.META["SERVER_PORT"], "absolute_uri": request.build_absolute_uri()}
+
+    @api.get("/meta/absolute")
+    async def get_meta_absolute(request):
+        """Return the absolute URI of the request."""
+        return {"absolute_uri": request.build_absolute_uri()}
 
     @api.post("/meta/post")
     async def post_meta(request):
@@ -239,6 +246,34 @@ class TestRequestMETA:
             "server_port": port,
             "absolute_uri": f"{scheme}://example.com/meta/scheme",
         }
+
+    @pytest.mark.parametrize(
+        ("headers", "extra_settings", "host"),
+        [
+            ({"Host": "example.com"}, {}, "example.com"),
+            # X-Forwarded-Host counts only with USE_X_FORWARDED_HOST, as in Django.
+            ({"Host": "example.com", "X-Forwarded-Host": "evil.example"}, {}, "example.com"),
+            ({"Host": "internal", "X-Forwarded-Host": "example.com"}, {"USE_X_FORWARDED_HOST": True}, "example.com"),
+        ],
+    )
+    def test_build_absolute_uri_gets_the_host_as_django_does(self, api, headers, extra_settings, host):
+        with override_settings(ALLOWED_HOSTS=["example.com"], **extra_settings), TestClient(api) as client:
+            response = client.get("/meta/absolute", headers=headers)
+        assert response.status_code == 200
+        assert response.json() == {"absolute_uri": f"http://{host}/meta/absolute"}
+
+    @pytest.mark.parametrize(("debug", "detail"), [(True, "ALLOWED_HOSTS"), (False, "Bad Request")])
+    def test_build_absolute_uri_refuses_a_host_outside_allowed_hosts(self, api, caplog, debug, detail):
+        """Django raises DisallowedHost. Bolt answers 400 and logs it, as Django does."""
+        with (
+            override_settings(ALLOWED_HOSTS=["example.com"], DEBUG=debug),
+            caplog.at_level(logging.ERROR, logger="django.security.DisallowedHost"),
+            TestClient(api) as client,
+        ):
+            response = client.get("/meta/absolute", headers={"Host": "evil.example"})
+        assert response.status_code == 400
+        assert detail in response.json()["detail"]
+        assert "django.security.DisallowedHost" in {record.name for record in caplog.records}
 
     def test_meta_remote_addr(self, client):
         """META contains REMOTE_ADDR and REMOTE_HOST."""

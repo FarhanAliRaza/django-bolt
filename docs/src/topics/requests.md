@@ -33,6 +33,10 @@ The request dict contains:
 | `body` | `bytes` | Raw request body |
 | `context` | `dict` | Authentication context |
 
+### Absolute URLs
+
+`request.build_absolute_uri()` gets the host from Django's `get_host()`, as Django does. Django checks the host against `ALLOWED_HOSTS`. A host that is not in the list raises `DisallowedHost`, and the response is 400. Django reads `X-Forwarded-Host` only when `USE_X_FORWARDED_HOST` is `True`. The scheme follows [BOLT_TRUSTED_PROXIES](../ref/settings.md#bolt_trusted_proxies).
+
 ## Type-safe request
 
 For better IDE support, use the `Request` type:

@@ -72,6 +72,32 @@ def test_mounted_asgi_websocket_scope_decodes_path_and_keeps_utf8_headers(make_s
     assert scope["x_name"] == "café"
 
 
+@pytest.mark.parametrize(
+    ("settings_extra", "scheme"),
+    [
+        # A client that is not a declared proxy cannot choose the scheme.
+        ("", "ws"),
+        # A declared proxy can. The test client connects from loopback.
+        ('BOLT_TRUSTED_PROXIES = ["127.0.0.0/8"]', "wss"),
+    ],
+)
+def test_mounted_asgi_websocket_scheme_follows_x_forwarded_proto_only_from_a_trusted_proxy(
+    make_server_project, settings_extra, scheme
+):
+    project = make_server_project(api_module=app_module("ws_asgi_mount"), settings_extra=settings_extra)
+
+    with (
+        project.start() as server,
+        SimpleWebSocketClient(
+            server.host,
+            server.port,
+            "/mounted/ws",
+            headers={"X-Forwarded-Proto": "https"},
+        ) as websocket,
+    ):
+        assert json.loads(websocket.receive_text())["scheme"] == scheme
+
+
 def test_registered_route_still_wins_over_mounts(make_server_project):
     project = _make_project(make_server_project)
 

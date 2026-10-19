@@ -34,11 +34,13 @@ _DEFAULT_JSON_HEADERS: list[tuple[str, str]] = [("content-type", "application/js
 try:
     from django.conf import settings as django_settings
     from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
+    from django.core.exceptions import SuspiciousOperation as DjangoSuspiciousOperation
     from django.http import HttpResponse as DjangoHttpResponse
     from django.views.debug import ExceptionReporter
 except ImportError:
     django_settings = None
     DjangoPermissionDenied = None
+    DjangoSuspiciousOperation = None
     DjangoHttpResponse = None
     ExceptionReporter = None
 
@@ -198,6 +200,14 @@ def _log_response_validation_error(exc: ResponseValidationError, errors: list[di
     )
 
 
+def _log_suspicious_operation(exc: BaseException) -> None:
+    # Django logs a SuspiciousOperation to django.security.<class name>, for
+    # example DisallowedHost from request.build_absolute_uri().
+    logging.getLogger(f"django.security.{exc.__class__.__name__}").error(
+        str(exc), exc_info=exc, extra={"status_code": 400}
+    )
+
+
 def _log_server_error(exc: BaseException) -> None:
     # Always log 500 errors. They are unexpected server errors.
     logger.error(
@@ -348,6 +358,13 @@ def handle_exception(
         return format_error_response(
             status_code=403,
             detail=str(exc) or "Permission denied",
+        )
+    elif DjangoSuspiciousOperation is not None and isinstance(exc, DjangoSuspiciousOperation):
+        # Django answers 400 and logs the exception to django.security.
+        _log_suspicious_operation(exc)
+        return format_error_response(
+            status_code=400,
+            detail=str(exc) if debug else "Bad Request",
         )
     elif DjangoPermissionDenied is not None and isinstance(exc, DjangoPermissionDenied):
         # Django's PermissionDenied exception - return 403
@@ -535,6 +552,8 @@ def bolt_error_from_exception(exc: BaseException) -> BoltError:
         return BoltError(status=403, kind="forbidden", detail="Permission denied", exception=exc)
     elif DjangoPermissionDenied is not None and isinstance(exc, DjangoPermissionDenied):
         return BoltError(status=403, kind="forbidden", detail=str(exc) or "Permission denied", exception=exc)
+    elif DjangoSuspiciousOperation is not None and isinstance(exc, DjangoSuspiciousOperation):
+        return BoltError(status=400, kind="bad_request", detail="Bad Request", exception=exc)
     else:
         return BoltError(status=500, kind="internal_error", detail="Internal Server Error", exception=exc)
     return BoltError(status=422, kind="validation", detail=_VALIDATION_DETAIL, errors=errors, exception=exc)
@@ -604,9 +623,14 @@ def render_error(
 
 
 def _log_formatted_error(error: BoltError) -> None:
-    """Log a server error as ``handle_exception`` logs it. It does not log an HTTPException."""
+    """Log a server error or a SuspiciousOperation as ``handle_exception`` logs it.
+
+    It does not log an HTTPException.
+    """
     if error.kind == "response_validation":
         _log_response_validation_error(error.exception, error.errors)
+    elif DjangoSuspiciousOperation is not None and isinstance(error.exception, DjangoSuspiciousOperation):
+        _log_suspicious_operation(error.exception)
     elif (
         error.kind == "internal_error"
         and error.exception is not None

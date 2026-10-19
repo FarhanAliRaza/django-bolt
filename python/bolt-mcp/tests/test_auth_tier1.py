@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from _helpers import initialize, mint_jwt, parse_rpc, post_rpc
+from _helpers import INITIALIZE_PARAMS, initialize, mcp_headers, mint_jwt, parse_rpc, post_rpc, rpc_body
 from bolt_mcp import MCP, mount_mcp
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
@@ -119,3 +119,26 @@ def test_a_session_default_is_dropped_on_a_mount():
             assert initialize(client)[0].status_code == 401
             bearer = f"Bearer {mint_jwt(SECRET, sub='7')}"
             assert initialize(client, authorization=bearer)[0].status_code == 200
+
+
+@pytest.mark.parametrize("trusted_proxies", [[], ["127.0.0.1"]])
+@pytest.mark.parametrize(("origin", "status"), [("https://testserver", 200), ("http://testserver", 403)])
+def test_cookie_csrf_follows_x_forwarded_proto_from_any_peer(trusted_proxies, origin, status):
+    """The check passes one origin, so X-Forwarded-Proto from any peer never makes it weaker."""
+    api = BoltAPI()
+    mount_mcp(
+        api,
+        MCP("cookie-server"),
+        auth=[JWTAuthentication(secret=SECRET, cookie="access_token")],
+        allowed_hosts=["testserver"],
+    )
+    headers = {
+        **mcp_headers(),
+        "Cookie": f"access_token={mint_jwt(SECRET)}",
+        "Host": "testserver",
+        "Origin": origin,
+        "X-Forwarded-Proto": "https",
+    }
+    with override_settings(BOLT_TRUSTED_PROXIES=trusted_proxies), TestClient(api) as client:
+        response = client.post("/mcp", content=rpc_body("initialize", INITIALIZE_PARAMS), headers=headers)
+    assert response.status_code == status

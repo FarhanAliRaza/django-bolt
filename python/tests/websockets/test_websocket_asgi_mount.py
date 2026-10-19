@@ -7,6 +7,7 @@ scope construction, then drives the mounted app over a mock transport.
 from __future__ import annotations
 
 import pytest
+from django.test import override_settings
 
 from django_bolt import BoltAPI, WebSocket
 from django_bolt.testing import WebSocketTestClient
@@ -49,6 +50,12 @@ async def scope_app(scope, receive, send):
     )
 
 
+async def scheme_app(scope, receive, send):
+    await receive()
+    await send({"type": "websocket.accept"})
+    await send({"type": "websocket.send", "text": scope["scheme"]})
+
+
 def router_app(scope, receive, send):
     """Route like `channels.routing.URLRouter`: strip `root_path`, then match.
 
@@ -85,6 +92,7 @@ def api():
     api.mount_asgi("/mounted", echo_app)
     api.mount_asgi("/scope", scope_app)
     api.mount_asgi("/routed", router_app)
+    api.mount_asgi("/scheme", scheme_app)
     return api
 
 
@@ -189,3 +197,12 @@ async def test_django_mount_with_custom_app_keeps_websocket():
     async with WebSocketTestClient(api, "/custom/ws") as ws:
         await ws.send_text("hello")
         assert await ws.receive_text() == "echo:hello"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("trusted_proxies", "scheme"), [([], "ws"), (["127.0.0.1"], "wss")])
+async def test_mounted_app_scheme_follows_x_forwarded_proto_only_from_a_trusted_proxy(api, trusted_proxies, scheme):
+    """As on the server. The test client connects from 127.0.0.1."""
+    with override_settings(BOLT_TRUSTED_PROXIES=trusted_proxies):
+        async with WebSocketTestClient(api, "/scheme/ws", headers={"X-Forwarded-Proto": "https"}) as ws:
+            assert await ws.receive_text() == scheme

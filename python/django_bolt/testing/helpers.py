@@ -10,7 +10,7 @@ from django_bolt.testing.client import TestClient
 
 def create_test_client(
     api: BoltAPI,
-    base_url: str = "http://testserver.local",
+    base_url: str = "http://testserver",
     raise_server_exceptions: bool = True,
     bootstrap_django: bool = True,
     **kwargs: Any,

@@ -8,6 +8,7 @@
 //!
 //! Lanes size themselves. A request takes an idle lane or starts a new one.
 //! A lane that stays idle for `idle_time()` closes its connections and stops.
+//! When the server stops, `shutdown` stops all lanes before Python exits.
 //!
 //! A lane has two uses:
 //! - `dispatch` runs a complete sync request on a lane, with no asyncio.
@@ -19,7 +20,7 @@ use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -28,6 +29,10 @@ use pyo3::types::{PyDict, PyTuple};
 use tokio::sync::oneshot;
 
 const DEFAULT_IDLE_SECONDS: f64 = 10.0;
+
+/// How long `shutdown` and `stop_idle_lanes` wait for busy lanes. A lane can
+/// still run the last call of an async request after the response.
+const STOP_WAIT: Duration = Duration::from_secs(2);
 
 static IDLE: OnceLock<Duration> = OnceLock::new();
 
@@ -97,10 +102,20 @@ struct IdleLane {
 /// can be in flight to it, and the lane runs that `Release` before the jobs
 /// of its next owner.
 static IDLE_LANES: Mutex<Vec<IdleLane>> = Mutex::new(Vec::new());
+/// The id and the sender of each lane that is alive, idle or not. A lane
+/// leaves this list after it released its Python thread state.
+static LANES: Mutex<Vec<(u64, Sender<Job>)>> = Mutex::new(Vec::new());
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+/// True after `shutdown`. It sets the flag under the locks of `IDLE_LANES` and
+/// `LANES`. Thus no lane goes idle and no lane starts after it.
 static STOPPING: AtomicBool = AtomicBool::new(false);
-/// The count of lane threads that are alive, idle or not.
-static LIVE_LANES: AtomicUsize = AtomicUsize::new(0);
+/// True after `shutdown` stopped its wait for the lanes. Then Python can
+/// finalize, and a lane must not attach.
+static PYTHON_CLOSED: AtomicBool = AtomicBool::new(false);
+/// A lane holds the read lock while it attaches at its start and at its end.
+/// `shutdown` takes the write lock after it sets `PYTHON_CLOSED`, so it waits
+/// for a lane that read the flag before.
+static PYTHON_GATE: RwLock<()> = RwLock::new(());
 /// `concurrent.futures.Future`, which `RequestLane.submit` creates for each call.
 static FUTURE_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
@@ -116,13 +131,24 @@ fn acquire() -> PyResult<IdleLane> {
 fn spawn_lane() -> PyResult<IdleLane> {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let (sender, receiver) = channel::<Job>();
+    {
+        let mut lanes = LANES.lock();
+        // `shutdown` does not wait for a lane that starts after it.
+        if STOPPING.load(Ordering::Relaxed) {
+            return Err(PyRuntimeError::new_err("request lanes stopped"));
+        }
+        lanes.push((id, sender.clone()));
+    }
     let lane_sender = sender.clone();
     let pending = Arc::new(AtomicUsize::new(0));
     let lane_pending = Arc::clone(&pending);
     std::thread::Builder::new()
         .name(format!("bolt-lane-{id}"))
         .spawn(move || lane_main(id, lane_sender, lane_pending, receiver))
-        .map_err(|err| PyRuntimeError::new_err(format!("could not start a request lane: {err}")))?;
+        .map_err(|err| {
+            unlist(id);
+            PyRuntimeError::new_err(format!("could not start a request lane: {err}"))
+        })?;
     Ok(IdleLane {
         id,
         sender,
@@ -131,9 +157,14 @@ fn spawn_lane() -> PyResult<IdleLane> {
 }
 
 fn lane_main(id: u64, sender: Sender<Job>, pending: Arc<AtomicUsize>, receiver: Receiver<Job>) {
-    LIVE_LANES.fetch_add(1, Ordering::Relaxed);
-    crate::state::pin_python_thread_state();
-    call_concurrency("mark_lane_thread");
+    let started = while_python_open(|| {
+        crate::state::pin_python_thread_state();
+        call_concurrency("mark_lane_thread");
+    });
+    if !started {
+        unlist(id);
+        return;
+    }
     let idle = idle_time();
     // The spawner owns a new lane, so the first job arrives with no idle wait.
     let mut owned = true;
@@ -167,6 +198,14 @@ fn lane_main(id: u64, sender: Sender<Job>, pending: Arc<AtomicUsize>, receiver: 
                 Err(RecvTimeoutError::Disconnected) => break,
             }
         };
+        // The server stopped, so no request waits for a result. Do not run
+        // the job: it could attach to Python after `shutdown` stopped its wait.
+        if STOPPING.load(Ordering::Relaxed) {
+            if let Job::Stop(ack) = job {
+                stopped = ack;
+            }
+            break;
+        }
         owned = true;
         match job {
             Job::Request {
@@ -215,20 +254,39 @@ fn lane_main(id: u64, sender: Sender<Job>, pending: Arc<AtomicUsize>, receiver: 
             }
         }
     }
-    call_concurrency("close_lane_connections");
-    crate::state::unpin_python_thread_state();
-    LIVE_LANES.fetch_sub(1, Ordering::Relaxed);
+    while_python_open(|| {
+        call_concurrency("close_lane_connections");
+        crate::state::unpin_python_thread_state();
+    });
+    unlist(id);
     if let Some(ack) = stopped {
         let _ = ack.send(());
     }
 }
 
+/// Run `work` unless `shutdown` stopped its wait for the lanes. Return false
+/// when the work did not run.
+fn while_python_open(work: impl FnOnce()) -> bool {
+    let _gate = PYTHON_GATE.read();
+    let open = !PYTHON_CLOSED.load(Ordering::SeqCst);
+    if open {
+        work();
+    }
+    open
+}
+
+fn unlist(id: u64) {
+    LANES.lock().retain(|(lane, _)| *lane != id);
+}
+
 /// Put the lane on the idle list. Return false when the server stops.
 fn go_idle(id: u64, sender: &Sender<Job>, pending: &Arc<AtomicUsize>) -> bool {
+    let mut idle = IDLE_LANES.lock();
+    // Read the flag under the lock: `shutdown` empties the list under it.
     if STOPPING.load(Ordering::Relaxed) {
         return false;
     }
-    IDLE_LANES.lock().push(IdleLane {
+    idle.push(IdleLane {
         id,
         sender: sender.clone(),
         pending: Arc::clone(pending),
@@ -317,26 +375,45 @@ pub fn dispatch(
     }
 }
 
-/// Stop all idle lanes. A busy lane stops after its current request.
-pub fn shutdown() {
-    STOPPING.store(true, Ordering::Relaxed);
-    let idle = std::mem::take(&mut *IDLE_LANES.lock());
-    for lane in idle {
+/// Stop all lanes. Wait until each one closed its database connections and
+/// released its Python thread state, up to `STOP_WAIT`. The server calls this
+/// after it stopped, before Python exits. After this, a lane does not attach
+/// to Python again. Return the count of lanes that did not stop in the wait.
+///
+/// A busy lane stops after its current job. A lane can also stay with an
+/// async request that never ends, for example when its worker stopped.
+pub fn shutdown() -> usize {
+    let lanes: Vec<Sender<Job>> = {
+        let mut idle = IDLE_LANES.lock();
+        let lanes = LANES.lock();
+        STOPPING.store(true, Ordering::Relaxed);
+        idle.clear();
+        lanes.iter().map(|(_, sender)| sender.clone()).collect()
+    };
+    for sender in lanes {
         // A send fails only when the lane thread is gone. Then no stop is necessary.
-        let _ = lane.sender.send(Job::Stop(None));
+        let _ = sender.send(Job::Stop(None));
     }
+    let deadline = Instant::now() + STOP_WAIT;
+    while !LANES.lock().is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // A lane that reads the flag after this does not attach. Wait, up to the
+    // same limit, for a lane that read it before. That lane is still in
+    // `LANES` if it does not complete in time.
+    PYTHON_CLOSED.store(true, Ordering::SeqCst);
+    drop(PYTHON_GATE.try_write_until(deadline));
+    LANES.lock().len()
 }
 
 /// Stop all lanes and wait until each one closed its database connections.
 /// The test clients call this at exit. If not, a lane connection stays open
 /// for the idle time, and it blocks the drop of the test database.
 ///
-/// A lane can still run the last call of an async request after the
-/// response. Thus this waits for busy lanes, up to `STOP_WAIT`. A lane that
-/// a different client still uses stays alive after that time.
+/// This waits for busy lanes, up to `STOP_WAIT`. A lane that a different
+/// client still uses stays alive after that time.
 #[pyfunction]
 pub fn stop_idle_lanes(py: Python<'_>) {
-    const STOP_WAIT: Duration = Duration::from_secs(2);
     py.detach(|| {
         let deadline = Instant::now() + STOP_WAIT;
         loop {
@@ -348,7 +425,7 @@ pub fn stop_idle_lanes(py: Python<'_>) {
             drop(ack);
             // The channel closes after the last stopped lane sent its message.
             while stopped.recv().is_ok() {}
-            if LIVE_LANES.load(Ordering::Relaxed) == 0 || Instant::now() >= deadline {
+            if LANES.lock().is_empty() || Instant::now() >= deadline {
                 return;
             }
             std::thread::sleep(Duration::from_millis(1));
@@ -431,11 +508,6 @@ impl RequestLane {
         }
         if listed {
             idle.push(lane);
-        } else if stopping {
-            // Shutdown took the idle list already, so it does not stop this
-            // lane. A send fails only when the lane thread is gone. Then no
-            // stop is necessary.
-            let _ = lane.sender.send(Job::Stop(None));
         }
     }
 }
@@ -503,9 +575,9 @@ mod tests {
     }
 
     /// Shutdown can take the idle list before a request releases its lane.
-    /// That lane is then in no list, so `release` must stop it.
+    /// The lane then stops at the `Release`, so it must not go into the list.
     #[test]
-    fn release_during_shutdown_stops_the_lane() {
+    fn release_during_shutdown_does_not_list_the_lane() {
         let _globals = GLOBALS.lock();
         let (lane, receiver) = request_lane(u64::MAX, 0);
         STOPPING.store(true, Ordering::Relaxed);
@@ -516,8 +588,20 @@ mod tests {
             receiver.try_recv(),
             Ok(Job::Release { listed: false })
         ));
-        assert!(matches!(receiver.try_recv(), Ok(Job::Stop(None))));
+        assert!(receiver.try_recv().is_err());
         assert!(!take_idle(u64::MAX));
+    }
+
+    /// `shutdown` waits only for the lanes that started before it.
+    #[test]
+    fn no_lane_starts_during_shutdown() {
+        let _globals = GLOBALS.lock();
+        STOPPING.store(true, Ordering::Relaxed);
+        let spawned = spawn_lane();
+        STOPPING.store(false, Ordering::Relaxed);
+
+        assert!(spawned.is_err());
+        assert!(LANES.lock().is_empty());
     }
 
     #[test]

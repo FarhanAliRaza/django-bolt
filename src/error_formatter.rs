@@ -151,15 +151,17 @@ fn error_request(py: Python<'_>, req: &HttpRequest, state: &AppState) -> PyResul
         }
     }
     let conn_host = headers.get("host").cloned().unwrap_or_default();
-    let conn_scheme = headers
-        .get("x-forwarded-proto")
-        .cloned()
-        .unwrap_or_else(|| "http".to_string());
-    let conn_remote_addr = client_ip::resolve_from_headers(
+    let peer_ip = req.peer_addr().map(|address| address.ip());
+    // Same trust rule as a handler request: only a trusted proxy sets the
+    // scheme with `X-Forwarded-Proto`.
+    let conn_scheme = client_ip::resolve_scheme(
         req.headers(),
-        req.peer_addr().map(|address| address.ip()),
+        peer_ip,
+        req.app_config().secure(),
         &state.trusted_proxies,
     );
+    let conn_remote_addr =
+        client_ip::resolve_from_headers(req.headers(), peer_ip, &state.trusted_proxies);
     let headers_py = string_map_to_py_dict(py, &headers, &[])?.unbind();
     Ok(PyRequest {
         method: req.method().as_str().to_owned().into(),

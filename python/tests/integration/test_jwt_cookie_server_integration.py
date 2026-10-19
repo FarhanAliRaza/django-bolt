@@ -110,6 +110,8 @@ def test_cookie_csrf_over_real_server(make_server_project):
         )
         assert wrong_scheme.status_code == 403, wrong_scheme.text
 
+        # The check follows X-Forwarded-Proto from any peer. It passes one
+        # origin, so a value that a client sends never makes it weaker.
         forwarded_scheme = server.request(
             "POST",
             "/write",
@@ -120,6 +122,13 @@ def test_cookie_csrf_over_real_server(make_server_project):
             },
         )
         assert forwarded_scheme.status_code == 200, forwarded_scheme.text
+
+        http_origin_on_https = server.request(
+            "POST",
+            "/write",
+            headers={**cookie, "Origin": http_origin, "X-Forwarded-Proto": "https"},
+        )
+        assert http_origin_on_https.status_code == 403, http_origin_on_https.text
 
         no_origin_signal = server.request("POST", "/write", headers=cookie)
         assert no_origin_signal.status_code == 403, no_origin_signal.text

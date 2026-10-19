@@ -23,6 +23,7 @@ import contextlib
 import os
 import platform
 import signal
+import socket
 import time
 
 import httpx
@@ -108,6 +109,26 @@ def test_sigterm_closes_websockets_with_service_restart_code(make_server_project
     stdout, stderr = server.stop()
     # -6 here means a Rust panic aborted the process during shutdown.
     assert exit_code == 0, f"Graceful SIGTERM shutdown must exit 0, got {exit_code}\nstderr:\n{stderr}"
+
+
+def test_sigterm_does_not_wait_for_an_idle_keep_alive_connection(make_server_project):
+    """A graceful stop closes an idle keep-alive connection, so it ends before the shutdown timeout."""
+    project = make_server_project(api_module=app_module("recycling_ws_echo"))
+
+    with (
+        project.start(env={"DJANGO_BOLT_SHUTDOWN_TIMEOUT": "30"}) as server,
+        socket.create_connection((server.host, server.port), timeout=5) as idle,
+    ):
+        idle.sendall(f"GET /health HTTP/1.1\r\nHost: {server.host}\r\n\r\n".encode())
+        assert idle.recv(65536).startswith(b"HTTP/1.1 200 OK")
+
+        started = time.monotonic()
+        os.kill(server.process.pid, signal.SIGTERM)
+        exit_code = server.process.wait(timeout=60)
+        elapsed = time.monotonic() - started
+
+    assert exit_code == 0
+    assert elapsed < 10, f"SIGTERM waited {elapsed:.1f} s for an idle keep-alive connection"
 
 
 def test_workers_lifetime_recycles_worker_without_downtime(make_server_project):

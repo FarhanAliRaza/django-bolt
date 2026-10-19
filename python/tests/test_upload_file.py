@@ -484,6 +484,34 @@ class TestUploadFileValidation:
         assert response.status_code == 200
         assert response.json()["has_file"] is True
 
+    def test_a_part_header_over_64_kb_gets_422(self):
+        """The multipart parser keeps at most 64 KB that it cannot use yet, for example a part header."""
+        api = BoltAPI()
+
+        @api.post("/upload")
+        async def upload(file: Annotated[UploadFile, File()]):
+            return {"size": file.size}
+
+        def body(pad: int) -> bytes:
+            return (
+                b"--b\r\n"
+                b'Content-Disposition: form-data; name="file"; filename="a.bin"\r\n'
+                b"X-Pad: " + b"a" * pad + b"\r\n"
+                b"Content-Type: application/octet-stream\r\n\r\n"
+                b"hello\r\n--b--\r\n"
+            )
+
+        client = TestClient(api)
+        headers = {"content-type": "multipart/form-data; boundary=b"}
+
+        response = client.post("/upload", content=body(1_000), headers=headers)
+        assert response.status_code == 200
+        assert response.json() == {"size": 5}
+
+        response = client.post("/upload", content=body(70_000), headers=headers)
+        assert response.status_code == 422
+        assert response.json()["detail"][0]["type"] == "multipart_error"
+
 
 class TestFileConstraintsByPartName:
     """Rust checks a file against the File() constraints of its multipart part name."""

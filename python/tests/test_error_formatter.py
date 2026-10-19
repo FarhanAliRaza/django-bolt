@@ -233,6 +233,39 @@ def test_unhandled_exception_reaches_the_formatter(recorded, path, caplog):
     assert logged == ["Internal Server Error: RuntimeError - boom"]
 
 
+def test_suspicious_operation_400_reaches_the_formatter(settings, caplog):
+    """DisallowedHost gives 400 and one security record, with a formatter as without one."""
+    settings.ALLOWED_HOSTS = ["example.com"]
+    api = BoltAPI(error_formatter=_record)
+
+    @api.get("/absolute")
+    async def absolute(request) -> dict:
+        return {"uri": request.build_absolute_uri()}
+
+    with caplog.at_level(logging.ERROR), TestClient(api) as client:
+        response = client.get("/absolute", headers={"Host": "evil.example"})
+    assert response.status_code == 400
+    data = response.json()
+    assert (data["kind"], data["detail"], data["exception"]) == ("bad_request", "Bad Request", "DisallowedHost")
+    assert [record.name for record in caplog.records if record.levelno >= logging.ERROR] == [
+        "django.security.DisallowedHost"
+    ]
+
+
+@pytest.mark.parametrize(("trusted_proxies", "port"), [([], "80"), (["127.0.0.1"], "443")])
+def test_formatter_request_takes_the_scheme_from_a_trusted_proxy_only(settings, trusted_proxies, port):
+    """The request of a Rust core error follows BOLT_TRUSTED_PROXIES, as a handler request does."""
+    settings.BOLT_TRUSTED_PROXIES = trusted_proxies
+
+    def formatter(error: BoltError, request) -> JSON:
+        return JSON({"port": request.META["SERVER_PORT"]}, status_code=error.status)
+
+    with TestClient(_routes(BoltAPI(error_formatter=formatter))) as client:
+        response = client.get("/missing", headers={"Host": "example.com", "X-Forwarded-Proto": "https"})
+    assert response.status_code == 404
+    assert response.json() == {"port": port}
+
+
 def test_response_validation_500_reaches_the_formatter(recorded, caplog):
     with caplog.at_level(logging.ERROR, logger="django_bolt.error_handlers"):
         response = recorded.get("/bad-response")

@@ -209,7 +209,7 @@ pub async fn handle_file(
 async fn serve_file(req: &HttpRequest, file_path: &Path) -> HttpResponse {
     // Use sync reads for files under 256KB (faster for typical static assets)
     // See: https://github.com/actix/actix-web/pull/3706
-    match NamedFile::open_async(file_path).await {
+    match NamedFile::open(file_path) {
         Ok(named) => named.read_mode_threshold(256 * 1024).into_response(req),
         Err(_) => not_found_response(),
     }

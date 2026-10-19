@@ -241,7 +241,10 @@ status, headers, body = generic_exception_handler(exc, debug=True)
 
 ### handle_exception
 
-The main entry point that routes to appropriate handlers:
+The main entry point that routes to appropriate handlers. It maps some Django exceptions as Django does:
+
+- `PermissionDenied` gives 403.
+- `SuspiciousOperation`, for example `DisallowedHost`, gives 400. Bolt logs it to the `django.security.<class name>` logger, as Django does. With `DEBUG=False`, the detail is `Bad Request`.
 
 ```python
 from django_bolt.error_handlers import handle_exception
@@ -377,7 +380,7 @@ api = BoltAPI(error_formatter=format_error)
 
 | Kind | Status | Source |
 |------|--------|--------|
-| `bad_request` | 400 | Too many headers, a header that is too large, or a body that Bolt cannot read |
+| `bad_request` | 400 | Too many headers, a header that is too large, a body that Bolt cannot read, or a Django `SuspiciousOperation`, such as `DisallowedHost` |
 | `not_authenticated` | 401 | A guard, or an `HTTPException(401)` |
 | `forbidden` | 403 | A guard, the CSRF origin check of Bolt, `PermissionDenied` or an `HTTPException(403)` |
 | `not_found` | 404 | No route, `FileNotFoundError` or an `HTTPException(404)` |

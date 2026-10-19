@@ -933,8 +933,14 @@ pub fn start_server(
                     });
 
                     let served = server.await;
-                    // Idle lanes close their database connections and stop.
-                    bolt_core::lane::shutdown();
+                    // The lanes close their database connections and stop
+                    // before Python exits.
+                    let busy = bolt_core::lane::shutdown();
+                    if busy > 0 {
+                        eprintln!(
+                            "[django-bolt] {busy} request lane(s) did not stop in time; they do not close their database connections"
+                        );
+                    }
                     served
                 }
             })

@@ -8,6 +8,7 @@ the lane shutdown.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -62,6 +63,23 @@ def test_server_with_live_lanes_stops_cleanly(make_server_project):
 
     assert server.process.returncode == 0, stderr
     assert "panicked" not in stderr
+
+
+@pytest.mark.server_integration
+def test_server_stop_waits_for_a_busy_lane(make_server_project, tmp_path):
+    report = tmp_path / "exit-report.json"
+    project = make_server_project(api_module=app_module("request_lanes"))
+    server = project.start(env={"BOLT_TEST_EXIT_REPORT": str(report)})
+
+    # The client goes away. The request keeps its lane, which holds a connection for 1 s.
+    with pytest.raises(httpx.ReadTimeout):
+        server.client.get(server.url("/async-hold"), timeout=httpx.Timeout(0.3, connect=10))
+    stdout, stderr = server.stop()
+
+    assert server.process.returncode == 0, stderr
+    assert "panicked" not in stderr
+    # The lane closed its connection before Python started to exit.
+    assert json.loads(report.read_text()) == {"open_connections": 0}
 
 
 @pytest.mark.server_integration

@@ -74,6 +74,11 @@ def test_server_stop_waits_for_a_busy_lane(make_server_project, tmp_path):
     # The client goes away. The request keeps its lane, which holds a connection for 1 s.
     with pytest.raises(httpx.ReadTimeout):
         server.client.get(server.url("/async-hold"), timeout=httpx.Timeout(0.3, connect=10))
+    # The lane keeps the connection until it stops, so the stop finds it open.
+    deadline = time.monotonic() + 5
+    while server.get("/connections").json() != {"open": 1}:
+        assert time.monotonic() < deadline, "the lane did not open its connection"
+        time.sleep(0.01)
     stdout, stderr = server.stop()
 
     assert server.process.returncode == 0, stderr

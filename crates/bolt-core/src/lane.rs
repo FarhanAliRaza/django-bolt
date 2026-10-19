@@ -109,11 +109,13 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 /// True after `shutdown`. It sets the flag under the locks of `IDLE_LANES` and
 /// `LANES`. Thus no lane goes idle and no lane starts after it.
 static STOPPING: AtomicBool = AtomicBool::new(false);
-/// False after `shutdown` stopped its wait for the lanes. Then Python can
-/// finalize, and a lane must not attach. A lane holds the read lock while it
-/// attaches at its start and at its end, so `shutdown` cannot close the flag
-/// during that work.
-static PYTHON_OPEN: RwLock<bool> = RwLock::new(true);
+/// True after `shutdown` stopped its wait for the lanes. Then Python can
+/// finalize, and a lane must not attach.
+static PYTHON_CLOSED: AtomicBool = AtomicBool::new(false);
+/// A lane holds the read lock while it attaches at its start and at its end.
+/// `shutdown` takes the write lock after it sets `PYTHON_CLOSED`, so it waits
+/// for a lane that read the flag before.
+static PYTHON_GATE: RwLock<()> = RwLock::new(());
 /// `concurrent.futures.Future`, which `RequestLane.submit` creates for each call.
 static FUTURE_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
@@ -265,11 +267,12 @@ fn lane_main(id: u64, sender: Sender<Job>, pending: Arc<AtomicUsize>, receiver: 
 /// Run `work` unless `shutdown` stopped its wait for the lanes. Return false
 /// when the work did not run.
 fn while_python_open(work: impl FnOnce()) -> bool {
-    let open = PYTHON_OPEN.read();
-    if *open {
+    let _gate = PYTHON_GATE.read();
+    let open = !PYTHON_CLOSED.load(Ordering::SeqCst);
+    if open {
         work();
     }
-    *open
+    open
 }
 
 fn unlist(id: u64) {
@@ -395,11 +398,11 @@ pub fn shutdown() -> usize {
     while !LANES.lock().is_empty() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(1));
     }
-    // A lane that started its exit work closes its connections first. That
-    // lane is still in `LANES` if the lock does not come in time.
-    if let Some(mut open) = PYTHON_OPEN.try_write_for(STOP_WAIT) {
-        *open = false;
-    }
+    // A lane that reads the flag after this does not attach. Wait, up to the
+    // same limit, for a lane that read it before. That lane is still in
+    // `LANES` if it does not complete in time.
+    PYTHON_CLOSED.store(true, Ordering::SeqCst);
+    drop(PYTHON_GATE.try_write_until(deadline));
     LANES.lock().len()
 }
 

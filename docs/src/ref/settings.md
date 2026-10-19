@@ -116,7 +116,7 @@ Bolt uses the same list for the request scheme. Only a peer in the list can set 
 
 Django's `SECURE_PROXY_SSL_HEADER` still applies on top of this scheme, in Django code and in `request.build_absolute_uri()`, as in Django. Django middleware on a Bolt route reads the scheme only from `SECURE_PROXY_SSL_HEADER`, as before. That setting trusts the header from every peer, so set it only when the proxy removes the header from client requests.
 
-The origin check of cookie authentication reads `X-Forwarded-Proto` from every peer. A browser cannot set this header on a cross-site request, so it only makes that check stricter. See [Cross-site request forgery protection](../topics/authentication.md#cross-site-request-forgery-protection).
+The origin check of cookie authentication reads `X-Forwarded-Proto` from every peer. That check passes only one origin, so a value that a client sends never makes it weaker than the scheme of the connection. See [Cross-site request forgery protection](../topics/authentication.md#cross-site-request-forgery-protection).
 
 Both an address and a block are accepted. `127.0.0.1` matches one address. `10.0.0.0/8` matches the block. An invalid entry raises `ImproperlyConfigured` at startup.
 

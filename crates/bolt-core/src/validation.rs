@@ -103,10 +103,13 @@ pub fn cookie_csrf_blocks(
 /// state-changing HTTPS request to `example.com`.
 ///
 /// The callers take `X-Forwarded-Proto` from any peer here, not only from
-/// `BOLT_TRUSTED_PROXIES`. A browser cannot set this header on a cross-site
-/// request. Thus the header only makes this check stricter. Without it, a page
-/// on `http://example.com` passes the check behind a TLS proxy that is not
-/// declared.
+/// `BOLT_TRUSTED_PROXIES`. The check passes one origin: this scheme with the
+/// `Host`. Without the header, the scheme is that of the connection. Behind a
+/// TLS proxy that is not declared, that is `http`, so a page on
+/// `http://example.com` passes. A cross-site page cannot send the header
+/// unless CORS allows it. Even then, that page can only select `http`, which
+/// the connection scheme gives already. Thus the header from any peer never
+/// makes this check weaker.
 ///
 /// Returns `true` when the request is allowed to proceed.
 #[inline]

@@ -345,9 +345,11 @@ is used when present; otherwise the origin of the `Origin` (or
 `Referer`) header — scheme and host — is compared against the request's
 effective scheme (honoring `X-Forwarded-Proto` behind a proxy) and
 `Host`. This check reads `X-Forwarded-Proto` from any peer, also outside
-[BOLT_TRUSTED_PROXIES](../ref/settings.md#bolt_trusted_proxies). A browser
-cannot set this header on a cross-site request, so it only makes the check
-stricter. HTTP and HTTPS are different origins, so an
+[BOLT_TRUSTED_PROXIES](../ref/settings.md#bolt_trusted_proxies). The check
+passes only one origin, so a value that a client sends never makes it weaker
+than the scheme of the connection. A cross-site page also cannot send the
+header unless your CORS settings allow it. HTTP and HTTPS are different
+origins, so an
 `Origin: http://example.com` never authorizes an HTTPS request to
 `example.com`. Requests that fail the check receive a `403 Forbidden`
 response.

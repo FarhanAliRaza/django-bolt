@@ -1,8 +1,10 @@
 """`request.build_absolute_uri()` for a Bolt request, built by Django.
 
-Django joins the location, checks the host and gives the scheme. Thus
-`ALLOWED_HOSTS`, `USE_X_FORWARDED_HOST` and `SECURE_PROXY_SSL_HEADER` apply as
-in a Django view. Bolt gives the path and the query as the client sent them.
+Django joins the location and gives the scheme. When Django builds the URL
+from the request host, it checks that host. Thus `ALLOWED_HOSTS`,
+`USE_X_FORWARDED_HOST` and `SECURE_PROXY_SSL_HEADER` apply as in a Django view.
+An absolute location comes back as it is, with no host check, as in Django.
+Bolt gives the path and the query as the client sent them.
 """
 
 from __future__ import annotations

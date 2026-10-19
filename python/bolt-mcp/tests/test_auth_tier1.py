@@ -124,7 +124,7 @@ def test_a_session_default_is_dropped_on_a_mount():
 @pytest.mark.parametrize("trusted_proxies", [[], ["127.0.0.1"]])
 @pytest.mark.parametrize(("origin", "status"), [("https://testserver", 200), ("http://testserver", 403)])
 def test_cookie_csrf_follows_x_forwarded_proto_from_any_peer(trusted_proxies, origin, status):
-    """A browser cannot set X-Forwarded-Proto on a cross-site request. The header only makes the check stricter."""
+    """The check passes one origin, so X-Forwarded-Proto from any peer never makes it weaker."""
     api = BoltAPI()
     mount_mcp(
         api,

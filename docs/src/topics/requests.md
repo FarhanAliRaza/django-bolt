@@ -35,7 +35,7 @@ The request dict contains:
 
 ### Absolute URLs
 
-Django's `HttpRequest.build_absolute_uri()` builds the URL of `request.build_absolute_uri()`. Thus Django joins a relative location to the request URL and encodes the result. Django checks the host against `ALLOWED_HOSTS`. A host that is not in the list raises `DisallowedHost`, and the response is 400. Django reads `X-Forwarded-Host` only when `USE_X_FORWARDED_HOST` is `True`. The scheme follows [BOLT_TRUSTED_PROXIES](../ref/settings.md#bolt_trusted_proxies), and `SECURE_PROXY_SSL_HEADER` applies on top of it, as in Django. Bolt keeps the path and the query of the request as the client sent them.
+Django's `HttpRequest.build_absolute_uri()` builds the URL of `request.build_absolute_uri()`. Thus Django joins a relative location to the request URL and encodes the result. When Django builds the URL from the request host, it checks that host against `ALLOWED_HOSTS`. A host that is not in the list raises `DisallowedHost`, and the response is 400. An absolute location, such as `https://cdn.example/a`, comes back as it is, with no host check, as in Django. Django reads `X-Forwarded-Host` only when `USE_X_FORWARDED_HOST` is `True`. The scheme follows [BOLT_TRUSTED_PROXIES](../ref/settings.md#bolt_trusted_proxies), and `SECURE_PROXY_SSL_HEADER` applies on top of it, as in Django. Bolt keeps the path and the query of the request as the client sent them.
 
 ## Type-safe request
 

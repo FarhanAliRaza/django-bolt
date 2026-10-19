@@ -110,8 +110,8 @@ def test_cookie_csrf_over_real_server(make_server_project):
         )
         assert wrong_scheme.status_code == 403, wrong_scheme.text
 
-        # The check follows X-Forwarded-Proto from any peer. A browser cannot
-        # set it on a cross-site request, so it only makes the check stricter.
+        # The check follows X-Forwarded-Proto from any peer. It passes one
+        # origin, so a value that a client sends never makes it weaker.
         forwarded_scheme = server.request(
             "POST",
             "/write",

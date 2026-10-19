@@ -429,9 +429,11 @@ impl PyRequest {
     ///     http://example.com/users?page=2
     ///
     /// Django's HttpRequest.build_absolute_uri() builds the URL, in
-    /// `django_bolt._absolute_uri`. Django joins the location and checks the
-    /// host, so a host outside `ALLOWED_HOSTS` raises `DisallowedHost`. The
-    /// resolved scheme is the scheme, unless `SECURE_PROXY_SSL_HEADER` applies.
+    /// `django_bolt._absolute_uri`. Django joins the location. When it builds
+    /// the URL from the request host, a host outside `ALLOWED_HOSTS` raises
+    /// `DisallowedHost`. An absolute location comes back with no host check.
+    /// The resolved scheme is the scheme, unless `SECURE_PROXY_SSL_HEADER`
+    /// applies.
     #[pyo3(signature = (location=None))]
     fn build_absolute_uri(&self, py: Python<'_>, location: Option<&str>) -> PyResult<String> {
         let scheme = if self.conn_scheme.is_empty() {

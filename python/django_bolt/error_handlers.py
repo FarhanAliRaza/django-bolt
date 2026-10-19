@@ -484,6 +484,7 @@ def problem_details(error: BoltError, request: Any) -> Response:
     "type", "title", "status", "detail" and "instance". It has "errors" when
     the error has field errors. The keys of ``error.extra`` are extension
     members. A key with the name of a standard member does not replace it.
+    An "errors" key is not used, because "errors" holds only field errors.
     """
     body: dict[str, Any] = {
         "type": "about:blank",
@@ -496,7 +497,9 @@ def problem_details(error: BoltError, request: Any) -> Response:
         body["errors"] = error.errors
     if isinstance(error.extra, dict):
         for key, value in error.extra.items():
-            body.setdefault(key, value)
+            # "errors" is a list of field errors, as ProblemDetails declares it.
+            if key != "errors":
+                body.setdefault(key, value)
     elif error.extra is not None:
         body.setdefault("extra", error.extra)
     return Response(body, status_code=error.status, media_type="application/problem+json")

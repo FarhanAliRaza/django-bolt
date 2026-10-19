@@ -6,6 +6,8 @@ and compares it with the error response that a client gets.
 
 from __future__ import annotations
 
+import http.client
+
 import msgspec
 import pytest
 from openapi_spec_validator import validate
@@ -32,6 +34,10 @@ class Conflict(msgspec.Struct):
     reason: str
 
 
+class Rejected(msgspec.Struct):
+    reason: str
+
+
 class ErrorBody(msgspec.Struct):
     """The body of a vendor error."""
 
@@ -49,6 +55,44 @@ def plain_error(error: BoltError, request) -> PlainText:
     return PlainText(error.detail, status_code=error.status)
 
 
+# The 422 body without a formatter: {"detail": [...]}.
+DETAIL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "detail": {
+            "type": "array",
+            "description": "List of validation errors",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "description": "Error type",
+                        "example": "validation_error",
+                    },
+                    "loc": {
+                        "type": "array",
+                        "description": "Location of the error (field path)",
+                        "items": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
+                        "example": ["body", "is_active"],
+                    },
+                    "msg": {
+                        "type": "string",
+                        "description": "Error message",
+                        "example": "Expected `bool`, got `int`",
+                    },
+                    "input": {"description": "The input value that caused the error (optional)"},
+                },
+                "required": ["type", "loc", "msg"],
+            },
+        }
+    },
+    "required": ["detail"],
+}
+REJECTED_REF = {"$ref": "#/components/schemas/Rejected"}
+PROBLEM_REF = {"$ref": "#/components/schemas/ProblemDetails"}
+
+
 def _api(formatter=None, *, strict: bool = False) -> BoltAPI:
     api = BoltAPI(
         error_formatter=formatter,
@@ -59,6 +103,12 @@ def _api(formatter=None, *, strict: bool = False) -> BoltAPI:
     async def create_item(data: ItemIn):
         if data.name == "taken":
             raise HTTPException(409, body=Conflict(reason="taken"))
+        return Item(id=1, name=data.name)
+
+    @api.post("/reviews", response_model={200: Item, 422: Rejected})
+    async def create_review(data: ItemIn):
+        if data.name == "spam":
+            raise HTTPException(422, body=Rejected(reason="spam"))
         return Item(id=1, name=data.name)
 
     api._register_openapi_routes()
@@ -74,50 +124,14 @@ def _spec(api: BoltAPI) -> dict:
     return spec
 
 
-def _responses(spec: dict) -> dict:
-    return spec["paths"]["/items"]["post"]["responses"]
+def _responses(spec: dict, path: str = "/items") -> dict:
+    return spec["paths"][path]["post"]["responses"]
 
 
 def test_without_formatter_the_422_keeps_the_detail_schema():
     assert _responses(_spec(_api()))["422"] == {
         "description": "Validation Error - Request data failed validation",
-        "content": {
-            "application/json": {
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "detail": {
-                            "type": "array",
-                            "description": "List of validation errors",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "type": {
-                                        "type": "string",
-                                        "description": "Error type",
-                                        "example": "validation_error",
-                                    },
-                                    "loc": {
-                                        "type": "array",
-                                        "description": "Location of the error (field path)",
-                                        "items": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
-                                        "example": ["body", "is_active"],
-                                    },
-                                    "msg": {
-                                        "type": "string",
-                                        "description": "Error message",
-                                        "example": "Expected `bool`, got `int`",
-                                    },
-                                    "input": {"description": "The input value that caused the error (optional)"},
-                                },
-                                "required": ["type", "loc", "msg"],
-                            },
-                        }
-                    },
-                    "required": ["detail"],
-                }
-            }
-        },
+        "content": {"application/json": {"schema": DETAIL_SCHEMA}},
     }
 
 
@@ -126,9 +140,7 @@ def test_problem_details_documents_the_422_that_the_client_gets():
     spec = _spec(api)
     responses = _responses(spec)
 
-    assert responses["422"]["content"] == {
-        "application/problem+json": {"schema": {"$ref": "#/components/schemas/ProblemDetails"}}
-    }
+    assert responses["422"]["content"] == {"application/problem+json": {"schema": PROBLEM_REF}}
     problem = spec["components"]["schemas"]["ProblemDetails"]
     assert problem["required"] == ["type", "title", "status", "detail", "instance"]
     assert problem["properties"]["errors"]["items"] == {"$ref": "#/components/schemas/ProblemFieldError"}
@@ -148,6 +160,56 @@ def test_problem_details_documents_the_422_that_the_client_gets():
     assert taken.status_code == 409
     assert taken.headers["content-type"] == "application/json"
     assert taken.json() == {"reason": "taken"}
+
+
+@pytest.mark.parametrize(
+    ("formatter", "content"),
+    [
+        (None, {"application/json": {"schema": {"anyOf": [REJECTED_REF, DETAIL_SCHEMA]}}}),
+        (
+            problem_details,
+            {"application/json": {"schema": REJECTED_REF}, "application/problem+json": {"schema": PROBLEM_REF}},
+        ),
+        (plain_error, {"application/json": {"schema": REJECTED_REF}}),
+    ],
+    ids=["no-formatter", "problem-details", "no-error-schema"],
+)
+def test_declared_422_keeps_its_body_next_to_the_validation_body(formatter, content):
+    """A body route can send its own typed 422 and the validation 422, so the schema shows both."""
+    response = _responses(_spec(_api(formatter)), "/reviews")["422"]
+    # The route declares this entry, so it keeps its description. The phrase depends on the Python version.
+    assert response == {"description": http.client.responses[422], "content": content}
+
+
+def test_declared_422_and_validation_422_reach_the_client():
+    with TestClient(_api(problem_details)) as client:
+        spam = client.post("/reviews", json={"name": "spam"})
+        invalid = client.post("/reviews", json={"name": 1})
+
+    assert spam.status_code == 422
+    assert spam.headers["content-type"] == "application/json"
+    msgspec.convert(spam.json(), Rejected)
+    assert invalid.status_code == 422
+    assert invalid.headers["content-type"] == "application/problem+json"
+    msgspec.convert(invalid.json(), ProblemDetails)
+
+
+def test_problem_details_errors_stay_a_list_of_field_errors():
+    """An "errors" key in the extra of the error does not take the place of the field errors."""
+    api = BoltAPI(error_formatter=problem_details)
+
+    @api.get("/vote")
+    async def vote() -> Item:
+        raise HTTPException(422, detail="Vote closed", extra={"errors": "closed", "poll": 7})
+
+    with TestClient(api) as client:
+        response = client.get("/vote")
+
+    assert response.status_code == 422
+    body = response.json()
+    assert "errors" not in body
+    assert body["poll"] == 7
+    msgspec.convert(body, ProblemDetails)
 
 
 def test_declared_error_schema_documents_the_422():

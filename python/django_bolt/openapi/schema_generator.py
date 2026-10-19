@@ -1133,20 +1133,46 @@ class SchemaGenerator:
 
             if has_request_body:
                 # 422 Unprocessable Entity - validation errors
-                responses["422"] = OpenAPIResponse(
-                    description="Validation Error - Request data failed validation",
-                    content=self._validation_error_content(),
-                )
+                content = self._validation_error_content()
+                declared = responses.get("422")
+                if declared is None:
+                    responses["422"] = OpenAPIResponse(
+                        description="Validation Error - Request data failed validation",
+                        content=content,
+                    )
+                else:
+                    # The route also sends its own 422, for example HTTPException(422, body=...).
+                    responses["422"] = replace(declared, content=self._merge_content(declared.content, content))
 
         return responses
+
+    @staticmethod
+    def _merge_content(
+        declared: dict[str, OpenAPIMediaType] | None,
+        generated: dict[str, OpenAPIMediaType] | None,
+    ) -> dict[str, OpenAPIMediaType] | None:
+        """The content of a response that can send the declared body or the generated body.
+
+        A media type with both bodies gets ``anyOf``. The two schemas have no tag,
+        and one body can match both, so ``oneOf`` can reject a valid body.
+        """
+        merged = dict(declared or {})
+        for media_type, media in (generated or {}).items():
+            existing = merged.get(media_type)
+            if existing is None or existing.schema is None:
+                merged[media_type] = media
+            else:
+                merged[media_type] = replace(existing, schema=Schema(any_of=[existing.schema, media.schema]))
+        return merged or None
 
     def _validation_error_content(self) -> dict[str, OpenAPIMediaType] | None:
         """The content of a 422 response, as the error formatter of the API sends it.
 
         Without a formatter, the body is the default ``{"detail": [...]}``. A
         formatter can declare its body with ``error_schema``. For a formatter
-        with no declaration, the result is None: Bolt cannot know the media type
-        or the shape, and generated clients parse the body that a schema shows.
+        with no declaration, the result is None. Bolt cannot know the media type
+        or the shape of its body. A generated client parses the body that a
+        schema shows, so a guess can break the client.
         """
         formatter = self.api._error_formatter
         if formatter is None:

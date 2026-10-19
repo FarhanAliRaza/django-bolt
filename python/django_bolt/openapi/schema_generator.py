@@ -57,7 +57,9 @@ class OpenAPIStrictError(ValueError):
     Raised by ``SchemaGenerator.generate`` with every offender listed at once:
     routes whose success response is an opaque ``{"type": "object"}`` (no return
     annotation / ``response_model``) and components that needed the
-    ``module.qualname`` fallback because two types share a short name.
+    ``module.qualname`` fallback because two types share a short name. An
+    ``error_formatter`` without ``error_schema`` is an offender when a route
+    has a 422 response.
     """
 
 
@@ -297,6 +299,7 @@ class SchemaGenerator:
         # strict mode bookkeeping (see OpenAPIStrictError)
         self._opaque_operations: list[str] = []
         self._qualified_components: list[str] = []
+        self._untyped_errors = False
 
     @staticmethod
     def _schema_kwargs(**kwargs: Any) -> dict[str, Any]:
@@ -632,7 +635,7 @@ class SchemaGenerator:
         # Collect and merge tags
         openapi.tags = self._collect_tags(collected_tags)
 
-        if self.config.strict and (self._opaque_operations or self._qualified_components):
+        if self.config.strict and (self._opaque_operations or self._qualified_components or self._untyped_errors):
             problems = []
             if self._opaque_operations:
                 problems.append(
@@ -643,6 +646,13 @@ class SchemaGenerator:
                 problems.append(
                     "component names that fell back to module.qualname because two types share a "
                     "short name (rename one): " + ", ".join(self._qualified_components)
+                )
+            if self._untyped_errors:
+                formatter = self.api._error_formatter
+                name = getattr(formatter, "__name__", type(formatter).__name__)
+                problems.append(
+                    f"the error_formatter {name} has no error_schema, so the 422 responses have no body "
+                    "schema (decorate the formatter with error_schema)"
                 )
             raise OpenAPIStrictError("OpenAPI strict mode: " + "; ".join(problems))
 
@@ -1125,12 +1135,28 @@ class SchemaGenerator:
                 # 422 Unprocessable Entity - validation errors
                 responses["422"] = OpenAPIResponse(
                     description="Validation Error - Request data failed validation",
-                    content={
-                        "application/json": OpenAPIMediaType(schema=self._get_validation_error_schema()),
-                    },
+                    content=self._validation_error_content(),
                 )
 
         return responses
+
+    def _validation_error_content(self) -> dict[str, OpenAPIMediaType] | None:
+        """The content of a 422 response, as the error formatter of the API sends it.
+
+        Without a formatter, the body is the default ``{"detail": [...]}``. A
+        formatter can declare its body with ``error_schema``. For a formatter
+        with no declaration, the result is None: Bolt cannot know the media type
+        or the shape, and generated clients parse the body that a schema shows.
+        """
+        formatter = self.api._error_formatter
+        if formatter is None:
+            return {"application/json": OpenAPIMediaType(schema=self._get_validation_error_schema())}
+        declared = getattr(formatter, "__bolt_error_schema__", None)
+        if declared is None:
+            self._untyped_errors = True
+            return None
+        schema = self._type_to_schema(declared.schema, register_component=True)
+        return {declared.media_type: OpenAPIMediaType(schema=schema)}
 
     def _get_validation_error_schema(self) -> Schema:
         """Get schema for 422 validation error responses.

@@ -29,6 +29,7 @@ BoltAPI(
     compression=None,          # CompressionConfig for response compression
     openapi_config=None,       # OpenAPIConfig for documentation
     include_in_schema=None,    # OpenAPI visibility default for this API's routes
+    error_formatter=None,      # Function that formats the framework error responses
 )
 ```
 
@@ -45,6 +46,7 @@ BoltAPI(
 | `compression` | `CompressionConfig` | `None` | Response compression settings |
 | `openapi_config` | `OpenAPIConfig` | `None` | Configuration for OpenAPI documentation |
 | `include_in_schema` | `bool` or `None` | `None` | Default OpenAPI visibility for this API's routes. A route, view, or viewset value wins. `None` inherits from the API this one is mounted into |
+| `error_formatter` | callable or `None` | `None` | `(error: BoltError, request) -> Response`. It formats each error response that the framework makes. Use `problem_details` for RFC 9457. See [Error formatter](../topics/error-handling.md#error-formatter) |
 
 `middleware` fails fast for unsupported instances. Pass middleware classes (`pass class, not instance`) for global/router lists.
 

@@ -167,8 +167,10 @@ def test_mounted_asgi_app_unrequested_subprotocol_fails_with_500(server):
 
 
 def test_bad_handshake_is_rejected_before_the_handler_runs(server):
-    status_line, _headers = _upgrade_head(server, "/ws/version-probe", version="99")
-    assert " 400 " in status_line
+    # RFC 6455 section 4.4: an unknown version gets 426 and the version that the server supports.
+    status_line, headers = _upgrade_head(server, "/ws/version-probe", version="99")
+    assert " 426 " in status_line
+    assert headers["sec-websocket-version"] == "13"
 
     # A good handshake reaches the handler, so the probe counts calls.
     status_line, _headers = _upgrade_head(server, "/ws/version-probe")

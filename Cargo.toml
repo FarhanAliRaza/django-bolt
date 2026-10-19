@@ -15,21 +15,21 @@ repository = "https://github.com/dj-bolt/django-bolt"
 # free-threaded build has no stable ABI before 3.15, so PyO3 ignores the abi3
 # feature for a free-threaded interpreter and builds a version-specific
 # module (cp314t). CI builds that wheel with `--interpreter 3.14t`.
-pyo3 = { version = "0.29.2", features = ["abi3-py312", "chrono"] }
-pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }
+pyo3 = { version = "0.30.1", features = ["abi3-py312", "chrono"] }
+pyo3-async-runtimes = { version = "0.30", features = ["tokio-runtime"] }
 actix-web = { version = "4", features = ["compress-gzip", "compress-brotli", "compress-zstd", "cookies"] }
 actix-http = "3"
 actix-web-actors = "4"  # WebSocket support
 actix = "0.13"  # Actor framework for WebSocket
-actix-files = "0.6"
+actix-files = "0.7"
 tokio = { version = "1", features = ["full"] }
 socket2 = { version = "0.6", features = ["all"] }
 matchit = "0.9"
 # Middleware dependencies
 governor = "0.10"  # Rate limiting
-jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }  # JWT authentication
+jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }  # JWT authentication
 aws-lc-rs = "1"  # HMAC keys built once per JWT secret; jsonwebtoken uses the same crate
-base64 = "0.22"  # base64url token-segment decoding for the JWT validation loop
+base64 = "0.23"  # base64url token-segment decoding for the JWT validation loop
 dashmap = "6"  # Fast concurrent hashmap for rate limiting
 parking_lot = "0.12"  # Fast RwLock for shared state
 serde = { version = "1", features = ["derive"] }
@@ -38,20 +38,20 @@ serde_json = "1"
 ahash = "0.8"
 # Memory allocators (optional features)
 mimalloc = { version = "0.1", default-features = false }
-tikv-jemallocator = { version = "0.6" }
+tikv-jemallocator = { version = "0.7" }
 urlencoding = "2"
 once_cell = "1"
 futures-util = "0.3"
 bytes = "1"
-brotli = "8"
+brotli = "9"
 flate2 = "1"
-zstd = "0.13"
+zstd = "0.14"
 regex = "1"
 # Type coercion dependencies (for path/query param parsing)
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 # Form parsing dependencies
-actix-multipart = "0.7"
+actix-multipart = "0.8"
 serde_urlencoded = "0.7"
 form_urlencoded = "1"  # URL-encoded form bodies, parsed lazily so the field limit applies first
 tempfile = "3"
@@ -68,7 +68,7 @@ http = "1"
 http-body = "1"
 http-body-util = "0.1"
 tokio-util = "0.7"
-sha2 = "0.10"  # MRTR requestState digests (args/principal)
+sha2 = "0.11"  # MRTR requestState digests (args/principal)
 # Property tests (dev only)
 proptest = "1"
 # Internal crates
@@ -86,7 +86,7 @@ license.workspace = true
 repository.workspace = true
 
 [build-dependencies]
-pyo3-build-config = { version = "0.29.2", features = ["resolve-config"] }
+pyo3-build-config = { version = "0.30.1", features = ["resolve-config"] }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
@@ -122,6 +122,7 @@ parking_lot = { workspace = true }
 pyo3 = { workspace = true }
 pyo3-async-runtimes = { workspace = true }
 regex = { workspace = true }
+serde_json = { workspace = true }
 socket2 = { workspace = true }
 tokio = { workspace = true }
 bolt-loop = { workspace = true }

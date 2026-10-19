@@ -1,5 +1,6 @@
-import tomllib
-from pathlib import Path
+from __future__ import annotations
+
+import importlib.metadata
 
 import click
 
@@ -12,10 +13,4 @@ def main():
 @main.command()
 def version():
     """Show Django-Bolt version."""
-    cli_dir = Path(__file__).parent.resolve()
-    toml_file = cli_dir / "../../pyproject.toml"
-
-    with toml_file.open("rb") as f:
-        pyproject = tomllib.load(f)
-
-    click.echo(f"Django-Bolt version: {pyproject['project']['version']}")
+    click.echo(f"Django-Bolt version: {importlib.metadata.version('django-bolt')}")

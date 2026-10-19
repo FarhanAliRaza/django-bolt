@@ -34,6 +34,12 @@ def _venv_python(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python"
 
 
+def _venv_script(venv_python: Path, name: str) -> Path:
+    if platform.system() == "Windows":
+        return venv_python.with_name(f"{name}.exe")
+    return venv_python.with_name(name)
+
+
 def _artifact_requirement(artifact_path: Path, extra: str = "") -> str:
     return f"django-bolt{extra} @ {artifact_path.resolve().as_uri()}"
 
@@ -92,6 +98,29 @@ def test_installed_artifact_runs_runbolt_dev(make_server_project, installed_arti
 
     assert response.status_code == 200
     assert response.json() == {"mode": "ok"}
+
+
+def test_installed_artifact_prints_its_version(installed_artifact_python: Path):
+    """The ``django-bolt version`` console script prints the version of the installed distribution."""
+    installed_version = subprocess.run(
+        [
+            str(installed_artifact_python),
+            "-c",
+            "import importlib.metadata; print(importlib.metadata.version('django-bolt'))",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    result = subprocess.run(
+        [str(_venv_script(installed_artifact_python, "django-bolt")), "version"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"Django-Bolt version: {installed_version}\n"
 
 
 def test_the_pool_extra_installs_a_pool_that_runbolt_accepts(make_server_project, pool_extra_python: Path):

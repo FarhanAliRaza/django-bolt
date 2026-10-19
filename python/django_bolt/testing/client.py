@@ -353,6 +353,7 @@ class TestClient(httpx.Client):
             cors_allowed_origins,
             static_files_config,
             api._rust_compression_config(),
+            error_renderer=api._rust_error_renderer(),
         )
         # Release the native app at close, or when nobody closed the client and
         # it is garbage. The native app holds the API, so a leak keeps it alive.
@@ -659,6 +660,7 @@ class AsyncTestClient(httpx.AsyncClient):
             cors_allowed_origins,
             static_files_config,
             api._rust_compression_config(),
+            error_renderer=api._rust_error_renderer(),
         )
         # Release the native app at close, or when nobody closed the client and
         # it is garbage. The native app holds the API, so a leak keeps it alive.

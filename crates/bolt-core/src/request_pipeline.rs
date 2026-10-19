@@ -3,6 +3,13 @@
 //! This module contains validation and processing logic that is common
 //! between the production handler (handler.rs) and test handler (testing.rs).
 
+// A validator here returns the error response of the request as its `Err`.
+// Since actix-web 4.15, `HttpResponse` is larger than the 128-byte limit of
+// this lint. A `Box` would make the `Result` smaller, but it would add an
+// allocation to each error response. The size costs the success path
+// nothing, because a call writes only the `Ok` value.
+#![allow(clippy::result_large_err)]
+
 use actix_web::http::header::HeaderValue;
 use actix_web::{HttpRequest, HttpResponse};
 use ahash::{AHashMap, AHashSet};
@@ -121,12 +128,12 @@ where
 /// A route with no sequence keys, or a request with no query, gives an empty
 /// result that does not allocate. The length limit applies to each value: the
 /// scalar parser keeps the last value of a key, so it does not check the others.
-/// The error is the detail of the rejection, for HTTP and WebSocket.
+/// The error is the rejected parameter, for HTTP and WebSocket.
 pub fn query_sequences<'a>(
     query: Option<&'a str>,
     keys: &AHashSet<String>,
     max_length: usize,
-) -> Result<QuerySequences<'a>, String> {
+) -> Result<QuerySequences<'a>, ParamError> {
     let query = match query {
         Some(query) if !keys.is_empty() && !query.is_empty() => query,
         _ => return Ok(Vec::new()),
@@ -134,12 +141,11 @@ pub fn query_sequences<'a>(
     let sequences = crate::router::collect_query_sequences(query, keys);
     for (name, values) in &sequences {
         if let Some(value) = values.iter().find(|value| value.len() > max_length) {
-            return Err(too_long_detail(
-                "Query parameter",
-                name,
-                value.len(),
-                max_length,
-            ));
+            return Err(ParamError {
+                label: "Query parameter",
+                name: name.to_string(),
+                msg: too_long_msg(value.len(), max_length),
+            });
         }
     }
     Ok(sequences)
@@ -157,16 +163,50 @@ pub fn set_query_sequences(
     Ok(())
 }
 
+/// A request value that fails validation: its source label, its name and the reason.
+#[derive(Debug)]
+pub struct ParamError {
+    pub label: &'static str,
+    pub name: String,
+    pub msg: String,
+}
+
+impl ParamError {
+    /// The 422 response for this error.
+    #[cold]
+    pub fn into_response(self) -> HttpResponse {
+        responses::error_422_param(self.label, &self.name, &self.msg)
+    }
+}
+
+/// The detail text, for example "Query parameter 'tag': Parameter too long: ...".
+impl std::fmt::Display for ParamError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} '{}': {}", self.label, self.name, self.msg)
+    }
+}
+
+impl From<ParamError> for PyErr {
+    fn from(error: ParamError) -> Self {
+        pyo3::exceptions::PyValueError::new_err(error.to_string())
+    }
+}
+
 #[cold]
 fn too_long(label: &str, name: &str, len: usize, max_length: usize) -> HttpResponse {
-    responses::error_422_validation(&too_long_detail(label, name, len, max_length))
+    responses::error_422_param(label, name, &too_long_msg(len, max_length))
 }
 
 #[cold]
 fn too_long_detail(label: &str, name: &str, len: usize, max_length: usize) -> String {
+    format!("{} '{}': {}", label, name, too_long_msg(len, max_length))
+}
+
+#[cold]
+fn too_long_msg(len: usize, max_length: usize) -> String {
     format!(
-        "{} '{}': Parameter too long: {} bytes (max {} bytes)",
-        label, name, len, max_length
+        "Parameter too long: {} bytes (max {} bytes)",
+        len, max_length
     )
 }
 
@@ -187,10 +227,7 @@ fn coerce_into<'t>(
             coerced_values.push((name, coerced));
             Ok(())
         }
-        Err(error) => Err(responses::error_422_validation(&format!(
-            "{} '{}': {}",
-            label, name, error
-        ))),
+        Err(error) => Err(responses::error_422_param(label, name, &error.to_string())),
     }
 }
 
@@ -382,12 +419,13 @@ pub fn insert_header_line(headers: &mut AHashMap<String, String>, name: &str, va
 
 /// Build HTTP 422 response for validation errors
 pub fn build_validation_error_response(error: &ValidationError) -> HttpResponse {
-    let body = serde_json::json!({
-        "detail": [error.to_json()]
-    });
-    HttpResponse::UnprocessableEntity()
+    let body = serde_json::json!({ "detail": [error.to_json()] });
+    let response = HttpResponse::UnprocessableEntity()
         .content_type("application/json")
-        .body(body.to_string())
+        .body(body.to_string());
+    crate::error::with_error_info(response, || {
+        responses::validation_info(serde_json::json!([error.to_json()]))
+    })
 }
 
 #[cfg(test)]
@@ -418,7 +456,9 @@ mod tests {
             sequences,
             vec![(Cow::from("tag"), vec![Cow::from("abc"), Cow::from("de")])]
         );
-        let detail = query_sequences(Some("tag=abcd&tag=a"), &keys, 3).unwrap_err();
+        let detail = query_sequences(Some("tag=abcd&tag=a"), &keys, 3)
+            .unwrap_err()
+            .to_string();
         assert_eq!(
             detail,
             "Query parameter 'tag': Parameter too long: 4 bytes (max 3 bytes)"

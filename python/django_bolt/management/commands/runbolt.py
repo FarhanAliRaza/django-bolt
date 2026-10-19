@@ -1450,13 +1450,14 @@ class Command(BaseCommand):
         )
 
         # The server has one error formatter. Rust uses it for a route miss,
-        # which belongs to no API.
-        formatters = {api._error_formatter for _, api in apis if api._error_formatter is not None}
-        if len(formatters) > 1:
+        # which belongs to no API. Compare with ==, not with a set: a callable
+        # instance can be unhashable, and two bound methods of one object are equal.
+        formatters = [api._error_formatter for _, api in apis if api._error_formatter is not None]
+        if any(formatter != formatters[0] for formatter in formatters[1:]):
             raise CommandError(
                 "The APIs set different error_formatter values. Set the same error_formatter on each API, or on one."
             )
-        merged._error_formatter = next(iter(formatters), None)
+        merged._error_formatter = formatters[0] if formatters else None
 
         # Update next handler ID
         merged._next_handler_id = next_handler_id

@@ -8,6 +8,7 @@ exceptions). Each test checks the HTTP response that a client gets.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Annotated
 from uuid import UUID
@@ -465,6 +466,50 @@ def _api_with_route(path: str, formatter=None) -> BoltAPI:
 def test_merge_keeps_the_one_formatter_of_the_project():
     merged = Command().merge_apis([("a.api", _api_with_route("/a", problem_details)), ("b.api", _api_with_route("/b"))])
     assert merged._error_formatter is problem_details
+
+
+@dataclass
+class _TypedProblems:
+    """A formatter with its own settings. A dataclass with ``eq=True`` cannot be hashed."""
+
+    type_base: str
+
+    def __call__(self, error: BoltError, request) -> JSON:
+        return JSON({"type": f"{self.type_base}/{error.kind}"}, status_code=error.status)
+
+    def format(self, error: BoltError, request) -> JSON:
+        return self(error, request)
+
+
+_PROBLEMS = _TypedProblems("https://errors.example")
+
+
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        (_TypedProblems("https://errors.example"), _TypedProblems("https://errors.example")),
+        # Each attribute access makes a new bound method. The two are equal, not identical.
+        (_PROBLEMS.format, _PROBLEMS.format),
+    ],
+    ids=["unhashable-equal", "bound-method"],
+)
+def test_merge_accepts_equal_formatters(first, second):
+    merged = Command().merge_apis([("a.api", _api_with_route("/a", first)), ("b.api", _api_with_route("/b", second))])
+
+    with TestClient(merged) as client:
+        response = client.get("/nowhere")
+
+    assert response.status_code == 404
+    assert response.json() == {"type": "https://errors.example/not_found"}
+
+
+def test_mount_accepts_an_equal_formatter():
+    parent = _api_with_route("/a", _PROBLEMS.format)
+    parent.mount("/v2", _api_with_route("/b", _PROBLEMS.format))
+
+    with TestClient(parent) as client:
+        assert client.get("/v2/b").status_code == 200
+        assert client.get("/nowhere").json() == {"type": "https://errors.example/not_found"}
 
 
 def test_merge_rejects_two_different_formatters():

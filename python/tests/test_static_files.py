@@ -189,7 +189,8 @@ class TestStaticFileServing:
     """Tests for static file serving via the test client."""
 
     @pytest.fixture(scope="class")
-    def api_with_static(self):
+    @classmethod
+    def api_with_static(cls):
         """Create an API (static is served by the native /static scope, not a route)."""
         api = BoltAPI()
 
@@ -200,7 +201,8 @@ class TestStaticFileServing:
         return api
 
     @pytest.fixture(scope="class")
-    def client(self, api_with_static):
+    @classmethod
+    def client(cls, api_with_static):
         """Test client whose native /static scope serves from TEST_STATIC_DIR."""
         static_config = {
             "url_prefix": "/static",
@@ -312,7 +314,8 @@ class TestStaticTemplateTag:
     """Tests for Django template {% static %} tag with Bolt."""
 
     @pytest.fixture(scope="class")
-    def api_with_template(self):
+    @classmethod
+    def api_with_template(cls):
         """Create API with template that uses static tag."""
         # Configure static settings for the whole class, and restore them after it.
         with override_settings(STATIC_ROOT=TEST_STATIC_DIR, STATIC_URL="/static/"):
@@ -325,7 +328,8 @@ class TestStaticTemplateTag:
             yield api
 
     @pytest.fixture(scope="class")
-    def client(self, api_with_template):
+    @classmethod
+    def client(cls, api_with_template):
         """Create test client."""
         return TestClient(api_with_template)
 
@@ -387,12 +391,14 @@ class TestCachingHeaders:
     """Tests for HTTP caching headers on static files."""
 
     @pytest.fixture(scope="class")
-    def api(self):
+    @classmethod
+    def api(cls):
         """Create API (static served by the native /static scope)."""
         return BoltAPI()
 
     @pytest.fixture(scope="class")
-    def client(self, api):
+    @classmethod
+    def client(cls, api):
         """Create test client with HTTP layer and explicit static files config."""
         static_config = {
             "url_prefix": "/static",
@@ -428,12 +434,14 @@ class TestDirectoryTraversalSecurity:
     """Comprehensive tests for directory traversal attack prevention."""
 
     @pytest.fixture(scope="class")
-    def api_with_static(self):
+    @classmethod
+    def api_with_static(cls):
         """Create API (static served by the native /static scope)."""
         return BoltAPI()
 
     @pytest.fixture(scope="class")
-    def client(self, api_with_static):
+    @classmethod
+    def client(cls, api_with_static):
         """Create test client with explicit static files config."""
         static_config = {
             "url_prefix": "/static",
@@ -504,7 +512,8 @@ class TestSymlinkSecurity:
     """Tests for symlink attack prevention."""
 
     @pytest.fixture(scope="class")
-    def setup_symlink_test(self):
+    @classmethod
+    def setup_symlink_test(cls):
         """Create a test directory with symlinks."""
         # Create a fresh test directory
         test_dir = tempfile.mkdtemp(prefix="symlink_test_")
@@ -701,12 +710,14 @@ class TestEdgeCases:
     """Tests for edge cases and special scenarios."""
 
     @pytest.fixture(scope="class")
-    def api_with_static(self):
+    @classmethod
+    def api_with_static(cls):
         """Create API (static served by the native /static scope)."""
         return BoltAPI()
 
     @pytest.fixture(scope="class", autouse=True)
-    def setup_static_dir(self):
+    @classmethod
+    def setup_static_dir(cls):
         """Point static serving at TEST_STATIC_DIR before the client exists.
 
         TestClient snapshots STATIC_ROOT/STATICFILES_DIRS at construction, so
@@ -718,7 +729,8 @@ class TestEdgeCases:
             yield
 
     @pytest.fixture(scope="class")
-    def client(self, api_with_static, setup_static_dir):
+    @classmethod
+    def client(cls, api_with_static, setup_static_dir):
         """Test client reading static config from the settings set above."""
         return TestClient(api_with_static, use_http_layer=True)
 

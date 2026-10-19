@@ -510,7 +510,8 @@ class TestRefreshEndpointTypEnforcement:
     end through a real server pipeline."""
 
     @pytest.fixture(scope="class")
-    def client(self):
+    @classmethod
+    def client(cls):
         api = BoltAPI()
 
         @api.get("/api", auth=[JWTAuthentication(secret=SECRET)], guards=[IsAuthenticated()])

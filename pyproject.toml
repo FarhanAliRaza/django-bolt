@@ -148,6 +148,11 @@ known-first-party = ["django_bolt"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+# Ruff 0.16 and later also format the Python blocks in Markdown. Keep the
+# snippets in docs/ and the readmes as their authors wrote them: the
+# formatter removes the column alignment of teaching comments and splits
+# single-line import examples.
+exclude = ["*.md"]
 
 [tool.ty.environment]
 python-version = "3.12"

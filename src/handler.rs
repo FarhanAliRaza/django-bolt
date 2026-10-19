@@ -1003,6 +1003,7 @@ async fn route_request<const ACCESS_LOG: bool>(
             let requires_csrf = ctx.as_ref().is_some_and(|auth| auth.cookie_csrf)
                 && !bolt_core::validation::is_safe_method(method);
             if requires_csrf {
+                // Any peer may set the scheme here. See `passes_cookie_csrf`.
                 let info = req.connection_info();
                 if bolt_core::validation::cookie_csrf_blocks(
                     method,
@@ -1107,15 +1108,18 @@ async fn route_request<const ACCESS_LOG: bool>(
             .and_then(|h| h.get("host"))
             .cloned()
             .unwrap_or_default();
-        let scheme = headers
-            .as_ref()
-            .and_then(|h| h.get("x-forwarded-proto"))
-            .cloned()
-            .unwrap_or_else(|| "http".to_string());
+        // Same trust rule as the client address: only a trusted proxy sets the
+        // scheme with `X-Forwarded-Proto`.
+        let scheme = middleware::client_ip::resolve_scheme(
+            req.headers(),
+            req.peer_addr().map(|address| address.ip()),
+            req.app_config().secure(),
+            &state.trusted_proxies,
+        );
         (host, scheme, client_ip)
     } else {
         // No META needed → empty strings (META getter will return defaults)
-        (String::new(), String::new(), None)
+        (String::new(), "", None)
     };
 
     // Determine if form parsing is needed and get content type

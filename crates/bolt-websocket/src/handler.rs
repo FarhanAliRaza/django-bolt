@@ -20,6 +20,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use bolt_core::metadata::{CorsConfig, RouteMetadata};
 use bolt_core::middleware::auth::{populate_auth_context, AuthContext};
+use bolt_core::middleware::client_ip::{resolve_scheme, TrustedProxies};
 use bolt_core::middleware::rate_limit::{check_after_auth, check_before_auth};
 use bolt_core::request_pipeline::{
     header_str, insert_header_line, query_sequences, set_declared_item, set_param_item,
@@ -305,8 +306,19 @@ where
     Ok(scope.into())
 }
 
-fn build_asgi_scope(py: Python<'_>, req: &HttpRequest, mount_prefix: &str) -> PyResult<Py<PyAny>> {
-    let secure = req.connection_info().scheme() == "https";
+fn build_asgi_scope(
+    py: Python<'_>,
+    req: &HttpRequest,
+    mount_prefix: &str,
+    trusted_proxies: &TrustedProxies,
+) -> PyResult<Py<PyAny>> {
+    // Only a trusted proxy sets the scheme with `X-Forwarded-Proto`.
+    let secure = resolve_scheme(
+        req.headers(),
+        req.peer_addr().map(|address| address.ip()),
+        req.app_config().secure(),
+        trusted_proxies,
+    ) == "https";
     let headers = req
         .headers()
         .iter()
@@ -902,7 +914,9 @@ pub async fn handle_websocket_upgrade(
                 state.max_param_length,
             )
         }
-        WsTarget::AsgiMount { mount_prefix, .. } => build_asgi_scope(py, &req, mount_prefix),
+        WsTarget::AsgiMount { mount_prefix, .. } => {
+            build_asgi_scope(py, &req, mount_prefix, &state.trusted_proxies)
+        }
     }) {
         Ok(s) => s,
         Err(e) => {

@@ -307,7 +307,7 @@ class TestClient(httpx.Client):
     def __init__(
         self,
         api: BoltAPI,
-        base_url: str = "http://testserver.local",
+        base_url: str = "http://testserver",
         raise_server_exceptions: bool = True,
         cors_allowed_origins: list[str] | None = None,
         read_django_settings: bool = True,
@@ -626,7 +626,7 @@ class AsyncTestClient(httpx.AsyncClient):
     def __init__(
         self,
         api: BoltAPI,
-        base_url: str = "http://testserver.local",
+        base_url: str = "http://testserver",
         raise_server_exceptions: bool = True,
         cors_allowed_origins: list[str] | None = None,
         read_django_settings: bool = True,

@@ -99,6 +99,7 @@ pub async fn handle_mcp_request(
         match validate_auth_and_guards(&headers, &mount.auth_backends, &mount.guards) {
             AuthGuardResult::Allow(ctx) => {
                 if ctx.as_ref().is_some_and(|auth| auth.cookie_csrf) {
+                    // Any peer may set the scheme here. See `passes_cookie_csrf`.
                     let scheme = req.connection_info().scheme().to_owned();
                     if cookie_csrf_blocks(&method, &headers, true, &scheme) {
                         return responses::error_403();

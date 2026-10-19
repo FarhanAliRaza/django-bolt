@@ -1,11 +1,14 @@
 """Tests for HTTP ASGI mounts."""
 
 import asyncio
+import io
 import json
 import threading
 
 import pytest
+from django.core.handlers.asgi import ASGIRequest
 from django.core.management.base import CommandError
+from django.test import override_settings
 
 from django_bolt import BoltAPI
 from django_bolt.api import (
@@ -73,19 +76,37 @@ def test_mount_asgi_scope_root_path_and_subpath():
     assert captured[1]["query_string"] == b"next=%2Fadmin%2F"
 
 
-def test_mount_asgi_scope_server_defaults_to_443_on_https():
+@pytest.mark.parametrize(
+    ("trusted_proxies", "proxy_ssl_header", "scheme", "port", "is_secure"),
+    [
+        # A client that is not a declared proxy cannot choose the scheme.
+        ([], None, "http", 80, False),
+        # A declared proxy can. The test client connects from 127.0.0.1.
+        (["127.0.0.1"], None, "https", 443, True),
+        # SECURE_PROXY_SSL_HEADER is the Django opt-in. It changes Django's view only.
+        ([], ("HTTP_X_FORWARDED_PROTO", "https"), "http", 80, True),
+    ],
+)
+def test_mount_asgi_scope_scheme_follows_x_forwarded_proto_only_from_a_trusted_proxy(
+    trusted_proxies, proxy_ssl_header, scheme, port, is_secure
+):
     api = BoltAPI()
     captured = {}
 
     async def asgi_app(scope, receive, send):
+        captured["scheme"] = scope["scheme"]
         captured["server"] = scope["server"]
+        captured["is_secure"] = ASGIRequest(scope, io.BytesIO()).is_secure()
         await receive()
         await send({"type": "http.response.start", "status": 204, "headers": []})
         await send({"type": "http.response.body", "body": b"", "more_body": False})
 
     api.mount_asgi("/secure", asgi_app)
 
-    with TestClient(api) as client:
+    with (
+        override_settings(BOLT_TRUSTED_PROXIES=trusted_proxies, SECURE_PROXY_SSL_HEADER=proxy_ssl_header),
+        TestClient(api) as client,
+    ):
         response = client.get(
             "/secure",
             headers={
@@ -95,8 +116,31 @@ def test_mount_asgi_scope_server_defaults_to_443_on_https():
         )
 
     assert response.status_code == 204
-    assert captured["server"][0] == "example.com"
-    assert captured["server"][1] == 443
+    assert captured == {"scheme": scheme, "server": ("example.com", port), "is_secure": is_secure}
+
+
+@pytest.mark.parametrize(
+    "forwarded_host",
+    [{"X-Forwarded-Host": "evil.example"}, {"Forwarded": "host=evil.example"}],
+)
+def test_mount_asgi_scope_server_comes_from_the_host_header(forwarded_host):
+    """A client cannot set scope["server"]. Django reads X-Forwarded-Host from the headers itself."""
+    api = BoltAPI()
+    captured = {}
+
+    async def asgi_app(scope, receive, send):
+        captured["server"] = scope["server"]
+        await receive()
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    api.mount_asgi("/mounted", asgi_app)
+
+    with TestClient(api) as client:
+        response = client.get("/mounted", headers={"Host": "example.com", **forwarded_host})
+
+    assert response.status_code == 204
+    assert captured["server"] == ("example.com", 80)
 
 
 def test_mount_asgi_client_ignores_forwarding_headers_from_an_untrusted_peer():

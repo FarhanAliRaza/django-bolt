@@ -109,10 +109,19 @@ Bolt uses this list to find the canonical client address for
 - The peer is not in the list. Bolt keys on the peer address. That peer is not a declared proxy, so its headers prove nothing.
 - The peer is in the list. Bolt reads `X-Forwarded-For` from the right and takes the first entry that is not a listed proxy. When every entry is a listed proxy, the client is inside your network and Bolt takes the leftmost entry. Without the header, Bolt falls back to a valid `X-Real-IP`, then the peer address. A malformed chain also falls back to the peer.
 
+Bolt uses the same list for the request scheme. Only a peer in the list can set the scheme with `X-Forwarded-Proto`. Bolt reads the rightmost value, because the proxy closest to Bolt adds it. A value other than `http` or `https` is ignored. From any other peer, the scheme is the scheme of the connection. Bolt does not end TLS, so that scheme is `http`. The scheme sets these values:
+
+- `request.build_absolute_uri()` and the default `request.META["SERVER_PORT"]` on Bolt routes.
+- The `scheme` key, and the port of the `server` key, of the ASGI scope of `mount_asgi()` and `mount_django()`. Django reads `scope["scheme"]` for `request.is_secure()`.
+
+Django's `SECURE_PROXY_SSL_HEADER` still applies on top of this scheme, in Django code and in `request.build_absolute_uri()`, as in Django. Django middleware on a Bolt route reads the scheme only from `SECURE_PROXY_SSL_HEADER`, as before. That setting trusts the header from every peer, so set it only when the proxy removes the header from client requests.
+
+The origin check of cookie authentication reads `X-Forwarded-Proto` from every peer. That check passes only one origin, so a value that a client sends never makes it weaker than the scheme of the connection. See [Cross-site request forgery protection](../topics/authentication.md#cross-site-request-forgery-protection).
+
 Both an address and a block are accepted. `127.0.0.1` matches one address. `10.0.0.0/8` matches the block. An invalid entry raises `ImproperlyConfigured` at startup.
 
 !!! warning "Set this when you run behind a proxy"
-    A client sends `X-Forwarded-For` itself, and a proxy appends to it. Without this setting Bolt ignores the header, so every caller behind the proxy shares one bucket. With the setting, Bolt separates them again and a client cannot pick its own bucket.
+    A client sends `X-Forwarded-For` itself, and a proxy appends to it. Without this setting Bolt ignores the header, so every caller behind the proxy shares one bucket. With the setting, Bolt separates them again and a client cannot pick its own bucket. Behind a proxy that ends TLS, Bolt also needs this setting to see `https`.
 
 ## File upload settings
 

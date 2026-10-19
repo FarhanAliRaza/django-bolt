@@ -149,6 +149,15 @@ server {
 }
 ```
 
+Bolt reads `X-Forwarded-For` and `X-Forwarded-Proto` only from a declared proxy. Add nginx to `BOLT_TRUSTED_PROXIES`:
+
+```python
+# settings.py
+BOLT_TRUSTED_PROXIES = ["127.0.0.1"]
+```
+
+Without this setting, `REMOTE_ADDR` is the address of nginx, and the scheme is always `http`. See [BOLT_TRUSTED_PROXIES](../ref/settings.md#bolt_trusted_proxies).
+
 Test and reload nginx:
 
 ```bash

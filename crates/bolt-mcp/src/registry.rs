@@ -14,7 +14,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 use rmcp::model::{
     CacheScope, Implementation, Prompt, ProtocolVersion, RequestStateCodec, Resource,
-    ResourceTemplate, ServerCapabilities, ServerInfo, Tool,
+    ResourceTemplate, ServerCapabilities, ServerConfig, Tool,
 };
 use serde::Deserialize;
 
@@ -33,7 +33,7 @@ pub struct McpToolEntry {
 }
 
 pub struct McpRegistry {
-    pub server_info: ServerInfo,
+    pub server_info: ServerConfig,
     /// Insertion order of tools for deterministic `tools/list` output
     /// (spec SHOULD: stable ordering improves client prompt-cache hits).
     pub tool_order: Vec<String>,
@@ -171,11 +171,8 @@ impl McpRegistry {
             .map_err(|_| PyValueError::new_err("MCP mount config 'state_key' must be bytes"))?
             .as_bytes()
             .to_vec();
-        if state_key.len() < 32 {
-            return Err(PyValueError::new_err(
-                "MCP mount config 'state_key' must be at least 32 bytes",
-            ));
-        }
+        let codec = RequestStateCodec::try_new(state_key)
+            .map_err(|err| PyValueError::new_err(format!("MCP mount config 'state_key': {err}")))?;
 
         let list_cache_scope = match catalog.list_cache_scope.as_deref() {
             None | Some("private") => CacheScope::Private,
@@ -196,9 +193,10 @@ impl McpRegistry {
             .enable_prompts()
             .enable_logging()
             .build();
-        let mut server_info = ServerInfo::new(capabilities);
-        // Advertise the modern revision explicitly: rmcp's LATEST is the
-        // previous revision and `initialize` negotiation caps at this value.
+        let mut server_info = ServerConfig::new(capabilities);
+        // Pin the advertised revision. The rmcp default is its LATEST, and a
+        // minor release of rmcp can change LATEST. `initialize` falls back
+        // to the newest revision that has the handshake.
         server_info.protocol_version = ProtocolVersion::V_2026_07_28;
         server_info.server_info = catalog.server_info;
         server_info.instructions = catalog.instructions;
@@ -212,7 +210,7 @@ impl McpRegistry {
             prompts: catalog.prompts,
             resource_dispatch,
             prompt_dispatch,
-            codec: RequestStateCodec::new(state_key),
+            codec,
             list_ttl_ms: catalog.list_ttl_ms.unwrap_or(0),
             list_cache_scope,
         })

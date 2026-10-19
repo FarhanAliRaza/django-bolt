@@ -405,6 +405,46 @@ With a formatter, Bolt does not send the Django debug page for a 500 error when 
 
 The formatter does not change a response that a handler or a middleware returns. It does not change the responses of a WebSocket handshake, an ASGI mount, or a static file.
 
+### OpenAPI schema
+
+The OpenAPI schema shows a 422 response for each route with a request body. The body of this 422 follows the formatter of the API:
+
+| Formatter | Media type | Schema |
+|-----------|------------|--------|
+| None | `application/json` | `{"detail": [...]}` |
+| `problem_details` | `application/problem+json` | The `ProblemDetails` component, with `errors` |
+| A formatter with `error_schema` | The declared media type | The declared type |
+| A formatter without `error_schema` | None | None |
+
+Use `error_schema` to declare the body of your own formatter:
+
+```python
+import msgspec
+
+from django_bolt import BoltAPI
+from django_bolt.error_handlers import BoltError, error_schema
+from django_bolt.responses import Response
+
+
+class ErrorBody(msgspec.Struct):
+    code: str
+    message: str
+    fields: list[dict] = []
+
+
+@error_schema(ErrorBody, media_type="application/vnd.error+json")
+def format_error(error: BoltError, request) -> Response:
+    body = {"code": error.kind, "message": error.detail, "fields": error.errors}
+    return Response(body, status_code=error.status, media_type="application/vnd.error+json")
+
+
+api = BoltAPI(error_formatter=format_error)
+```
+
+A formatter without `error_schema` gets a 422 with a description and no content. Bolt cannot know the media type or the shape of its body. A wrong media type or shape makes generated clients fail when they parse the error. A response with no content is valid OpenAPI and makes no claim about the body. `OpenAPIConfig(strict=True)` reports a formatter without `error_schema`.
+
+The formatter does not change the entries of `response_model`. For example, `response_model={409: Conflict}` keeps its `application/json` schema.
+
 ## Example: Custom error handling
 
 ```python

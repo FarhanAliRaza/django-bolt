@@ -173,6 +173,79 @@ def test_formatter_without_error_schema_documents_no_422_body():
     }
 
 
+class Rejected(msgspec.Struct):
+    """A request that the route rejects after validation."""
+
+    reason: str
+
+
+def _declared_422_api(formatter=None) -> BoltAPI:
+    api = BoltAPI(error_formatter=formatter, openapi_config=OpenAPIConfig(title="Errors", version="1.0.0"))
+
+    @api.post("/items", response_model={200: Item, 422: Rejected})
+    async def create_item(data: ItemIn):
+        if data.name == "rejected":
+            raise HTTPException(422, body=Rejected(reason="rejected"))
+        return Item(id=1, name=data.name)
+
+    api._register_openapi_routes()
+    return api
+
+
+def _post_rejected_and_invalid(api: BoltAPI):
+    with TestClient(api) as client:
+        return client.post("/items", json={"name": "rejected"}), client.post("/items", json={"name": 1})
+
+
+def test_a_declared_422_keeps_its_body_next_to_the_formatter_body():
+    api = _declared_422_api(problem_details)
+    content = _responses(_spec(api))["422"]["content"]
+
+    assert content["application/json"]["schema"] == {"$ref": "#/components/schemas/Rejected"}
+    assert content["application/problem+json"]["schema"] == {"$ref": "#/components/schemas/ProblemDetails"}
+    rejected, invalid = _post_rejected_and_invalid(api)
+    assert (rejected.status_code, rejected.headers["content-type"]) == (422, "application/json")
+    assert msgspec.convert(rejected.json(), Rejected) == Rejected(reason="rejected")
+    assert (invalid.status_code, invalid.headers["content-type"]) == (422, "application/problem+json")
+    assert msgspec.convert(invalid.json(), ProblemDetails).errors[0].loc == ["body", "name"]
+
+
+def test_without_formatter_a_declared_422_and_the_detail_body_share_application_json():
+    api = _declared_422_api()
+    content = _responses(_spec(api))["422"]["content"]
+
+    assert list(content) == ["application/json"]
+    rejected_schema, detail_schema = content["application/json"]["schema"]["anyOf"]
+    assert rejected_schema == {"$ref": "#/components/schemas/Rejected"}
+    assert detail_schema["required"] == ["detail"]
+    rejected, invalid = _post_rejected_and_invalid(api)
+    assert (rejected.status_code, rejected.json()) == (422, {"reason": "rejected"})
+    assert (invalid.status_code, invalid.json()["detail"][0]["loc"]) == (422, ["body", "name"])
+
+
+def test_a_formatter_without_error_schema_keeps_the_declared_422():
+    content = _responses(_spec(_declared_422_api(plain_error)))["422"]["content"]
+
+    assert list(content) == ["application/json"]
+    assert content["application/json"]["schema"] == {"$ref": "#/components/schemas/Rejected"}
+
+
+def test_problem_details_extra_does_not_change_the_errors_shape():
+    api = BoltAPI(error_formatter=problem_details)
+
+    @api.post("/rules")
+    async def check_rules(data: ItemIn):
+        raise HTTPException(422, "Rule failed", extra={"errors": "failed", "rule": "unique"})
+
+    with TestClient(api) as client:
+        response = client.post("/rules", json={"name": "x"})
+
+    body = response.json()
+    assert (response.status_code, body["rule"]) == (422, "unique")
+    assert "errors" not in body
+    assert msgspec.convert(body, ProblemDetails).errors == []
+
+
 def test_strict_mode_reports_a_formatter_without_error_schema():
     api = _api(plain_error, strict=True)
     with pytest.raises(OpenAPIStrictError, match=r"error_formatter plain_error has no error_schema"):

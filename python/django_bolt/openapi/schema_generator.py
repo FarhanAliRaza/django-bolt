@@ -1133,20 +1133,38 @@ class SchemaGenerator:
 
             if has_request_body:
                 # 422 Unprocessable Entity - validation errors
-                responses["422"] = OpenAPIResponse(
-                    description="Validation Error - Request data failed validation",
-                    content=self._validation_error_content(),
-                )
+                responses["422"] = self._validation_error_response(responses.get("422"))
 
         return responses
+
+    def _validation_error_response(self, declared: OpenAPIResponse | None) -> OpenAPIResponse:
+        """The 422 response of a route with a request body.
+
+        A failed validation sends the body of ``_validation_error_content``. A
+        route can also declare a 422 body for its own errors. Then the response
+        keeps the declared body. The validation body gets its own media type, or
+        it joins the declared body in ``anyOf``.
+        """
+        content = self._validation_error_content()
+        if declared is None:
+            return OpenAPIResponse(description="Validation Error - Request data failed validation", content=content)
+        merged = dict(declared.content or {})
+        for media_type, media in (content or {}).items():
+            own = merged.get(media_type)
+            if own is None:
+                merged[media_type] = media
+            elif own.schema != media.schema:
+                merged[media_type] = replace(own, schema=Schema(any_of=[own.schema, media.schema]))
+        return replace(declared, content=merged or None)
 
     def _validation_error_content(self) -> dict[str, OpenAPIMediaType] | None:
         """The content of a 422 response, as the error formatter of the API sends it.
 
         Without a formatter, the body is the default ``{"detail": [...]}``. A
         formatter can declare its body with ``error_schema``. For a formatter
-        with no declaration, the result is None: Bolt cannot know the media type
-        or the shape, and generated clients parse the body that a schema shows.
+        with no declaration, the result is None. Bolt cannot know the media type
+        or the shape of that body. Generated clients parse the body that a schema
+        shows, so the schema does not guess.
         """
         formatter = self.api._error_formatter
         if formatter is None:

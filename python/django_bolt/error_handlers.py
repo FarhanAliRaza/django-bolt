@@ -465,7 +465,8 @@ class ProblemDetails(msgspec.Struct, kw_only=True):
     """An error body in the RFC 9457 Problem Details format.
 
     The body has "errors" when the error has field errors. The keys of the
-    "extra" of the error are more members of the body.
+    "extra" of the error are more members of the body. They do not replace a
+    member, and they do not add "errors".
     """
 
     type: str
@@ -484,6 +485,7 @@ def problem_details(error: BoltError, request: Any) -> Response:
     "type", "title", "status", "detail" and "instance". It has "errors" when
     the error has field errors. The keys of ``error.extra`` are extension
     members. A key with the name of a standard member does not replace it.
+    An "errors" key is not added, so "errors" is always a list of field errors.
     """
     body: dict[str, Any] = {
         "type": "about:blank",
@@ -496,7 +498,8 @@ def problem_details(error: BoltError, request: Any) -> Response:
         body["errors"] = error.errors
     if isinstance(error.extra, dict):
         for key, value in error.extra.items():
-            body.setdefault(key, value)
+            if key != "errors":
+                body.setdefault(key, value)
     elif error.extra is not None:
         body.setdefault("extra", error.extra)
     return Response(body, status_code=error.status, media_type="application/problem+json")

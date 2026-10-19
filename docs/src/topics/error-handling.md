@@ -341,7 +341,7 @@ www-authenticate: Bearer
  "detail": "Authentication required", "instance": "/private"}
 ```
 
-An error with field errors also has `"errors"`, a list of `{"loc", "msg", "type"}` objects. Some objects also have `"ctx"`. The keys of `error.extra` become extension members, for example `"retry_after"` for a 429. A key does not replace a standard member. The `title` is the RFC 9110 name of the status, on each Python version.
+An error with field errors also has `"errors"`, a list of `{"loc", "msg", "type"}` objects. Some objects also have `"ctx"`. The keys of `error.extra` become extension members, for example `"retry_after"` for a 429. A key does not replace a standard member, and an `"errors"` key is not added. The `title` is the RFC 9110 name of the status, on each Python version.
 
 ### Your own formatter
 

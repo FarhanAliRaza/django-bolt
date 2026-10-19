@@ -184,9 +184,9 @@ async def create_user():
 The schema shows a 422 response for each route with a request body. Set
 `OpenAPIConfig(include_error_responses=False)` to remove these responses. With
 `BoltAPI(error_formatter=...)`, the 422 shows the body of the formatter. A route
-that declares its own 422 in `response_model` keeps it, and the 422 also shows
-the validation body. See
-[OpenAPI schema](error-handling.md#openapi-schema).
+that declares its own 422 in `response_model` keeps it. The 422 also shows the
+validation body when the API has no formatter, or a formatter with
+`error_schema`. See [OpenAPI schema](error-handling.md#openapi-schema).
 
 ## Customizing documentation UIs
 

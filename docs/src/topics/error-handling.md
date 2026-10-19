@@ -454,7 +454,7 @@ A formatter without `error_schema` gets a 422 with a description and no content.
 
 The formatter does not change the entries of `response_model`. For example, `response_model={409: Conflict}` keeps its `application/json` schema. This agrees with the response, because an `HTTPException` with a typed `body` skips the formatter.
 
-A route with a request body can declare its own 422, for example `response_model={422: Rejected}`. Such a route can send two 422 bodies: its own body and the validation body. The schema shows both. When the two bodies have the same media type, the schema joins them with `anyOf`. The entry keeps the description of the route.
+A route with a request body can declare its own 422, for example `response_model={422: Rejected}`. Such a route can send two 422 bodies: its own body and the validation body. The schema shows both, unless the formatter has no `error_schema`. Then the entry shows only the body of the route. When the two bodies have the same media type, the schema joins them with `anyOf`. The entry keeps the description of the route.
 
 ## Example: Custom error handling
 

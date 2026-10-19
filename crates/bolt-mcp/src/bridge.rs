@@ -22,6 +22,9 @@ use bolt_core::validation::{cookie_csrf_blocks, validate_auth_and_guards, AuthGu
 /// Buffer the request body, enforcing the payload cap. Mirrors the bounded
 /// read loop used for regular routes; rmcp enforces its own configured cap as
 /// defense in depth.
+// The `Err` response ends the request. See `bolt_core::request_pipeline` for
+// why the lint does not apply.
+#[allow(clippy::result_large_err)]
 async fn read_body(
     payload: &mut web::Payload,
     max_payload_size: usize,

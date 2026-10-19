@@ -344,7 +344,7 @@ www-authenticate: Bearer
  "detail": "Authentication required", "instance": "/private"}
 ```
 
-An error with field errors also has `"errors"`, a list of `{"loc", "msg", "type"}` objects. Some objects also have `"ctx"`. The keys of `error.extra` become extension members, for example `"retry_after"` for a 429. A key does not replace a standard member. The `title` is the RFC 9110 name of the status, on each Python version.
+An error with field errors also has `"errors"`, a list of `{"loc", "msg", "type"}` objects. Some objects also have `"ctx"`. The keys of `error.extra` become extension members, for example `"retry_after"` for a 429. A key does not replace a standard member. Bolt does not use an `"errors"` key of `error.extra`, because `"errors"` holds only field errors. The `title` is the RFC 9110 name of the status, on each Python version.
 
 ### Your own formatter
 
@@ -453,6 +453,8 @@ api = BoltAPI(error_formatter=format_error)
 A formatter without `error_schema` gets a 422 with a description and no content. Bolt cannot know the media type or the shape of its body. A wrong media type or shape makes generated clients fail when they parse the error. A response with no content is valid OpenAPI and makes no claim about the body. `OpenAPIConfig(strict=True)` reports a formatter without `error_schema`.
 
 The formatter does not change the entries of `response_model`. For example, `response_model={409: Conflict}` keeps its `application/json` schema. This agrees with the response, because an `HTTPException` with a typed `body` skips the formatter.
+
+A route with a request body can declare its own 422, for example `response_model={422: Rejected}`. Such a route can send two 422 bodies: its own body and the validation body. The schema shows both, unless the formatter has no `error_schema`. Then the entry shows only the body of the route. When the two bodies have the same media type, the schema joins them with `anyOf`. The entry keeps the description of the route.
 
 ## Example: Custom error handling
 

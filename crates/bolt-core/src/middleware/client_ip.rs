@@ -271,6 +271,30 @@ pub fn resolve_scheme(
     secure: bool,
     trusted_proxies: &TrustedProxies,
 ) -> &'static str {
+    resolve_scheme_with(
+        || {
+            headers
+                .get_all("x-forwarded-proto")
+                .next_back()
+                .and_then(|value| value.to_str().ok())
+        },
+        peer_addr,
+        secure,
+        trusted_proxies,
+    )
+}
+
+/// `resolve_scheme` for headers in another form, such as the test client map.
+///
+/// `forwarded_proto` returns the last `X-Forwarded-Proto` line. It runs only
+/// for a trusted peer.
+#[inline]
+pub fn resolve_scheme_with<'a>(
+    forwarded_proto: impl FnOnce() -> Option<&'a str>,
+    peer_addr: Option<IpAddr>,
+    secure: bool,
+    trusted_proxies: &TrustedProxies,
+) -> &'static str {
     let connection = if secure { "https" } else { "http" };
     if trusted_proxies.is_empty() {
         return connection;
@@ -280,10 +304,7 @@ pub fn resolve_scheme(
         _ => return connection,
     }
 
-    let forwarded = headers
-        .get_all("x-forwarded-proto")
-        .next_back()
-        .and_then(|value| value.to_str().ok())
+    let forwarded = forwarded_proto()
         .and_then(|value| value.rsplit(',').next())
         .map(str::trim);
     match forwarded {

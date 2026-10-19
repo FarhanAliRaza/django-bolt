@@ -93,17 +93,6 @@ impl PyRequest {
             None => PyDict::new(py).unbind(),
         }
     }
-
-    /// The host from Django's `HttpRequest.get_host()` on this `META`.
-    ///
-    /// Django checks the host against `ALLOWED_HOSTS` and raises
-    /// `DisallowedHost` for another host. It reads `X-Forwarded-Host` only
-    /// with `USE_X_FORWARDED_HOST`.
-    fn django_host(&self, py: Python<'_>) -> PyResult<String> {
-        let django_request = py.import("django.http")?.getattr("HttpRequest")?.call0()?;
-        django_request.setattr("META", self.META(py)?)?;
-        django_request.call_method0("get_host")?.extract()
-    }
 }
 
 #[pymethods]
@@ -439,34 +428,27 @@ impl PyRequest {
     /// Example:
     ///     http://example.com/users?page=2
     ///
-    /// This matches Django's HttpRequest.build_absolute_uri() method.
-    /// Django's `get_host()` gives the host, so a host outside `ALLOWED_HOSTS`
-    /// raises `DisallowedHost`. The resolved scheme gives the scheme.
+    /// Django's HttpRequest.build_absolute_uri() builds the URL, in
+    /// `django_bolt._absolute_uri`. Django joins the location and checks the
+    /// host, so a host outside `ALLOWED_HOSTS` raises `DisallowedHost`. The
+    /// resolved scheme is the scheme, unless `SECURE_PROXY_SSL_HEADER` applies.
     #[pyo3(signature = (location=None))]
     fn build_absolute_uri(&self, py: Python<'_>, location: Option<&str>) -> PyResult<String> {
-        // Django returns an absolute location as it is, and does not read the host.
-        if let Some(location) = location {
-            let bits = py
-                .import("urllib.parse")?
-                .call_method1("urlsplit", (location,))?;
-            if bits.getattr("scheme")?.is_truthy()? && bits.getattr("netloc")?.is_truthy()? {
-                return py
-                    .import("django.utils.encoding")?
-                    .call_method1("iri_to_uri", (location,))?
-                    .extract();
-            }
-        }
-        let host = self.django_host(py)?;
         let scheme = if self.conn_scheme.is_empty() {
             "http"
         } else {
             self.conn_scheme
         };
-
-        Ok(match location {
-            Some(location) => format!("{}://{}{}", scheme, host, location),
-            None => format!("{}://{}{}", scheme, host, self.get_full_path()),
-        })
+        py.import("django_bolt._absolute_uri")?
+            .getattr("build_absolute_uri")?
+            .call1((
+                self.META(py)?,
+                &self.path,
+                self.get_full_path(),
+                scheme,
+                location,
+            ))?
+            .extract()
     }
 
     #[pyo3(signature = (key, /, default=None))]

@@ -6,10 +6,25 @@ import logging
 
 import pytest
 from django.http import QueryDict
-from django.test import override_settings
+from django.test import RequestFactory, override_settings
 
 from django_bolt import BoltAPI
 from django_bolt.testing import TestClient
+
+# Locations that Bolt joined to the host as text. Django parses and joins them.
+LOCATIONS = (
+    "@evil.example/x",
+    ".evil.example/x",
+    ":80@evil.example/",
+    "//evil.example/x",
+    "?page=2",
+    "foo",
+    "../up",
+    "",
+    "/x\r\nSet-Cookie: a=b",
+    "/café x",
+    "https://cdn.example/a b",
+)
 
 
 @pytest.fixture(scope="module")
@@ -74,6 +89,11 @@ def api():
     async def get_meta_absolute(request):
         """Return the absolute URI of the request."""
         return {"absolute_uri": request.build_absolute_uri()}
+
+    @api.get("/meta/location/{index}")
+    async def get_meta_location(request, index: int):
+        """Return the absolute URI of one of LOCATIONS."""
+        return {"absolute_uri": request.build_absolute_uri(LOCATIONS[index])}
 
     @api.get("/meta/absolute-location")
     async def get_meta_absolute_location(request):
@@ -267,6 +287,26 @@ class TestRequestMETA:
         assert response.status_code == 200
         assert response.json() == {"absolute_uri": f"http://{host}/meta/absolute"}
 
+    @pytest.mark.parametrize("index", range(len(LOCATIONS)))
+    def test_build_absolute_uri_joins_a_location_as_django_does(self, api, index):
+        """Django parses the location and joins it to the request URL. Text glued to the host can change the host."""
+        path = f"/meta/location/{index}"
+        with override_settings(ALLOWED_HOSTS=["example.com"]), TestClient(api) as client:
+            response = client.get(path, headers={"Host": "example.com"})
+            expected = RequestFactory().get(path, HTTP_HOST="example.com").build_absolute_uri(LOCATIONS[index])
+        assert response.status_code == 200
+        assert response.json() == {"absolute_uri": expected}
+
+    def test_build_absolute_uri_follows_secure_proxy_ssl_header(self, api):
+        """Django's build_absolute_uri() applies SECURE_PROXY_SSL_HEADER. Bolt's SERVER_PORT does not."""
+        with (
+            override_settings(SECURE_PROXY_SSL_HEADER=("HTTP_X_FORWARDED_PROTO", "https")),
+            TestClient(api) as client,
+        ):
+            response = client.get("/meta/scheme", headers={"Host": "example.com", "X-Forwarded-Proto": "https"})
+        assert response.status_code == 200
+        assert response.json() == {"server_port": "80", "absolute_uri": "https://example.com/meta/scheme"}
+
     def test_build_absolute_uri_allows_the_host_of_the_default_test_client(self, api):
         """Django's test runner adds `testserver` to ALLOWED_HOSTS. TestClient sends that host."""
         with override_settings(ALLOWED_HOSTS=["testserver"]), TestClient(api) as client:
@@ -286,13 +326,16 @@ class TestRequestMETA:
         """Django raises DisallowedHost. Bolt answers 400 and logs it, as Django does."""
         with (
             override_settings(ALLOWED_HOSTS=["example.com"], DEBUG=debug),
-            caplog.at_level(logging.ERROR, logger="django.security.DisallowedHost"),
+            caplog.at_level(logging.ERROR),
             TestClient(api) as client,
         ):
             response = client.get("/meta/absolute", headers={"Host": "evil.example"})
         assert response.status_code == 400
         assert detail in response.json()["detail"]
-        assert "django.security.DisallowedHost" in {record.name for record in caplog.records}
+        # One record, as in Django. A client can send a bad host on each request.
+        assert [record.name for record in caplog.records if record.levelno >= logging.ERROR] == [
+            "django.security.DisallowedHost"
+        ]
 
     def test_meta_remote_addr(self, client):
         """META contains REMOTE_ADDR and REMOTE_HOST."""

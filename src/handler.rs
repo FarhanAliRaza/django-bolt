@@ -902,18 +902,6 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
     } else {
         None
     };
-    // Same trust rule as the client address: only a trusted proxy can set the
-    // scheme with `X-Forwarded-Proto`. The cookie CSRF check and META use it.
-    let conn_scheme = if must_extract_headers {
-        middleware::client_ip::resolve_scheme(
-            req.headers(),
-            req.peer_addr().map(|address| address.ip()),
-            req.app_config().secure(),
-            &state.trusted_proxies,
-        )
-    } else {
-        ""
-    };
 
     // Rate limiting (Rust-native, no GIL). Address and header keys run before
     // authentication so a flood never pays for token verification. Identity
@@ -960,14 +948,20 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
                     return responses::error_403_denial(denial.as_deref());
                 }
             };
-            let requires_csrf = ctx.as_ref().is_some_and(|auth| auth.cookie_csrf);
-            if bolt_core::validation::cookie_csrf_blocks(
-                method,
-                headers_map,
-                requires_csrf,
-                conn_scheme,
-            ) {
-                return responses::error_403();
+            // A safe method passes the check, so it needs no connection info.
+            let requires_csrf = ctx.as_ref().is_some_and(|auth| auth.cookie_csrf)
+                && !bolt_core::validation::is_safe_method(method);
+            if requires_csrf {
+                // Any peer may set the scheme here. See `passes_cookie_csrf`.
+                let info = req.connection_info();
+                if bolt_core::validation::cookie_csrf_blocks(
+                    method,
+                    headers_map,
+                    true,
+                    info.scheme(),
+                ) {
+                    return responses::error_403();
+                }
             }
             ctx
         } else {
@@ -1057,16 +1051,24 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
     // conn_info is only used for request.META (Django templates) and build_absolute_uri().
     // When headers weren't extracted (pure API routes with no auth/cookies/middleware),
     // empty strings are safe because no Django middleware will call META anyway.
-    let (conn_host, conn_remote_addr) = if must_extract_headers {
+    let (conn_host, conn_scheme, conn_remote_addr) = if must_extract_headers {
         let host = headers
             .as_ref()
             .and_then(|h| h.get("host"))
             .cloned()
             .unwrap_or_default();
-        (host, client_ip)
+        // Same trust rule as the client address: only a trusted proxy sets the
+        // scheme with `X-Forwarded-Proto`.
+        let scheme = middleware::client_ip::resolve_scheme(
+            req.headers(),
+            req.peer_addr().map(|address| address.ip()),
+            req.app_config().secure(),
+            &state.trusted_proxies,
+        );
+        (host, scheme, client_ip)
     } else {
         // No META needed → empty strings (META getter will return defaults)
-        (String::new(), None)
+        (String::new(), "", None)
     };
 
     // Determine if form parsing is needed and get content type

@@ -789,6 +789,13 @@ pub fn handle_test_websocket(
         None => {
             return match find_websocket_mount_in_slice(&app.asgi_mounts, normalized_path) {
                 Some(mount) => {
+                    // The scheme follows BOLT_TRUSTED_PROXIES, as on the server.
+                    let secure = bolt_core::middleware::client_ip::resolve_scheme_with(
+                        || header_map.get("x-forwarded-proto").map(String::as_str),
+                        Some(TEST_PEER_ADDR.ip()),
+                        false,
+                        &app.config.trusted_proxies,
+                    ) == "https";
                     // Give the app the request path as sent, as the server does.
                     let scope = build_asgi_scope_from_parts(
                         py,
@@ -798,7 +805,7 @@ pub fn handle_test_websocket(
                         header_map
                             .iter()
                             .map(|(name, value)| (name.as_str(), value.as_bytes())),
-                        false,
+                        secure,
                         Some(("127.0.0.1".to_string(), 0)),
                     )?;
                     Ok((

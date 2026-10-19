@@ -97,11 +97,16 @@ pub fn cookie_csrf_blocks(
 /// `Origin`/`Referer` origin comparison (scheme + authority) against the
 /// request's effective scheme and `Host` for older clients.
 ///
-/// `scheme` is the request's effective scheme (`http`/`https`) from
-/// `client_ip::resolve_scheme`. Only a peer in `BOLT_TRUSTED_PROXIES` can set
-/// it with `X-Forwarded-Proto`. HTTP and HTTPS are different origins, so
-/// `Origin: http://example.com` must not authorize a state-changing HTTPS
-/// request to `example.com`.
+/// `scheme` is the request's effective scheme (`http`/`https`, honoring
+/// `X-Forwarded-Proto` behind a proxy) — HTTP and HTTPS are different
+/// origins, so `Origin: http://example.com` must not authorize a
+/// state-changing HTTPS request to `example.com`.
+///
+/// The callers take `X-Forwarded-Proto` from any peer here, not only from
+/// `BOLT_TRUSTED_PROXIES`. A browser cannot set this header on a cross-site
+/// request. Thus the header only makes this check stricter. Without it, a page
+/// on `http://example.com` passes the check behind a TLS proxy that is not
+/// declared.
 ///
 /// Returns `true` when the request is allowed to proceed.
 #[inline]

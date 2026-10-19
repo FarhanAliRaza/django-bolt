@@ -110,7 +110,8 @@ def test_cookie_csrf_over_real_server(make_server_project):
         )
         assert wrong_scheme.status_code == 403, wrong_scheme.text
 
-        # The client is not in BOLT_TRUSTED_PROXIES, so it cannot choose the scheme.
+        # The check follows X-Forwarded-Proto from any peer. A browser cannot
+        # set it on a cross-site request, so it only makes the check stricter.
         forwarded_scheme = server.request(
             "POST",
             "/write",
@@ -120,31 +121,20 @@ def test_cookie_csrf_over_real_server(make_server_project):
                 "X-Forwarded-Proto": "https",
             },
         )
-        assert forwarded_scheme.status_code == 403, forwarded_scheme.text
+        assert forwarded_scheme.status_code == 200, forwarded_scheme.text
+
+        http_origin_on_https = server.request(
+            "POST",
+            "/write",
+            headers={**cookie, "Origin": http_origin, "X-Forwarded-Proto": "https"},
+        )
+        assert http_origin_on_https.status_code == 403, http_origin_on_https.text
 
         no_origin_signal = server.request("POST", "/write", headers=cookie)
         assert no_origin_signal.status_code == 403, no_origin_signal.text
 
         safe_method = server.get("/whoami", headers=cookie)
         assert safe_method.status_code == 200, safe_method.text
-
-
-def test_cookie_csrf_takes_the_scheme_from_a_trusted_proxy_over_real_server(make_server_project):
-    """A peer in BOLT_TRUSTED_PROXIES sets the scheme with X-Forwarded-Proto."""
-    project = make_server_project(
-        api_module=app_module("jwt_cookie_user"),
-        settings_extra='BOLT_TRUSTED_PROXIES = ["127.0.0.0/8"]',
-    )
-    token = make_token("cookie-user")
-
-    with project.start() as server:
-        headers = {
-            "Cookie": f"access_token={token}",
-            "Origin": f"https://{server.host}:{server.port}",
-            "X-Forwarded-Proto": "https",
-        }
-        forwarded_scheme = server.request("POST", "/write", headers=headers)
-        assert forwarded_scheme.status_code == 200, forwarded_scheme.text
 
 
 def test_custom_get_user_over_real_server(make_server_project):

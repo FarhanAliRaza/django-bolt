@@ -9,10 +9,7 @@ use actix_http::encoding::Encoder;
 use actix_web::{
     body::{BodySize, MessageBody},
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
-    http::{
-        header::{ContentEncoding, ACCEPT_ENCODING, CONTENT_ENCODING, VARY},
-        StatusCode,
-    },
+    http::header::{ContentEncoding, ACCEPT_ENCODING, CONTENT_ENCODING, VARY},
     Error,
 };
 use futures_util::future::LocalBoxFuture;
@@ -128,18 +125,14 @@ where
                 .map(|c| c.minimum_size)
                 .unwrap_or(500);
 
-            // A 206 body is a byte range, and Content-Range counts the bytes
-            // of the file. A compressed body would not match those offsets
-            // (RFC 9110 section 14.4), so a partial response stays as it is.
             // Check if response size warrants compression (skip small responses)
-            let should_compress = response.status() != StatusCode::PARTIAL_CONTENT
-                && match response.body().size() {
-                    BodySize::None => encoding != ContentEncoding::Identity,
-                    BodySize::Sized(size) => {
-                        size >= minimum_size as u64 && encoding != ContentEncoding::Identity
-                    }
-                    _ => encoding != ContentEncoding::Identity,
-                };
+            let should_compress = match response.body().size() {
+                BodySize::None => encoding != ContentEncoding::Identity,
+                BodySize::Sized(size) => {
+                    size >= minimum_size as u64 && encoding != ContentEncoding::Identity
+                }
+                _ => encoding != ContentEncoding::Identity,
+            };
 
             if should_compress {
                 // Add Vary header to indicate content varies by Accept-Encoding

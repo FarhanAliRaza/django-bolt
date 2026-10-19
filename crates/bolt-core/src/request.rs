@@ -444,6 +444,18 @@ impl PyRequest {
     /// raises `DisallowedHost`. The resolved scheme gives the scheme.
     #[pyo3(signature = (location=None))]
     fn build_absolute_uri(&self, py: Python<'_>, location: Option<&str>) -> PyResult<String> {
+        // Django returns an absolute location as it is, and does not read the host.
+        if let Some(location) = location {
+            let bits = py
+                .import("urllib.parse")?
+                .call_method1("urlsplit", (location,))?;
+            if bits.getattr("scheme")?.is_truthy()? && bits.getattr("netloc")?.is_truthy()? {
+                return py
+                    .import("django.utils.encoding")?
+                    .call_method1("iri_to_uri", (location,))?
+                    .extract();
+            }
+        }
         let host = self.django_host(py)?;
         let scheme = if self.conn_scheme.is_empty() {
             "http"

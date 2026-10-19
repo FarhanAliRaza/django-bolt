@@ -75,6 +75,11 @@ def api():
         """Return the absolute URI of the request."""
         return {"absolute_uri": request.build_absolute_uri()}
 
+    @api.get("/meta/absolute-location")
+    async def get_meta_absolute_location(request):
+        """Return the absolute URI of an absolute location."""
+        return {"absolute_uri": request.build_absolute_uri("https://cdn.example/a")}
+
     @api.post("/meta/post")
     async def post_meta(request):
         """Return META for POST request."""
@@ -261,6 +266,20 @@ class TestRequestMETA:
             response = client.get("/meta/absolute", headers=headers)
         assert response.status_code == 200
         assert response.json() == {"absolute_uri": f"http://{host}/meta/absolute"}
+
+    def test_build_absolute_uri_allows_the_host_of_the_default_test_client(self, api):
+        """Django's test runner adds `testserver` to ALLOWED_HOSTS. TestClient sends that host."""
+        with override_settings(ALLOWED_HOSTS=["testserver"]), TestClient(api) as client:
+            response = client.get("/meta/absolute")
+        assert response.status_code == 200
+        assert response.json() == {"absolute_uri": "http://testserver/meta/absolute"}
+
+    def test_build_absolute_uri_returns_an_absolute_location_without_the_host(self, api):
+        """Django does not read the host for an absolute location, so the host is not checked."""
+        with override_settings(ALLOWED_HOSTS=["example.com"]), TestClient(api) as client:
+            response = client.get("/meta/absolute-location", headers={"Host": "evil.example"})
+        assert response.status_code == 200
+        assert response.json() == {"absolute_uri": "https://cdn.example/a"}
 
     @pytest.mark.parametrize(("debug", "detail"), [(True, "ALLOWED_HOSTS"), (False, "Bad Request")])
     def test_build_absolute_uri_refuses_a_host_outside_allowed_hosts(self, api, caplog, debug, detail):

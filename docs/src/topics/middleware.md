@@ -488,6 +488,8 @@ In an async request, Bolt moves work to the lane one time for all `process_reque
 
 Lanes need no configuration. A request takes an idle lane, or Bolt starts a new one. A lane that stays idle for 10 seconds closes its database connections and stops. [`DJANGO_BOLT_LANE_IDLE_SECONDS`](../ref/settings.md#django_bolt_lane_idle_seconds) changes this time.
 
+When `runbolt` stops, each lane closes its database connections and stops before Python exits. Bolt waits up to 2 seconds for a lane that still runs a call.
+
 #### Database connections
 
 A lane keeps its database connections open between requests. This is different from Django, which closes a connection after each request when `CONN_MAX_AGE = 0`. Bolt applies `CONN_MAX_AGE` and `CONN_HEALTH_CHECKS` on lanes when you set them.

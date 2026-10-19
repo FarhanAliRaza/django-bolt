@@ -3,6 +3,13 @@
 //! This module contains validation and processing logic that is common
 //! between the production handler (handler.rs) and test handler (testing.rs).
 
+// A validator here returns the error response of the request as its `Err`.
+// Since actix-web 4.15, `HttpResponse` is larger than the 128-byte limit of
+// this lint. A `Box` would make the `Result` smaller, but it would add an
+// allocation to each error response. The size costs the success path
+// nothing, because a call writes only the `Ok` value.
+#![allow(clippy::result_large_err)]
+
 use actix_web::http::header::HeaderValue;
 use actix_web::{HttpRequest, HttpResponse};
 use ahash::{AHashMap, AHashSet};

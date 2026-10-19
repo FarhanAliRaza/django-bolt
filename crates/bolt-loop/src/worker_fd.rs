@@ -80,7 +80,11 @@ impl FdWatchers {
             .map_err(PyErr::from)?;
         let async_fd = {
             let _guard = runtime.enter();
-            AsyncFd::with_interest(owned, direction.interest()).map_err(PyErr::from)?
+            // SAFETY: `owned` is our own duplicate of the descriptor. The
+            // AsyncFd takes ownership of it, so it stays open and keeps its
+            // number until the AsyncFd drops.
+            unsafe { AsyncFd::register_with_interest(owned, direction.interest()) }
+                .map_err(|err| PyErr::from(std::io::Error::from(err)))?
         };
         let task = runtime.spawn(watch(
             async_fd,

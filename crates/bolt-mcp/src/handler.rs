@@ -21,7 +21,7 @@ use rmcp::model::{
     InputRequest, InputRequests, InputRequiredResult, ListPromptsResult,
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
     ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
-    ResultType, ServerInfo, Tool,
+    ResultType, ServerConfig, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::RoleServer;
@@ -475,7 +475,7 @@ impl McpHandler {
 }
 
 impl rmcp::ServerHandler for McpHandler {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         self.registry.server_info.clone()
     }
 

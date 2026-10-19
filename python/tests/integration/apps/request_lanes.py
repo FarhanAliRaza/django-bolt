@@ -8,6 +8,9 @@ that it sees, so a test can find a request that read the state of another one.
 from __future__ import annotations
 
 import asyncio
+import atexit
+import json
+import os
 import threading
 import time
 
@@ -29,6 +32,20 @@ def _track_connection(sender, connection, **kwargs):
 
 
 connection_created.connect(_track_connection)
+
+
+def _open_connection_count() -> int:
+    return sum(1 for conn in _created_connections if conn.connection is not None)
+
+
+def _write_exit_report(path: str) -> None:
+    with open(path, "w") as report:
+        json.dump({"open_connections": _open_connection_count()}, report)
+
+
+# A test sets this to see the connections that are still open when Python exits.
+if _exit_report := os.environ.get("BOLT_TEST_EXIT_REPORT"):
+    atexit.register(_write_exit_report, _exit_report)
 
 
 class ThreadLocalTenantMiddleware(MiddlewareMixin):
@@ -70,7 +87,7 @@ def db_route():
 
 @api.get("/connections")
 async def open_connections():
-    return {"open": sum(1 for conn in _created_connections if conn.connection is not None)}
+    return {"open": _open_connection_count()}
 
 
 def _expire_connection() -> int:
@@ -118,3 +135,15 @@ def sync_break_handled():
         # The handler handles the database error, so Bolt sees no exception.
         return {"handled": True}
     return {"handled": False}
+
+
+def _hold_connection() -> int:
+    value = _select_one()
+    # The lane keeps its connection while the client goes away and the server stops.
+    time.sleep(1)
+    return value
+
+
+@api.get("/async-hold")
+async def async_hold():
+    return {"value": await sync_to_async(_hold_connection)()}

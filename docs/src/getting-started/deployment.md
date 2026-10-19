@@ -50,7 +50,7 @@ Recycling is **spawn-first and graceful** — it is safe for long-lived connecti
 1. The supervisor forks a **replacement worker first**; `SO_REUSEPORT` lets old and new workers share the port, so an accepting process is always up. (Closing the old worker's socket can reset the handful of connections already queued on it — negligible with keep-alive clients, which simply retry.)
 2. The old worker receives SIGTERM and stops accepting new connections — the kernel routes new traffic to healthy workers.
 3. Active **WebSocket connections receive a proper close frame with code `1012` (Service Restart)** instead of an abrupt reset. Clients should treat 1012 as "reconnect now"; the reconnect lands on a healthy worker. New connections to the draining worker are refused, so they retry onto a healthy one.
-4. In-flight HTTP requests finish (up to `--workers-kill-timeout`, which also sets the server's internal graceful-shutdown window).
+4. In-flight HTTP requests finish (up to `--workers-kill-timeout`, which also sets the server's internal graceful-shutdown window). Idle keep-alive connections close at once. Each active connection closes after its current request.
 5. If the worker still hasn't exited after the timeout, it is SIGKILLed.
 
 The same drain sequence runs on plain `SIGTERM` (systemd stop, `kubectl delete pod`), so deploys and scale-downs also close WebSockets cleanly. `SIGINT` (Ctrl-C) stops immediately without draining; pressing Ctrl-C twice force-kills workers.

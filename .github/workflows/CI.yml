@@ -480,8 +480,9 @@ jobs:
   # - simulation counts CPU instructions. A count does not change with the load
   #   of the runner, so a small CPU change shows. It does not count system calls.
   # - walltime measures elapsed time, system calls and waits included. It runs on
-  #   a CodSpeed macro runner, a dedicated bare-metal machine with low noise. The
-  #   free plan has 600 macro runner minutes each month.
+  #   a GitHub-hosted ARM64 runner, a shared virtual machine. Its results have
+  #   more noise than a CodSpeed macro runner, but it uses no macro runner
+  #   minutes. Use it to find large changes. Use simulation for small ones.
   # The release wheel has no symbols, so Rust frames in the flame graphs have
   # no names. To see them, run `just build-profiling` and profile locally.
   # A tag push measures the commit of a master push again. CodSpeed can then
@@ -499,14 +500,13 @@ jobs:
             runner: ubuntu-latest
             wheels: wheels-linux-x86_64-*
             launcher: ""
-          # The ARM64 Graviton macro runner, so the job installs the wheel of
-          # linux-arm64. A public repository can use the runner only if the
-          # Default runner group of the organization allows public repositories.
-          # taskset keeps all threads on one core. Without it, the scheduler
-          # places the client, server and pool threads differently in each run.
+          # The GitHub-hosted ARM64 runner, so the job installs the wheel of
+          # linux-arm64. taskset keeps all threads on one core of its four.
+          # Without it, the scheduler places the client, server and pool
+          # threads differently in each run.
           # A case with a thread pool hop then changes by up to 18% (#430).
           - mode: walltime
-            runner: codspeed-macro-arm64-graviton-ubuntu-22-04
+            runner: ubuntu-24.04-arm
             wheels: wheels-linux-aarch64-*
             launcher: "taskset -c 3 "
     permissions:

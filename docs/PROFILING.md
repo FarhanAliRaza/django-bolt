@@ -49,8 +49,10 @@ a time, so it shows no queueing and no contention. The ORM cases read 10 users
 from SQLite. Use the count to find a CPU regression. Use bombardier for
 throughput and latency under concurrency.
 
-The job also measures walltime on a CodSpeed macro runner. Walltime includes
-system calls and the time a thread waits. The job runs the process on one core
+The job also measures walltime on a GitHub-hosted ARM64 runner. Walltime includes
+system calls and the time a thread waits. The runner is a shared virtual
+machine, so walltime has more noise than the count. Use it to find large
+changes only. The job runs the process on one core
 with `taskset`. Without a pin, the scheduler places the client, server and pool
 threads differently in each run. A case with a thread pool hop then changes by
 up to 18% with no code change (#430). Pin the process the same way to measure

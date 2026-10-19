@@ -62,7 +62,7 @@ enum DispatchOutcome {
 }
 
 static STREAMING_RESPONSE_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
-const SKIP_CORS_HEADER_NAME: HeaderName = HeaderName::from_static("x-bolt-skip-cors");
+pub(crate) const SKIP_CORS_HEADER_NAME: HeaderName = HeaderName::from_static("x-bolt-skip-cors");
 const SKIP_CORS_HEADER_VALUE: HeaderValue = HeaderValue::from_static("true");
 
 fn get_streaming_response_class(py: Python<'_>) -> &Py<PyAny> {
@@ -97,7 +97,7 @@ pub async fn build_file_response(
                         .content_type("text/plain; charset=utf-8")
                         .body(format!("Failed to read file metadata: {}", e));
                     return error::with_error_info(response, || {
-                        error::ErrorInfo::core("internal_error", "Internal Server Error")
+                        error::ErrorInfo::internal(format!("Failed to read file metadata: {}", e))
                     });
                 }
             };
@@ -126,7 +126,7 @@ pub async fn build_file_response(
                             .content_type("text/plain; charset=utf-8")
                             .body(format!("Failed to read file: {}", e));
                         error::with_error_info(response, || {
-                            error::ErrorInfo::core("internal_error", "Internal Server Error")
+                            error::ErrorInfo::internal(format!("Failed to read file: {}", e))
                         })
                     }
                 }
@@ -184,7 +184,7 @@ pub async fn build_file_response(
                     .content_type("text/plain; charset=utf-8")
                     .body(format!("File error: {}", e));
                 error::with_error_info(response, || {
-                    error::ErrorInfo::core("internal_error", "Internal Server Error")
+                    error::ErrorInfo::internal(format!("File error: {}", e))
                 })
             }
         },
@@ -738,6 +738,16 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
     crate::error_formatter::format_error_response(response, &error_req, &error_state)
 }
 
+/// The error formatter does not change the responses of an MCP or an ASGI mount.
+/// Some of their errors come from shared builders, so remove the `ErrorInfo` here.
+#[inline]
+fn without_error_info(mut response: HttpResponse, state: &AppState) -> HttpResponse {
+    if state.error_renderer.is_some() {
+        response.extensions_mut().remove::<error::ErrorInfo>();
+    }
+    response
+}
+
 async fn route_request<const ACCESS_LOG: bool>(
     req: HttpRequest,
     mut payload: web::Payload,
@@ -814,20 +824,17 @@ async fn route_request<const ACCESS_LOG: bool>(
             // pays nothing. Before the ASGI fallback so an overlapping prefix
             // cannot shadow an MCP endpoint.
             if let Some(mcp_mount) = bolt_mcp::find_mcp_mount(state.get_ref(), path) {
-                return bolt_mcp::bridge::handle_mcp_request(
-                    req,
-                    payload,
-                    mcp_mount,
-                    state.get_ref(),
-                )
-                .await;
+                let response =
+                    bolt_mcp::bridge::handle_mcp_request(req, payload, mcp_mount, state.get_ref())
+                        .await;
+                return without_error_info(response, &state);
             }
 
             // HTTP ASGI mount fallback:
             // - only after Bolt route miss
             // - only after trailing-slash/API-method near-miss checks above
             if let Some(asgi_mount) = find_asgi_mount(state.get_ref(), path) {
-                return asgi_http::handle_asgi_mount_request(
+                let response = asgi_http::handle_asgi_mount_request(
                     req,
                     payload,
                     asgi_mount,
@@ -837,6 +844,7 @@ async fn route_request<const ACCESS_LOG: bool>(
                     &state.trusted_proxies,
                 )
                 .await;
+                return without_error_info(response, &state);
             }
 
             // Handle OPTIONS preflight for non-existent routes
@@ -1520,17 +1528,17 @@ async fn route_request<const ACCESS_LOG: bool>(
                 {
                     Ok(response) => response,
                     Err(e) => Python::attach(|py| {
+                        let reason =
+                            format!("Handler returned unsupported response wire format: {}", e);
                         let response = error::build_error_response(
                             py,
                             500,
-                            format!("Handler returned unsupported response wire format: {}", e),
+                            reason.clone(),
                             vec![],
                             None,
                             state.debug,
                         );
-                        error::with_error_info(response, || {
-                            error::ErrorInfo::core("internal_error", "Internal Server Error")
-                        })
+                        error::with_error_info(response, || error::ErrorInfo::internal(reason))
                     }),
                 }
             }

@@ -6,10 +6,11 @@
 //! more. A response with no `ErrorInfo` comes from a handler, and stays as it is.
 //! This code runs on error paths only.
 
-use actix_web::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
+use actix_web::http::header::{HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_TYPE};
 use actix_web::http::StatusCode;
 use actix_web::{HttpRequest, HttpResponse};
 use ahash::AHashMap;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use std::sync::Arc;
@@ -20,6 +21,8 @@ use bolt_core::request::PyRequest;
 use bolt_core::request_pipeline::insert_header_line;
 use bolt_core::state::AppState;
 use bolt_core::type_coercion::string_map_to_py_dict;
+
+use crate::handler::SKIP_CORS_HEADER_NAME;
 
 /// The same limit as `extract_headers`.
 const MAX_HEADERS: usize = 100;
@@ -43,10 +46,15 @@ pub fn format_error_response(
     };
     let formatted = Python::attach(|py| -> PyResult<Option<HttpResponse>> {
         let request = Py::new(py, error_request(py, req, state)?)?;
+        // The skip-CORS marker is internal. The CORS middleware also finds the skip from the route.
         let headers: Vec<(&str, &str)> = response
             .headers()
             .iter()
-            .filter(|(name, _)| **name != CONTENT_TYPE && **name != CONTENT_LENGTH)
+            .filter(|(name, _)| {
+                **name != CONTENT_TYPE
+                    && **name != CONTENT_LENGTH
+                    && **name != SKIP_CORS_HEADER_NAME
+            })
             .filter_map(|(name, value)| Some((name.as_str(), value.to_str().ok()?)))
             .collect();
         let status = response.status().as_u16();
@@ -56,6 +64,7 @@ pub fn format_error_response(
                 detail,
                 errors,
                 extra,
+                reason,
             } => renderer.call1(
                 py,
                 (
@@ -67,6 +76,7 @@ pub fn format_error_response(
                     headers,
                     request,
                     py.None(),
+                    reason.as_deref(),
                 ),
             )?,
             ErrorInfo::Exception(exc) => renderer.call1(
@@ -80,6 +90,7 @@ pub fn format_error_response(
                     headers,
                     request,
                     exc.clone_ref(py),
+                    py.None(),
                 ),
             )?,
         };
@@ -87,11 +98,18 @@ pub fn format_error_response(
             return Ok(None);
         }
         let (status, headers, body): (u16, Vec<(String, String)>, Vec<u8>) = result.extract(py)?;
-        let mut builder = HttpResponse::build(
-            StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-        );
-        for header in headers {
-            builder.append_header(header);
+        // Python checks the result. A wrong one here sends the default response.
+        let status = StatusCode::from_u16(status)
+            .ok()
+            .filter(|status| status.is_client_error() || status.is_server_error())
+            .ok_or_else(|| PyValueError::new_err(format!("status {status} is not an error")))?;
+        let mut builder = HttpResponse::build(status);
+        for (name, value) in headers {
+            let name =
+                HeaderName::try_from(name).map_err(|err| PyValueError::new_err(err.to_string()))?;
+            let value = HeaderValue::try_from(value)
+                .map_err(|err| PyValueError::new_err(err.to_string()))?;
+            builder.append_header((name, value));
         }
         Ok(Some(builder.body(body)))
     });

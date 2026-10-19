@@ -233,6 +233,7 @@ pub fn check_rate_limit(
                         .into(),
                     errors: None,
                     extra: Some(serde_json::json!({ "retry_after": retry_after })),
+                    reason: None,
                 }
             }))
         }

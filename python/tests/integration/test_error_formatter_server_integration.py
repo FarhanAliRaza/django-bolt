@@ -43,3 +43,18 @@ def test_problem_details_end_to_end(make_server_project):
     assert conflict.json()["detail"] == "Already exists"
 
     assert ok.json() == {"status": "ok"}
+
+
+@pytest.mark.server_integration
+def test_problem_details_with_a_lifespan(make_server_project):
+    """runbolt starts an app with a lifespan in a separate branch. That branch also gives the formatter."""
+    project = make_server_project(api_module=app_module("error_formatter_lifespan"))
+    with project.start(startup_path="/health") as server:
+        missing = server.request("GET", "/nowhere")
+        conflict = server.request("GET", "/conflict")
+
+    assert missing.status_code == 404
+    assert missing.headers["content-type"] == "application/problem+json"
+    assert missing.json()["instance"] == "/nowhere"
+    assert conflict.status_code == 409
+    assert conflict.headers["content-type"] == "application/problem+json"

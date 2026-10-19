@@ -385,9 +385,20 @@ _KIND_BY_STATUS: dict[int, str] = {
     504: "gateway_timeout",
 }
 
-_STATUS_TITLES: dict[int, str] = {status.value: status.phrase for status in HTTPStatus}
+# The RFC 9110 names. Python 3.12 has older names for these, and the title must not change with Python.
+_STATUS_TITLES: dict[int, str] = {
+    **{status.value: status.phrase for status in HTTPStatus},
+    413: "Content Too Large",
+    414: "URI Too Long",
+    416: "Range Not Satisfiable",
+    422: "Unprocessable Content",
+}
 
 _VALIDATION_DETAIL = "Request validation failed"
+
+# RFC 9110 token characters for a header name, and the characters that a header value must not have.
+_HEADER_NAME = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+_HEADER_VALUE_FORBIDDEN = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
 
 
 class BoltError(msgspec.Struct, frozen=True, kw_only=True):
@@ -398,8 +409,8 @@ class BoltError(msgspec.Struct, frozen=True, kw_only=True):
         kind: A stable name for the error, for example "not_authenticated",
             "forbidden", "not_found", "validation", "rate_limited",
             "payload_too_large", "response_validation" or "internal_error".
-        detail: A message for a human. It does not show internal data.
-        errors: The field errors. Each one is a dict with "loc", "msg" and "type".
+        detail: A message for a human. Bolt does not put internal data, such as a file path, in it.
+        errors: The field errors. Each one is a dict with "loc", "msg" and "type", and some have "ctx".
         headers: The headers that the error needs, for example WWW-Authenticate
             or Retry-After. Bolt adds them to the response of the formatter.
         extra: The ``extra`` of an HTTPException, or ``{"retry_after": n}`` for
@@ -470,7 +481,8 @@ def problem_details(error: BoltError, request: Any) -> Response:
 
     Use it as ``BoltAPI(error_formatter=problem_details)``. The body has
     "type", "title", "status", "detail" and "instance". It has "errors" when
-    the error has field errors.
+    the error has field errors. The keys of ``error.extra`` are extension
+    members. A key with the name of a standard member does not replace it.
     """
     body: dict[str, Any] = {
         "type": "about:blank",
@@ -481,6 +493,11 @@ def problem_details(error: BoltError, request: Any) -> Response:
     }
     if error.errors:
         body["errors"] = error.errors
+    if isinstance(error.extra, dict):
+        for key, value in error.extra.items():
+            body.setdefault(key, value)
+    elif error.extra is not None:
+        body.setdefault("extra", error.extra)
     return Response(body, status_code=error.status, media_type="application/problem+json")
 
 
@@ -508,10 +525,11 @@ def bolt_error_from_exception(exc: BaseException) -> BoltError:
     elif isinstance(exc, msgspec.ValidationError):
         errors = msgspec_validation_error_to_dict(exc)
     elif isinstance(exc, FileNotFoundError):
-        return BoltError(status=404, kind="not_found", detail=str(exc) or "File not found", exception=exc)
-    elif isinstance(exc, PermissionError) or (
-        DjangoPermissionDenied is not None and isinstance(exc, DjangoPermissionDenied)
-    ):
+        # The text of an OSError has the path of the file. The client must not get it.
+        return BoltError(status=404, kind="not_found", detail="File not found", exception=exc)
+    elif isinstance(exc, PermissionError):
+        return BoltError(status=403, kind="forbidden", detail="Permission denied", exception=exc)
+    elif DjangoPermissionDenied is not None and isinstance(exc, DjangoPermissionDenied):
         return BoltError(status=403, kind="forbidden", detail=str(exc) or "Permission denied", exception=exc)
     else:
         return BoltError(status=500, kind="internal_error", detail="Internal Server Error", exception=exc)
@@ -535,6 +553,10 @@ def _response_parts(response: Any, error: BoltError) -> tuple[int, list[tuple[st
         raise TypeError(f"error_formatter must return Response, JSON, PlainText or HTML, not {type(response).__name__}")
     if getattr(response, "_cookies", None):
         raise TypeError("error_formatter cannot set cookies on an error response")
+    status = response.status_code
+    # A status out of this range can have no body, or it is not an error. An IntEnum such as HTTPStatus is an int.
+    if not isinstance(status, int) or isinstance(status, bool) or not 400 <= status <= 599:
+        raise TypeError(f"error_formatter must return a status from 400 to 599, not {status!r}")
 
     headers = [("content-type", content_type)]
     names = {"content-type"}
@@ -547,7 +569,17 @@ def _response_parts(response: Any, error: BoltError) -> tuple[int, list[tuple[st
     for name, value in error.headers.items():
         if name.lower() not in names:
             headers.append((name, value))
-    return int(response.status_code), headers, body
+    for name, value in headers:
+        _check_header(name, value)
+    return int(status), headers, body
+
+
+def _check_header(name: Any, value: Any) -> None:
+    """Raise TypeError for a header that is not valid in an HTTP response."""
+    if not isinstance(name, str) or not _HEADER_NAME.fullmatch(name):
+        raise TypeError(f"error_formatter returned a header name that is not valid: {name!r}")
+    if not isinstance(value, str) or _HEADER_VALUE_FORBIDDEN.search(value):
+        raise TypeError(f"error_formatter returned a value that is not valid for the header {name!r}: {value!r}")
 
 
 def render_error(
@@ -568,10 +600,14 @@ def render_error(
 
 
 def _log_formatted_error(error: BoltError) -> None:
-    """Log a server error as ``handle_exception`` logs it."""
+    """Log a server error as ``handle_exception`` logs it. It does not log an HTTPException."""
     if error.kind == "response_validation":
         _log_response_validation_error(error.exception, error.errors)
-    elif error.kind == "internal_error" and error.exception is not None:
+    elif (
+        error.kind == "internal_error"
+        and error.exception is not None
+        and not isinstance(error.exception, HTTPException)
+    ):
         _log_server_error(error.exception)
 
 
@@ -580,7 +616,12 @@ def handle_exception_with_formatter(
     exc: Exception,
     request: Any,
 ) -> tuple[int, list[tuple[str, str]], bytes]:
-    """Handle an exception with the formatter, or with ``handle_exception`` when there is none."""
+    """Handle an exception with the formatter, or with ``handle_exception`` when there is none.
+
+    An HTTPException with a typed body skips the formatter. The handler chose that body.
+    """
+    if isinstance(exc, HTTPException) and exc.body is not None:
+        return http_exception_handler(exc)
     if formatter is not None:
         error = bolt_error_from_exception(exc)
         parts = render_error(formatter, error, request)
@@ -600,14 +641,19 @@ def render_core_error(
     headers: list[tuple[str, str]],
     request: Any,
     exception: BaseException | None,
+    reason: str | None,
 ) -> tuple[int, list[tuple[str, str]], bytes] | None:
     """Format an error response of the Rust core. Rust calls this only on an error.
 
     ``exception`` is set when a Python exception reached Rust. Then the error
-    comes from the exception, as for an error in ``_dispatch``. The result is
-    None when the formatter fails. Then Rust sends its default response.
+    comes from the exception, as for an error in ``_dispatch``. ``reason`` tells
+    the cause of a Rust 500 for the log. The formatter does not get it. The
+    result is None when the formatter fails, or for an HTTPException with a
+    typed body. Then Rust sends its default response.
     """
     if exception is not None:
+        if isinstance(exception, HTTPException) and exception.body is not None:
+            return None
         error = bolt_error_from_exception(exception)
     else:
         error = BoltError(
@@ -621,4 +667,7 @@ def render_core_error(
     parts = render_error(formatter, error, request)
     if parts is not None:
         _log_formatted_error(error)
+        if reason is not None:
+            # The default body told the reason, and the formatter replaced it.
+            logger.error("Internal Server Error: %s", reason)
     return parts

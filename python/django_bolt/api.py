@@ -524,8 +524,14 @@ class BoltAPI:
                 Rust or from Python. ``None`` keeps the ``{"detail": ...}`` body.
                 Use ``django_bolt.error_handlers.problem_details`` for RFC 9457.
         """
-        if error_formatter is not None and not callable(error_formatter):
-            raise TypeError(f"error_formatter must be callable, not {type(error_formatter).__name__}")
+        if error_formatter is not None:
+            if not callable(error_formatter):
+                raise TypeError(f"error_formatter must be callable, not {type(error_formatter).__name__}")
+            # Rust calls the formatter on an error path that cannot await.
+            if inspect.iscoroutinefunction(error_formatter) or inspect.iscoroutinefunction(
+                type(error_formatter).__call__
+            ):
+                raise TypeError("error_formatter must be a sync callable, not an async one")
         self._error_formatter = error_formatter
         self._routes: list[tuple[str, str, int, Callable]] = []
         # Handler IDs whose lane affinity error was logged with its fix, one time each.
@@ -3488,9 +3494,6 @@ class BoltAPI:
             existing_mcp_paths.add(child_definition["path"])
             child_mcp_mounts.append(child_definition)
 
-        if child_formatter is not None:
-            self._error_formatter = child_formatter
-
         # Copy routes from sub-app to this app with path prefix
         for method, route_path, handler_id, handler in app._routes:
             # Compute new path with mount prefix and normalize using parent's trailing_slash setting
@@ -3567,6 +3570,9 @@ class BoltAPI:
             self._asgi_mounts.append((new_asgi_prefix, asgi_app))
 
         self._mcp_mounts.extend(child_mcp_mounts)
+        # Last, so that a mount that raises does not change the formatter.
+        if child_formatter is not None:
+            self._error_formatter = child_formatter
 
     def mount_asgi(self, path: str, app: Callable[..., Any]) -> None:
         """Mount an ASGI app at a static prefix (evaluated after Bolt route miss)."""

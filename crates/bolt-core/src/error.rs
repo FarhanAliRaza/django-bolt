@@ -22,6 +22,8 @@ pub enum ErrorInfo {
         errors: Option<serde_json::Value>,
         /// More data, for example `{"retry_after": 3}` for a rate limit.
         extra: Option<serde_json::Value>,
+        /// The cause of a server error, for the log. The formatter does not get it.
+        reason: Option<String>,
     },
     /// A Python exception that reached Rust. Python describes it.
     Exception(Py<PyAny>),
@@ -34,6 +36,18 @@ impl ErrorInfo {
             detail: detail.into(),
             errors: None,
             extra: None,
+            reason: None,
+        }
+    }
+
+    /// A 500 of the Rust core. The client gets no detail, and `reason` goes to the log.
+    pub fn internal(reason: String) -> Self {
+        Self::Core {
+            kind: "internal_error",
+            detail: Cow::Borrowed("Internal Server Error"),
+            errors: None,
+            extra: None,
+            reason: Some(reason),
         }
     }
 }
@@ -366,7 +380,7 @@ pub fn handle_python_error(
             debug,
         );
         with_error_info(response, || {
-            ErrorInfo::core("internal_error", "Internal Server Error")
+            ErrorInfo::internal("Handler execution error".to_string())
         })
     }
 }

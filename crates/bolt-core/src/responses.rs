@@ -188,6 +188,7 @@ pub fn validation_info(errors: serde_json::Value) -> ErrorInfo {
         detail: Cow::Borrowed("Request validation failed"),
         errors: Some(errors),
         extra: None,
+        reason: None,
     }
 }
 

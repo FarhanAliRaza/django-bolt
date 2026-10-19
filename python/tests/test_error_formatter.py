@@ -419,11 +419,22 @@ def test_mount_rejects_a_different_formatter():
     async def parent_route() -> dict:
         return {}
 
-    with pytest.raises(ValueError, match="error_formatter"):
-        parent.mount("/v2", BoltAPI(error_formatter=_record))
+    child = BoltAPI(error_formatter=_record)
 
-    assert parent._error_formatter is problem_details
-    assert [route[1] for route in parent._routes] == ["/parent"]
+    @child.get("/child")
+    async def child_route() -> dict:
+        return {}
+
+    with pytest.raises(ValueError, match="error_formatter"):
+        parent.mount("/v2", child)
+
+    # The failed mount leaves the parent as it was.
+    with TestClient(parent) as client:
+        assert client.get("/parent").status_code == 200
+        miss = client.get("/v2/child")
+
+    assert miss.status_code == 404
+    assert miss.headers["content-type"] == "application/problem+json"
 
 
 def test_without_formatter_the_errors_keep_the_detail_shape():

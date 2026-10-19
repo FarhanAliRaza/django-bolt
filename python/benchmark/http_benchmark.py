@@ -110,6 +110,9 @@ CASES = (
     Case("header", "GET", "/header", lambda body: body == b"val", (("x-test", "val"),)),
     Case("cookie", "GET", "/cookie", lambda body: body == b"abc", (("Cookie", "session=abc"),)),
     Case("exception", "GET", "/exc", json_equals({"detail": "Not found"}), status=404),
+    # Errors that the Rust core builds, with no Python call: a route miss and a guard 401.
+    Case("route-miss", "GET", "/no-such-route", json_equals({"detail": "Not Found"}), status=404),
+    Case("auth-401", "GET", "/auth/me", json_equals({"detail": "Authentication required"}), status=401),
     Case("html", "GET", "/html", lambda body: body == b"<h1>Hello</h1>"),
     Case("redirect", "GET", "/redirect", empty, status=302),
     Case("file-static", "GET", "/file-static", lambda body: body.startswith(b"from __future__ import annotations")),

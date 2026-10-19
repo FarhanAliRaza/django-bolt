@@ -245,6 +245,8 @@ pub struct TestAppState {
     pub global_compression_config: Option<Arc<bolt_core::metadata::CompressionConfig>>,
     /// The rate-limit buckets of this app. See `create_test_app`.
     pub rate_limiters: Arc<RateLimiters>,
+    /// The error renderer of the API, as `start_server` gets it.
+    pub error_renderer: Option<Py<PyAny>>,
 }
 
 /// Rate-limit buckets that several test apps share. The WebSocket test client
@@ -291,7 +293,11 @@ fn test_app(app_id: u64) -> PyResult<Arc<RwLock<TestAppState>>> {
 /// one connection, so it passes the buckets of its API, and the connections to
 /// one API share their buckets, as on a server.
 #[pyfunction]
-#[pyo3(signature = (dispatch, read_django_settings=true, cors_allowed_origins=None, static_files_config=None, compression_config=None, rate_limiters=None))]
+#[pyo3(signature = (dispatch, read_django_settings=true, cors_allowed_origins=None, static_files_config=None, compression_config=None, rate_limiters=None, error_renderer=None))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is an optional keyword of the Python test clients"
+)]
 pub fn create_test_app(
     py: Python<'_>,
     dispatch: Py<PyAny>,
@@ -300,7 +306,11 @@ pub fn create_test_app(
     static_files_config: Option<&Bound<'_, PyDict>>,
     compression_config: Option<&Bound<'_, PyDict>>,
     rate_limiters: Option<&Bound<'_, TestRateLimiters>>,
+    error_renderer: Option<Py<PyAny>>,
 ) -> PyResult<u64> {
+    if error_renderer.is_some() {
+        bolt_core::error::enable_error_info();
+    }
     // Without read_django_settings, the CORS, static and media settings are not
     // read at all, so their warnings do not show either.
     let mut config = ServerConfig::read(py, read_django_settings)?;
@@ -331,6 +341,7 @@ pub fn create_test_app(
         rate_limiters: rate_limiters
             .map(|shared| Arc::clone(&shared.get().0))
             .unwrap_or_default(),
+        error_renderer,
     };
 
     registry().insert(id, Arc::new(RwLock::new(app)));
@@ -574,17 +585,25 @@ pub fn test_request(
                         config,
                         compression,
                         rate_limiters,
+                        error_renderer,
                     ) = {
                         let state = app_state.read();
+                        let (dispatch, error_renderer) = Python::attach(|py| {
+                            (
+                                state.dispatch.clone_ref(py),
+                                state.error_renderer.as_ref().map(|r| r.clone_ref(py)),
+                            )
+                        });
                         (
                             state.router.clone(),
                             state.route_metadata.clone(),
                             state.asgi_mounts.clone(),
                             state.mcp_mounts.clone(),
-                            Python::attach(|py| state.dispatch.clone_ref(py)),
+                            dispatch,
                             state.config.clone(),
                             state.global_compression_config.clone(),
                             state.rate_limiters.clone(),
+                            error_renderer,
                         )
                     };
                     let max_payload_size = config.max_payload_size;
@@ -618,6 +637,7 @@ pub fn test_request(
                         media_files_config: config.media_files_config,
                         access_logger: None,
                         access_log_levels: 0,
+                        error_renderer,
                     });
 
                     // Create Actix test service with production middleware stack
@@ -976,8 +996,7 @@ pub fn handle_test_websocket(
             query_string.as_deref(),
             &ws_route_meta.query_seq_fields,
             max_param_length,
-        )
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        )?;
         set_query_sequences(py, &query_dict, &sequences)?;
     }
     scope_dict.set_item("query_params", query_dict)?;
@@ -1109,6 +1128,7 @@ mod tests {
             },
             global_compression_config: None,
             rate_limiters: Arc::default(),
+            error_renderer: None,
         };
         registry().insert(id, Arc::new(RwLock::new(app)));
         id

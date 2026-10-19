@@ -163,8 +163,7 @@ fn build_scope(
             Some(req.query_string()),
             &route_meta.query_seq_fields,
             max_param_length,
-        )
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        )?;
         set_query_sequences(py, &query_dict, &sequences)?;
     }
     scope_dict.set_item("query_params", query_dict)?;

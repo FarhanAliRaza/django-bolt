@@ -110,7 +110,7 @@ mod tests {
     use std::collections::HashSet;
 
     fn codec() -> RequestStateCodec {
-        RequestStateCodec::new(vec![7u8; 32])
+        RequestStateCodec::try_new(vec![7u8; 32]).unwrap()
     }
 
     fn state() -> McpRequestState {

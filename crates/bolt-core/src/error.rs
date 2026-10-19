@@ -2,6 +2,7 @@ use actix_web::{http::StatusCode, HttpResponse};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::settings::DjangoSettings;
 
@@ -37,9 +38,39 @@ impl ErrorInfo {
     }
 }
 
-/// Put `info` in the extensions of an error response. This runs on error paths only.
+/// True when an app in this process has an error formatter. Startup sets it.
+static ERROR_INFO_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Make the error builders record `ErrorInfo`. Startup calls this when an app
+/// has an error formatter.
+pub fn enable_error_info() {
+    ERROR_INFO_ENABLED.store(true, Ordering::Relaxed);
+}
+
+/// Put the `ErrorInfo` that `info` makes in the extensions of an error response.
+///
+/// `info` runs only when an app in this process has an error formatter.
+/// Without one, an error response costs one load of a flag more than before.
+#[inline]
+pub fn with_error_info(response: HttpResponse, info: impl FnOnce() -> ErrorInfo) -> HttpResponse {
+    with_error_info_if(ERROR_INFO_ENABLED.load(Ordering::Relaxed), response, info)
+}
+
+#[inline]
+fn with_error_info_if(
+    enabled: bool,
+    response: HttpResponse,
+    info: impl FnOnce() -> ErrorInfo,
+) -> HttpResponse {
+    if enabled {
+        insert_error_info(response, info())
+    } else {
+        response
+    }
+}
+
 #[cold]
-pub fn with_error_info(mut response: HttpResponse, info: ErrorInfo) -> HttpResponse {
+fn insert_error_info(mut response: HttpResponse, info: ErrorInfo) -> HttpResponse {
     response.extensions_mut().insert(info);
     response
 }
@@ -172,7 +203,7 @@ pub fn handle_python_exception(
     debug: bool,
 ) -> HttpResponse {
     let response = default_exception_response(py, exc, path, method, debug);
-    with_error_info(response, ErrorInfo::Exception(exc.clone().unbind()))
+    with_error_info(response, || ErrorInfo::Exception(exc.clone().unbind()))
 }
 
 fn default_exception_response(
@@ -334,16 +365,37 @@ pub fn handle_python_error(
             None,
             debug,
         );
-        with_error_info(
-            response,
-            ErrorInfo::core("internal_error", "Internal Server Error"),
-        )
+        with_error_info(response, || {
+            ErrorInfo::core("internal_error", "Internal Server Error")
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn without_an_error_formatter_the_error_info_is_not_made() {
+        let response = with_error_info_if(false, HttpResponse::NotFound().finish(), || {
+            panic!("no app has an error formatter, so the info must not be made")
+        });
+        assert!(response.extensions().get::<ErrorInfo>().is_none());
+    }
+
+    #[test]
+    fn with_an_error_formatter_the_error_info_is_in_the_extensions() {
+        let response = with_error_info_if(true, HttpResponse::NotFound().finish(), || {
+            ErrorInfo::core("not_found", "Not Found")
+        });
+        assert!(matches!(
+            response.extensions().get::<ErrorInfo>(),
+            Some(ErrorInfo::Core {
+                kind: "not_found",
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn test_escape_json() {

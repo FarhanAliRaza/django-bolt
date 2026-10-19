@@ -309,7 +309,7 @@ For validation errors:
 
 An error formatter changes the body of each error response that the framework makes. One function formats the errors from all layers:
 
-- The Rust core: 401 and 403 from guards, 404 for no route, 413, 400 for bad headers, 422 from path, query, header, cookie and form values, and 429 from rate limits.
+- The Rust core: 401 and 403 from guards, 404 for no route, 413, 400 for bad headers, 422 from path, query, header, cookie and form values, and 429 from rate limits. It also covers a `FileResponse` whose file Rust cannot open or read when it sends the response.
 - Python: request and response validation, `HTTPException`, and unhandled exceptions.
 
 Without a formatter, the errors keep the `{"detail": ...}` body.

@@ -680,6 +680,9 @@ pub fn start_server(
             "Routes not registered",
         ));
     }
+    if error_renderer.is_some() {
+        bolt_core::error::enable_error_info();
+    }
 
     // Read the Django settings ONCE at startup, not per request. The test
     // client reads them with the same function. A bad setting fails here,

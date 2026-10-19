@@ -308,6 +308,9 @@ pub fn create_test_app(
     rate_limiters: Option<&Bound<'_, TestRateLimiters>>,
     error_renderer: Option<Py<PyAny>>,
 ) -> PyResult<u64> {
+    if error_renderer.is_some() {
+        bolt_core::error::enable_error_info();
+    }
     // Without read_django_settings, the CORS, static and media settings are not
     // read at all, so their warnings do not show either.
     let mut config = ServerConfig::read(py, read_django_settings)?;

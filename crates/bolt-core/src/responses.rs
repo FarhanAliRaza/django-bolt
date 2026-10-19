@@ -64,10 +64,9 @@ pub fn error_401() -> HttpResponse {
         .content_type("application/json")
         .insert_header(("WWW-Authenticate", "Bearer"))
         .body(ERROR_BODY_401);
-    with_error_info(
-        response,
-        ErrorInfo::core("not_authenticated", "Authentication required"),
-    )
+    with_error_info(response, || {
+        ErrorInfo::core("not_authenticated", "Authentication required")
+    })
 }
 
 #[inline]
@@ -75,7 +74,9 @@ pub fn error_403() -> HttpResponse {
     let response = HttpResponse::Forbidden()
         .content_type("application/json")
         .body(ERROR_BODY_403);
-    with_error_info(response, ErrorInfo::core("forbidden", "Permission denied"))
+    with_error_info(response, || {
+        ErrorInfo::core("forbidden", "Permission denied")
+    })
 }
 
 /// A 403 carrying a guard's custom `detail`, falling back to the static body.
@@ -90,7 +91,9 @@ pub fn error_403_denial(denial: Option<&GuardDenial>) -> HttpResponse {
             let response = HttpResponse::Forbidden()
                 .content_type("application/json")
                 .body(denial.body.clone());
-            with_error_info(response, ErrorInfo::core("forbidden", denial.text.clone()))
+            with_error_info(response, || {
+                ErrorInfo::core("forbidden", denial.text.clone())
+            })
         }
     }
 }
@@ -100,7 +103,7 @@ pub fn error_404() -> HttpResponse {
     let response = HttpResponse::NotFound()
         .content_type("application/json")
         .body(ERROR_BODY_404);
-    with_error_info(response, ErrorInfo::core("not_found", "Not Found"))
+    with_error_info(response, || ErrorInfo::core("not_found", "Not Found"))
 }
 
 #[inline]
@@ -108,7 +111,9 @@ pub fn error_400_too_many_headers() -> HttpResponse {
     let response = HttpResponse::BadRequest()
         .content_type("application/json")
         .body(ERROR_BODY_400_HEADERS);
-    with_error_info(response, ErrorInfo::core("bad_request", "Too many headers"))
+    with_error_info(response, || {
+        ErrorInfo::core("bad_request", "Too many headers")
+    })
 }
 
 /// 413 Payload Too Large with static body
@@ -117,10 +122,9 @@ pub fn error_413() -> HttpResponse {
     let response = HttpResponse::PayloadTooLarge()
         .content_type("application/json")
         .body(ERROR_BODY_413);
-    with_error_info(
-        response,
-        ErrorInfo::core("payload_too_large", "Payload too large"),
-    )
+    with_error_info(response, || {
+        ErrorInfo::core("payload_too_large", "Payload too large")
+    })
 }
 
 /// For errors that need dynamic content, we provide a fast formatter
@@ -135,7 +139,7 @@ pub fn error_400_header_too_large(max_size: usize) -> HttpResponse {
     let response = HttpResponse::BadRequest()
         .content_type("application/json")
         .body(body);
-    with_error_info(response, ErrorInfo::core("bad_request", detail))
+    with_error_info(response, || ErrorInfo::core("bad_request", detail))
 }
 
 /// The location source of a request value, from the label of its 422 detail.
@@ -168,12 +172,13 @@ pub fn error_422_param(label: &str, name: &str, msg: &str) -> HttpResponse {
     let response = HttpResponse::UnprocessableEntity()
         .content_type("application/json")
         .body(body);
-    let errors = serde_json::json!([{
-        "loc": [loc_source(label), name],
-        "msg": msg,
-        "type": "validation_error",
-    }]);
-    with_error_info(response, validation_info(errors))
+    with_error_info(response, || {
+        validation_info(serde_json::json!([{
+            "loc": [loc_source(label), name],
+            "msg": msg,
+            "type": "validation_error",
+        }]))
+    })
 }
 
 /// The error information of a 422 with the field errors `errors`.
@@ -261,6 +266,7 @@ mod tests {
 
     #[test]
     fn each_error_response_names_its_kind_for_the_formatter() {
+        crate::error::enable_error_info();
         let cases = [
             (error_401(), "not_authenticated", "Authentication required"),
             (error_403(), "forbidden", "Permission denied"),
@@ -284,6 +290,7 @@ mod tests {
 
     #[test]
     fn a_guard_denial_gives_its_own_detail() {
+        crate::error::enable_error_info();
         let denial = GuardDenial::new("Client accounts only".to_string());
         let response = error_403_denial(Some(&denial));
         assert_eq!(core_info(&response).1, "Client accounts only");
@@ -291,6 +298,7 @@ mod tests {
 
     #[test]
     fn a_param_error_gives_its_location() {
+        crate::error::enable_error_info();
         let response = error_422_param("Header", "x-count", "Invalid integer 'a'");
         let (kind, detail, errors) = core_info(&response);
         assert_eq!(

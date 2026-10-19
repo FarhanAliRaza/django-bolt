@@ -24,7 +24,7 @@ from django_bolt.exceptions import HTTPException
 from django_bolt.management.commands.runbolt import Command
 from django_bolt.middleware import rate_limit
 from django_bolt.param_functions import Form
-from django_bolt.responses import JSON, PlainText, Response
+from django_bolt.responses import JSON, FileResponse, PlainText, Response
 from django_bolt.serializers import Serializer
 from django_bolt.testing import TestClient
 
@@ -316,6 +316,40 @@ def test_broken_formatter_logs_and_sends_the_default_error(formatter, caplog):
     assert python_error.json() == {"detail": "Already exists", "extra": {"id": 3}}
     failures = [record for record in caplog.records if "error_formatter failed" in record.getMessage()]
     assert len(failures) == 2
+
+
+def test_file_response_errors_reach_the_formatter(tmp_path):
+    """FileResponse checks its file when the handler makes it, and Rust opens the file again to send it.
+
+    A file that is missing at the first check gives a Python error. A file
+    that goes away before Rust opens it gives a Rust error. Both reach the
+    formatter.
+    """
+    path = tmp_path / "report.txt"
+    api = BoltAPI(error_formatter=_record)
+
+    @api.get("/missing")
+    async def missing():
+        return FileResponse(str(tmp_path / "absent.txt"))
+
+    @api.get("/gone")
+    async def gone():
+        path.write_text("data")
+        response = FileResponse(str(path))
+        path.unlink()
+        return response
+
+    with TestClient(api) as client:
+        missing_response = client.get("/missing")
+        gone_response = client.get("/gone")
+
+    assert missing_response.status_code == 404
+    assert missing_response.json()["kind"] == "not_found"
+    assert missing_response.json()["exception"] == "FileNotFoundError"
+    assert gone_response.status_code == 404
+    assert gone_response.headers["content-type"] == "application/json"
+    assert gone_response.json()["kind"] == "not_found"
+    assert gone_response.json()["exception"] is None
 
 
 def test_without_formatter_the_errors_keep_the_detail_shape():

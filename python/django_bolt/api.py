@@ -55,7 +55,13 @@ from .concurrency import (
 )
 from .decorators import _RESPONSE_MODEL_UNSET, ActionHandler
 from .dependencies import dependency_fields
-from .error_handlers import ErrorFormatter, handle_exception_with_formatter, render_core_error
+from .error_handlers import (
+    ErrorFormatter,
+    handle_exception,
+    handle_exception_with_formatter,
+    http_exception_handler,
+    render_core_error,
+)
 from .exceptions import HTTPException
 from .logging.middleware import LoggingMiddleware, create_logging_middleware
 from .middleware import CompressionConfig, DjangoMiddleware, DjangoMiddlewareStack
@@ -2857,6 +2863,10 @@ class BoltAPI:
 
     def _handle_http_exception(self, he: HTTPException, request: Any) -> Response:
         """Handle HTTPException and return response."""
+        # Without a formatter, go straight to the handler: handle_exception
+        # first reads the Django DEBUG setting, which an HTTPException does not use.
+        if self._error_formatter is None:
+            return _wire_from_error_parts(*http_exception_handler(he))
         return _wire_from_error_parts(*handle_exception_with_formatter(self._error_formatter, he, request))
 
     def _rust_error_renderer(self) -> Callable | None:
@@ -2900,6 +2910,8 @@ class BoltAPI:
     def _handle_generic_exception(self, e: Exception, request: Any) -> Response:
         """Handle generic exception using error_handlers module."""
         # Without a formatter, the handler reads the Django DEBUG setting.
+        if self._error_formatter is None:
+            return _wire_from_error_parts(*handle_exception(e, debug=None, request=request))
         return _wire_from_error_parts(*handle_exception_with_formatter(self._error_formatter, e, request))
 
     @staticmethod

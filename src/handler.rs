@@ -93,9 +93,12 @@ pub async fn build_file_response(
             let file_size = match file.metadata().await {
                 Ok(metadata) => metadata.len(),
                 Err(e) => {
-                    return HttpResponse::InternalServerError()
+                    let response = HttpResponse::InternalServerError()
                         .content_type("text/plain; charset=utf-8")
                         .body(format!("Failed to read file metadata: {}", e));
+                    return error::with_error_info(response, || {
+                        error::ErrorInfo::core("internal_error", "Internal Server Error")
+                    });
                 }
             };
 
@@ -118,9 +121,14 @@ pub async fn build_file_response(
                         let body = if is_head_request { Vec::new() } else { buffer };
                         builder.body(body)
                     }
-                    Err(e) => HttpResponse::InternalServerError()
-                        .content_type("text/plain; charset=utf-8")
-                        .body(format!("Failed to read file: {}", e)),
+                    Err(e) => {
+                        let response = HttpResponse::InternalServerError()
+                            .content_type("text/plain; charset=utf-8")
+                            .body(format!("Failed to read file: {}", e));
+                        error::with_error_info(response, || {
+                            error::ErrorInfo::core("internal_error", "Internal Server Error")
+                        })
+                    }
                 }
             } else {
                 // For large files, use streaming
@@ -152,16 +160,33 @@ pub async fn build_file_response(
                 builder.streaming(stream)
             }
         }
+        // FileResponse checks the file when the handler makes it. The file can
+        // go away, or lose its permission, before this opens it.
         Err(e) => match e.kind() {
-            ErrorKind::NotFound => HttpResponse::NotFound()
-                .content_type("text/plain; charset=utf-8")
-                .body("File not found"),
-            ErrorKind::PermissionDenied => HttpResponse::Forbidden()
-                .content_type("text/plain; charset=utf-8")
-                .body("Permission denied"),
-            _ => HttpResponse::InternalServerError()
-                .content_type("text/plain; charset=utf-8")
-                .body(format!("File error: {}", e)),
+            ErrorKind::NotFound => {
+                let response = HttpResponse::NotFound()
+                    .content_type("text/plain; charset=utf-8")
+                    .body("File not found");
+                error::with_error_info(response, || {
+                    error::ErrorInfo::core("not_found", "File not found")
+                })
+            }
+            ErrorKind::PermissionDenied => {
+                let response = HttpResponse::Forbidden()
+                    .content_type("text/plain; charset=utf-8")
+                    .body("Permission denied");
+                error::with_error_info(response, || {
+                    error::ErrorInfo::core("forbidden", "Permission denied")
+                })
+            }
+            _ => {
+                let response = HttpResponse::InternalServerError()
+                    .content_type("text/plain; charset=utf-8")
+                    .body(format!("File error: {}", e));
+                error::with_error_info(response, || {
+                    error::ErrorInfo::core("internal_error", "Internal Server Error")
+                })
+            }
         },
     }
 }
@@ -1185,10 +1210,9 @@ async fn route_request<const ACCESS_LOG: bool>(
                             "{{\"error\": \"Failed to read request body: {}\"}}",
                             e
                         ));
-                    return error::with_error_info(
-                        response,
-                        error::ErrorInfo::core("bad_request", "Failed to read request body"),
-                    );
+                    return error::with_error_info(response, || {
+                        error::ErrorInfo::core("bad_request", "Failed to read request body")
+                    });
                 }
             }
         }
@@ -1504,10 +1528,9 @@ async fn route_request<const ACCESS_LOG: bool>(
                             None,
                             state.debug,
                         );
-                        error::with_error_info(
-                            response,
-                            error::ErrorInfo::core("internal_error", "Internal Server Error"),
-                        )
+                        error::with_error_info(response, || {
+                            error::ErrorInfo::core("internal_error", "Internal Server Error")
+                        })
                     }),
                 }
             }

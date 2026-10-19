@@ -412,12 +412,13 @@ pub fn insert_header_line(headers: &mut AHashMap<String, String>, name: &str, va
 
 /// Build HTTP 422 response for validation errors
 pub fn build_validation_error_response(error: &ValidationError) -> HttpResponse {
-    let errors = serde_json::json!([error.to_json()]);
-    let body = serde_json::json!({ "detail": &errors });
+    let body = serde_json::json!({ "detail": [error.to_json()] });
     let response = HttpResponse::UnprocessableEntity()
         .content_type("application/json")
         .body(body.to_string());
-    crate::error::with_error_info(response, responses::validation_info(errors))
+    crate::error::with_error_info(response, || {
+        responses::validation_info(serde_json::json!([error.to_json()]))
+    })
 }
 
 #[cfg(test)]

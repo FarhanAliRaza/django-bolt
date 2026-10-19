@@ -226,16 +226,15 @@ pub fn check_rate_limit(
                 burst,
                 responses::get_rate_limit_body(retry_after),
             );
-            Some(crate::error::with_error_info(
-                response,
+            Some(crate::error::with_error_info(response, || {
                 crate::error::ErrorInfo::Core {
                     kind: "rate_limited",
                     detail: format!("Rate limit exceeded. Try again in {} seconds.", retry_after)
                         .into(),
                     errors: None,
                     extra: Some(serde_json::json!({ "retry_after": retry_after })),
-                },
-            ))
+                }
+            }))
         }
     }
 }

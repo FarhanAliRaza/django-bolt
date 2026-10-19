@@ -309,7 +309,12 @@ For validation errors:
 
 An error formatter changes the body of each error response that the framework makes. One function formats the errors from all layers:
 
-- The Rust core: 401 and 403 from guards, 404 for no route, 413, 400 for bad headers, 422 from path, query, header, cookie and form values, and 429 from rate limits. It also covers a `FileResponse` whose file Rust cannot open or read when it sends the response.
+- The Rust core:
+  - 401 and 403 from guards, and 404 for no route.
+  - 413, and 400 for bad headers.
+  - 422 from path, query, header, cookie and form values.
+  - 429 from rate limits.
+  - A `FileResponse` whose file Rust cannot open or read when it sends the response.
 - Python: request and response validation, `HTTPException`, and unhandled exceptions.
 
 Without a formatter, the errors keep the `{"detail": ...}` body.
@@ -388,9 +393,11 @@ Bolt adds `error.headers` to the response of the formatter. A header that the re
 
 On the request of an error from the Rust core, `method`, `path`, `query_string` and `headers` are set. The other request data is empty, because Bolt rejects the request before it reads it.
 
-The formatter runs only for an error. Rust calls it only when the app has a formatter, so a request that succeeds costs nothing more. When the formatter raises an exception or returns another type, Bolt logs the error and sends the default response. Bolt still logs a 500 error before it calls the formatter.
+The formatter runs only for an error. Rust calls it only when the app has a formatter, so a request that succeeds costs nothing more. When the formatter raises an exception or returns another type, Bolt logs the error and sends the default response. Bolt logs each 500 error, also when the formatter formats it.
 
 With more than one API in a project, `runbolt` uses one formatter for all of them. Set the same formatter on each API, or set it on one API. Two different formatters stop startup.
+
+`mount()` follows the same rule. The parent API takes the formatter of the mounted API. Two different formatters raise `ValueError`.
 
 The formatter runs on the thread of the request, also for an async handler. Keep it fast. Do not use the database or the network in it.
 

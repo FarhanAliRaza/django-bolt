@@ -3380,7 +3380,7 @@ class BoltAPI:
         try:
             return await run_in_orm_executor(serialize_response_sync, result, meta)
         except HTTPException as he:
-            return self._handle_http_exception(he)
+            return self._handle_http_exception(he, request)
         except Exception as e:
             if self._logging_middleware:
                 self._logging_middleware.log_exception(request, e, exc_info=True)
@@ -3458,6 +3458,14 @@ class BoltAPI:
                 f"Use include_router() for Router instances."
             )
 
+        # The server has one error formatter, as in ``runbolt``. This API takes the
+        # formatter of the mounted API, and two different formatters are an error.
+        child_formatter = app._error_formatter
+        if child_formatter is not None and self._error_formatter not in (None, child_formatter):
+            raise ValueError(
+                "The mounted API sets a different error_formatter. Set the same error_formatter on both APIs, or on one."
+            )
+
         # Normalize path prefix: ensure leading slash, strip trailing slash
         mount_path = "/" + path.strip("/") if path else ""
 
@@ -3479,6 +3487,9 @@ class BoltAPI:
                 raise ValueError(f"An MCP server is already mounted at {child_definition['path']!r} on this API")
             existing_mcp_paths.add(child_definition["path"])
             child_mcp_mounts.append(child_definition)
+
+        if child_formatter is not None:
+            self._error_formatter = child_formatter
 
         # Copy routes from sub-app to this app with path prefix
         for method, route_path, handler_id, handler in app._routes:

@@ -15,6 +15,7 @@ from uuid import UUID
 import msgspec
 import pytest
 from django.core.management.base import CommandError
+from django.db.models import QuerySet
 from msgspec import Meta
 
 from django_bolt import BoltAPI
@@ -27,6 +28,8 @@ from django_bolt.param_functions import Form
 from django_bolt.responses import JSON, FileResponse, PlainText, Response
 from django_bolt.serializers import Serializer
 from django_bolt.testing import TestClient
+
+from .test_models import Article
 
 
 class Body(Serializer):
@@ -350,6 +353,77 @@ def test_file_response_errors_reach_the_formatter(tmp_path):
     assert gone_response.headers["content-type"] == "application/json"
     assert gone_response.json()["kind"] == "not_found"
     assert gone_response.json()["exception"] is None
+
+
+class ArchivedQuerySet(QuerySet):
+    """Raise an HTTPException when the rows load."""
+
+    def _fetch_all(self):
+        raise HTTPException(410, "Archived")
+
+
+def archived_articles():
+    """Return a QuerySet from a helper, so that the sync dispatch defers it to the ORM pool."""
+    return ArchivedQuerySet(model=Article)
+
+
+@pytest.mark.parametrize("formatter", [None, _record], ids=["default", "formatter"])
+def test_http_exception_from_a_queryset_on_the_orm_pool(formatter):
+    """A sync handler gives a QuerySet, and its rows load on the ORM pool.
+
+    An HTTPException that the rows raise there keeps its status.
+    """
+    api = BoltAPI(error_formatter=formatter)
+
+    @api.get("/articles")
+    def listing(request):
+        return archived_articles()
+
+    with TestClient(api) as client:
+        response = client.get("/articles")
+
+    assert response.status_code == 410, response.text
+    if formatter is None:
+        assert response.json() == {"detail": "Archived"}
+    else:
+        assert response.json()["kind"] == "gone"
+        assert response.json()["exception"] == "HTTPException"
+
+
+@pytest.mark.parametrize("parent_formatter", [None, _record], ids=["parent-without", "parent-same"])
+def test_mount_keeps_the_formatter_of_the_mounted_api(parent_formatter):
+    """The server has one formatter. The parent takes the formatter of the mounted API."""
+    child = BoltAPI(error_formatter=_record)
+
+    @child.get("/conflict")
+    async def conflict() -> dict:
+        raise HTTPException(409, "Already exists")
+
+    parent = BoltAPI(error_formatter=parent_formatter)
+    parent.mount("/v2", child)
+
+    with TestClient(parent) as client:
+        mounted = client.get("/v2/conflict")
+        miss = client.get("/nowhere")
+
+    assert mounted.status_code == 409
+    assert mounted.json()["kind"] == "conflict"
+    assert miss.status_code == 404
+    assert miss.json()["kind"] == "not_found"
+
+
+def test_mount_rejects_a_different_formatter():
+    parent = BoltAPI(error_formatter=problem_details)
+
+    @parent.get("/parent")
+    async def parent_route() -> dict:
+        return {}
+
+    with pytest.raises(ValueError, match="error_formatter"):
+        parent.mount("/v2", BoltAPI(error_formatter=_record))
+
+    assert parent._error_formatter is problem_details
+    assert [route[1] for route in parent._routes] == ["/parent"]
 
 
 def test_without_formatter_the_errors_keep_the_detail_shape():

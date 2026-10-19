@@ -447,6 +447,53 @@ class BoltError(msgspec.Struct, frozen=True, kw_only=True):
 ErrorFormatter = Callable[[BoltError, Any], Any]
 
 
+class _ErrorSchema(msgspec.Struct, frozen=True):
+    """The error body of a formatter, as the OpenAPI schema shows it."""
+
+    schema: Any
+    media_type: str
+
+
+def error_schema[F: Callable[..., Any]](schema: Any, *, media_type: str = "application/json") -> Callable[[F], F]:
+    """Declare the error body of a formatter for the OpenAPI schema.
+
+    Use it as a decorator on the formatter. ``schema`` is the type of the body,
+    for example a ``msgspec.Struct``. The generated error responses then show
+    this type and ``media_type``. Without this decorator, they show no body.
+    """
+
+    def decorate(formatter: F) -> F:
+        formatter.__bolt_error_schema__ = _ErrorSchema(schema, media_type)
+        return formatter
+
+    return decorate
+
+
+# The docstrings of these structs are the descriptions in the OpenAPI schema.
+class ProblemFieldError(msgspec.Struct, kw_only=True):
+    """A field error: the location of the value, a message and the error type."""
+
+    loc: list[str | int]
+    msg: str
+    type: str
+
+
+class ProblemDetails(msgspec.Struct, kw_only=True):
+    """An error body in the RFC 9457 Problem Details format.
+
+    The body has "errors" when the error has field errors. The keys of the
+    "extra" of the error are more members of the body.
+    """
+
+    type: str
+    title: str
+    status: int
+    detail: str
+    instance: str
+    errors: list[ProblemFieldError] = []
+
+
+@error_schema(ProblemDetails, media_type="application/problem+json")
 def problem_details(error: BoltError, request: Any) -> Response:
     """Format an error as RFC 9457 Problem Details (``application/problem+json``).
 

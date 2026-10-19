@@ -170,7 +170,13 @@ struct HmacKeys {
 
 impl StaticKey {
     pub fn new(key: DecodingKey) -> Self {
-        let hmac = key.try_get_hmac_secret().ok().map(|secret| {
+        // Only an HMAC secret gets HMAC keys. A public key also keeps its
+        // bytes, and they must never verify an HMAC token.
+        let secret = match key.family() {
+            AlgorithmFamily::Hmac => key.try_get_as_bytes().ok(),
+            _ => None,
+        };
+        let hmac = secret.map(|secret| {
             Arc::new(HmacKeys {
                 hs256: hmac::Key::new(hmac::HMAC_SHA256, secret),
                 hs384: hmac::Key::new(hmac::HMAC_SHA384, secret),
@@ -404,20 +410,6 @@ pub enum AuthBackend {
     },
 }
 
-fn algorithm_family(alg: Algorithm) -> AlgorithmFamily {
-    match alg {
-        Algorithm::HS256 | Algorithm::HS384 | Algorithm::HS512 => AlgorithmFamily::Hmac,
-        Algorithm::RS256
-        | Algorithm::RS384
-        | Algorithm::RS512
-        | Algorithm::PS256
-        | Algorithm::PS384
-        | Algorithm::PS512 => AlgorithmFamily::Rsa,
-        Algorithm::ES256 | Algorithm::ES384 => AlgorithmFamily::Ec,
-        Algorithm::EdDSA => AlgorithmFamily::Ed,
-    }
-}
-
 /// Parse a configured algorithm name into a `jsonwebtoken::Algorithm`.
 /// Unknown names are a configuration error — silently falling back to a
 /// different algorithm would verify tokens against the wrong scheme.
@@ -443,9 +435,9 @@ pub fn build_jwt_decoding_key(
     let first = *algorithms
         .first()
         .ok_or_else(|| "JWT auth backend requires at least one algorithm".to_string())?;
-    let family = algorithm_family(first);
+    let family = first.family();
     for alg in &algorithms[1..] {
-        if algorithm_family(*alg) != family {
+        if alg.family() != family {
             return Err(format!(
                 "JWT algorithms {:?} mix key families; all algorithms of one backend must use the same key type",
                 algorithms
@@ -1074,6 +1066,18 @@ mod tests {
         let rsa = StaticKey::new(DecodingKey::from_rsa_components("AQAB", "AQAB").unwrap());
         assert!(rsa.hmac_key(Algorithm::RS256).is_none());
         assert!(rsa.hmac_key(Algorithm::HS256).is_none());
+
+        // A public key from a PEM or a DER file keeps its bytes as a secret
+        // does. They must not become an HMAC key: a token signed with the
+        // public key as an HMAC secret would then verify.
+        for key in [
+            DecodingKey::from_rsa_der(b"der"),
+            DecodingKey::from_ec_der(b"der"),
+            DecodingKey::from_ed_der(b"der"),
+        ] {
+            let public = StaticKey::new(key);
+            assert!(public.hmac_key(Algorithm::HS256).is_none(), "{public:?}");
+        }
     }
 
     #[test]

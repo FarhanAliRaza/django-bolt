@@ -22,8 +22,8 @@ use bolt_core::metadata::{CorsConfig, RouteMetadata};
 use bolt_core::middleware::auth::{populate_auth_context, AuthContext};
 use bolt_core::middleware::rate_limit::{check_after_auth, check_before_auth};
 use bolt_core::request_pipeline::{
-    insert_header_line, query_sequences, set_declared_item, set_param_item, set_query_sequences,
-    EMPTY_TYPES,
+    header_str, insert_header_line, query_sequences, set_declared_item, set_param_item,
+    set_query_sequences, EMPTY_TYPES,
 };
 use bolt_core::router::parse_query_string;
 use bolt_core::state::AppState;
@@ -132,7 +132,8 @@ fn build_scope(
     max_param_length: usize,
 ) -> PyResult<Py<PyAny>> {
     let empty_types: &TypeHints = &EMPTY_TYPES;
-    let param_types = route_meta.map_or(empty_types, |m| &m.param_types);
+    let path_types = route_meta.map_or(empty_types, |m| &m.path_types);
+    let query_types = route_meta.map_or(empty_types, |m| &m.query_types);
     let header_types = route_meta.map_or(empty_types, |m| &m.header_types);
     let cookie_types = route_meta.map_or(empty_types, |m| &m.cookie_types);
 
@@ -149,7 +150,7 @@ fn build_scope(
             &query_dict,
             key,
             value,
-            param_types,
+            query_types,
             max_param_length,
             "Query parameter",
         )?;
@@ -193,7 +194,7 @@ fn build_scope(
             &params_dict,
             k,
             v,
-            param_types,
+            path_types,
             max_param_length,
             "Path parameter",
         )?;
@@ -779,7 +780,7 @@ pub async fn handle_websocket_upgrade(
     // OPTIMIZATION: HeaderName::as_str() already returns lowercase (http crate canonical form)
     let mut headers: AHashMap<String, String> = AHashMap::new();
     for (key, value) in req.headers().iter() {
-        if let Ok(v) = value.to_str() {
+        if let Some(v) = header_str(value) {
             insert_header_line(&mut headers, key.as_str(), v);
         }
     }

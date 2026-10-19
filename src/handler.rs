@@ -21,8 +21,8 @@ use bolt_asgi::asgi_http;
 use bolt_core::error::{self, handle_python_error};
 use bolt_core::form_parsing::{
     parse_multipart, parse_urlencoded, FileContent, FileFieldConstraints, FileInfo,
-    FormParseResult, FormValue, DEFAULT_MAX_PARTS, DEFAULT_MEMORY_LIMIT,
-    ERROR_TYPE_PAYLOAD_TOO_LARGE,
+    FormParseResult, FormValue, LimitedPayload, DEFAULT_MAX_FIELDS, DEFAULT_MAX_PARTS,
+    DEFAULT_MEMORY_LIMIT, ERROR_TYPE_PAYLOAD_TOO_LARGE,
 };
 use bolt_core::metadata::{RustArgBinding, RustArgSource};
 use bolt_core::middleware;
@@ -874,7 +874,8 @@ async fn route_request<const ACCESS_LOG: bool>(
         match validate_and_cache_typed_params(
             path_params.as_ref(),
             query_params.as_ref(),
-            &route_meta.param_types,
+            &route_meta.path_types,
+            &route_meta.query_types,
             max_param_length,
         ) {
             Ok(cached) => cached,
@@ -965,10 +966,17 @@ async fn route_request<const ACCESS_LOG: bool>(
                     return responses::error_403_denial(denial.as_deref());
                 }
             };
-            let requires_csrf = ctx.as_ref().is_some_and(|auth| auth.cookie_csrf);
+            // A safe method passes the check, so it needs no connection info.
+            let requires_csrf = ctx.as_ref().is_some_and(|auth| auth.cookie_csrf)
+                && !bolt_core::validation::is_safe_method(method);
             if requires_csrf {
-                let scheme = req.connection_info().scheme().to_owned();
-                if bolt_core::validation::cookie_csrf_blocks(method, headers_map, true, &scheme) {
+                let info = req.connection_info();
+                if bolt_core::validation::cookie_csrf_blocks(
+                    method,
+                    headers_map,
+                    true,
+                    info.scheme(),
+                ) {
                     return responses::error_403();
                 }
             }
@@ -1104,107 +1112,115 @@ async fn route_request<const ACCESS_LOG: bool>(
 
     // Read body from payload only when needed.
     // For multipart, we need the payload stream directly.
-    let (body, form_result): (Vec<u8>, Option<FormParseResult>) =
-        if !needs_body && !needs_form_parsing {
-            (Vec::new(), None)
-        } else if needs_form_parsing && is_multipart {
-            // Multipart form parsing - uses the payload stream directly
+    let (body, form_result): (Vec<u8>, Option<FormParseResult>) = if !needs_body
+        && !needs_form_parsing
+    {
+        (Vec::new(), None)
+    } else if needs_form_parsing && is_multipart {
+        // Multipart form parsing - uses the payload stream directly
+        let empty_form_type_hints: HashMap<String, u8> = HashMap::new();
+        let empty_file_constraints: HashMap<String, FileFieldConstraints> = HashMap::new();
+        let form_type_hints = route_metadata
+            .map(|m| &m.form_type_hints)
+            .unwrap_or(&empty_form_type_hints);
+        let file_constraints = route_metadata
+            .map(|m| &m.file_constraints)
+            .unwrap_or(&empty_file_constraints);
+        let max_upload_size = route_metadata
+            .map(|m| m.max_upload_size)
+            .unwrap_or(1024 * 1024);
+        let memory_spool_threshold = route_metadata
+            .map(|m| m.memory_spool_threshold)
+            .unwrap_or(DEFAULT_MEMORY_LIMIT);
+
+        // Create Multipart from the payload. The limit covers each byte of the body,
+        // as the parser buffers a part header with no limit of its own.
+        let (limited, exceeded) = LimitedPayload::new(payload, state.max_payload_size);
+        let multipart = Multipart::new(req.headers(), limited);
+
+        match parse_multipart(
+            multipart,
+            form_type_hints,
+            file_constraints,
+            max_upload_size,
+            memory_spool_threshold,
+            DEFAULT_MAX_PARTS,
+            max_param_length,
+            state.max_payload_size,
+        )
+        .await
+        {
+            Ok(result) => (Vec::new(), Some(result)),
+            Err(validation_error) => {
+                // Aggregate-size overflow maps to 413 to match the non-multipart
+                // path; other multipart failures stay 422 validation errors.
+                if exceeded.get() || validation_error.error_type == ERROR_TYPE_PAYLOAD_TOO_LARGE {
+                    return responses::error_413();
+                }
+                return build_validation_error_response(&validation_error);
+            }
+        }
+    } else {
+        // Read payload as bytes (for non-multipart requests).
+        // The aggregate size is bounded against max_payload_size during
+        // streaming so chunked requests (no Content-Length) are enforced too.
+        let mut body_vec = Vec::new();
+        let mut total_read: usize = 0;
+        while let Some(chunk) = payload.next().await {
+            match chunk {
+                Ok(data) => {
+                    total_read = match total_read.checked_add(data.len()) {
+                        Some(v) => v,
+                        None => return responses::error_413(),
+                    };
+                    if total_read > state.max_payload_size {
+                        return responses::error_413();
+                    }
+                    body_vec.extend_from_slice(&data);
+                }
+                Err(e) => {
+                    let response = HttpResponse::BadRequest()
+                        .content_type("application/json")
+                        .body(format!(
+                            "{{\"error\": \"Failed to read request body: {}\"}}",
+                            e
+                        ));
+                    return error::with_error_info(
+                        response,
+                        error::ErrorInfo::core("bad_request", "Failed to read request body"),
+                    );
+                }
+            }
+        }
+
+        // URL-encoded form parsing
+        if needs_form_parsing && is_urlencoded {
             let empty_form_type_hints: HashMap<String, u8> = HashMap::new();
-            let empty_file_constraints: HashMap<String, FileFieldConstraints> = HashMap::new();
             let form_type_hints = route_metadata
                 .map(|m| &m.form_type_hints)
                 .unwrap_or(&empty_form_type_hints);
-            let file_constraints = route_metadata
-                .map(|m| &m.file_constraints)
-                .unwrap_or(&empty_file_constraints);
-            let max_upload_size = route_metadata
-                .map(|m| m.max_upload_size)
-                .unwrap_or(1024 * 1024);
-            let memory_spool_threshold = route_metadata
-                .map(|m| m.memory_spool_threshold)
-                .unwrap_or(DEFAULT_MEMORY_LIMIT);
 
-            // Create Multipart from the payload
-            let multipart = Multipart::new(req.headers(), payload);
-
-            match parse_multipart(
-                multipart,
+            match parse_urlencoded(
+                &body_vec,
                 form_type_hints,
-                file_constraints,
-                max_upload_size,
-                memory_spool_threshold,
-                DEFAULT_MAX_PARTS,
                 max_param_length,
-                state.max_payload_size,
-            )
-            .await
-            {
-                Ok(result) => (Vec::new(), Some(result)),
+                DEFAULT_MAX_FIELDS,
+            ) {
+                Ok(form_map) => {
+                    let result = FormParseResult {
+                        form_map,
+                        files_map: HashMap::new(),
+                    };
+                    (body_vec, Some(result))
+                }
                 Err(validation_error) => {
-                    // Aggregate-size overflow maps to 413 to match the non-multipart
-                    // path; other multipart failures stay 422 validation errors.
-                    if validation_error.error_type == ERROR_TYPE_PAYLOAD_TOO_LARGE {
-                        return responses::error_413();
-                    }
                     return build_validation_error_response(&validation_error);
                 }
             }
         } else {
-            // Read payload as bytes (for non-multipart requests).
-            // The aggregate size is bounded against max_payload_size during
-            // streaming so chunked requests (no Content-Length) are enforced too.
-            let mut body_vec = Vec::new();
-            let mut total_read: usize = 0;
-            while let Some(chunk) = payload.next().await {
-                match chunk {
-                    Ok(data) => {
-                        total_read = match total_read.checked_add(data.len()) {
-                            Some(v) => v,
-                            None => return responses::error_413(),
-                        };
-                        if total_read > state.max_payload_size {
-                            return responses::error_413();
-                        }
-                        body_vec.extend_from_slice(&data);
-                    }
-                    Err(e) => {
-                        let response = HttpResponse::BadRequest()
-                            .content_type("application/json")
-                            .body(format!(
-                                "{{\"error\": \"Failed to read request body: {}\"}}",
-                                e
-                            ));
-                        return error::with_error_info(
-                            response,
-                            error::ErrorInfo::core("bad_request", "Failed to read request body"),
-                        );
-                    }
-                }
-            }
-
-            // URL-encoded form parsing
-            if needs_form_parsing && is_urlencoded {
-                let empty_form_type_hints: HashMap<String, u8> = HashMap::new();
-                let form_type_hints = route_metadata
-                    .map(|m| &m.form_type_hints)
-                    .unwrap_or(&empty_form_type_hints);
-
-                match parse_urlencoded(&body_vec, form_type_hints, max_param_length) {
-                    Ok(form_map) => {
-                        let result = FormParseResult {
-                            form_map,
-                            files_map: HashMap::new(),
-                        };
-                        (body_vec, Some(result))
-                    }
-                    Err(validation_error) => {
-                        return build_validation_error_response(&validation_error);
-                    }
-                }
-            } else {
-                (body_vec, None)
-            }
-        };
+            (body_vec, None)
+        }
+    };
 
     // Check if this is a HEAD request (needed for body stripping after Python handler)
     let is_head_request = method == "HEAD";
@@ -1357,7 +1373,7 @@ async fn route_request<const ACCESS_LOG: bool>(
             let result_obj = if is_async_handler {
                 bolt_loop::dispatch_sync(py, &route.dispatch_sync, request_obj.as_any())?
             } else {
-                route.dispatch_sync.call1(py, (request_obj,))?
+                route.dispatch_sync.call1(py, (request_obj.bind(py),))?
             };
 
             // Bare-bytes fast path: sync executors return just the encoded JSON
@@ -1382,6 +1398,15 @@ async fn route_request<const ACCESS_LOG: bool>(
                 );
                 mark_skip_cors(&mut resp, skip_cors);
                 return Ok(DispatchOutcome::Ready(resp));
+            }
+
+            // A sync executor returns a callable when its result needs the event
+            // loop, for example a QuerySet that must load on the ORM pool. A wire
+            // is bytes or a tuple, so it is never callable. Run the call on the
+            // worker loop, as the async path runs the dispatch.
+            if result_obj.bind(py).is_callable() {
+                let fut = bolt_loop::dispatch(result_obj, request_obj.into_any());
+                return Ok(DispatchOutcome::Pending(Box::pin(fut)));
             }
 
             let parsed = parse_response_wire(py, &result_obj)?;

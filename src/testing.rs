@@ -935,7 +935,8 @@ pub fn handle_test_websocket(
     // Get type hints from route metadata for type coercion
     let ws_route_meta = app.route_metadata.get(handler_id);
     let empty_types: &TypeHints = &EMPTY_TYPES;
-    let param_types = ws_route_meta.map_or(empty_types, |m| &m.param_types);
+    let path_types = ws_route_meta.map_or(empty_types, |m| &m.path_types);
+    let query_types = ws_route_meta.map_or(empty_types, |m| &m.query_types);
     let header_types = ws_route_meta.map_or(empty_types, |m| &m.header_types);
     let cookie_types = ws_route_meta.map_or(empty_types, |m| &m.cookie_types);
 
@@ -949,7 +950,7 @@ pub fn handle_test_websocket(
             &path_params_dict,
             k,
             v,
-            param_types,
+            path_types,
             max_param_length,
             "Path parameter",
         )?;
@@ -972,7 +973,7 @@ pub fn handle_test_websocket(
                 &query_dict,
                 key,
                 value,
-                param_types,
+                query_types,
                 max_param_length,
                 "Query parameter",
             )?;

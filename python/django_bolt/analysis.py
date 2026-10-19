@@ -474,6 +474,12 @@ def analyze_handler(
     target = _unwrap(resolve_introspection_target(_unwrap(fn, visitor)), visitor)
     # A call of a class runs its __init__, which can come from a base class.
     if inspect.isclass(target):
+        # A metaclass __call__ and a __new__ run before __init__. The analysis
+        # reads __init__ only, so it cannot see what they read.
+        if type(target).__call__ is not type.__call__ or any("__new__" in vars(base) for base in target.__mro__[:-1]):
+            analysis.analysis_failed = True
+            analysis.failure_reason = f"{target.__name__} runs a __new__ or a metaclass __call__ before __init__"
+            return analysis
         target = _unwrap(target.__init__, visitor)
 
     # Try to get source code

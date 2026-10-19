@@ -92,7 +92,7 @@ dev = [
     "pydantic>=2",
     "pyyaml>=5.2",
     "maturin>=1.9.6",
-    "django==6.1.1",
+    "django==6.1.2",
     "ruff>=0.8",
     "vulture>=2.11", #for dead code detection
     "nanodjango>=0.16",
@@ -140,6 +140,7 @@ ignore = [
     "B008",   # do not perform function calls in argument defaults (needed for Depends)
     "ARG001", # unused function argument (common in handlers)
     "ARG002", # unused method argument
+    "ARG003", # unused class method argument (a class-scoped fixture is a classmethod since pytest 9.1)
 ]
 
 [tool.ruff.lint.isort]
@@ -148,6 +149,11 @@ known-first-party = ["django_bolt"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+# Ruff 0.16 and later also format the Python blocks in Markdown. Keep the
+# snippets in docs/ and the readmes as their authors wrote them: the
+# formatter removes the column alignment of teaching comments and splits
+# single-line import examples.
+exclude = ["*.md"]
 
 [tool.ty.environment]
 python-version = "3.12"

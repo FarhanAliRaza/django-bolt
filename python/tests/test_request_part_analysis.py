@@ -16,9 +16,9 @@ from typing import Annotated, Any
 
 import pytest
 
-from django_bolt import BoltAPI, ViewSet, action
+from django_bolt import BoltAPI, Request, ViewSet, action
 from django_bolt.analysis import analyze_handler
-from django_bolt.params import Depends
+from django_bolt.params import Depends, Form
 from django_bolt.testing import TestClient
 
 from .test_models import Article
@@ -102,6 +102,35 @@ class InheritedTokenInInit(TokenInInit):
     class Query:
         def __init__(self, request):
             self.query = dict(request.query)
+
+
+class AcceptsAnything:
+    """A base class whose __init__ reads no request part."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+
+class TokenInNew(AcceptsAnything):
+    """A call of the class runs __new__ first. Here __new__ reads the header."""
+
+    def __new__(cls, request):
+        self = super().__new__(cls)
+        self.token = request.headers.get("x-token")
+        return self
+
+
+class TokenFromMetaclass(type):
+    """A metaclass __call__ runs before __new__ and __init__. Here it reads the header."""
+
+    def __call__(cls, request):
+        instance = super().__call__()
+        instance.token = request.headers.get("x-token")
+        return instance
+
+
+class TokenInMetaclassCall(AcceptsAnything, metaclass=TokenFromMetaclass):
+    """Its __init__ comes from a base class and reads no request part."""
 
 
 def _request_parts(api: BoltAPI, path: str) -> tuple[str, ...]:
@@ -327,3 +356,72 @@ def test_the_analysis_fails_for_a_class_whose_init_has_no_source():
 
     assert analysis.analysis_failed is True
     assert analysis.failure_reason.startswith("Could not get source:")
+
+
+def test_a_form_route_parses_no_headers_for_python():
+    """Rust reads the Content-Type of a form from its own map, so Python needs no headers dict."""
+    api = BoltAPI()
+
+    @api.post("/form")
+    def form(name: Annotated[str, Form()]):
+        return {"name": name}
+
+    assert _request_parts(api, "/form") == ("body",)
+
+
+def form_name(name: Annotated[str, Form()]) -> str:
+    return name
+
+
+def test_a_form_dependency_parses_no_headers_for_python():
+    api = BoltAPI()
+
+    @api.post("/form")
+    def form(name: Annotated[str, Depends(form_name)]):
+        return {"name": name}
+
+    assert _request_parts(api, "/form") == ("body",)
+
+
+def test_a_form_handler_that_reads_a_header_gets_it():
+    api = BoltAPI()
+
+    def request_id(request):
+        return request.headers.get("x-id")
+
+    @api.post("/form")
+    def form(request: Request, name: Annotated[str, Form()]):
+        return {"name": name, "id": request_id(request)}
+
+    with TestClient(api) as client:
+        response = client.post("/form", data={"name": "bolt"}, headers={"x-id": "7"})
+
+    assert response.json() == {"name": "bolt", "id": "7"}
+
+
+def test_a_class_dependency_whose_new_reads_the_header_gets_it():
+    """A call of the class runs __new__ before __init__, so the analysis of __init__ is not enough."""
+    api = BoltAPI()
+
+    @api.get("/items")
+    def items(holder: Annotated[TokenInNew, Depends(TokenInNew)]):
+        return {"token": holder.token}
+
+    with TestClient(api) as client:
+        response = client.get("/items", headers={"x-token": "secret"})
+
+    assert response.json() == {"token": "secret"}
+
+
+def test_a_class_dependency_whose_metaclass_call_reads_the_header_gets_it():
+    """A metaclass __call__ runs before __new__ and __init__."""
+    api = BoltAPI()
+
+    @api.get("/items")
+    def items(holder: Annotated[TokenInMetaclassCall, Depends(TokenInMetaclassCall)]):
+        return {"token": holder.token}
+
+    with TestClient(api) as client:
+        response = client.get("/items", headers={"x-token": "secret"})
+
+    assert response.json() == {"token": "secret"}

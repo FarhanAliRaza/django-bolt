@@ -335,3 +335,51 @@ def test_run_succeeds_when_a_shutdown_follows_a_worker_failure():
     supervisor = make_supervisor(env, processes=2, spawn=spawn, kill=kill_then_exit, log=log, check_interval=0.01)
 
     assert supervisor.run() == 0
+
+
+def _spawn_until(env: FakeWorkerEnv, count: int):
+    """Spawn ``count`` workers, then fail, as runbolt does when a pool of the parent does not close."""
+
+    def spawn(slot: int) -> int:
+        if len(env.spawns()) == count:
+            raise RuntimeError("a pool of the parent did not close")
+        return env.spawn(slot)
+
+    return spawn
+
+
+def _kill_then_exit(env: FakeWorkerEnv):
+    def kill(pid: int, signum: int) -> None:
+        env.kill(pid, signum)
+        env.exit(pid, 0)
+
+    return kill
+
+
+def test_a_failed_spawn_at_start_stops_the_workers_that_run():
+    """The parent exits with the error. A worker that it leaves behind serves with no supervisor."""
+    env = FakeWorkerEnv()
+    supervisor = make_supervisor(
+        env, processes=2, spawn=_spawn_until(env, 1), kill=_kill_then_exit(env), check_interval=0.01
+    )
+
+    with pytest.raises(RuntimeError, match="did not close"):
+        supervisor.run()
+
+    assert env.signals() == [(100, signal.SIGTERM)]
+    assert not env.alive
+
+
+def test_a_failed_spawn_of_a_replacement_stops_the_old_worker():
+    """A recycle spawns the replacement first. When that spawn fails, the old worker must still stop."""
+    env = FakeWorkerEnv()
+    supervisor = make_supervisor(
+        env, max_rss_bytes=100 * MIB, spawn=_spawn_until(env, 1), kill=_kill_then_exit(env), check_interval=0.01
+    )
+    env.rss[100] = 200 * MIB
+
+    with pytest.raises(RuntimeError, match="did not close"):
+        supervisor.run()
+
+    assert env.signals() == [(100, signal.SIGTERM)]
+    assert not env.alive

@@ -139,6 +139,7 @@ class WebSocketTestClient:
             None,
             self.api._rust_compression_config(),
             _rate_limiters(self.api),
+            error_renderer=self.api._rust_error_renderer(),
         )
 
         # Register WebSocket routes with pre-compiled injectors (same as production)

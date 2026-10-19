@@ -55,7 +55,13 @@ from .concurrency import (
 )
 from .decorators import _RESPONSE_MODEL_UNSET, ActionHandler
 from .dependencies import dependency_fields
-from .error_handlers import handle_exception, http_exception_handler
+from .error_handlers import (
+    ErrorFormatter,
+    handle_exception,
+    handle_exception_with_formatter,
+    http_exception_handler,
+    render_core_error,
+)
 from .exceptions import HTTPException
 from .logging.middleware import LoggingMiddleware, create_logging_middleware
 from .middleware import CompressionConfig, DjangoMiddleware, DjangoMiddlewareStack
@@ -478,6 +484,7 @@ class BoltAPI:
         validate_response: bool = True,
         include_in_schema: bool | None = None,
         lifespan: Callable | None = None,
+        error_formatter: ErrorFormatter | None = None,
     ) -> None:
         """
         Initialize a BoltAPI instance.
@@ -512,7 +519,20 @@ class BoltAPI:
                 inherits from the API this one is mounted into. The root defaults to True.
             lifespan: Async context manager factory for startup/shutdown lifecycle.
                 Receives the BoltAPI instance as argument.
+            error_formatter: Callable ``(error: BoltError, request) -> Response``.
+                It formats each error response that the framework makes, from
+                Rust or from Python. ``None`` keeps the ``{"detail": ...}`` body.
+                Use ``django_bolt.error_handlers.problem_details`` for RFC 9457.
         """
+        if error_formatter is not None:
+            if not callable(error_formatter):
+                raise TypeError(f"error_formatter must be callable, not {type(error_formatter).__name__}")
+            # Rust calls the formatter on an error path that cannot await.
+            if inspect.iscoroutinefunction(error_formatter) or inspect.iscoroutinefunction(
+                type(error_formatter).__call__
+            ):
+                raise TypeError("error_formatter must be a sync callable, not an async one")
+        self._error_formatter = error_formatter
         self._routes: list[tuple[str, str, int, Callable]] = []
         # Handler IDs whose lane affinity error was logged with its fix, one time each.
         self._lane_affinity_hinted: set[int] = set()
@@ -2847,9 +2867,22 @@ class BoltAPI:
 
         return execute
 
-    def _handle_http_exception(self, he: HTTPException) -> Response:
+    def _handle_http_exception(self, he: HTTPException, request: Any) -> Response:
         """Handle HTTPException and return response."""
-        return _wire_from_error_parts(*http_exception_handler(he))
+        # Without a formatter, go straight to the handler: handle_exception
+        # first reads the Django DEBUG setting, which an HTTPException does not use.
+        if self._error_formatter is None:
+            return _wire_from_error_parts(*http_exception_handler(he))
+        return _wire_from_error_parts(*handle_exception_with_formatter(self._error_formatter, he, request))
+
+    def _rust_error_renderer(self) -> Callable | None:
+        """Return the callable that formats the errors of the Rust core, or None.
+
+        Rust calls it only when it makes an error response.
+        """
+        if self._error_formatter is None:
+            return None
+        return functools.partial(render_core_error, self._error_formatter)
 
     def _describe_lane_affinity_error(self, error: LaneAffinityError, handler: Callable, handler_id: int) -> None:
         """Add the route and the handler to the message. In dev mode, log the fix one time per route.
@@ -2880,11 +2913,12 @@ class BoltAPI:
                 description,
             )
 
-    def _handle_generic_exception(self, e: Exception, request: dict[str, Any] = None) -> Response:
+    def _handle_generic_exception(self, e: Exception, request: Any) -> Response:
         """Handle generic exception using error_handlers module."""
-        # Use the error handler which respects Django DEBUG setting
-        status, headers, body = handle_exception(e, debug=None, request=request)  # debug will be checked dynamically
-        return _wire_from_error_parts(status, headers, body)
+        # Without a formatter, the handler reads the Django DEBUG setting.
+        if self._error_formatter is None:
+            return _wire_from_error_parts(*handle_exception(e, debug=None, request=request))
+        return _wire_from_error_parts(*handle_exception_with_formatter(self._error_formatter, e, request))
 
     @staticmethod
     def _is_python_middleware_spec(middleware_spec: Any) -> bool:
@@ -3265,7 +3299,7 @@ class BoltAPI:
                 return await meta["_handler_executor"](handler, request)
 
         except HTTPException as he:
-            return self._handle_http_exception(he)
+            return self._handle_http_exception(he, request)
         except Exception as e:
             if isinstance(e, LaneAffinityError):
                 self._describe_lane_affinity_error(e, handler, handler_id)
@@ -3326,7 +3360,7 @@ class BoltAPI:
             return meta["_sync_executor"](handler, request)
 
         except HTTPException as he:
-            return self._handle_http_exception(he)
+            return self._handle_http_exception(he, request)
         except Exception as e:
             # BlackSheep pattern: only log unhandled exceptions (rare path)
             if self._logging_middleware:
@@ -3352,7 +3386,7 @@ class BoltAPI:
         try:
             return await run_in_orm_executor(serialize_response_sync, result, meta)
         except HTTPException as he:
-            return self._handle_http_exception(he)
+            return self._handle_http_exception(he, request)
         except Exception as e:
             if self._logging_middleware:
                 self._logging_middleware.log_exception(request, e, exc_info=True)
@@ -3428,6 +3462,14 @@ class BoltAPI:
             raise TypeError(
                 f"mount() expects a BoltAPI instance, got {type(app).__name__}. "
                 f"Use include_router() for Router instances."
+            )
+
+        # The server has one error formatter, as in ``runbolt``. This API takes the
+        # formatter of the mounted API, and two different formatters are an error.
+        child_formatter = app._error_formatter
+        if child_formatter is not None and self._error_formatter not in (None, child_formatter):
+            raise ValueError(
+                "The mounted API sets a different error_formatter. Set the same error_formatter on both APIs, or on one."
             )
 
         # Normalize path prefix: ensure leading slash, strip trailing slash
@@ -3528,6 +3570,9 @@ class BoltAPI:
             self._asgi_mounts.append((new_asgi_prefix, asgi_app))
 
         self._mcp_mounts.extend(child_mcp_mounts)
+        # Last, so that a mount that raises does not change the formatter.
+        if child_formatter is not None:
+            self._error_formatter = child_formatter
 
     def mount_asgi(self, path: str, app: Callable[..., Any]) -> None:
         """Mount an ASGI app at a static prefix (evaluated after Bolt route miss)."""

@@ -128,6 +128,9 @@ pub struct AppState {
     pub media_files_config: Option<Arc<ScopeConfig>>,
     pub access_log_levels: u8, // INFO, WARNING, ERROR bits, read at startup.
     pub access_logger: Option<Py<PyAny>>, // Python logger instance for access logging (django.server). None when disabled.
+    /// `error_handlers.render_core_error` bound to the error formatter of the
+    /// app. None when the app has no formatter. Called on error responses only.
+    pub error_renderer: Option<Py<PyAny>>,
 }
 
 pub static GLOBAL_ROUTER: OnceCell<Arc<Router>> = OnceCell::new();

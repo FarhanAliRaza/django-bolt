@@ -62,7 +62,7 @@ enum DispatchOutcome {
 }
 
 static STREAMING_RESPONSE_CLASS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
-const SKIP_CORS_HEADER_NAME: HeaderName = HeaderName::from_static("x-bolt-skip-cors");
+pub(crate) const SKIP_CORS_HEADER_NAME: HeaderName = HeaderName::from_static("x-bolt-skip-cors");
 const SKIP_CORS_HEADER_VALUE: HeaderValue = HeaderValue::from_static("true");
 
 fn get_streaming_response_class(py: Python<'_>) -> &Py<PyAny> {
@@ -93,9 +93,12 @@ pub async fn build_file_response(
             let file_size = match file.metadata().await {
                 Ok(metadata) => metadata.len(),
                 Err(e) => {
-                    return HttpResponse::InternalServerError()
+                    let response = HttpResponse::InternalServerError()
                         .content_type("text/plain; charset=utf-8")
                         .body(format!("Failed to read file metadata: {}", e));
+                    return error::with_error_info(response, || {
+                        error::ErrorInfo::internal(format!("Failed to read file metadata: {}", e))
+                    });
                 }
             };
 
@@ -118,9 +121,14 @@ pub async fn build_file_response(
                         let body = if is_head_request { Vec::new() } else { buffer };
                         builder.body(body)
                     }
-                    Err(e) => HttpResponse::InternalServerError()
-                        .content_type("text/plain; charset=utf-8")
-                        .body(format!("Failed to read file: {}", e)),
+                    Err(e) => {
+                        let response = HttpResponse::InternalServerError()
+                            .content_type("text/plain; charset=utf-8")
+                            .body(format!("Failed to read file: {}", e));
+                        error::with_error_info(response, || {
+                            error::ErrorInfo::internal(format!("Failed to read file: {}", e))
+                        })
+                    }
                 }
             } else {
                 // For large files, use streaming
@@ -152,16 +160,33 @@ pub async fn build_file_response(
                 builder.streaming(stream)
             }
         }
+        // FileResponse checks the file when the handler makes it. The file can
+        // go away, or lose its permission, before this opens it.
         Err(e) => match e.kind() {
-            ErrorKind::NotFound => HttpResponse::NotFound()
-                .content_type("text/plain; charset=utf-8")
-                .body("File not found"),
-            ErrorKind::PermissionDenied => HttpResponse::Forbidden()
-                .content_type("text/plain; charset=utf-8")
-                .body("Permission denied"),
-            _ => HttpResponse::InternalServerError()
-                .content_type("text/plain; charset=utf-8")
-                .body(format!("File error: {}", e)),
+            ErrorKind::NotFound => {
+                let response = HttpResponse::NotFound()
+                    .content_type("text/plain; charset=utf-8")
+                    .body("File not found");
+                error::with_error_info(response, || {
+                    error::ErrorInfo::core("not_found", "File not found")
+                })
+            }
+            ErrorKind::PermissionDenied => {
+                let response = HttpResponse::Forbidden()
+                    .content_type("text/plain; charset=utf-8")
+                    .body("Permission denied");
+                error::with_error_info(response, || {
+                    error::ErrorInfo::core("forbidden", "Permission denied")
+                })
+            }
+            _ => {
+                let response = HttpResponse::InternalServerError()
+                    .content_type("text/plain; charset=utf-8")
+                    .body(format!("File error: {}", e));
+                error::with_error_info(response, || {
+                    error::ErrorInfo::internal(format!("File error: {}", e))
+                })
+            }
         },
     }
 }
@@ -697,6 +722,34 @@ pub(crate) fn content_length_exceeds_limit(
 
 pub async fn handle_request<const ACCESS_LOG: bool>(
     req: HttpRequest,
+    payload: web::Payload,
+    state: web::Data<Arc<AppState>>,
+) -> HttpResponse {
+    // Without an error formatter, this is the whole cost: one Option check.
+    if state.error_renderer.is_none() {
+        return route_request::<ACCESS_LOG>(req, payload, state).await;
+    }
+    let error_req = req.clone();
+    let error_state = state.clone();
+    let response = route_request::<ACCESS_LOG>(req, payload, state).await;
+    if response.status().as_u16() < 400 {
+        return response;
+    }
+    crate::error_formatter::format_error_response(response, &error_req, &error_state)
+}
+
+/// The error formatter does not change the responses of an MCP or an ASGI mount.
+/// Some of their errors come from shared builders, so remove the `ErrorInfo` here.
+#[inline]
+fn without_error_info(mut response: HttpResponse, state: &AppState) -> HttpResponse {
+    if state.error_renderer.is_some() {
+        response.extensions_mut().remove::<error::ErrorInfo>();
+    }
+    response
+}
+
+async fn route_request<const ACCESS_LOG: bool>(
+    req: HttpRequest,
     mut payload: web::Payload,
     state: web::Data<Arc<AppState>>,
 ) -> HttpResponse {
@@ -771,20 +824,17 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
             // pays nothing. Before the ASGI fallback so an overlapping prefix
             // cannot shadow an MCP endpoint.
             if let Some(mcp_mount) = bolt_mcp::find_mcp_mount(state.get_ref(), path) {
-                return bolt_mcp::bridge::handle_mcp_request(
-                    req,
-                    payload,
-                    mcp_mount,
-                    state.get_ref(),
-                )
-                .await;
+                let response =
+                    bolt_mcp::bridge::handle_mcp_request(req, payload, mcp_mount, state.get_ref())
+                        .await;
+                return without_error_info(response, &state);
             }
 
             // HTTP ASGI mount fallback:
             // - only after Bolt route miss
             // - only after trailing-slash/API-method near-miss checks above
             if let Some(asgi_mount) = find_asgi_mount(state.get_ref(), path) {
-                return asgi_http::handle_asgi_mount_request(
+                let response = asgi_http::handle_asgi_mount_request(
                     req,
                     payload,
                     asgi_mount,
@@ -794,6 +844,7 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
                     &state.trusted_proxies,
                 )
                 .await;
+                return without_error_info(response, &state);
             }
 
             // Handle OPTIONS preflight for non-existent routes
@@ -846,7 +897,7 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
             max_param_length,
         ) {
             Ok(sequences) => sequences,
-            Err(detail) => return responses::error_422_validation(&detail),
+            Err(error) => return error.into_response(),
         },
         _ => Vec::new(),
     };
@@ -1161,12 +1212,15 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
                     body_vec.extend_from_slice(&data);
                 }
                 Err(e) => {
-                    return HttpResponse::BadRequest()
+                    let response = HttpResponse::BadRequest()
                         .content_type("application/json")
                         .body(format!(
                             "{{\"error\": \"Failed to read request body: {}\"}}",
                             e
                         ));
+                    return error::with_error_info(response, || {
+                        error::ErrorInfo::core("bad_request", "Failed to read request body")
+                    });
                 }
             }
         }
@@ -1474,14 +1528,17 @@ pub async fn handle_request<const ACCESS_LOG: bool>(
                 {
                     Ok(response) => response,
                     Err(e) => Python::attach(|py| {
-                        error::build_error_response(
+                        let reason =
+                            format!("Handler returned unsupported response wire format: {}", e);
+                        let response = error::build_error_response(
                             py,
                             500,
-                            format!("Handler returned unsupported response wire format: {}", e),
+                            reason.clone(),
                             vec![],
                             None,
                             state.debug,
-                        )
+                        );
+                        error::with_error_info(response, || error::ErrorInfo::internal(reason))
                     }),
                 }
             }

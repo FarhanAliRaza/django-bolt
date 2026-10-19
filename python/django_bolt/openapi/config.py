@@ -140,6 +140,10 @@ class OpenAPIConfig:
     The 422 response includes detailed validation error information with field-level
     error messages, making it easier for API consumers to understand what went wrong.
 
+    With ``BoltAPI(error_formatter=...)``, the 422 shows the body that the
+    formatter declares with ``error_schema``. A formatter with no declaration
+    gives a 422 with no content.
+
     Set to False to only document successful responses.
 
     Example:
@@ -167,6 +171,8 @@ class OpenAPIConfig:
     every offender) if any route documents an opaque ``{"type": "object"}`` JSON
     response (no return annotation / ``response_model``) or any component name
     had to fall back to ``module.qualname`` because two types share a short name.
+    An ``error_formatter`` without ``error_schema`` is also an offender when a
+    route has a 422 response.
     Routes with ``include_in_schema=False`` and non-JSON ``response_class`` routes
     are not offenders.
     """

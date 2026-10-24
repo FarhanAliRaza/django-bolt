@@ -49,7 +49,7 @@ a time, so it shows no queueing and no contention. The ORM cases read 10 users
 from SQLite. Use the count to find a CPU regression. Use bombardier for
 throughput and latency under concurrency.
 
-The job also measures walltime on GitHub's `ubuntu-22.04-arm` runner and uploads
+The job also measures walltime on GitHub's `ubuntu-26.04-arm` runner and uploads
 the results to CodSpeed. Walltime includes system calls and the time a thread
 waits. CodSpeed's macro runners provided dedicated bare-metal hardware tuned
 for low noise; GitHub's shared hosts can introduce timing variance. Use CPU

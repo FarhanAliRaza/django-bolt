@@ -498,14 +498,13 @@ jobs:
             runner: ubuntu-latest
             wheels: wheels-linux-x86_64-*
             launcher: ""
-          # Keep ARM64 and Ubuntu 22.04 when moving to a GitHub-hosted runner;
-          # this job installs the wheel of linux-arm64. Hardware still changes,
-          # so walltime results need a new baseline on this runner.
+          # Keep ARM64: this job installs the wheel of linux-arm64. Changes to
+          # the runner OS or hardware require a new baseline for walltime results.
           # taskset keeps all threads on one core. Without it, the scheduler
           # places the client, server and pool threads differently in each run.
           # A case with a thread pool hop then changes by up to 18% (#430).
           - mode: walltime
-            runner: ubuntu-22.04-arm
+            runner: ubuntu-26.04-arm
             wheels: wheels-linux-aarch64-*
             launcher: "taskset -c 3 "
     permissions:

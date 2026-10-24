@@ -100,7 +100,7 @@ dev = [
     "zstandard>=0.25.0", # for testing with zstd-compressed payloads
     # httpx decodes `br` responses only with a brotli binding. The CFFI binding
     # keeps the GIL off on free-threaded builds; the C `brotli` module turns it on.
-    "brotlicffi>=1.1",
+    "brotlicffi>=1.2.1.0", # patched decoder for GHSA-9v8h-qqgm-4m35
     "cryptography>=42", # RSA/EC keypair generation for asymmetric JWT tests
     "bolt-mcp", # workspace member: MCP server support (editable)
     "django-debug-toolbar>=7.1.1",

@@ -370,7 +370,7 @@ dependencies = [
 
 [[package]]
 name = "bolt-core"
-version = "0.13.0-alpha1"
+version = "0.13.0"
 dependencies = [
  "actix-files",
  "actix-http",
@@ -410,7 +410,7 @@ dependencies = [
 
 [[package]]
 name = "bolt-loop"
-version = "0.13.0-alpha1"
+version = "0.13.0"
 dependencies = [
  "libc",
  "once_cell",

@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.13.0]
+
 ### Added
 
 - **`BoltAPI(error_formatter=...)`** - One function formats each error response that the framework makes. It covers the errors of the Rust core. These are 401 and 403 from guards, 404 for no route, 413, and 400 for bad headers. They also include 422 from request values and 429 from rate limits. It also covers a `FileResponse` whose file Rust cannot open or read. It also covers the Python errors: request and response validation, `HTTPException` and unhandled exceptions. The function gets a `BoltError` with `status`, a stable `kind`, `detail`, the field `errors`, `headers`, `extra` and `exception`, and the request. It returns a `Response`, `JSON`, `PlainText` or `HTML`. Bolt adds the error headers, so a 401 keeps `WWW-Authenticate` and a 429 keeps `Retry-After`. `django_bolt.error_handlers.problem_details` formats RFC 9457 Problem Details. Rust calls Python only for an error, and only when the app has a formatter. Without a formatter, the responses do not change. `runbolt` stops when two APIs of a project set different formatters, and `mount()` raises `ValueError`. An `HTTPException` with a typed body keeps its body. ASGI and MCP mounts keep their own error responses. An async formatter raises `TypeError`. A formatter response with a status out of 400 to 599, or a header that is not valid, gives the default response. Bolt then logs the error. See [Error formatter](docs/src/topics/error-handling.md#error-formatter).

@@ -437,7 +437,7 @@ wheels = [
 
 [[package]]
 name = "django-bolt"
-version = "0.13.0a1"
+version = "0.13.0"
 source = { editable = "." }
 dependencies = [
     { name = "asgiref" },

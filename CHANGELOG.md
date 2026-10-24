@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A struct parameter error names its source as a scalar parameter error does** - A 422 error for a field of a struct parameter had `"query parameter"` or `"form field"` as the first item of `loc`. A scalar parameter has `"query"` or `"body"` there. Now a struct with `Query()` gives `["query", ...]`, and a struct with `Form()` gives `["body", ...]` for a missing field too. `Cookie()` keeps `["cookie", ...]`. A missing field with `msgspec.field(name=...)` now gives its wire name in `loc` and `msg`, as an invalid field does.
+
 ## [0.13.0]
 
 ### Added

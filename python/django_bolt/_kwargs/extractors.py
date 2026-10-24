@@ -57,6 +57,9 @@ _SEQUENCE_ORIGINS = (list, set, frozenset, tuple)
 _META_CONSTRAINTS = ("gt", "ge", "lt", "le", "multiple_of", "pattern", "min_length", "max_length", "tz")
 # These sources give one value. A query key can give more than one.
 _SINGLE_VALUE_SOURCES = ("path", "header", "cookie")
+# The `loc` source of a struct parameter error, by the name of its source in messages.
+# A scalar parameter of the same source uses the same `loc` source.
+_STRUCT_ERROR_SOURCES = {"query parameter": "query", "cookie": "cookie", "form field": "body"}
 
 
 def _holds_one_item(annotation: Any) -> bool:
@@ -361,7 +364,7 @@ def _collect_struct_errors(
     """
     Collect validation errors for every field of a msgspec struct from the provided input mapping.
 
-    Validate each field of `struct_type` against `data` and return a list of error objects describing either per-field validation failures or missing required fields/files. This function treats form fields as body-located errors when `param_type` is "form field" and, when `has_files` is True, enables upload-file decoding for validation.
+    Validate each field of `struct_type` against `data` and return a list of error objects describing either per-field validation failures or missing required fields/files. The `loc` of each error names the source as a scalar parameter does ("query", "cookie" or "body"). When `has_files` is True, upload-file decoding is enabled for validation.
 
     Parameters:
         struct_type (type): The msgspec struct/serializer type whose fields to validate.
@@ -377,7 +380,7 @@ def _collect_struct_errors(
             - "input": the offending input value or None for missing fields/files.
     """
     dec_hook = _upload_file_dec_hook if has_files else None
-    loc_prefix = "body" if param_type == "form field" else param_type
+    source = _STRUCT_ERROR_SOURCES[param_type]
     errors: list[dict[str, Any]] = []
     for field in msgspec.structs.fields(struct_type):
         encoded_name = getattr(field, "encode_name", field.name)
@@ -388,7 +391,7 @@ def _collect_struct_errors(
                 errors.append(
                     {
                         "type": "validation_error",
-                        "loc": (loc_prefix, encoded_name),
+                        "loc": (source, encoded_name),
                         "msg": str(e),
                         "input": data[encoded_name],
                     }
@@ -398,8 +401,8 @@ def _collect_struct_errors(
             errors.append(
                 {
                     "type": "file_missing" if is_file else "missing_field",
-                    "loc": ("body", field.name) if is_file else (param_type, field.name),
-                    "msg": "Missing required file" if is_file else f"Missing required {param_type}: {field.name}",
+                    "loc": ("body", encoded_name) if is_file else (source, encoded_name),
+                    "msg": "Missing required file" if is_file else f"Missing required {param_type}: {encoded_name}",
                     "input": None,
                 }
             )

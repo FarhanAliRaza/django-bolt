@@ -49,12 +49,19 @@ a time, so it shows no queueing and no contention. The ORM cases read 10 users
 from SQLite. Use the count to find a CPU regression. Use bombardier for
 throughput and latency under concurrency.
 
-The job also measures walltime on a CodSpeed macro runner. Walltime includes
-system calls and the time a thread waits. The job runs the process on one core
-with `taskset`. Without a pin, the scheduler places the client, server and pool
-threads differently in each run. A case with a thread pool hop then changes by
-up to 18% with no code change (#430). Pin the process the same way to measure
-walltime locally:
+The job also measures walltime on GitHub's `ubuntu-22.04-arm` runner and uploads
+the results to CodSpeed. Walltime includes system calls and the time a thread
+waits. CodSpeed's macro runners provided dedicated bare-metal hardware tuned
+for low noise; GitHub's shared hosts can introduce timing variance. Use CPU
+simulation for small CPU regressions, and confirm walltime changes with repeated
+runs on the same hardware. Results from the previous CodSpeed macro runner are
+not a comparable walltime baseline for the GitHub runner.
+
+The job runs the process on one core with `taskset`. Without a pin, the scheduler
+places the client, server and pool threads differently in each run. A case with
+a thread pool hop then changes by up to 18% with no code change (#430). Pinning
+reduces this variation but does not eliminate shared-host noise. Pin the process
+the same way to measure walltime locally:
 
 ```bash
 taskset -c 3 uv run pytest python/benchmark/http_benchmark.py -p no:django --codspeed --codspeed-mode walltime

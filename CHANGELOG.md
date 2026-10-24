@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`WebSocketTestClient` runs the Origin check of `runbolt`** - The test client had its own copy of the WebSocket Origin check. The copy accepted an `Origin` value that is not ASCII, but `runbolt` rejects it. Now both use the same check, so such a test gets `PermissionError`, as `runbolt` gives 403.
+
 ## [0.13.0]
 
 ### Added
